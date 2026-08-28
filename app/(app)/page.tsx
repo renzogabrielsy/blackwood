@@ -1,25 +1,17 @@
 // No 'use client' — async Server Component (Daily Sync Digest).
 // Replaces the archived modular widget dashboard (see _archived/dashboard-v1).
 //
-// `/` hosts TWO surfaces, switched by `?view=digest|schedule` (default `digest`,
-// which OMITS the param). The branch happens HERE, server-side, so only the
-// selected surface's queries run — the toggle (HomeViewToggle) merely writes the
-// URL. `/production/schedule` renders the SAME `<ScheduleMonthView />` in the same
-// shell — two doors, one surface. (BUG-003 was the production TAB SHELL leaking
-// onto the schedule, not the URL; the shell now lives in a `(tabs)` route group
-// that the schedule route sits outside of.)
+// `/` hosts EXACTLY ONE surface again (2026-08-28). It used to be a `?view=`
+// switcher whose second branch was the editable Production Schedule; that whole
+// feature was retired as redundant with Renzo's Google Sheet master (a future v2
+// will be read-only and gsheet-backed). The toggle, the schedule bands and the
+// `?view=` / `?month=` params went with it — see `_archived/prod-schedule-v1/`.
 import { Suspense } from "react";
-import Link from "next/link";
-import { cn } from "@/lib/utils";
 import { getDigestData } from "@/lib/digest/queries";
-import { HomeViewToggle, type HomeView } from "@/components/digest/home-view-toggle";
-import { ScheduleMonthView } from "@/components/digest/schedule-month-view";
 import { DigestHeader } from "@/components/digest/digest-header";
 import { PlantStatusHeader } from "@/components/digest/plant-status-header";
 import { KpiHero } from "@/components/digest/kpi-hero";
 import { DigestCharts } from "@/components/digest/digest-charts";
-import { WeekStrip } from "@/components/digest/week-strip";
-import { SchedulePreview } from "@/components/digest/schedule-preview";
 import { SyncSummary } from "@/components/digest/sync-summary";
 import { SyncNeedsYou } from "@/components/digest/sync-needs-you";
 import { ActivityFeed } from "@/components/digest/activity-feed";
@@ -30,34 +22,10 @@ import { BagInventory } from "@/components/digest/bag-inventory";
 import { ShipmentsBand, ShipmentsBandFallback } from "@/components/digest/shipments-band";
 import { DigestAutoRefresh } from "@/components/digest/digest-auto-refresh";
 import { SyncLauncher } from "@/components/sync/SyncLauncher";
-// Shared page shell — same container for both views so the toggle never shifts,
-// AND the same container `/production/schedule` uses, so the two doors onto the
-// schedule are pixel-identical.
+// The page-shell container.
 import { HOME_SHELL_CLS as SHELL_CLS } from "@/components/digest/shell";
 
-export default async function HomePage({
-  searchParams,
-}: {
-  searchParams: Promise<{ view?: string; month?: string }>;
-}) {
-  const { view: viewParam, month } = await searchParams;
-  // Default view is the digest — any unknown/absent value falls back to it.
-  const view: HomeView = viewParam === "schedule" ? "schedule" : "digest";
-
-  if (view === "schedule") {
-    return (
-      <div className={SHELL_CLS}>
-        <HomeViewToggle view="schedule" />
-        {/* Month nav keeps `view=schedule` alive alongside `?month=`. */}
-        <ScheduleMonthView
-          month={month}
-          basePath="/"
-          extraParams={{ view: "schedule" }}
-        />
-      </div>
-    );
-  }
-
+export default async function HomePage() {
   return <DigestBoard />;
 }
 
@@ -77,9 +45,6 @@ async function DigestBoard() {
           Renders null; position is cosmetic. */}
       <DigestAutoRefresh />
 
-      {/* A0. View switcher — digest board ↔ production schedule (URL-driven). */}
-      <HomeViewToggle view="digest" />
-
       {/* A. Header strip (sub-band — navbar owns the page title). The Daily Sync
           launcher (privileged-only modal trigger) lives in this top band,
           right-aligned, replacing the retired floating button. */}
@@ -94,12 +59,14 @@ async function DigestBoard() {
         <SyncLauncher />
       </div>
 
-      {/* A2. Plant status — the operational date's running/rest state, planned
-          setup, projected tons + fed kg (from the PROD SCHED plan). */}
+      {/* A2. Operational-day band — the date, kg fed, sync freshness and how many
+          streams are behind. It used to also carry the PROD SCHED plan's
+          running/rest beacon, planned setup and projected tons; the plan is gone
+          (2026-08-28) and none of those are derivable from activity without
+          guessing, so they were removed rather than faked. */}
       <section>
         <PlantStatusHeader
           operationalDate={data.meta.operationalDate}
-          plantStatus={data.plantStatus}
           fedKg={fedKg}
           lastSyncAt={data.meta.lastSyncAt}
           freshness={data.meta.freshness}
@@ -107,70 +74,15 @@ async function DigestBoard() {
         />
       </section>
 
-      {/* A3. This week — plan vs actual, surfaced right below the plant status
-          band (skips if there is no operational date). Links to the full
-          Production Schedule table. */}
-      {data.weekPlan.length > 0 && (
-        <section className="flex flex-col gap-2">
-          <div className="flex items-baseline justify-between gap-2">
-            <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              This week · plan vs actual
-            </h2>
-            <div className="flex items-baseline gap-3">
-              <span className="text-[11px] text-muted-foreground">
-                from the PROD SCHED plan
-              </span>
-              <Link
-                href="/?view=schedule"
-                title="Open the full month plan — Setup, Shifts, Projected tons and Remarks are editable there (tablet/desktop)."
-                className="text-[11px] font-medium text-primary hover:underline"
-              >
-                <span className="hidden sm:inline">Open month plan to edit →</span>
-                <span className="sm:hidden">Open full month plan →</span>
-              </Link>
-            </div>
-          </div>
-          <WeekStrip week={data.weekPlan} />
-        </section>
-      )}
-
-      {/* A4. Snapshot row — the compact rolling 10-day schedule table paired
-          BESIDE the Open Blocks card grid on wide screens (lg: 2 columns), so
-          two dense "current snapshot" bands share one row instead of stacking
-          full-width — reclaiming vertical space at the top of the digest. Each
-          renders only when it has content; a lone survivor spans the full width
-          (no lg:grid-cols-2). Both stack in a single column on mobile. */}
-      {(data.schedulePreview.length > 0 ||
-        data.openBlocks.length > 0 ||
-        // A parked upstream conflict must be visible even on a day with no
-        // rolling schedule window, or it sits unread on the schedule route.
-        data.schedulePendingConflicts > 0) && (
-        <section
-          className={cn(
-            // `min-w-0` so this grid (a flex item of the shell column) can shrink
-            // below its items' intrinsic width; the SchedulePreview / OpenBlocks
-            // grid items carry their own `min-w-0` so they contain (table scrolls
-            // inside its card; open-block cards shrink to fit) instead of clipping.
-            "grid min-w-0 items-start gap-4 sm:gap-6",
-            (data.schedulePreview.length > 0 ||
-              data.schedulePendingConflicts > 0) &&
-              data.openBlocks.length > 0 &&
-              "lg:grid-cols-2"
-          )}
-        >
-          {(data.schedulePreview.length > 0 ||
-            data.schedulePendingConflicts > 0) && (
-            <SchedulePreview
-              rows={data.schedulePreview}
-              pendingConflicts={data.schedulePendingConflicts}
-            />
-          )}
-          {data.openBlocks.length > 0 && (
-            <OpenBlocks
-              openBlocks={data.openBlocks}
-              operationalDate={data.meta.operationalDate}
-            />
-          )}
+      {/* A4. Open blocks — the "current snapshot" band. It used to share a
+          two-column row with the rolling 10-day schedule preview; with the
+          schedule retired it is alone, so it spans the full width. */}
+      {data.openBlocks.length > 0 && (
+        <section className="min-w-0">
+          <OpenBlocks
+            openBlocks={data.openBlocks}
+            operationalDate={data.meta.operationalDate}
+          />
         </section>
       )}
 
@@ -179,14 +91,13 @@ async function DigestBoard() {
         <KpiHero kpis={data.kpis} dayStatus={data.dayStatus} />
       </section>
 
-      {/* C. Rich charts (flow chart is rest-day aware via the week plan) */}
+      {/* C. Rich charts */}
       <section>
         <DigestCharts
           flow={data.flow}
           price={data.price}
           grades={data.grades}
           productionHours={data.productionHours}
-          weekPlan={data.weekPlan}
         />
       </section>
 

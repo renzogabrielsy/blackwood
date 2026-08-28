@@ -511,84 +511,20 @@ export class DbClient {
 
   // -- production plan (production_schedule) --------------------------------
   //
-  // REMOVED 2026-07-30: `upsertProductionSchedule(rows)`, a blind replace-by-plan_date
-  // upsert of the WHOLE calendar on every run. It was the clobber mechanism the schedule
-  // "master plotter" Phase A exists to kill — nothing may write this table unconditionally
-  // any more. The pair below is the replacement: snapshot state, plan purely, apply
-  // atomically. Do NOT reintroduce a blanket upsert here.
-  /**
-   * Snapshot `view_production_schedule_state` for the given plan_dates — the ADVISORY
-   * read the conditional-refresh planner works from (ownership, the stored/parked
-   * source_rev, row_version, the actuals-freeze flag, and the current plan values).
-   *
-   * Chunked at 400 dates per request: a plan is ~year-sized (273 rows today) but a single
-   * `in.(…)` list of a whole year is a long URL, and PostgREST caps a response at 1000
-   * rows regardless. Returns whatever it can read; a hard error throws (the caller,
-   * refreshProductionSchedule, is fully guarded and downgrades any throw to non-fatal).
-   */
-  async readScheduleState(planDates: string[]): Promise<Row[]> {
-    if (!planDates.length) return [];
-    const CHUNK = 400;
-    const out: Row[] = [];
-    for (let i = 0; i < planDates.length; i += CHUNK) {
-      const slice = planDates.slice(i, i + CHUNK);
-      const { data, error } = await this.sb
-        .from("view_production_schedule_state")
-        .select(
-          "plan_date, shifts, setup, projected_tons, grades, remarks, source, owner, " +
-            "source_rev, row_version, pending_source_rev, is_reported",
-        )
-        .in("plan_date", slice);
-      if (error) {
-        throw new Error(
-          `read view_production_schedule_state failed ${error.code ?? ""}: ${sliceMsg(
-            error.message,
-          )}`,
-        );
-      }
-      out.push(...((data ?? []) as unknown as Row[]));
-    }
-    return out;
-  }
-
-  /**
-   * CONDITIONAL production-schedule write via the atomic RPC `fn_apply_schedule_upstream`.
-   *
-   * Replaces the old unconditional `upsertProductionSchedule`. The worker plans purely
-   * (reports/prodSchedule/plan.ts) and hands the planned ops here; the RPC re-checks
-   * row_version + owner + the production_shifts actuals freeze IN THE SAME STATEMENT as
-   * each write, so a human save that landed between the snapshot and this call wins and
-   * comes back as `version_conflict` rather than being clobbered.
-   *
-   * Chunked at 200 ops (each op carries a full row payload). Returns the flat outcome
-   * list. Throws on a hard PostgREST error — the caller is guarded.
-   */
-  async applyScheduleUpstream(
-    ops: Row[],
-  ): Promise<Array<{ plan_date: string; action: string; outcome: string }>> {
-    if (!ops.length) return [];
-    const CHUNK = 200;
-    const out: Array<{ plan_date: string; action: string; outcome: string }> = [];
-    for (let i = 0; i < ops.length; i += CHUNK) {
-      const slice = ops.slice(i, i + CHUNK);
-      const { data, error } = await this.sb.rpc("fn_apply_schedule_upstream", {
-        p_ops: slice,
-      });
-      if (error) {
-        throw new Error(
-          `fn_apply_schedule_upstream RPC failed ${error.code ?? ""}: ${sliceMsg(error.message)}`,
-        );
-      }
-      for (const r of (data ?? []) as Array<Record<string, unknown>>) {
-        out.push({
-          plan_date: String(r.plan_date ?? "").slice(0, 10),
-          action: String(r.action ?? ""),
-          outcome: String(r.outcome ?? ""),
-        });
-      }
-    }
-    return out;
-  }
+  // REMOVED 2026-08-28: `readScheduleState(planDates)` and `applyScheduleUpstream(ops)`,
+  // the last two DB helpers of the production-schedule feature. They read
+  // `view_production_schedule_state` and called the atomic RPC `fn_apply_schedule_upstream`
+  // from the old Stage 3c; both objects are dropped by the held migration
+  // `20260828013000_drop_production_schedule.sql`, so leaving either here would guarantee a
+  // 42P01/42883 on the first run after it lands. (An earlier `upsertProductionSchedule` — a
+  // blind replace-by-plan_date upsert of the WHOLE calendar — had already been removed on
+  // 2026-07-30 as the clobber mechanism it was.) Nothing here writes or reads a plan any
+  // more; the Google Sheet is the master. Archived at `_archived/prod-schedule-v1/`.
+  //
+  // NOTE for anyone re-adding a plan: this file's read of `view_digest_stream_status`
+  // (lib/streamStaleness.ts) is NOT part of that feature and must keep working — see
+  // scripts/verify-worker-view-grants.ts, which derives the worker's view list from the
+  // string literals in this source tree.
 
   // -- production facts (the human-edit latch, 2026-08-03) ------------------
   /**

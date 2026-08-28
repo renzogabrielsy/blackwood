@@ -902,7 +902,8 @@ export interface BatchClose {
   matched: boolean
 }
 
-/** The plan-bearing fields of one production-schedule day. */
+/** The plan-bearing fields of one production-schedule day.
+ *  HISTORICAL — see `ScheduleConflict` below (no live producer since 2026-08-28). */
 export type SchedulePlanField =
   | 'shifts'
   | 'setup'
@@ -915,6 +916,15 @@ export type SchedulePlanField =
  * MIRROR of the worker's `reports/prodSchedule/plan.ts::ScheduleConflict`). Joseph's
  * proposed value was parked in `production_schedule.pending_upstream` instead of being
  * applied; the operator arbitrates it. Never a ₱/cost field — this is a plan, not pricing.
+ *
+ * HISTORICAL (2026-08-28): the production PLAN was retired — `production_schedule`,
+ * its UI and the sync's Stage 3c are gone, so NO LIVE RUN PRODUCES THIS ANY MORE.
+ * It is kept, parseable and renderable, because historic `sync_runs.result` payloads
+ * in the database still carry it and the Sync panel pages through past runs; a kind
+ * the panel cannot parse renders as a blank card. Do not add a producer, and do not
+ * add a write affordance — the arbitration dialog (the only caller of
+ * `takeUpstreamProposal` / `keepMineClearPending`) was archived with the feature.
+ * See `_archived/prod-schedule-v1/`.
  */
 export interface ScheduleConflict {
   plan_date: string
@@ -1029,7 +1039,9 @@ export interface ReconciliationChannel {
   blocking?: BlockReconciliation
   /** Batches closed this run from Google Sheet RC OUT close remarks (+ unmatched warnings). */
   batch_closes?: BatchClose[]
-  /** Production-plan days the sync withheld because a human owns them (Stage 3c). */
+  /** Production-plan days the sync withheld because a human owns them (Stage 3c).
+   *  HISTORICAL: no live producer since 2026-08-28 (the plan was retired). Still read
+   *  so past runs render — see `ScheduleConflict`. */
   schedule_conflicts?: ScheduleConflict[]
   /**
    * Streams that have gone quiet (Stage 3e). The ONE finding that is about what did NOT

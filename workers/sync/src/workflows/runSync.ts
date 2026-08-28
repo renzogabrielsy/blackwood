@@ -11,10 +11,11 @@
  *
  *   ONE IMAP SESSION PER RUN (2026-07-28, BUG-019): the whole body runs inside
  *   `withGmailRunLease` (lib/gmailSession.ts), which pins the shared Gmail session for
- *   the run. Stage 1 opens it; the labelers (2b), the flecon fetcher (2b) and the
- *   schedule fetcher (3c) reuse it instead of opening their own. Released in a
- *   `finally`, so it closes exactly once on success, failure and cancellation alike.
- *   See specs/SHARED.md §1.8.
+ *   the run. Stage 1 opens it; the labelers (2b) and the flecon fetcher (2b) reuse it
+ *   instead of opening their own. Released in a `finally`, so it closes exactly once on
+ *   success, failure and cancellation alike. See specs/SHARED.md §1.8. (A third reuser,
+ *   the production-schedule fetcher at the old Stage 3c, was removed 2026-08-28 with the
+ *   rest of the schedule feature — see `_archived/prod-schedule-v1/`.)
  *
  *   Stage 1 — Mail Clerk (child workflow): ONE Gmail session → all report files into
  *             Supabase Storage. gsheet is NOT an email — its download is storage-ized
@@ -77,10 +78,6 @@ import {
   type HeldRowLike,
   type RecordExistsFn,
 } from "./creationRaceHolds.js";
-import {
-  refreshProductionSchedule,
-  type ScheduleConflict,
-} from "../reports/prodSchedule/refresh.js";
 import { planGsheetCloses, toChannelBatchCloses, type BatchClose, type BatchDirEntry } from "../lib/gsheetCloseScan.js";
 import {
   findStaleStreams,
@@ -294,20 +291,16 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
     { name: "reconcile:blocking" },
   );
 
-  // ── Stage 3c: production-PLAN refresh — orthogonal, non-fatal, additive. Re-parses
-  // Renzo's PROD SCHED tab (re-downloads the Sheet, same as the reconcile shadows do —
-  // the gsheet report's buffer lives inside its isolated child workflow and is not
-  // threaded across the DBOS boundary; a multi-MB Buffer in a workflow result would bloat
-  // the checkpoint), overlays Joseph Go's latest schedule email (guarded — Renzo-only on
-  // any Joseph failure), and writes `production_schedule` CONDITIONALLY (2026-07-30):
-  // unchanged revisions write nothing, reported days are frozen, and a human-owned day's
-  // upstream value is PARKED rather than applied. WRITES ONLY `production_schedule` — it
-  // touches NO inventory/report table and can NEVER fail the run: the whole step is
-  // wrapped so any throw is a logged warning and the sync continues. Returns the parked
-  // conflicts so they join the run's honest findings list.
-  const scheduleConflicts = await DBOS.runStep(() => refreshProdSchedule(runId), {
-    name: "refresh:prod_schedule",
-  });
+  // ── Stage 3c: REMOVED 2026-08-28. It was the production-PLAN refresh: re-parse Renzo's
+  // PROD SCHED tab, overlay Joseph Go's schedule email, and write `production_schedule`
+  // conditionally, parking a human-owned day's upstream value as a `schedule_conflict`.
+  // The whole feature was retired (the Google Sheet is and remains the real master), so
+  // this run no longer opens Joseph's mailbox, no longer downloads the Sheet a second
+  // time for the PROD SCHED tab, and no longer calls `fn_apply_schedule_upstream` — which
+  // matters, because that function is dropped by the held migration
+  // `20260828013000_drop_production_schedule.sql`. Code archived at
+  // `_archived/prod-schedule-v1/worker/`. Stage letters after this one are deliberately
+  // NOT renumbered: 3d and 3e appear by those names in every historic run's progress log.
 
   // ── Stage 3d: gsheet batch close-scan — CLOSE-ONLY, monotonic, additive. Reads the
   // Google Sheet RC OUT close remarks ("CLOSED"/"DONE"/…) and flips the named batch
@@ -325,10 +318,11 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
   );
 
   // ── Stage 3e: freshness watch — READ-ONLY, never a write, never a gate. Reads
-  // `view_digest_stream_status` and reports any stream that has missed a planned
-  // working day. This runs LAST, after every writer, so it judges the state the run
-  // actually leaves behind. It is the one finding that is about what did NOT arrive:
-  // a run where nothing came in is otherwise indistinguishable from a quiet day, and
+  // `view_digest_stream_status` and reports any stream that has missed a working day the
+  // plant was demonstrably active (a day another stream reported). This runs LAST, after
+  // every writer, so it judges the state the run actually leaves behind. It is the one
+  // finding that is about what did NOT arrive: a run where nothing came in is
+  // otherwise indistinguishable from a quiet day, and
   // that is precisely how RC OUT went 5 days stale in July without anyone noticing.
   const freshness = await DBOS.runStep(() => checkStreamFreshness(runId), {
     name: "check:stream_freshness",
@@ -336,7 +330,6 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
 
   // Merge the orthogonal reconciliation channels (any may be absent).
   const hasCloses = batchCloses.length > 0;
-  const hasScheduleConflicts = scheduleConflicts.length > 0;
   const hasStaleStreams = freshness.streams.length > 0;
   // Carried ONLY on failure — the same discipline as `report_not_received`: the key's
   // presence IS the fact, so a healthy run keeps byte-identical shape. (Unlike
@@ -352,7 +345,6 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
     rcOutRecon ||
     blockingRecon ||
     hasCloses ||
-    hasScheduleConflicts ||
     hasStaleStreams ||
     freshnessFailed ||
     hasSlowSearches
@@ -360,7 +352,6 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
           ...(rcOutRecon ?? {}),
           ...(blockingRecon ? { blocking: blockingRecon } : {}),
           ...(hasCloses ? { batch_closes: batchCloses } : {}),
-          ...(hasScheduleConflicts ? { schedule_conflicts: scheduleConflicts } : {}),
           ...(hasStaleStreams ? { stale_streams: freshness.streams } : {}),
           ...(freshnessFailed ? { stale_stream_check: { ok: false, error: freshness.error } } : {}),
           ...(hasSlowSearches ? { gmail_slow_searches: slowSearches } : {}),
@@ -975,88 +966,14 @@ async function reconcileBlockBalanceShadow(
   }
 }
 
-/**
- * NON-FATAL production-schedule refresh step (Stage 3c). Delegates to
- * refreshProductionSchedule (reports/prodSchedule/refresh.ts), which is itself fully
- * guarded and returns ok:false rather than throwing. This wrapper adds the progress
- * beats and a belt-and-braces try/catch so NOTHING here can fail the sync run — the
- * production PLAN feeds a read-only Home Digest band, never a write gate.
- *
- * Emits one info/warn beat describing the outcome (what was written vs left alone, Joseph
- * overlay applied or the Renzo-only fallback reason). A total failure logs a single warn
- * and returns [] — the NON-FATAL contract is unchanged: this step can never fail a run.
- *
- * Returns the human-owned days whose upstream value was PARKED this run, so runSync can
- * fold them into `result.reconciliation.schedule_conflicts` → the panel's findings list.
- * An empty array on every failure path.
- */
-async function refreshProdSchedule(runId: string): Promise<ScheduleConflict[]> {
-  try {
-    const db = DbClient.fromEnv();
-    const emit = makeEmitter(db, runId, "_run");
-    const res = await refreshProductionSchedule({ db });
-    if (!res.ok) {
-      await emit(
-        "reconcile",
-        "Skipped the production-plan refresh this run.",
-        99,
-        res.error,
-        "warn",
-      );
-      return [];
-    }
-    const josephBit = res.joseph
-      ? `Joseph ${res.joseph.sourceTag} overlaid ${res.joseph.overridden} day(s)`
-      : `Renzo-only${res.josephSkippedReason ? ` (${res.josephSkippedReason})` : ""}`;
-
-    const p = res.plan;
-    const parked = res.conflicts.length;
-    // The honest headline: in the steady state this reads "nothing to change".
-    const changed =
-      res.upserted === 0
-        ? "nothing to change"
-        : `${res.upserted} day(s) updated (${p.inserted} new, ${p.applied} changed, ${p.reclaimed} back in sync)`;
-    const held = parked
-      ? ` ${parked} day(s) you edited were left alone — Joseph's version is waiting for your decision.`
-      : "";
-    const frozen = p.frozen + p.frozenAtWrite;
-    const frozenBit = frozen ? ` ${frozen} day(s) already reported — untouched.` : "";
-
-    await emit(
-      "reconcile",
-      `Production plan — ${changed}, ${res.minDate}..${res.maxDate}. ${josephBit}.${held}${frozenBit}`,
-      99,
-      [
-        res.joseph?.warnings.length ? `${res.joseph.warnings.length} schedule warning(s)` : null,
-        p.versionConflicts
-          ? `${p.versionConflicts} day(s) changed underneath the sync and were not written`
-          : null,
-      ]
-        .filter(Boolean)
-        .join(" · ") || undefined,
-      parked > 0 ? "warn" : "info",
-    );
-    return res.conflicts;
-  } catch (err) {
-    // Belt-and-braces: refreshProductionSchedule already guards, but a failure in the
-    // emitter/db construction must still never fail the run.
-    // eslint-disable-next-line no-console
-    console.error(
-      `[warn] production-schedule refresh step failed (non-fatal): ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
-    return [];
-  }
-}
 
 /**
  * checkStreamFreshness — the freshness watch (Stage 3e).
  *
  * Reads `view_digest_stream_status` and emits ONE beat naming every stream that has
- * missed a planned working day. The lateness arithmetic is entirely the view's (rest
- * days and not-yet-due next-day reports are already excluded there), so this only
- * decides how to say it.
+ * missed a working day the plant was active. The lateness arithmetic is entirely the
+ * view's (rest days and not-yet-due next-day reports are already excluded there), so this
+ * only decides how to say it.
  *
  * NON-FATAL, like every other Stage-3 channel: it never throws, so it can never fail the
  * run. A watchdog that can fail the thing it watches is worse than no watchdog.

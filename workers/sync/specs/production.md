@@ -466,6 +466,8 @@ Two nullable columns on all six tables: `human_edited_at` (NULL = sync-owned; NO
 
 Deliberately lighter than `production_schedule`'s `owner` + `pending_upstream` + `row_version`:
 
+> **The schedule side of this comparison no longer exists (2026-08-28).** `production_schedule`, its ownership model and the worker's Stage-3c refresh were removed — code at `_archived/prod-schedule-v1/worker/`, spec at `_archived/prod-schedule-v1/specs/prod_schedule.md`, DB objects dropped by `supabase/migrations/20260828013000_drop_production_schedule.sql`. **The table below is kept because it is the reasoning for the LATCH, which is live and unchanged**: it says why the production FACT tables carry only two nullable columns, and that argument stands on its own whether or not the heavier design it was measured against still ships. Nothing in this spec's live behaviour depends on the schedule.
+
 | Schedule has | Production facts don't, because |
 |---|---|
 | `owner` enum | The schedule has TWO upstreams (Joseph's email, Renzo's PROD SCHED tab) and must know which one to hand a released day back to. A production fact has exactly ONE (MC's / Ivy's workbook), so ownership is binary — a nullable timestamp IS the boolean, with the "when" for free. |

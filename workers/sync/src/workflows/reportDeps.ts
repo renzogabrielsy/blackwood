@@ -133,7 +133,8 @@ export function makeDryRunDb(real: DbClient): DbClient {
 //
 // BUG-019 (2026-07-28): this used to call `GmailClient.fromEnv() + connect()` on EVERY
 // label application — up to four reports label, so four fresh IMAP logins per run on top
-// of the Mail Clerk's, the flecon fetcher's and the schedule fetcher's. That is how a run
+// of the Mail Clerk's, the flecon fetcher's and the then-existing schedule fetcher's
+// (removed 2026-08-28). That is how a run
 // reached 7+ simultaneous sessions and tripped Gmail's ~15-connection cap. It now runs on
 // THE shared session (lib/gmailSession.ts), which `runSync` pins for the whole run.
 // ---------------------------------------------------------------------------

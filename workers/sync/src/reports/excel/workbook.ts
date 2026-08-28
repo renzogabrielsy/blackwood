@@ -536,6 +536,14 @@ export function sidesForFinding(f: RunFinding): Sides {
   }
 
   // A plan day a human owns: `changed_fields` is a name list, values live in current/proposed.
+  //
+  // HISTORICAL since 2026-08-28 — no live producer. The production-schedule feature was
+  // removed and the worker no longer emits `schedule_conflict`, so this branch cannot fire
+  // on a new run. It is kept for the same reason the app kept its renderer: the finding
+  // vocabulary is shared with `lib/sync/findings.ts`, and a workbook regenerated over a
+  // historic `sync_runs.result` (or a fixture replayed in a test) would otherwise print an
+  // unlabelled two-sided fact. Deleting it buys nothing and loses the only place that says
+  // what side B meant. Do not add a new producer.
   if (f.kind === "schedule_conflict" && Array.isArray(d.changed_fields)) {
     const cur = (d.current ?? {}) as Record<string, unknown>;
     const prop = (d.proposed ?? {}) as Record<string, unknown>;

@@ -1,11 +1,12 @@
 /**
- * The shared page-shell container for the two surfaces that host the Production
- * Schedule: the home digest's `?view=schedule` branch (`app/(app)/page.tsx`) and
- * the standalone `/production/schedule` route.
+ * The page-shell container for the Home Digest (`app/(app)/page.tsx`).
  *
- * It lives in its own module purely so those two entry points can never drift
- * apart — they must feel like ONE surface reached by two doors, not two pages
- * that happen to render the same table (see docs/BUG_LEDGER.md → BUG-003).
+ * It has its own module for a historical reason: `/` used to host a second
+ * surface (`?view=schedule`) and `/production/schedule` a second door onto it,
+ * and the three had to be pixel-identical (docs/BUG_LEDGER.md → BUG-003). That
+ * feature was retired on 2026-08-28 (see `_archived/prod-schedule-v1/`), so
+ * there is one consumer again. Kept as a constant rather than inlined because
+ * `app/(app)/loading.tsx` must reproduce the same container for its skeleton.
  *
  * Not a component and not tenant-shaped: a class string, nothing else.
  */

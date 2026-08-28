@@ -291,6 +291,11 @@ export function collectBatchCloses(result: SyncRunResult): BatchClose[] {
  * `production_schedule.pending_upstream`). Lives only in
  * `result.reconciliation.schedule_conflicts` (optional additive field — absent on runs
  * that parked nothing and on every run predating the conditional refresh). Pure, guarded.
+ *
+ * HISTORICAL (2026-08-28): the production plan was retired, so no live run emits this
+ * channel any more. The fold STAYS because stored run payloads still carry it and the
+ * Sync panel renders past runs; `scripts/verify-schedule-conflict-fold.ts` is the proof
+ * that path still works. See `_archived/prod-schedule-v1/`.
  */
 export function collectScheduleConflicts(result: SyncRunResult): ScheduleConflict[] {
   return result.reconciliation?.schedule_conflicts ?? []

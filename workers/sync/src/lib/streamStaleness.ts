@@ -6,14 +6,27 @@
  * (migration `20260803070000`) and **nothing in the worker consumed it** — a stream
  * could go quiet for a week and the only way to notice was to look at the digest.
  *
- * The arithmetic is NOT reimplemented here. `missed_working_days` counts
- * `production_schedule` days with `shifts > 0` STRICTLY BETWEEN the stream's latest
- * reported day and the operational date, so:
+ * The arithmetic is NOT reimplemented here, and this module does not read the plan — it
+ * reads ONE view and trusts its number. `missed_working_days` counts the days ANY OTHER
+ * STREAM REPORTED, STRICTLY BETWEEN this stream's latest reported day and the operational
+ * date (rewritten 2026-08-28 when the production-schedule table was retired; it previously
+ * counted planned days with `shifts > 0`). The three properties the watch depends on are
+ * unchanged:
  *   - a rest day is never late,
  *   - a next-day stream's not-yet-due report for today is never late,
- *   - `> 0` genuinely means "a working day passed and this stream said nothing."
+ *   - `> 0` genuinely means "a day the plant was demonstrably active passed and this
+ *     stream said nothing."
  * That is why the threshold is a bare `> 0` and not a tunable — the tuning already
- * happened in SQL, where the calendar lives.
+ * happened in SQL, where the definition lives.
+ *
+ * "A Sunday is never late" still holds, but NOT because nothing reports on a Sunday —
+ * 8 of 2026's 34 Sundays carried a report. It holds because the bound is strictly
+ * `< operational_date` and `operational_date` is itself activity-derived, so a quiet
+ * stretch ENDING on a Sunday cannot count it. Replaying 2026 gave the same verdict on
+ * 1,188 of 1,195 stream-days; the new rule is marginally MORE sensitive, and has one
+ * structural blind spot — a day on which NO stream reported at all cannot be known to
+ * have been a working day, so a total plant-wide outage reads as a holiday. See
+ * `supabase/migrations/20260828013000_drop_production_schedule.sql` for the measurement.
  *
  * NON-FATAL by contract, like every other reconciliation channel: a failure never fails
  * the run. A staleness alert must never be the reason a sync run fails — the whole point
@@ -42,7 +55,7 @@
  */
 import type { DbClient, Row } from "./db.js";
 
-/** One stream that has missed at least one planned working day. */
+/** One stream that has missed at least one working day the plant was active. */
 export interface StaleStream {
   /** Stable key: `deliveries` | `rc_out` | `production` | `electricity` | `trucks`. */
   stream: string;
@@ -52,7 +65,7 @@ export interface StaleStream {
   through_date: string | null;
   /** The operational date the lateness is measured against. */
   operational_date: string | null;
-  /** Planned working days between the two, exclusive. Always >= 1 here. */
+  /** Active days between the two, exclusive (days another stream reported). Always >= 1 here. */
   missed_working_days: number;
   /** True when the stream reports a day behind by design (affects the wording only). */
   reports_next_day: boolean;

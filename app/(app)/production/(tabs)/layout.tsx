@@ -4,9 +4,11 @@
 //
 // It lives inside the `(tabs)` ROUTE GROUP (URL-invisible) rather than at
 // `production/` so that sibling production routes can opt OUT of it. That is the
-// whole point of the group: `/production/schedule` sits OUTSIDE it and therefore
-// renders the schedule with no PeriodPicker header and no bottom tab bar — the
-// original BUG-003 symptom — while `/production` keeps its URL and its shell.
+// whole point of the group. Its original beneficiaries — `/production/schedule`
+// and `/production/setups` — were retired on 2026-08-28
+// (`_archived/prod-schedule-v1/`), so the group currently guards nothing; KEEP IT
+// anyway, because the next non-tab route under `/production` needs exactly this
+// escape and re-deriving it is how BUG-003 happened in the first place.
 // See docs/BUG_LEDGER.md → BUG-003 (Fallback S, the "route-group escape").
 import { Card, CardContent } from '@/components/ui/card';
 import { ProductionSheetTabs } from '../components/sheet-tabs';

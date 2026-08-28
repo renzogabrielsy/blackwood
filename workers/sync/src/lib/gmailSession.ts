@@ -11,7 +11,10 @@
  *   1  mailClerk.ts               the intended shared session          ✅
  *   4  reportDeps.makeLabeler     a NEW session on EVERY label call    ❌ (4 writers)
  *   1  reportDeps.makeFleconFetcher  its own session                   ❌
- *   1  prodSchedule/josephEmail   its own session                      ❌
+ *   1  prodSchedule/josephEmail   its own session                      ❌ (report removed
+ *                                                                        2026-08-28; a run's
+ *                                                                        Gmail users are now
+ *                                                                        the six above)
  *
  * Gmail caps an account at ~15 simultaneous IMAP connections and answers
  * `NO [ALERT] Too many simultaneous connections. (Failure)` past that. Every sync run

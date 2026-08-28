@@ -3,13 +3,10 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 import { fmtKg, relativeTime } from "./format";
-import { BEACON_DOT } from "./status-tokens";
-import type { Freshness, PlantStatus } from "@/lib/digest/types";
+import type { Freshness } from "@/lib/digest/types";
 
 interface PlantStatusHeaderProps {
   operationalDate: string | null;
-  /** the operational date's plant status (null outside the ingested plan window) */
-  plantStatus: PlantStatus | null;
   /** kg fed on the operational date (RC Out KPI value) */
   fedKg: number;
   lastSyncAt: string | null;
@@ -43,39 +40,36 @@ function dowNameFor(date: string | null): string {
 function Fact({
   label,
   children,
-  plan,
 }: {
   label: string;
   children: React.ReactNode;
-  plan?: boolean;
 }) {
   return (
     <div className="flex flex-col gap-0.5">
       <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/80">
         {label}
       </span>
-      <span
-        className={cn(
-          "text-sm font-semibold tabular-nums",
-          plan && "text-violet-600 dark:text-violet-300"
-        )}
-      >
-        {children}
-      </span>
+      <span className="text-sm font-semibold tabular-nums">{children}</span>
     </div>
   );
 }
 
 /**
- * Operational-date status bar. Left: a running/rest beacon + the date.
- * Middle: planned setup, projected tons, fed kg. Right: last-sync freshness
- * (ticks client-side) + a streams-behind note. Mirrors the digest's
- * glass-card idiom. Sourced from `plantStatus` (the `production_schedule`
- * plan) + `meta`.
+ * Operational-date bar. Left: the date + weekday. Middle: kg fed. Right:
+ * last-sync freshness (ticks client-side) + a streams-behind note. Mirrors the
+ * digest's glass-card idiom.
+ *
+ * WHAT LEFT, AND WHY (2026-08-28). This band used to open with a running/rest
+ * BEACON and carry "Planned setup" + "Projected out" beside the fed figure, all
+ * read from the `production_schedule` plan. The plan was retired as redundant
+ * with Renzo's Google Sheet, and none of the three is derivable from activity:
+ * `fedKg` on the operational date is normally 0 because RC Out is filed the
+ * following morning, so a beacon driven off it would announce "plant at rest" on
+ * an ordinary working day. A confident wrong status is worse than no status, so
+ * the band reports only what it can observe. See `_archived/prod-schedule-v1/`.
  */
 export function PlantStatusHeader({
   operationalDate,
-  plantStatus,
   fedKg,
   lastSyncAt,
   freshness,
@@ -88,60 +82,21 @@ export function PlantStatusHeader({
     return () => clearInterval(id);
   }, [lastSyncAt]);
 
-  const hasPlan = plantStatus != null;
-  const isRest = hasPlan && plantStatus.shifts === 0;
-  const running = hasPlan ? plantStatus.running : false;
-
-  const beaconLabel = !hasPlan
-    ? "Plant status · no plan on record"
-    : isRest
-      ? "Plant at rest · planned"
-      : `Plant running · ${plantStatus.shifts} shift${plantStatus.shifts === 1 ? "" : "s"}`;
-
   const dow = dowNameFor(operationalDate);
 
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-3 rounded-xl border bg-card/95 p-3.5 backdrop-blur supports-backdrop-filter:bg-card/70 animate-fade-up sm:gap-x-5 sm:p-4">
-      {/* Beacon + date */}
-      <div className="flex items-center gap-3">
-        <span className="relative flex h-2.5 w-2.5">
-          {running && (
-            <span
-              className={cn(
-                "absolute inline-flex h-full w-full animate-ping rounded-full opacity-60",
-                BEACON_DOT.run
-              )}
-            />
-          )}
-          <span
-            className={cn(
-              "relative inline-flex h-2.5 w-2.5 rounded-full",
-              running ? BEACON_DOT.run : BEACON_DOT.rest
-            )}
-          />
+      {/* Operational day */}
+      <div className="flex flex-col">
+        <span className="text-base font-semibold tracking-tight">
+          {dow ? `${dow} ` : ""}
+          {operationalDate ?? "—"}
         </span>
-        <div className="flex flex-col">
-          <span className="text-base font-semibold tracking-tight">
-            {beaconLabel}
-          </span>
-          <span className="text-xs text-muted-foreground tabular-nums">
-            {dow ? `${dow} ` : ""}
-            {operationalDate ?? "—"} · operational day
-          </span>
-        </div>
+        <span className="text-xs text-muted-foreground">operational day</span>
       </div>
 
       <div className="hidden h-9 w-px self-center bg-border sm:block" />
 
-      <Fact label="Planned setup" plan>
-        {hasPlan ? plantStatus.setup ?? "— off —" : "—"}
-      </Fact>
-      <Fact label="Projected out" plan>
-        {hasPlan && plantStatus.projectedTons != null
-          ? `${plantStatus.projectedTons.toFixed(1)} `
-          : "— "}
-        <span className="text-xs font-normal text-muted-foreground">t</span>
-      </Fact>
       <Fact label="Fed (RC Out)">
         <span className="font-mono">{fmtKg(fedKg)} </span>
         <span className="text-xs font-normal text-muted-foreground">kg</span>

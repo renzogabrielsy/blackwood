@@ -34,19 +34,14 @@ import type {
   TruckTrip,
   OpenBlock,
   FleconBagBalance,
-  PlantStatus,
-  WeekDayPlan,
-  SchedulePreviewRow,
 } from "./types";
 import {
   OVERDUE_AFTER_MISSED_DAYS,
   resolveKpiAnchorDate,
   resolveKpiDayStatus,
   resolveKpiPrevDate,
-  resolveScheduleRowState,
   streamForKpi,
   type KpiDayStatus,
-  type ProdSchedDay,
 } from "./day-status";
 
 // Trailing-window sizes (kept here, not in SQL, so the contract windows
@@ -167,23 +162,6 @@ interface LatestSyncByEmployeeRow {
   employee: string;
   count: number;
 }
-interface ProdSchedRow {
-  plan_date: string;
-  dow: string | null;
-  shifts: number | string | null;
-  setup: string | null;
-  projected_tons: number | string | null;
-  /** raw DB source string, e.g. "joseph:REV2" | "gsheet:PROD SCHED".
-   *  Only selected for the schedule-preview fetch; undefined elsewhere. */
-  source?: string | null;
-  /** per-grade projected tonnage JSONB ({ "3X50": 21 }). Only selected for the
-   *  schedule-preview fetch; undefined elsewhere. */
-  grades?: Record<string, number> | null;
-}
-interface ProdActualTonsRow {
-  date: string;
-  actual_tons: number | string | null;
-}
 interface AuditLogRow {
   id: string;
   table_name: string;
@@ -239,31 +217,6 @@ function daysBetween(a: string, b: string): number {
   return Math.round((ad - bd) / 86_400_000);
 }
 
-/** UTC-safe yyyy-MM-dd + n days. */
-function addDaysUtc(date: string, n: number): string {
-  const ms = Date.parse(date + "T00:00:00Z") + n * 86_400_000;
-  return new Date(ms).toISOString().slice(0, 10);
-}
-
-const DOW_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-/** Weekday name for a yyyy-MM-dd date (UTC) — fallback when a plan row is absent. */
-function dowNameFor(date: string): string {
-  return DOW_NAMES[new Date(date + "T00:00:00Z").getUTCDay()] ?? "";
-}
-
-/** Shape a production_schedule row into the ProdSchedDay contract the pure
- *  day-status resolvers consume. */
-function toProdSchedDay(r: ProdSchedRow): ProdSchedDay {
-  const shifts = Math.trunc(n(r.shifts)) as 0 | 1 | 2;
-  return {
-    date: r.plan_date,
-    dow: r.dow ?? dowNameFor(r.plan_date),
-    shifts,
-    setup: r.setup,
-    projectedTons: n(r.projected_tons),
-  };
-}
-
 // =====================================================================
 // Main entry point
 // =====================================================================
@@ -293,7 +246,6 @@ export async function getDigestData(): Promise<DigestData> {
     zeroCostRes,
     blockingRes,
     fleconBagsRes,
-    schedConflictsRes,
   ] = await Promise.all([
     canViewPrices(),
     supabase.from("view_digest_operational_days").select("*").maybeSingle(),
@@ -344,13 +296,6 @@ export async function getDigestData(): Promise<DigestData> {
       .from("view_flecon_bag_balance")
       .select("*")
       .order("sort_order", { ascending: true }),
-    // Production-schedule days carrying an unarbitrated upstream proposal.
-    // COUNT ONLY (head:true → no rows transferred; the partial index
-    // idx_production_schedule_pending_upstream serves it). No operationalDate
-    // dependency, so it belongs in this first wave — no extra round-trip.
-    supabase
-      .from("view_production_schedule_conflicts")
-      .select("plan_date", { count: "exact", head: true }),
   ]);
 
   const opDays = (opDaysRes.data as OperationalDaysRow | null) ?? {
@@ -367,11 +312,10 @@ export async function getDigestData(): Promise<DigestData> {
   // (through/prev reported day, missed working days) is computed in SQL —
   // this is a passthrough plus the ok/warn threshold.
   //
-  // `status = warn` now means "OVERDUE_AFTER_MISSED_DAYS+ planned WORKING
-  // days of reports outstanding", not "N calendar days behind": a Sunday or
-  // holiday (production_schedule.shifts = 0) is not a late report, and the
-  // operational date itself is excluded because a next-day stream's report
-  // for today is not due yet.
+  // `status = warn` means "OVERDUE_AFTER_MISSED_DAYS+ WORKING days of reports
+  // outstanding", not "N calendar days behind": a day nobody worked is not a
+  // late report, and the operational date itself is excluded because a
+  // next-day stream's report for today is not due yet.
   const streamRows = (streamsRes.data as StreamStatusRow[] | null) ?? [];
   const streams: StreamFreshness[] = streamRows.map((s) => ({
     stream: s.stream,
@@ -524,38 +468,15 @@ export async function getDigestData(): Promise<DigestData> {
   // ===================================================================
   // WAVE 2 — the operational-date-dependent queries, in ONE round-trip.
   // ===================================================================
-  // Every query below needs `operationalDate` (only knowable after wave 1),
-  // so it CANNOT fold into the wave-1 Promise.all. But none of them depends
-  // on ANY other wave-1 result, and none depends on each other — so they all
-  // belong in a single parallel wave rather than the four sequential awaits
-  // this function used to do (rcInSub → trucks → the schedule batch).
+  // Both queries below need `operationalDate` (only knowable after wave 1), so
+  // they CANNOT fold into the wave-1 Promise.all. Neither depends on the other,
+  // so they cost ONE round-trip between them rather than two sequential awaits.
   //
-  // Window math is pure (addDaysUtc), so the ranges are computed here and the
-  // whole batch fires at once. The results are consumed further down, exactly
-  // where they were before.
-  //
-  // The operational date's week = 7 consecutive days STARTING at the
-  // operational date (today is the first, isToday). This matches the draft's
-  // WeekStrip and sidesteps the sheet's off-by-one weekday labels (its `dow`
-  // text runs one day ahead of the real calendar) — the plan is keyed by DATE,
-  // not weekday, so rest/shift detection is unaffected.
-  //
-  // Schedule-preview window: 10 days STARTING at the operational date (today
-  // first) — a SUPERSET of the week window, pulling the extra `source` (the
-  // plan-authority tag) + per-grade `grades` columns. The week's plan/actual
-  // rows are SLICED from these preview responses rather than re-queried: the
-  // preview ranges strictly contain the week ranges and select a superset of
-  // the columns, so the derived rows are byte-identical while costing two
-  // fewer queries.
-  const weekDates = operationalDate
-    ? Array.from({ length: 7 }, (_, i) => addDaysUtc(operationalDate, i))
-    : [];
-  const previewDates = operationalDate
-    ? Array.from({ length: 10 }, (_, i) => addDaysUtc(operationalDate, i))
-    : [];
-  const previewEnd = previewDates[9];
-
-  const [subRes, truckRes, previewSchedRes, previewActualRes] = operationalDate
+  // This wave used to carry two more reads — the `production_schedule` plan
+  // window and `view_digest_prod_actual_tons` — which fed the week strip and the
+  // rolling 10-day schedule preview. Both bands were retired with the production
+  // plan (2026-08-28), so the wave is two queries lighter.
+  const [subRes, truckRes] = operationalDate
     ? await Promise.all([
         // RC In sub-line: supplier + sack counts for the operational day.
         supabase
@@ -572,18 +493,8 @@ export async function getDigestData(): Promise<DigestData> {
           .eq("reading_date", operationalDate)
           .gt("ttl_km", 0)
           .order("ttl_km", { ascending: false }),
-        supabase
-          .from("production_schedule")
-          .select("plan_date, dow, shifts, setup, projected_tons, source, grades")
-          .gte("plan_date", operationalDate)
-          .lte("plan_date", previewEnd!),
-        supabase
-          .from("view_digest_prod_actual_tons")
-          .select("date, actual_tons")
-          .gte("date", operationalDate)
-          .lte("date", previewEnd!),
       ])
-    : [null, null, null, null];
+    : [null, null];
 
   // ---------- RC In sub-line ----------
   let rcInSub: string | undefined;
@@ -777,10 +688,10 @@ export async function getDigestData(): Promise<DigestData> {
   const flags: Flag[] = [];
 
   // (a) stale stream: reports outstanding for OVERDUE_AFTER_MISSED_DAYS+
-  // planned WORKING days. Measured against the plan (SQL), not raw calendar
-  // days, so a Sunday/holiday and "today's next-day report isn't due yet"
-  // never raise a flag — the same measure the KPI cards use, so the footer
-  // and the hero can never disagree.
+  // WORKING days. Measured in SQL, not in raw calendar days, so a day nobody
+  // worked and "today's next-day report isn't due yet" never raise a flag —
+  // the same measure the KPI cards use, so the footer and the hero can never
+  // disagree.
   for (const s of streams) {
     if (s.status !== "warn" || s.missedDays == null) continue;
     flags.push({
@@ -830,113 +741,27 @@ export async function getDigestData(): Promise<DigestData> {
       }
     : { label: "", rcInKg: 0, rcOutKg: 0, productionKg: 0, netKg: 0 };
 
-  // ---------- production plan: plant status, per-KPI day state, week plan ----------
-  // Sourced from `production_schedule` (the ingested PROD SCHED plan) joined with
-  // ACTUAL production tons from view_digest_prod_actual_tons (SUM in SQL, never a
-  // TS reduction). The state RESOLUTION is light branching in the pure
-  // ./day-status resolvers (allowed in TS); the tons SUM stays in the view.
-  // Not price data → no gating. Dependent on operationalDate, so fetched here
-  // (same follow-up pattern as trucks / rcInSub).
-  let plantStatus: PlantStatus | null = null;
+  // ---------- per-KPI day state ----------
+  // The "misleading zero" + lag-by-design fix. `anchorDate` is the day
+  // kpi.value belongs to — the operational date for same-day streams, the
+  // stream's latest REPORTED day for the ones the operator files a morning
+  // late. Pure branching over SQL-computed scalars (./day-status).
+  //
+  // Until 2026-08-28 this also consumed the operational date's `production_schedule`
+  // row, which is what produced the `rest` state. That plan is retired, so a quiet
+  // day now reads `idle`/`reported` rather than claiming to know it was PLANNED
+  // rest — see ./day-status.
   const dayStatus: Record<string, KpiDayStatus> = {};
-  let weekPlan: WeekDayPlan[] = [];
-  let schedulePreview: SchedulePreviewRow[] = [];
   if (operationalDate) {
-    // The plan + actual-tons rows for BOTH the week strip and the 10-day preview
-    // come from the single preview-window fetch in wave 2 above (the preview
-    // range contains the week range). `planByDate` / `actualByDate` are the same
-    // maps as before — the week's consumers just index them by the 7 week dates.
-    const previewPlanByDate = new Map(
-      ((previewSchedRes?.data as ProdSchedRow[] | null) ?? []).map((p) => [p.plan_date, p])
-    );
-    const previewActualByDate = new Map(
-      ((previewActualRes?.data as ProdActualTonsRow[] | null) ?? []).map((a) => [
-        a.date,
-        n(a.actual_tons),
-      ])
-    );
-    const planByDate = previewPlanByDate;
-    const actualByDate = previewActualByDate;
-    // Actual WORKED hours per date, from the already-fetched (120-day windowed)
-    // view_digest_daily_hours rows — the window covers every forward date in the
-    // week/preview ranges. Joined by date the same way actual tons are; a date
-    // with no production/hours row → absent from the map → actualHrs null.
-    const workHrsByDate = new Map(hoursRows.map((h) => [h.date, n(h.work_hrs)]));
-
-    // Operational-date plan (always within its own Mon→Sun week).
-    const opPlanRow = planByDate.get(operationalDate);
-    const opPlan: ProdSchedDay | undefined = opPlanRow ? toProdSchedDay(opPlanRow) : undefined;
-
-    if (opPlanRow) {
-      plantStatus = {
-        date: operationalDate,
-        shifts: Math.trunc(n(opPlanRow.shifts)),
-        setup: opPlanRow.setup,
-        projectedTons: opPlanRow.projected_tons == null ? null : n(opPlanRow.projected_tons),
-        running: Math.trunc(n(opPlanRow.shifts)) > 0,
-      };
-    }
-
-    // Per-KPI day state (the "misleading zero" + lag-by-design fix) against
-    // the op-date plan. `anchorDate` is the day kpi.value belongs to — the
-    // operational date for same-day streams, the stream's latest REPORTED day
-    // for the ones the operator files a morning late.
     for (const kpi of kpis) {
       dayStatus[kpi.key] = resolveKpiDayStatus({
         kpiKey: kpi.key,
         value: kpi.value,
         anchorDate: anchorByKpi[kpi.key] ?? operationalDate,
         operationalDate,
-        plan: opPlan,
         streams,
       });
     }
-
-    // The operational date's week (Mon→Sun): plan joined with actual tons.
-    weekPlan = weekDates.map((date) => {
-      const row = planByDate.get(date);
-      const plan: ProdSchedDay = row
-        ? toProdSchedDay(row)
-        : { date, dow: dowNameFor(date), shifts: 0, setup: null, projectedTons: 0 };
-      const actualTons = actualByDate.has(date) ? round(actualByDate.get(date)!, 2) : null;
-      const actualHrs = workHrsByDate.has(date) ? round(workHrsByDate.get(date)!, 2) : null;
-      return {
-        date,
-        dow: plan.dow,
-        shifts: plan.shifts,
-        setup: plan.setup,
-        projectedTons: row ? (row.projected_tons == null ? null : n(row.projected_tons)) : null,
-        actualTons,
-        actualHrs,
-        isToday: date === operationalDate,
-        state: resolveScheduleRowState(plan, actualTons, operationalDate),
-      };
-    });
-
-    // Rolling 10-day schedule preview (op date → +9 days). Same plan-vs-actual
-    // join + resolved state as weekPlan, plus the `source` tag + per-grade tons.
-    schedulePreview = previewDates.map((date) => {
-      const row = previewPlanByDate.get(date);
-      const plan: ProdSchedDay = row
-        ? toProdSchedDay(row)
-        : { date, dow: dowNameFor(date), shifts: 0, setup: null, projectedTons: 0 };
-      const actualTons = previewActualByDate.has(date)
-        ? round(previewActualByDate.get(date)!, 2)
-        : null;
-      const actualHrs = workHrsByDate.has(date) ? round(workHrsByDate.get(date)!, 2) : null;
-      return {
-        date,
-        dow: plan.dow,
-        shifts: plan.shifts,
-        setup: plan.setup,
-        projectedTons: row ? (row.projected_tons == null ? null : n(row.projected_tons)) : null,
-        actualTons,
-        actualHrs,
-        state: resolveScheduleRowState(plan, actualTons, operationalDate),
-        source: row?.source ?? null,
-        grades: (row?.grades as unknown as Record<string, number> | null) ?? null,
-      };
-    });
   }
 
   const lastSyncAt = latestSyncRow ? auditRows[0]?.performed_at ?? null : null;
@@ -962,11 +787,7 @@ export async function getDigestData(): Promise<DigestData> {
     trucks,
     openBlocks,
     fleconBags,
-    plantStatus,
     dayStatus,
-    weekPlan,
-    schedulePreview,
-    schedulePendingConflicts: schedConflictsRes.count ?? 0,
   };
 }
 

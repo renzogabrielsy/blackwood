@@ -8,9 +8,10 @@
  *
  * That session now comes from the SHARED broker (`lib/gmailSession.ts`), not from a
  * client this file constructs: `runSync` pins one lease for the whole run, so the
- * clerk's session is the SAME one the labelers / flecon fetcher / schedule fetcher
- * reuse later. Before 2026-07-28 those three opened their own and a run reached 7+
- * simultaneous IMAP logins, past Gmail's ~15 cap — see specs/SHARED.md §1.8 (BUG-019).
+ * clerk's session is the SAME one the labelers and the flecon fetcher reuse later.
+ * Before 2026-07-28 those two — plus the production-schedule fetcher, removed with that
+ * feature on 2026-08-28 — opened their own, and a run reached 7+ simultaneous IMAP
+ * logins, past Gmail's ~15 cap — see specs/SHARED.md §1.8 (BUG-019).
  *
  * The Gmail queries are copied VERBATIM from the Python orchestrators (read as spec):
  *   sync_deliveries.py : GMAIL_OP  label:"Work/ICTC Daily" subject:"RC DELIVERIES" after:{since} -label:"Blackwood-Processed"

@@ -6,44 +6,25 @@ server-rendered operational + ingestion-health summary. It replaced the old
 modular widget dashboard (drag/resize ReactGridLayout grid), which is now
 **archived** at `_archived/dashboard-v1/` (restorable via git history).
 
-## `/` hosts TWO views — `?view=digest|schedule` (BUG-003)
-`/` is a **URL-driven view switcher**, house pattern (identical to Summaries'
-`?view=period|supplier`; `useSearchParams` + `router.replace`, **not** nuqs):
+## `/` hosts ONE surface (2026-08-28)
 
-| `?view=` | Surface | Notes |
-|---|---|---|
-| *(absent)* / `digest` | The digest bands (below) | **DEFAULT — the param is OMITTED** to keep `/` clean |
-| `schedule` | `<ScheduleMonthView />` — the full **month plan-vs-actual** table, **inline-editable** (Phase B) | Takes `?month=YYYY-MM` alongside `?view=schedule` |
+`/` used to be a URL-driven view switcher (`?view=digest|schedule`) whose second
+branch was the editable **Production Schedule** month table, reachable by a second
+door at `/production/schedule`. **That whole feature was retired on 2026-08-28** —
+Renzo's call: the in-app plan was redundant with his Google Sheet master, and a
+future v2 will be READ-ONLY and gsheet-backed rather than a second editable copy.
 
-- **The branch happens SERVER-SIDE** in `page.tsx` (`searchParams.view`), so only
-  the selected surface's queries run — `getDigestData()` is never called for the
-  schedule view, and vice versa. `HomeViewToggle`'s only job is to write the URL.
-- **`components/digest/home-view-toggle.tsx`** — `'use client'`. The segmented
-  control ("Digest" | "Schedule"), rendered at the TOP of the shared page shell in
-  BOTH views (so it never shifts position when switching). Full-width, 44px-tall
-  segments on phones (`w-full … py-2`), inline pill from `sm` up (`sm:w-auto
-  sm:py-1`). Selecting "Digest" **drops both `view` AND `month`** (the month cursor
-  is schedule-only state — leaving it on a digest URL would be dead weight). Active
-  `view` is passed in as a prop (server-parsed) so the highlight is right on first
-  paint; the `Suspense` wrapper is mandatory for `useSearchParams`.
-- **Why the schedule lives here:** it used to be the `/production/schedule` route,
-  which inherited `app/(app)/production/layout.tsx` and so rendered under the
-  Daily·Electricity·Trucks tab bar it has nothing to do with (BUG-003).
-- **TWO DOORS, ONE SURFACE (2026-07-30).** `/production/schedule` is **no longer a
-  redirect** — it renders the SAME `<ScheduleMonthView />` in the SAME
-  `HOME_SHELL_CLS` container (`components/digest/shell.ts`), with the same
-  server-side data loading. There is no second implementation. The tab shell can
-  no longer reach it because `layout.tsx` (+ `page.tsx`/`error.tsx`/`loading.tsx`)
-  moved into the URL-invisible `app/(app)/production/(tabs)/` route group, which
-  the schedule route sits outside of — BUG-003's own documented Fallback (S).
-  **Why the redirect had to go:** it left the toggle on `/` as the only way in, so
-  the shipped inline editor read as "never built" to the person who asked for it.
-- **Navbar:** bare `/` still returns `null` from `getBreadcrumb()` (no title, by
-  design), but `/?view=schedule` resolves to **"← Back to Digest / Production
-  Schedule"** — the registry's first entry tests pathname **+ query params** — and
-  `/production/schedule` has its own entry (**"← Back to Production"**, same title
-  and description) placed BEFORE the `prefix('/production')` catch-all.
-  See `components/NAVBAR.md`.
+Removed with it: the `HomeViewToggle` segmented control, the `?view=` and `?month=`
+params (they mean nothing on `/` now), the `WeekStrip` band, the rolling 10-day
+`SchedulePreview` band and its pending-conflict chip, the plan facts on the
+plant-status band, and the `/production/schedule` + `/production/setups` routes with
+their navbar entries. Source is archived at **`_archived/prod-schedule-v1/`**; the DB
+objects are archived in the `graveyard` schema and dropped by a held migration that
+runs only after this code deploys.
+
+`page.tsx` is a plain async Server Component again — no `searchParams`, no branch.
+The navbar's bare `/` still returns `null` from `getBreadcrumb()` (no title, by
+design), and the registry no longer has any entry that consults query params.
 
 The digest marries two views, stacked top→bottom (decision: "both, stacked"):
 1. **Today's operations** — the latest business day's numbers (RC In/Out,
@@ -66,24 +47,15 @@ values into views.
   `notifications`, `price-demos`, `production`, `review-queue`, `settings`,
   `summaries`, `sync/cases`. **Adding a new route under `(app)` means adding its
   `loading.tsx` too**, or it will render the digest skeleton.
-- `page.tsx` — **async Server Component**. Reads `searchParams` and branches on
-  `?view=` (see above): `schedule` → the shared shell + `<HomeViewToggle
-  view="schedule" />` + `<ScheduleMonthView month={month} basePath="/"
-  extraParams={{ view: 'schedule' }} />` and RETURNS (no digest fetch); otherwise
-  `<DigestBoard />`, the async sub-component that calls `getDigestData()` once and
-  composes the bands. Thin: fetch + layout only. No `'use client'`. Both views share
-  the `SHELL_CLS` container constant.
-  **Render order, top→bottom:** **HomeViewToggle** → (DigestHeader + **SyncLauncher**) header row →
-  **PlantStatusHeader** (operational-date running/rest status bar) →
-  **WeekStrip** (this week · plan vs actual — surfaced near the TOP, right under
-  the plant-status band; its heading carries a "View full schedule →" link to
-  `/?view=schedule`) → **Snapshot row** (a `lg:grid-cols-2` grid pairing the
-  compact rolling **10-day SchedulePreview TABLE** BESIDE **OpenBlocks** so two
-  dense "current snapshot" bands share one row instead of stacking full-width;
-  each cell renders only when it has content and a lone survivor spans full
-  width — no `lg:grid-cols-2`; both stack single-column on mobile) → KpiHero
-  (state-aware) →
-  DigestCharts (rest-day-aware flow) → TrucksSummary → **BagInventory** →
+- `page.tsx` — **async Server Component**. Delegates to `<DigestBoard />`, the async
+  sub-component that calls `getDigestData()` once and composes the bands. Thin:
+  fetch + layout only. No `'use client'`, no `searchParams`.
+  **Render order, top→bottom:** (DigestHeader + **SyncLauncher**) header row →
+  **PlantStatusHeader** (operational-date bar) →
+  **OpenBlocks** (full width since 2026-08-28 — it used to be the right-hand cell of
+  a `lg:grid-cols-2` snapshot row shared with the retired SchedulePreview; renders
+  only when it has content) → KpiHero (state-aware) →
+  DigestCharts → TrucksSummary → **BagInventory** →
   **ShipmentsBand** (Trello export-doc readiness, in its OWN `<Suspense>`) →
   (SyncSummary + ActivityFeed) → DigestFooterBand. The page computes two small
   presentational reads for the plant-status band — `fedKg` (the rc_out KPI value)
@@ -106,7 +78,7 @@ values into views.
   can't be read) + an ~800ms debounce coalescing the queued→running→terminal burst
   into one refresh. No polling, no mount-time catch-up query (Realtime fires only
   for post-subscribe changes → an already-terminal run at load never refresh-loops).
-  Rendered ONLY on the digest branch, not the schedule branch.
+  Rendered once at the top of the digest.
 - `components/digest/format.ts` — pure display formatters (`fmtKg`, `fmtKwh`,
   `fmtPhpNumber`, `fmtDeltaPct`, `fmtByUnit`, `relativeTime`, `diffValue`).
   No aggregation (HARD RULE — that lives in SQL views).
@@ -115,12 +87,15 @@ values into views.
   (fresh=green pulsing dot / recent=amber / stale=muted). Relative sync time
   recomputes on the client and ticks every 60 s.
 - `components/digest/plant-status-header.tsx` — `'use client'`. Operational-date
-  status bar sourced from `data.plantStatus` (+ `meta`, `fedKg`): a running/rest
-  **beacon** (pulsing dot when running), planned setup, projected tons, fed kg,
-  and a last-sync freshness chip that re-ticks every 60 s + a "N streams behind"
-  note. Renders a neutral "no plan on record" state when `plantStatus` is null
-  (outside the ingested plan window). Glass card + `animate-fade-up`. Rendered
-  high (right under the header row).
+  bar (+ `meta`, `fedKg`): the date + weekday, fed kg, a last-sync freshness chip
+  that re-ticks every 60 s, and a "N streams behind" note. Glass card +
+  `animate-fade-up`. Rendered high (right under the header row).
+  **REDUCED 2026-08-28:** the running/rest **beacon**, **Planned setup** and
+  **Projected out** were all read from the retired `production_schedule` plan, and
+  the `plantStatus` prop went with them. None is derivable from activity — `fedKg`
+  on the operational date is normally 0 because RC Out is filed the following
+  morning, so a beacon driven off it would announce "plant at rest" on an ordinary
+  working day. The band now reports only what it can observe.
 - `components/digest/kpi-hero.tsx` — `'use client'`. **State-aware** stat-card
   grid from `data.kpis` + `data.dayStatus`. Each card consults
   `dayStatus[kpi.key]`: a **`reported`** state renders the classic card (label,
@@ -130,7 +105,9 @@ values into views.
   `StateCard` instead — a state label + left severity rail + chip + ghosted
   projection and **NO sparkline** ("no active series"), so a planned rest, a
   late report, and a stale stream never all masquerade as a misleading `0`.
-  A **lag-by-design** card (production / power / rc_out) is `reported` against
+  (The `rest` state and the ghosted `projectedTons` on an `awaiting` card went
+  with the plan on 2026-08-28 — `rest` was the one state only the plan could
+  resolve.) A **lag-by-design** card (production / power / rc_out) is `reported` against
   its latest REPORTED day and carries an `AsOfChip` ("Aug 1") on the VALUE row
   plus a qualifier line ("2 days ago" / amber "1 report due"); an overdue one
   becomes a red `StateCard` that still shows the last real reading and
@@ -147,12 +124,13 @@ values into views.
   production panels are ALWAYS side-by-side regardless of whether the price chart
   is present (grade spans full width only when `productionHours` is empty). Takes
   a new `productionHours` prop (passed from `page.tsx`).
-  **Feed In vs Out** — a **rest-day-aware `ComposedChart`**: rest / no-report /
-  no-delivery days stay **null** (the line never plunges to the floor), but the
-  lines **connect smoothly across** those nulls (`connectNulls={true}`) so the
-  trend reads as one continuous stroke, NOT a gapped series; a `planByDate` map
-  built from `data.weekPlan` still adds a faint band on planned rest days and an
-  amber marker on `awaiting` days (report pending) as background context. **RC In
+  **Feed In vs Out** — a `ComposedChart`: no-report / no-delivery days stay
+  **null** (the line never plunges to the floor), but the lines **connect smoothly
+  across** those nulls (`connectNulls={true}`) so the trend reads as one continuous
+  stroke, NOT a gapped series. (The faint "planned rest" band and amber "awaiting
+  report" marker were removed on 2026-08-28 with the `weekPlan` prop that fed
+  them — nothing left in the data distinguishes a planned rest from an unfiled
+  report, so the chart no longer claims to.) **RC In
   price ₱/kg** (line — skipped entirely when `price` is empty, which happens for
   price-denied roles since the series is gated server-side; the ₱ YAxis uses a
   **data-driven padded domain** — `[min − max(range·0.6, 1.5), max + max(range·0.25,
@@ -174,44 +152,13 @@ values into views.
   `view_digest_daily_hours`). Downtime > 0 tinted amber, else muted dash. Glass
   card chrome; title "Work & downtime hours", subtitle "last 14 days · hrs".
   Renders `null` when `productionHours` is empty. No ₱ → no gating.
-- `components/digest/week-strip.tsx` — **Server component**. This-week
-  plan-vs-actual strip from `data.weekPlan` (7 days of the operational date's
-  week): one card per day with dow + date, setup, a violet planned bar over a
-  chart-1 actual bar, and a state chip (Reported / Today / Planned) driven by the
-  pre-resolved `WeekDayPlan.state`. Rest days render dashed + "planned rest";
-  today gets a `ring`. Rendered **near the top** (right under the plant-status
-  band, above OpenBlocks; skipped when `weekPlan` is empty); its section heading
-  carries a "View full schedule →" link to the `/?view=schedule` month
-  table. Presentation-only — states + tons come pre-resolved from the adapter.
-- `components/digest/schedule-preview.tsx` — **Server component**. Compact
-  Excel-Standard **Production Schedule table** from `data.schedulePreview` (**10
-  rows**: operational date → +9 days), sized as a **half-width scroll card**
-  (`max-h-[340px] overflow-auto` + sticky header) that pairs beside `OpenBlocks`
-  in the snapshot row. Columns: Date · Day · **Setup / grades** · Sh · **Total t**
-  · Act t · **Act hrs** · Status · Src. **Act hrs** (`SchedulePreviewRow.actualHrs`
-  — reported work hours from `view_digest_daily_hours`) sits right of Act t; most
-  rows are null in this forward window → muted dash (expected). The Setup cell
-  stacks a muted **per-grade tonnage**
-  breakdown (`3X50 21t · 4X8 5t`, heaviest first, single-line + `title`) under
-  the setup name; **Total t** is the day total (`projectedTons`). Rest days show a
-  clean dash. Today's row accent-tinted; Status chip reuses
-  `STATE_CHIP`/`STATE_LABEL`, Src chip is violet **Joseph** when `source` starts
-  with `joseph:` else muted **Sheet**. Card header "Production schedule · next 10
-  days" + right-aligned "View full schedule →" link. Takes an optional
-  `pendingConflicts` prop (`DigestData.schedulePendingConflicts`) rendered as a
-  quiet amber "N pending upstream change(s)" chip in the header, linking to
-  `/?view=schedule`; **0 renders nothing**. The band now also renders for a
-  non-zero count alone (tables omitted when `rows` is empty), so a parked conflict
-  is never invisible. No ₱ → no gating.
-  **Grade-by-shift:** `GradePoint` now carries an optional `shift` ('M'|'E'|'N',
-  from `view_digest_grades.shift`). `pivotGrades` segments a grade into per-shift
-  series (`grade·shift` keys, e.g. `3X50·M`) ONLY when that grade has >1 distinct
-  shift in the window — single-shift/shift-less grades stay one clean bar with a
-  bare-grade legend label. Color is assigned per GRADE (shared hue); shifts
-  within a grade are distinguished by a stepped `fillOpacity` (1 → 0.7 → 0.45).
-  All series share one `stackId` (pre-ordered grade→shift), so each day still
-  reads as a single stacked column across grades, with shift sub-segments
-  contiguous inside each grade band. Legend hides when there's ≤1 series.
+> **REMOVED 2026-08-28** — the `week-strip.tsx` (this week · plan vs actual) and
+> `schedule-preview.tsx` (rolling 10-day Production Schedule table, its
+> `SchedulePreviewMobile` phone layer, the shared `ScheduleTable`/`ScheduleRowCard`
+> and the pending-conflict chip) bands. Both were pure presentations of the
+> `production_schedule` plan, which was retired. Archived at
+> `_archived/prod-schedule-v1/components/digest/`.
+
 - `components/digest/trucks-summary.tsx` — `'use client'`. Excel-Standard dense
   table of trucks that logged a trip (`ttl_km > 0`) on the operational date,
   busiest first. Columns: Plate / Distance (km) / Fuel (L) — numerics `font-mono`
@@ -227,7 +174,9 @@ values into views.
   **IN-USE** block (`status = 'IN-USE'`), `block_loc` ascending — chosen because
   only a few blocks are ever in-use, so cards read better than a dense table.
   Responsive grid `grid-cols-1 sm:grid-cols-2` (2-up, tuned to sit cleanly in the
-  half-width snapshot column beside `SchedulePreview`; stacks 1-up when narrow).
+  half-width snapshot column that used to pair beside the schedule preview;
+  since 2026-08-28 the band spans the full width, so the same grid simply gets
+  more room and stacks 1-up when narrow).
   **Each card is a clickable `<button>` control** (keyboard-accessible, focus
   ring, hover border): activating it calls `fetchBlockDataForBatch(batchId)`
   (`@/app/(app)/inventory/blocking/actions`) and opens the ESTABLISHED Blocking
@@ -333,31 +282,30 @@ values into views.
     lag-aware columns cost no extra round-trip), and `meta.streams` is now
     assembled immediately after `operationalDate` resolves because the KPI cards
     are ANCHORED to it.
-  - **Wave 2** — one `Promise.all` of the 4 queries that need `operationalDate`
-    (rc-in day stats, trucks, the `production_schedule` plan, actual tons).
-    `operationalDate` comes from wave 1's `view_digest_operational_days`, so
-    these genuinely cannot fold upward — but they don't depend on each other, so
-    they cost ONE round-trip between them, not four. `weekPlan` and
-    `schedulePreview` SLICE the same preview-window response (the preview range
-    contains the week range and selects a superset of columns) instead of
-    re-querying the narrower window.
+  - **Wave 2** — one `Promise.all` of the 2 queries that need `operationalDate`
+    (rc-in day stats, trucks). `operationalDate` comes from wave 1's
+    `view_digest_operational_days`, so these genuinely cannot fold upward — but
+    they don't depend on each other, so they cost ONE round-trip between them.
+    **This wave lost two reads on 2026-08-28** — the `production_schedule` plan
+    window and `view_digest_prod_actual_tons` — with the week strip and the 10-day
+    preview. Wave 1 likewise lost the `view_production_schedule_conflicts` count.
   The contract in
   `lib/digest/types.ts` is intentionally stable — extend it deliberately (as with
   `trucks` / `GradePoint.shift`) and keep `queries.ts` to light mapping only (all
   aggregation stays in SQL views per the HARD RULE).
 - **Contract shape** (`lib/digest/types.ts`): `DigestData = { meta, kpis, flow,
   price, grades, productionHours, latestSync, activity, flags, monthToDate, trucks,
-  openBlocks, fleconBags, plantStatus, dayStatus, weekPlan, schedulePreview,
-  schedulePendingConflicts }`.
+  openBlocks, fleconBags, dayStatus }`.
   - `meta` — `operationalDate`, `prevOperationalDate`, `lastSyncAt`, `freshness`,
     `streams[]` (per-stream `throughDate`, `prevReportedDate`, `reportsNextDay`,
     `missedDays` + `ok|warn`). Sourced from **`view_digest_stream_status`**
     (migration `20260803070000`), which supersedes `view_digest_stream_freshness`
     in the adapter — same query count, no extra round-trip. `status = warn` now
     means "2+ planned WORKING days of reports outstanding", not "N calendar days
-    behind": rest days (`production_schedule.shifts = 0`) and the operational
-    date itself are excluded in SQL, so a Sunday is never late and a next-day
-    stream's not-yet-due report for today is never late.
+    behind": non-working days and the operational date itself are excluded in
+    SQL, so a next-day stream's not-yet-due report for today is never late.
+    (Until 2026-08-28 a working day meant `production_schedule.shifts > 0`; with
+    the plan retired, SQL derives it from days another stream reported.)
   - `kpis[]` — `{ key, label, value, unit, prevValue, deltaPct, spark[], sub? }`.
     The four operational `spark[]` series (rc_in/rc_out/production/power) are
     built with zero-value days FILTERED OUT (pre-`tail`) so a 0 day doesn't dip
@@ -403,10 +351,6 @@ values into views.
     totalOut, balance, lastMovementDate }`. One entry per bag type,
     `sort_order` ascending. Row-level passthrough from `view_flecon_bag_balance`
     (all aggregation is the view's job). **No price data** — nothing gated.
-  - `plantStatus` — `{ date, shifts, setup, projectedTons, running } | null`.
-    The operational date's plant status from the `production_schedule` table
-    (`running = shifts > 0`; null outside the ingested plan window). **Not price
-    data** — never gated. Feeds `PlantStatusHeader`.
   - `dayStatus` — `Record<string, KpiDayStatus>` keyed by kpi key
     (`rc_in`/`rc_out`/`production`/`power`/`net_flow`). Each `KpiDayStatus` =
     `{ state: 'reported'|'awaiting'|'rest'|'stale'|'idle', projectedTons?,
@@ -424,54 +368,18 @@ values into views.
     reports, from SQL) is the ONLY thing that turns a card amber (>= 1) or red
     (>= 2). `awaiting` is deliberately not emitted for these streams — see
     `components/digest/CONTEXT.md` → "Lag-by-design streams".
-  - `weekPlan[]` — `{ date, dow, shifts, setup, projectedTons, actualTons,
-    isToday, state }` for the 7 days of the operational date's week. Plan (from
-    `production_schedule`) joined with ACTUAL tons (`view_digest_prod_actual_tons`
-    — SUM in SQL, never a TS reduction); `state` is a `ScheduleRowState`
-    (`reported`/`awaiting`/`rest`/`planned`/`today`). Feeds `WeekStrip` and the
-    flow chart's rest/awaiting band markers. Empty when there is no op date.
-  - `schedulePreview[]` — `{ date, dow, shifts, setup, projectedTons, actualTons,
-    state, source, grades }` for the rolling **10-day** window (operational date →
-    +9 days). Same plan-vs-actual join + resolved `ScheduleRowState` as `weekPlan`,
-    PLUS the raw DB `source` tag (`joseph:…` = authoritative, else the sheet) and
-    `grades` (the `production_schedule.grades` JSONB — `Record<string, number> |
-    null`, grade → projected tons; `projectedTons` stays the day TOTAL). Feeds the
-    `SchedulePreview` table band. Empty when there is no op date.
 
-### Production-schedule ownership (2026-07-30)
-`production_schedule` is no longer sync-owned. Each `plan_date` has an **owner**
-(`joseph` | `gsheet` | `human` | `actual`) and the sync writes only the days it is
-allowed to: an unchanged upstream revision writes **nothing**, a day with reported
-production is frozen, and a day a human edited in-app is never overwritten — the
-upstream value is parked in `pending_upstream` for the operator to arbitrate.
+### Production-schedule ownership — REMOVED (2026-08-28)
 
-**Phase A (data layer)** — migration `20260730060000_production_schedule_ownership.sql`:
-the `owner` / `source_rev` / `pending_upstream` / `row_version` /
-`human_edited_at` / `human_edited_by` columns, `view_production_schedule_state`
-(adds `effective_owner` + `is_reported`; `actual` is DERIVED from a
-`production_shifts` row existing, never stored),
-`view_production_schedule_conflicts` (one row per parked proposal, carrying BOTH
-sides + `changed_fields`), `fn_apply_schedule_upstream` (sync-only, service_role)
-and `fn_save_schedule_day` (the in-app write path).
-
-**Phase B (the in-app editing UI) — BUILT.** See "Schedule view" below and
-`app/(app)/production/CONTEXT.md` → "Production Schedule (Phase B)".
-
-**The pending-conflict count** is read in `getDigestData()`'s **wave 1** (it needs
-no `operationalDate`, so no extra round-trip) and lands on `DigestData` as
-`schedulePendingConflicts`:
-
-```ts
-const { count } = await supabase
-  .from('view_production_schedule_conflicts')
-  .select('plan_date', { count: 'exact', head: true })
-```
-
-`SchedulePreview` renders it as a quiet amber chip linking to `/?view=schedule`
-(**nothing at all when 0**), and the digest's snapshot-row condition in `page.tsx`
-includes `schedulePendingConflicts > 0` so a parked conflict is still surfaced on a
-day with no rolling schedule window.
-See `workers/sync/specs/prod_schedule.md`.
+The plan had an ownership model (`owner` = `joseph` | `gsheet` | `human` | `actual`,
+`source_rev`, `pending_upstream`, `row_version`), a conditional sync stage, an
+in-app editor and a conflict-arbitration dialog. **All of it is retired.** The
+`schedulePendingConflicts` count left `DigestData`, and the sync's parked-proposal
+channel (`result.reconciliation.schedule_conflicts`) has no live producer — though
+it is still PARSED and RENDERED, because historic `sync_runs.result` payloads carry
+it and the Sync panel pages through past runs. See `_archived/prod-schedule-v1/`
+and `_archived/prod-schedule-v1/specs/prod_schedule.md` for the reasoning, which still governs the
+human-edit latch on the six production FACT tables (untouched).
 
 ## Key Behaviors
 - **Freshness pill** — green pulsing dot when synced today, amber within ~3 d,
@@ -498,6 +406,8 @@ See `workers/sync/specs/prod_schedule.md`.
   "never animate 100+ instances" rule).
 - **Navbar** — `/` returns `null` from `getBreadcrumb()`, so the left side stays
   empty (no redundant title). The digest renders its own sub-band header only.
+  Since 2026-08-28 NO registry entry consults query params (the `/?view=schedule`
+  entry was the only one); the `params` argument is still threaded through.
 
 ## Mobile / responsive (phone ≤375px, iPad Mini 768/1024)
 The digest is a responsive pass over the SAME design system — desktop (`sm`+ /
@@ -505,8 +415,7 @@ The digest is a responsive pass over the SAME design system — desktop (`sm`+ /
 condense heavy widgets on phones and offer **tap-to-expand into a shadcn `Sheet`
 (`side="bottom"`)** for the full detail.
 - **Page shell** (`page.tsx`) — tighter mobile padding/gap
-  (`gap-4 px-3 py-4 sm:gap-6 sm:px-6 sm:py-5`); the snapshot grid gap is
-  `gap-4 sm:gap-6`. The 2-col snapshot row already stacks single-column below `lg`.
+  (`gap-4 px-3 py-4 sm:gap-6 sm:px-6 sm:py-5`).
 - **PlantStatusHeader** — smaller mobile padding/gap; the right-hand sync-freshness
   block is full-width + left-aligned on phones (`w-full … sm:w-auto sm:items-end`),
   and the `flex-1` spacer is `hidden sm:block` so it doesn't force an empty row.
@@ -516,15 +425,6 @@ condense heavy widgets on phones and offer **tap-to-expand into a shadcn `Sheet`
   value/state + delta-or-state chip, NO sparkline); tapping a card opens a bottom
   `Sheet` with the full `KpiCard`/`StateCard` (sparkline, delta, 7-day avg, and the
   net-flow "expected drift" note as text). State managed in `kpi-hero.tsx`.
-- **WeekStrip** — phones render the 7 day-cards as a horizontal **snap-scroll**
-  strip (`flex snap-x overflow-x-auto`; each card `min-w-[8.5rem] snap-start`);
-  `sm`+ reverts to the original grid (`sm:grid sm:grid-cols-4 lg:grid-cols-7`).
-- **SchedulePreview** — the dense 9-col table shows inline only at `sm`+
-  (`hidden sm:block`, via the shared `ScheduleTable`). Phones (`sm:hidden`) render
-  `SchedulePreviewMobile`: a condensed stacked list of the nearest 5 days
-  (date · setup/grades · tons · status) plus a **"View full table" bottom `Sheet`**
-  containing the full `ScheduleTable` (`min-w-[640px]`, scrolls sideways inside the
-  sheet). "View full schedule →" link retained.
 - **OpenBlocks** — cards already stack 1-up on phones (`grid-cols-1 sm:grid-cols-2`);
   the shared `BlockingDetailPanel` slide-over is now `w-full sm:w-[520px]` so it no
   longer overflows a 375px screen (see blocking CONTEXT).
@@ -537,11 +437,6 @@ condense heavy widgets on phones and offer **tap-to-expand into a shadcn `Sheet`
 - **Trucks / Bag / Sync+Activity / Footer** — already stack + use `table-fixed
   w-full` / `flex-wrap`, so they reflow cleanly on phones (responsive-only, no
   condense/expand needed).
-- **Schedule view (`/?view=schedule`)** — the toggle segments are full-width and
-  44px-tall on phones (inline pill at `sm`+). The month view itself renders
-  `ScheduleCardsMobile` (full-month condensed card list) below `sm` and the dense
-  `overflow-x-auto` + `min-w-[1080px]` table at `sm`+, so columns keep their widths
-  and scroll sideways instead of crushing.
 - **Reduced motion** — `globals.css` now has a `@media (prefers-reduced-motion:
   reduce)` guard that neutralizes the `animate-*` / `stagger-*` utilities and
   collapses `hover-lift` to near-instant.
@@ -563,5 +458,7 @@ condense heavy widgets on phones and offer **tap-to-expand into a shadcn `Sheet`
 
 ## See Also
 - `_archived/dashboard-v1/README.md` — the previous widget dashboard (archived).
+- `_archived/prod-schedule-v1/README.md` — the retired production plan: the `?view=schedule`
+  month editor, the week strip, the 10-day preview, the setup library and their DB objects.
 - `components/NAVBAR.md` — `/` has no breadcrumb entry (left side empty).
 - `CLAUDE.md` — Motion & Glass, Excel Standard, Error Toasts hard rule.

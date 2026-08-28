@@ -3,10 +3,10 @@
 // =====================================================================
 // ORIGINAL PROBLEM (still solved here, do not regress): `getDigestData()`
 // COALESCEs "no row for a stream on the operational date" and "a real 0
-// reading" both to 0. On the operational date that made a planned Sunday,
-// an unfiled report, and a stale stream all render as a flat "0" —
+// reading" both to 0. On the operational date that made a quiet day, an
+// unfiled report, and a stale stream all render as a flat "0" —
 // indistinguishable and often alarming. This module resolves each stream
-// to ONE of five states so a "0" carries meaning before it reaches the UI.
+// to ONE of four states so a "0" carries meaning before it reaches the UI.
 //
 // SECOND PROBLEM (2026-08-03): most streams are reported a day BEHIND by
 // design. MC's Daily Production Report (production + electricity + trucks)
@@ -18,10 +18,22 @@
 // THE RULE NOW:
 //   * A lag-by-design stream's card is anchored to its LATEST REPORTED DAY,
 //     not to the operational date, and always carries that day's date.
-//   * "Older than expected" is measured in PLANNED WORKING DAYS whose report
-//     is outstanding (`missedDays`), computed in SQL against
-//     `production_schedule.shifts > 0` and excluding the operational date
-//     itself. Sunday is never late; today is never late.
+//   * "Older than expected" is measured in WORKING DAYS whose report is
+//     outstanding (`missedDays`), computed in SQL and excluding the
+//     operational date itself, so today is never late. (Until 2026-08-28 a
+//     working day meant `production_schedule.shifts > 0`; with the production
+//     plan retired, SQL derives it from days another stream reported. Same
+//     column, same meaning here — this module only branches on the number.
+//     Back-tested over 239 days x 5 streams: 1,188 of 1,195 stream-days keep
+//     the IDENTICAL verdict, so the ladder below is unchanged in meaning and
+//     very slightly MORE sensitive. **The blind spot, so it is never a
+//     surprise: a day on which NO stream reported cannot be known to have been
+//     a working day, so a total plant-wide outage now reads as a holiday and
+//     raises nothing here.** That is structural — with the plan retired,
+//     nothing in the system records INTENT to run. Do not try to patch it in
+//     this module: it has only the scalars SQL hands it, and guessing intent
+//     from absence is the exact class of error the `rest` state was removed
+//     for.)
 //   * 0 missed → calm. 1 missed → amber (a report is genuinely due).
 //     >= 2 missed → red `stale` (overdue), and the card still shows WHAT was
 //     last reported and WHEN, so the alarm is specific rather than blank.
@@ -38,53 +50,28 @@
 
 import type { StreamFreshness } from "./types";
 
-// ---------------------------------------------------------------------
-// PROD SCHED day shape (moved here from the retired prod-schedule-draft
-// constant — the live plan now comes from the `production_schedule` table
-// via getDigestData()). Shared by the digest adapter + the resolvers below.
-// ---------------------------------------------------------------------
-
-/** Planned shift count for a day. 0 = planned rest (Sunday / holiday). */
-export type PlannedShifts = 0 | 1 | 2;
-
-/** One day of the PROD SCHED plan (from `production_schedule`).
- *  `projectedTons` is the planned output in TONS. */
-export interface ProdSchedDay {
-  /** yyyy-MM-dd */
-  date: string;
-  /** short weekday, e.g. "Mon" */
-  dow: string;
-  shifts: PlannedShifts;
-  /** line setup label, e.g. "3X50 / 4X8"; null on a rest day */
-  setup: string | null;
-  /** planned output in TONS */
-  projectedTons: number;
-  /** free-text planning note from the sheet, when present */
-  remarks?: string;
-}
-
 /**
  * Resolved status for one KPI card.
  * - `reported` — a real value is present → show the number + delta. For a
  *   lag-by-design stream the number belongs to `asOf` (its latest reported
  *   day), and `missedDays === 1` additionally tints the card amber.
- * - `awaiting` — plant PLANNED to run but the stream has no row yet → amber,
- *   show the projected figure ghosted. NOT emitted for lag-by-design streams
- *   (see the header): "today has no row" is their normal state, so this
- *   could otherwise be the whole working day.
- * - `rest`     — schedule shifts == 0 (Sunday/holiday) → calm, never red.
- * - `stale`    — the stream is `OVERDUE_AFTER_MISSED_DAYS`+ planned working
- *   days behind → red "report overdue".
+ * - `awaiting` — a same-day stream has no row yet → amber. NOT emitted for
+ *   lag-by-design streams (see the header): "today has no row" is their normal
+ *   state, so this could otherwise be the whole working day.
+ * - `stale`    — the stream is `OVERDUE_AFTER_MISSED_DAYS`+ working days
+ *   behind → red "report overdue".
  * - `idle`     — RC In only: procurement is not shift-bound, so "no delivery
  *   today" is neutral, not a late report.
  */
-export type DayState = "reported" | "awaiting" | "rest" | "stale" | "idle";
+// NOTE (2026-08-28): `rest` was removed with the production plan. It was the
+// ONE state that could not be resolved from activity — only the plan knew a
+// Sunday was a *planned* rest rather than a missing report — and inferring it
+// from "no rows today" would have been a guess dressed as a fact.
+export type DayState = "reported" | "awaiting" | "stale" | "idle";
 
 export interface KpiDayStatus {
   state: DayState;
-  /** planned output (tons) for an `awaiting` day, when known */
-  projectedTons?: number;
-  /** how many planned WORKING days the stream is behind, for `stale` */
+  /** how many WORKING days the stream is behind, for `stale` */
   staleDays?: number;
   /** true when this KPI's stream is reported a day behind BY DESIGN, so the
    *  card is anchored to `asOf` rather than to the operational date. */
@@ -95,12 +82,9 @@ export interface KpiDayStatus {
   asOf?: string;
   /** calendar days between `asOf` and the operational date ("2 days ago"). */
   asOfAgeDays?: number;
-  /** planned WORKING days whose report is outstanding. 0 = on time,
+  /** WORKING days whose report is outstanding. 0 = on time,
    *  1 = amber (due), >= 2 = overdue. Undefined when not computable. */
   missedDays?: number;
-  /** the operational date itself is a planned rest day (shifts === 0) —
-   *  rendered as a calm side-note, never as an alarm. */
-  restToday?: boolean;
 }
 
 /** KPI card key → the stream-freshness key that backs it. */
@@ -111,7 +95,7 @@ const KPI_STREAM_MAP: Record<string, string> = {
   rc_in: "deliveries",
 };
 
-/** Missed planned WORKING days at which a lagging stream turns amber. One
+/** Missed WORKING days at which a lagging stream turns amber. One
  *  outstanding working day = the report is genuinely due right now. */
 export const LATE_AFTER_MISSED_DAYS = 1;
 
@@ -207,8 +191,8 @@ export function resolveKpiAnchorDate({
  *
  * The anchor is set by whichever input is furthest behind (the minimum
  * `through_date`), so the previous complete day is that same stream's previous
- * reported day. Stepping back one calendar day instead would land on a rest day
- * half the time; stepping back by the *other* stream's history would compare a
+ * reported day. Stepping back one calendar day instead would land on a non-
+ * reporting day half the time; stepping back by the *other* stream's history would compare a
  * complete day against an incomplete one, which is the bug being fixed.
  */
 export function resolveCompletePrevDate(
@@ -255,8 +239,6 @@ export interface ResolveKpiArgs {
   anchorDate: string | null;
   /** the operational date (yyyy-MM-dd), or null if none */
   operationalDate: string | null;
-  /** the day's PROD SCHED plan (may be undefined outside the plan window) */
-  plan: ProdSchedDay | undefined;
   /** per-stream status from DigestData.meta.streams */
   streams: StreamFreshness[];
 }
@@ -270,7 +252,6 @@ export function resolveKpiDayStatus({
   value,
   anchorDate,
   operationalDate,
-  plan,
   streams,
 }: ResolveKpiArgs): KpiDayStatus {
   // Net flow is a derived balance — never a "late report". Its inputs' lateness is
@@ -290,20 +271,18 @@ export function resolveKpiDayStatus({
   }
 
   const stream = streamForKpi(kpiKey, streams);
-  const restToday = plan?.shifts === 0;
 
   // -------------------------------------------------------------------
   // SAME-DAY streams. RC In is procurement, not shift-bound: a day with no
-  // delivery is IDLE (neutral), never an "awaiting report" or a rest day.
+  // delivery is IDLE (neutral), never an "awaiting report".
   // -------------------------------------------------------------------
   if (!stream?.reportsNextDay) {
     if (kpiKey === "rc_in") {
       return value > 0 ? { state: "reported" } : { state: "idle" };
     }
-    // Any future same-day stream: keep the original plan-driven ladder.
-    if (restToday) return { state: "rest" };
+    // Any future same-day stream: reported when it has a number, else awaiting.
     if (value > 0) return { state: "reported" };
-    return { state: "awaiting", projectedTons: plan?.projectedTons };
+    return { state: "awaiting" };
   }
 
   // -------------------------------------------------------------------
@@ -315,15 +294,11 @@ export function resolveKpiDayStatus({
   // Nothing usable on record — either the stream has never reported, or its
   // latest reported day falls outside the loaded daily window.
   if (!anchorDate) {
-    if (stream.throughDate == null && restToday) {
-      return { state: "rest", lagByDesign: true, restToday: true };
-    }
     return {
       state: "stale",
       lagByDesign: true,
       staleDays: missedDays,
       missedDays,
-      restToday: restToday || undefined,
     };
   }
 
@@ -336,10 +311,9 @@ export function resolveKpiDayStatus({
     ...(asOf && operationalDate
       ? { asOfAgeDays: daysBetween(operationalDate, asOf) }
       : {}),
-    ...(restToday ? { restToday: true } : {}),
   };
 
-  // Overdue: a planned working day's report was skipped, not just delayed.
+  // Overdue: a working day's report was skipped, not just delayed.
   if (missedDays != null && missedDays >= OVERDUE_AFTER_MISSED_DAYS) {
     return { ...base, state: "stale", staleDays: missedDays };
   }
@@ -347,31 +321,4 @@ export function resolveKpiDayStatus({
   // On time (0 missed) or one report due (1 missed → amber, rendered by the
   // card from `missedDays`). Either way the real number leads.
   return base;
-}
-
-// ---------------------------------------------------------------------
-// Schedule-table row state (plan vs actual for a whole month)
-// ---------------------------------------------------------------------
-
-/**
- * Row state for the Production Schedule table. Distinct from the KPI states:
- * a row can be a FUTURE `planned` day (not yet due) or the `today` row.
- */
-export type ScheduleRowState =
-  | "reported" // actual output on record
-  | "awaiting" // past working day, no actual yet
-  | "rest" // planned rest (0 shifts)
-  | "planned" // future working day
-  | "today"; // the operational date, no actual yet
-
-export function resolveScheduleRowState(
-  day: ProdSchedDay,
-  actualTons: number | null,
-  operationalDate: string | null
-): ScheduleRowState {
-  if (day.shifts === 0) return "rest";
-  if (actualTons != null && actualTons > 0) return "reported";
-  if (operationalDate && day.date === operationalDate) return "today";
-  if (operationalDate && day.date > operationalDate) return "planned";
-  return "awaiting";
 }

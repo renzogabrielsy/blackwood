@@ -1,6 +1,6 @@
 // `/production` — the tab index. Inside the `(tabs)` route group (URL-invisible),
-// so it still resolves at `/production` but the shell it inherits no longer
-// reaches `/production/schedule`.
+// so it still resolves at `/production` while the shell it inherits stays scoped
+// to the tab surfaces (see `(tabs)/layout.tsx`).
 //
 // ── WHICH GRID (`?grid=`) ────────────────────────────────────────────────────────
 //

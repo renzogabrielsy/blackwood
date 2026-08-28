@@ -31,7 +31,6 @@ import type {
   PricePoint,
   GradePoint,
   DailyHoursPoint,
-  WeekDayPlan,
 } from "@/lib/digest/types";
 
 // ---------------------------------------------------------------------
@@ -149,35 +148,28 @@ function tooltipChrome() {
 }
 
 // ---------------------------------------------------------------------
-// Chart 1 — Feed In vs Out (last 30 days), rest-day aware
+// Chart 1 — Feed In vs Out (last 30 days)
 // ---------------------------------------------------------------------
-// A zero day is NOT a plunge to the floor: a planned rest day (0 shifts) or a
-// day whose report hasn't landed yet is kept NULL so the line never dives to
-// zero. But the lines CONNECT ACROSS those nulls (connectNulls={true}) — the
-// trend reads as one smooth, continuous stroke instead of a broken series of
-// gaps. Where the operational week's plan is known (weekPlan), a rest day still
-// gets a faint background band and an awaiting day an amber marker so the
-// bridged span reads as "pending"/"planned rest", never "nothing happened".
+// A zero day is NOT a plunge to the floor: a day with no delivery, or one whose
+// report hasn't landed yet, is kept NULL so the line never dives to zero. But
+// the lines CONNECT ACROSS those nulls (connectNulls={true}) — the trend reads
+// as one smooth, continuous stroke instead of a broken series of gaps.
+//
+// REMOVED 2026-08-28: the faint "planned rest" band and the amber "awaiting
+// report" marker. Both were driven by the operational week's `production_schedule`
+// plan, which is retired. Nothing in the remaining data distinguishes a planned
+// rest day from an unfiled report, so the chart no longer claims to — the null
+// gap and its bridging stroke, which never depended on the plan, are unchanged.
 
 interface FlowChartRow {
   date: string;
   /** kg received; null when there was no delivery (procurement gap) */
   inKg: number | null;
-  /** kg fed; null on a rest day or when the report is still awaited */
+  /** kg fed; null when nothing was fed or the report is still awaited */
   outKg: number | null;
-  /** full-height marker for rest days (a faint band behind the lines) */
-  restBand: number | null;
-  /** low-height marker for awaiting days (report pending) */
-  awaitingBand: number | null;
 }
 
-function FlowChart({
-  flow,
-  planByDate,
-}: {
-  flow: FlowPoint[];
-  planByDate: Map<string, WeekDayPlan>;
-}) {
+function FlowChart({ flow }: { flow: FlowPoint[] }) {
   const tip = tooltipChrome();
 
   const { rows, yMax } = React.useMemo(() => {
@@ -186,23 +178,15 @@ function FlowChart({
     );
     const max = values.length ? Math.max(...values) : 1;
     const ceil = Math.ceil(max / 10_000) * 10_000 || max;
-    const built: FlowChartRow[] = flow.map((f) => {
-      const plan = planByDate.get(f.date);
-      const rest = plan ? plan.shifts === 0 : false;
-      // out === 0 on a KNOWN working day → the RC Out report hasn't landed yet.
-      const awaiting = !rest && f.out === 0 && (plan ? plan.shifts > 0 : false);
-      return {
-        date: f.date,
-        // no delivery → gap (procurement is not shift-bound)
-        inKg: f.in > 0 ? f.in : null,
-        // rest / pending / silent → gap, never a plunge to zero
-        outKg: rest || f.out === 0 ? null : f.out,
-        restBand: rest ? ceil : null,
-        awaitingBand: awaiting ? ceil * 0.14 : null,
-      };
-    });
+    const built: FlowChartRow[] = flow.map((f) => ({
+      date: f.date,
+      // no delivery → gap (procurement is not shift-bound)
+      inKg: f.in > 0 ? f.in : null,
+      // nothing fed / report pending → gap, never a plunge to zero
+      outKg: f.out > 0 ? f.out : null,
+    }));
     return { rows: built, yMax: ceil };
-  }, [flow, planByDate]);
+  }, [flow]);
 
   const legend = (
     <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
@@ -213,14 +197,6 @@ function FlowChart({
       <span className="inline-flex items-center gap-1.5">
         <span className="h-[3px] w-3.5 rounded-full bg-[var(--chart-1)]" />
         Fed
-      </span>
-      <span className="inline-flex items-center gap-1.5">
-        <span className="h-2.5 w-2.5 rounded-sm border border-dashed border-border bg-muted" />
-        Rest day (planned)
-      </span>
-      <span className="inline-flex items-center gap-1.5">
-        <span className="h-2.5 w-2.5 rounded-sm bg-amber-500/25" />
-        Awaiting report
       </span>
     </div>
   );
@@ -258,8 +234,6 @@ function FlowChart({
           <RTooltip
             {...tip}
             formatter={(value, name) => {
-              if (name === "restBand") return ["planned rest", "Status"];
-              if (name === "awaitingBand") return ["report pending", "Status"];
               if (value == null) return ["—", name === "inKg" ? "Received" : "Fed"];
               return [
                 `${fmtKg(Number(value))} kg`,
@@ -268,24 +242,7 @@ function FlowChart({
             }}
             labelFormatter={(l) => l}
           />
-          {/* rest-day band (behind the lines) */}
-          <Bar
-            dataKey="restBand"
-            fill="var(--muted-foreground)"
-            fillOpacity={0.1}
-            isAnimationActive={false}
-            maxBarSize={72}
-          />
-          {/* awaiting-report marker near the baseline */}
-          <Bar
-            dataKey="awaitingBand"
-            fill="var(--chart-4)"
-            fillOpacity={0.35}
-            isAnimationActive={false}
-            maxBarSize={40}
-            radius={[3, 3, 0, 0]}
-          />
-          {/* values stay null on rest/no-report/no-delivery days (never a
+          {/* values stay null on no-report/no-delivery days (never a
               plunge to zero), but connectNulls bridges ACROSS them so the line
               is one smooth continuous stroke, not a gapped series */}
           <Line
@@ -706,9 +663,6 @@ interface DigestChartsProps {
   /** worked vs downtime hours per production day (same 14-day window as
    *  `grades`) — feeds the hours table paired beside the grade chart. */
   productionHours: DailyHoursPoint[];
-  /** the operational date's week plan — drives the flow chart's rest/awaiting
-   *  band markers (dates outside the week simply render gaps on zero days). */
-  weekPlan: WeekDayPlan[];
 }
 
 export function DigestCharts({
@@ -716,7 +670,6 @@ export function DigestCharts({
   price,
   grades,
   productionHours,
-  weekPlan,
 }: DigestChartsProps) {
   // The price series is EMPTY for price-denied roles (gated server-side in
   // getDigestData). Skip the ₱/kg chart entirely in that case so no broken /
@@ -724,16 +677,12 @@ export function DigestCharts({
   // empty data.
   const showPrice = price.length > 0;
   const showHours = productionHours.length > 0;
-  const planByDate = React.useMemo(
-    () => new Map(weekPlan.map((w) => [w.date, w])),
-    [weekPlan]
-  );
   return (
     <div className="flex flex-col gap-3">
       {/* Row 1 — Feed In vs Out + RC In price. When price is gated the flow
           chart spans the full width (no empty half). */}
       <div className={cn("grid grid-cols-1 gap-3", showPrice && "lg:grid-cols-2")}>
-        <FlowChart flow={flow} planByDate={planByDate} />
+        <FlowChart flow={flow} />
         {showPrice && <PriceChart price={price} />}
       </div>
       {/* Row 2 — Production by grade (left) paired with the Work & downtime
