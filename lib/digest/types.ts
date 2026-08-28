@@ -12,7 +12,7 @@
 // layer (lib/digest/queries.ts) only SHAPES rows into these types.
 // =====================================================================
 
-import type { KpiDayStatus, ScheduleRowState } from "./day-status";
+import type { KpiDayStatus } from "./day-status";
 
 // ---------- Meta / freshness ----------
 
@@ -39,11 +39,14 @@ export interface StreamFreshness {
    *  "no row for the operational date" is its normal steady state, never a
    *  fault. From SQL (`view_digest_stream_status.reports_next_day`). */
   reportsNextDay: boolean;
-  /** planned WORKING days whose report is outstanding — days with
-   *  `production_schedule.shifts > 0` strictly between `throughDate` and the
-   *  operational date. Rest days and the operational date itself are
-   *  EXCLUDED, so Sunday is never late and today is never late. 0 = on time.
-   *  null = not computable. Counted in SQL, never in TypeScript. */
+  /** WORKING days whose report is outstanding — days strictly between
+   *  `throughDate` and the operational date on which the plant demonstrably
+   *  operated. The operational date itself is EXCLUDED, so today is never late.
+   *  0 = on time. null = not computable. Counted in SQL
+   *  (`view_digest_stream_status.missed_working_days`), never in TypeScript.
+   *  NOTE (2026-08-28): "working day" used to mean `production_schedule.shifts
+   *  > 0`. With the production plan retired, SQL now derives it from days on
+   *  which any other stream reported — same column, same contract here. */
   missedDays: number | null;
   /** ok = current within tolerance, warn = lagging (>= 2 missed working days) */
   status: "ok" | "warn";
@@ -237,80 +240,6 @@ export interface MonthToDate {
   netKg: number;
 }
 
-// ---------- Production plan (PROD SCHED) ----------
-
-/** Plant status for the operational date, sourced from `production_schedule`.
- *  `running = shifts > 0`. Null when the operational date has no plan row
- *  (outside the ingested PROD SCHED window). Not price data — never gated. */
-export interface PlantStatus {
-  /** the operational date (yyyy-MM-dd) */
-  date: string;
-  /** planned shift count: 0 = rest/holiday, 1 = normal, 2 = double */
-  shifts: number;
-  /** planned line setup, e.g. "3X50 / 4X8"; null on a rest day */
-  setup: string | null;
-  /** planned TTL tons for the day; null when unknown */
-  projectedTons: number | null;
-  /** shifts > 0 — the plant was scheduled to run that day */
-  running: boolean;
-}
-
-/** One day of the operational date's week (Mon→Sun), plan joined with ACTUAL
- *  production tons. `state` is resolved by `resolveScheduleRowState` in
- *  ./day-status. `actualTons` is null when no production run is on record yet. */
-export interface WeekDayPlan {
-  /** yyyy-MM-dd */
-  date: string;
-  /** weekday name, e.g. "Tuesday" */
-  dow: string;
-  shifts: number;
-  setup: string | null;
-  projectedTons: number | null;
-  /** actual output in TONS for the day (SUM(production_runs.ttl_kg)/1000), or
-   *  null when no production run is on record. Aggregated in SQL
-   *  (view_digest_prod_actual_tons), never summed in TypeScript. */
-  actualTons: number | null;
-  /** actual hours WORKED for the day (view_digest_daily_hours.work_hrs, joined by
-   *  date), or null when that date has no production/hours row. Not a TS sum. */
-  actualHrs: number | null;
-  /** the operational date */
-  isToday: boolean;
-  /** reported | awaiting | rest | planned | today (see ./day-status) */
-  state: ScheduleRowState;
-}
-
-/** One row of the rolling schedule-preview table on the Home Digest: the
- *  operational date through the next 9 days (10 rows), plan (from
- *  `production_schedule`) joined with ACTUAL production tons. Distinct from
- *  `WeekDayPlan` (used by the week-strip cards) — this feeds a dense Excel-
- *  Standard table complementing the full page at `/production/schedule`.
- *  Not price data → never gated. */
-export interface SchedulePreviewRow {
-  /** yyyy-MM-dd */
-  date: string;
-  /** weekday name, e.g. "Tuesday" */
-  dow: string;
-  shifts: number;
-  setup: string | null;
-  projectedTons: number | null;
-  /** actual output in TONS for the day (SUM(production_runs.ttl_kg)/1000), or
-   *  null when no production run is on record. Aggregated in SQL
-   *  (view_digest_prod_actual_tons), never summed in TypeScript. */
-  actualTons: number | null;
-  /** actual hours WORKED for the day (view_digest_daily_hours.work_hrs, joined by
-   *  date), or null when that date has no production/hours row. Not a TS sum. */
-  actualHrs: number | null;
-  /** reported | awaiting | rest | planned | today (see ./day-status) */
-  state: ScheduleRowState;
-  /** raw DB `source` string, e.g. "joseph:REV2" | "gsheet:PROD SCHED". A
-   *  `joseph:`-prefixed source is the authoritative plan. Null when absent. */
-  source: string | null;
-  /** per-grade projected tonnage for the day, straight from the
-   *  production_schedule `grades` JSONB ({ "3X50": 21, "4X8": 5 }). null/empty
-   *  on a rest day. `projectedTons` remains the day TOTAL. */
-  grades: Record<string, number> | null;
-}
-
 // ---------- Top-level payload ----------
 
 export interface DigestData {
@@ -335,31 +264,12 @@ export interface DigestData {
   /** FLECON bag balance snapshot — one entry per bag type, sort_order ascending.
    *  No price data. Row-level passthrough from view_flecon_bag_balance. */
   fleconBags: FleconBagBalance[];
-  /** Plant status for the operational date, from `production_schedule`
-   *  (running / planned setup / projected tons). Null when the operational date
-   *  has no plan row. Not price data. */
-  plantStatus: PlantStatus | null;
   /** Per-KPI operational-day state, keyed by kpi key
    *  ("rc_in" | "rc_out" | "production" | "power" | "net_flow"). Resolves the
-   *  "misleading zero": a plan-driven state (reported / awaiting / rest / stale /
-   *  idle) so a bare 0 carries meaning. Computed by `resolveKpiDayStatus`
-   *  (./day-status) against the operational date's plan + stream freshness. */
+   *  "misleading zero": a state (reported / awaiting / stale / idle) so a bare 0
+   *  carries meaning. Computed by `resolveKpiDayStatus` (./day-status) against
+   *  stream freshness. **The `rest` state is gone (2026-08-28)** — it was the one
+   *  branch that needed the retired `production_schedule` plan; a rest day now
+   *  simply reads `idle` / `reported` like any other quiet day. */
   dayStatus: Record<string, KpiDayStatus>;
-  /** The 7 days of the operational date's week (Mon→Sun): plan (from
-   *  `production_schedule`) joined with ACTUAL production tons (from
-   *  view_digest_prod_actual_tons) + a resolved per-day state. Empty when there
-   *  is no operational date. */
-  weekPlan: WeekDayPlan[];
-  /** Rolling schedule preview: the operational date through the next 9 days
-   *  (10 rows). Plan (from `production_schedule`, incl. per-grade tonnage) joined
-   *  with actual tons (view_digest_prod_actual_tons) + a resolved per-row state.
-   *  Feeds the compact schedule-preview table band. Empty when there is no
-   *  operational date. */
-  schedulePreview: SchedulePreviewRow[];
-  /** How many production-schedule days carry an unarbitrated upstream proposal
-   *  the sync withheld because a human owns the day
-   *  (COUNT over `view_production_schedule_conflicts`). Surfaced as a quiet
-   *  indicator on the schedule band so a stale conflict cannot sit unread on the
-   *  schedule route. 0 = render nothing. Not price data. */
-  schedulePendingConflicts: number;
 }

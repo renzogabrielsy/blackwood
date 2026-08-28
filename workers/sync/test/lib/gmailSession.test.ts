@@ -7,9 +7,10 @@
  *
  * WHAT IT PROVES
  *   1. A full run's Gmail work — mail-clerk fetch (7 queries) + 4 labelers + the flecon
- *      fetcher + the schedule fetcher — opens exactly ONE session under the run lease.
- *      Without the lease the SAME work is what production did before the fix: it is the
- *      before/after counter, not an assertion.
+ *      fetcher — opens exactly ONE session under the run lease. Without the lease the
+ *      SAME work is what production did before the fix: it is the before/after counter,
+ *      not an assertion. (A seventh user, the production-schedule fetcher at Stage 3c,
+ *      was removed with that feature on 2026-08-28 — hence 6 where this once said 7.)
  *   2. The session is closed EXACTLY once, including on the error path.
  *   3. Concurrent callers (Stage 2b runs four writers in parallel) still make ONE connect.
  *   4. A failed connect is remembered — later callers in the same run do NOT open more
@@ -31,7 +32,6 @@ import {
 } from "../../src/lib/gmailSession.js";
 import type { GmailClient } from "../../src/lib/gmail.js";
 import { makeLabeler, makeSingleLabeler, makeFleconFetcher } from "../../src/workflows/reportDeps.js";
-import { fetchLatestJosephSchedule } from "../../src/reports/prodSchedule/josephEmail.js";
 
 // ── A fake GmailClient. Counts connects/closes; never opens a socket. ───────
 interface FakeOpts {
@@ -89,13 +89,15 @@ describe("one IMAP session per run (BUG-019 Fix 1)", () => {
    *   Stage 1   mail clerk — 7 queries on one session
    *   Stage 2b  4 parallel writers, each labeling its thread
    *   Stage 2b  the flecon fetcher searching for its workbook
-   *   Stage 3c  the schedule fetcher (Joseph)
-   * Before the fix each bullet after the first opened its own session: 1 + 4 + 1 + 1 = 7.
+   * Before the fix each bullet after the first opened its own session: 1 + 4 + 1 = 6.
+   * (It was 7 until 2026-08-28, when the Stage-3c schedule fetcher was removed along with
+   * the rest of the production-schedule feature. The topology is what is being measured,
+   * so the number moves with the work — it is not a fixed historical constant.)
    */
   /**
    * `parallelLabelers=false` mirrors reality: each writer labels at the END of its own
    * apply phase, at a different moment, in a different DBOS child workflow — the four
-   * label calls do NOT reliably overlap. So the seven Gmail users are effectively
+   * label calls do NOT reliably overlap. So the six Gmail users are effectively
    * sequential, and each one used to build its own client.
    */
   async function doAFullRunsGmailWork({ parallelLabelers = false } = {}): Promise<void> {
@@ -112,11 +114,9 @@ describe("one IMAP session per run (BUG-019 Fix 1)", () => {
     }
     // Stage 2b — flecon fetches its own workbook.
     await makeFleconFetcher()('subject:"FLECON BAGGED"');
-    // Stage 3c — the production-schedule fetcher.
-    await fetchLatestJosephSchedule();
   }
 
-  it("opens ONE session for a whole run under the run lease (was 7)", async () => {
+  it("opens ONE session for a whole run under the run lease (was 6)", async () => {
     useFake();
     await withGmailRunLease(() => doAFullRunsGmailWork());
 
@@ -126,14 +126,15 @@ describe("one IMAP session per run (BUG-019 Fix 1)", () => {
     expect(gmailSessionStats()).toMatchObject({ opens: 1, closes: 1, leases: 0, open: false });
   });
 
-  it("the SAME work without the run lease is 7 sessions — that is what the lease removes", async () => {
-    // The seven Gmail users (clerk + 4 labelers + flecon + schedule) each open their own
-    // session when nothing pins one for them. That is exactly the pre-fix topology, and
-    // 7 sessions per run against Gmail's ~15-connection cap is what broke production.
+  it("the SAME work without the run lease is 6 sessions — that is what the lease removes", async () => {
+    // The six Gmail users (clerk + 4 labelers + flecon) each open their own session when
+    // nothing pins one for them. That is exactly the pre-fix topology, and sessions per
+    // run against Gmail's ~15-connection cap is what broke production — it was 7 before
+    // the schedule fetcher was removed on 2026-08-28, and the cap has not moved.
     useFake();
     await doAFullRunsGmailWork();
-    expect(FakeClient.connects).toBe(7);
-    expect(FakeClient.closes).toBe(7);
+    expect(FakeClient.connects).toBe(6);
+    expect(FakeClient.closes).toBe(6);
   });
 
   it("holds ONE session even when the four labelers really do overlap", async () => {

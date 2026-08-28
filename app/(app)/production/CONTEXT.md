@@ -13,12 +13,7 @@ Top-level route `/production` for charcoal plant operations data: daily producti
 | `daily/daily-cards-mobile.tsx` | **Phone read layer** for the Daily ledger (`sm:hidden`; desktop grid is `hidden sm:block`). Archetype C `MobileCardList` — one card per run row, fed the grid's OWN exported `buildGridRows()`; tap → section-grouped detail sheet (Identity / Production / Downtime / Waste). Read-only. |
 | `daily/ledger-derive.ts` | Pure helper `deriveDailyMetrics(row: GridRow)` — captures the grid's inline DT TTL / PROD HRS / PROD LOSS / TTL WASTE compute in ONE place so the mobile card shows identical derived values (never recomputed differently). |
 | `electricity/electricity-cards-mobile.tsx` | **Phone read layer** for Electricity (`sm:hidden`). Simplest `MobileCardList` — card headline `date · meter · TTL KWH · [start→end]`, detail = start/end/diff/mult/consumption/remarks. DIFF + TTL KWH read off the DB generated columns (`diff_kwh`, `consumption_kwh`). |
-| `schedule/actions.ts` | **The in-app write path for `production_schedule`** (Phase B, 2026-07-30). Server actions only — the client never touches Supabase. `saveScheduleDay` (edit → `fn_save_schedule_day`, flips the WHOLE DAY to `owner='human'`), `takeUpstreamProposal` / `keepMineClearPending` (the two conflict resolutions — the ONLY callers that pass `p_clear_pending: true`), `releaseScheduleDay` (hand a human day back to the sync). Every value-bearing mutation goes through `fn_save_schedule_day` with the `row_version` the client READ, so a save racing the sync returns `version_conflict` and is surfaced as "reload", never force-written. `revalidatePath('/')` after each success (the schedule lives at `/?view=schedule`). Exports `SchedulePatch`, `SaveOutcome`, `ScheduleWriteResult`. **Schema gap CLOSED:** `releaseScheduleDay` now calls the real RPC `fn_release_schedule_day(p_plan_date, p_expected_row_version)` (migration `20260730070000`), so there is no read-then-write left anywhere in this file. Since `20260730090000` neither human RPC has an actuals freeze — see "Reportedness freezes the SYNC, not the HUMAN" below; the `'frozen'` arm of `SaveOutcome` is now unreachable from this file, and `releaseScheduleDay` no longer needs its advisory pre-read of `view_production_schedule_state`. |
-| `schedule/page.tsx` | **The `/production/schedule` route — renders the editable month grid** (no longer a redirect; 2026-07-30). Historical note (BUG-003). The Production Schedule left the production module: it lived under `layout.tsx` and so wrongly rendered inside the Daily·Electricity·Trucks tab shell. It is now a **view on the Home Digest** — `/?view=schedule` — and the month table itself lives in `components/digest/schedule-month-view.tsx` (`<ScheduleMonthView month basePath extraParams />`, unchanged queries/columns/frozen panes). **The redirect was removed** because the schedule became reachable ONLY via a toggle on `/`, so the shipped editor read as "never built". This file now renders `<ScheduleMonthView month basePath="/production/schedule" />` inside the shared `HOME_SHELL_CLS` (`components/digest/shell.ts`) — the SAME component, container and data loading `/?view=schedule` uses. **Two doors, one surface; no fork.** BUG-003 stays fixed by the `(tabs)` ROUTE GROUP: `layout.tsx` + `page.tsx` + `error.tsx` + `loading.tsx` moved into `app/(app)/production/(tabs)/` (URLs unchanged), so the Daily·Electricity·Trucks shell can no longer reach this sibling route. The page renders NO title header — the navbar owns it (`exact('/production/schedule')` in `getBreadcrumb()`). Its phone card list moved to `components/digest/schedule-cards-mobile.tsx`. See `app/(app)/CONTEXT.md` → "`/` hosts TWO views". |
-| `setups/page.tsx` | **The `/production/setups` route — the SETUP LIBRARY.** Server component: loads `production_setups` (**ACTIVE *and* RETIRED** — that is the point of the screen), maps via `parseGradeMix`, hands `SetupLibraryRow[]` to `SetupsManager`. Sits OUTSIDE `(tabs)/` for the same reason `schedule/` does — it is not a Daily · Electricity · Trucks tab and must not inherit their shell (BUG-003). Renders no title header; the navbar owns it (`exact('/production/setups')` in `getBreadcrumb()`, plus a `Setup Library` entry in `ICTC_MODULES`). |
-| `setups/setups-manager.tsx` | `'use client'` — add · edit · **retire / restore** · reorder, Excel Standard (`table-fixed`, explicit px summing to `min-w-[1112px]` inside `overflow-x-auto`, `px-2 py-1`, `h-8`, mono right-aligned numerics). **There is no delete anywhere**: retiring flips `active=false`, which only removes the setup from the day-grid dropdown — retired rows stay listed (dimmed, struck-through, under their own sub-header) and restorable, because `production_schedule.setup` is free text with no FK and every historical plan row keeps its label forever. Reorder is ↑/↓ within the ACTIVE block, sent as the whole ordered id list. The per-row `t / shift` figure is `projectSetup(mix, 1).projectedTons` — the ONE implementation, never a local `reduce()`. **"Editing a mix is not retroactive"** is said in three places (banner, edit dialog, retire confirm) because it is the one genuinely surprising behaviour. Errors via `errorToast()` / inline Copy blocks (HARD RULE). |
-| `setups/actions.ts` | Server actions for `production_setups` — `createProductionSetup` (returns the written `code` so the day grid can apply it in the same motion), `updateProductionSetup`, `setProductionSetupActive` (retire/restore; **no delete action exists in this file**), `reorderProductionSetups` (rewrites `sort_order` as 10, 20, 30… from the client's ordered id list — immune to the drift a swap-with-neighbour scheme accumulates when two rows share a `sort_order`, which the seeded data can). Plain PostgREST, no RPC — there is no ownership model to protect (RLS gives `authenticated` full CRUD). Validation is mirrored server-side, and `readableDbError()` turns the UNIQUE violation on `code` (`23505`) into a sentence instead of leaking `duplicate key value violates unique constraint "production_setups_code_key"`. Revalidates `/production/setups`, `/production/schedule` and `/`. |
-| `(tabs)/layout.tsx` | Client layout for the TAB surfaces only (inside the URL-invisible `(tabs)` route group, so `/production/schedule` opts out) — wraps in `ProductionTabProvider` + `ProductionPeriodProvider` + Card shell. Mounts the universal `<PeriodPicker />` header bar above tab content + `<ProductionSheetTabs />` footer |
+| `(tabs)/layout.tsx` | Client layout for the TAB surfaces only (inside the URL-invisible `(tabs)` route group — its original beneficiaries `/production/schedule` and `/production/setups` were retired 2026-08-28, but the group stays for the next non-tab route) — wraps in `ProductionTabProvider` + `ProductionPeriodProvider` + Card shell. Mounts the universal `<PeriodPicker />` header bar above tab content + `<ProductionSheetTabs />` footer |
 | `error.tsx` | Error boundary |
 | `loading.tsx` | Loading skeleton |
 | `components/production-tab-context.tsx` | React context — `activeTab` / `setActiveTab`, localStorage key `production_active_tab` |
@@ -205,11 +200,52 @@ old value back — silently, because the workbook still said the old value.
 
 Worker side: `workers/sync/specs/production.md` §6a.
 
-## Production Schedule (Phase B — in-app editing, 2026-07-30)
+## Production Schedule — **REMOVED 2026-08-28** (kept below as history)
 
-The schedule **UI** lives in `components/digest/` (rendered at BOTH `/?view=schedule` and `/production/schedule`),
-but its **server actions** stay here at `app/(app)/production/schedule/actions.ts`
-— this is the plan's domain module.
+> ⚠️ **The entire production-schedule feature is being retired.** Renzo maintains the
+> schedule in Google Sheets and the in-app master was redundant; a future v2 will be a
+> read-only view of the sheet. **Every database object described in this section is gone
+> or going:** `production_schedule`, `view_production_schedule_state`,
+> `view_production_schedule_conflicts`, `fn_apply_schedule_upstream`,
+> `fn_save_schedule_day`, `fn_release_schedule_day`.
+>
+> **Nothing is unrecoverable.** All 273 rows are in `graveyard.production_schedule_20260827`;
+> the exact replayable DDL of all six objects (with grants, RLS policies and every column
+> comment) is in `graveyard.prod_schedule_ddl_20260827` and in
+> **`_archived/prod-schedule-v1/db/RESTORE.sql`**, which also carries the restore ORDER.
+> Migration `20260828012428_archive_production_schedule.sql` took the copy and is APPLIED;
+> `20260828013000_drop_production_schedule.sql` does the removal and lands only after the
+> app AND the Fly sync worker have both been deployed without their schedule code.
+>
+> **The one live thing that changed:** `view_digest_stream_status.missed_working_days` no
+> longer counts `production_schedule` days with `shifts > 0` — it counts days on which any
+> other stream reported. See CLAUDE.md → Views → Stream status for the measured comparison
+> and its one blind spot.
+>
+> **The app side is DONE (2026-08-28).** `/production/schedule` and `/production/setups`
+> no longer exist as routes, their navbar `getBreadcrumb()` entries and `ICTC_MODULES`
+> links are gone, and `/` is a single surface again (no `?view=`/`?month=`). Archived to
+> `_archived/prod-schedule-v1/`: `schedule/{page,actions}.ts(x)`,
+> `setups/{page,setups-manager,actions}.ts(x)`, `lib/production/setup-projection.ts`,
+> `components/production/setup-form-dialog.tsx`, the 13 `components/digest/schedule-*` +
+> `week-strip` + `home-view-toggle` files, and `scripts/{verify-setup-projection,
+> sync-prod-schedule,joseph-prod-sched}.ts`. Nothing in the live tree imports
+> `production_schedule` any more.
+>
+> **What deliberately stayed live:** the sync panel's `schedule_conflict` vocabulary
+> (`app/(app)/sync/types.ts`, `lib/sync/cases-fold.ts`, `lib/sync/findings.ts`) — marked
+> HISTORICAL, no live producer, still parsed and rendered so stored `sync_runs.result`
+> payloads don't render as blank cards. `scripts/verify-schedule-conflict-fold.ts` proves
+> that path still works. The WRITE affordance (the conflict-arbitration dialog) went.
+>
+> The rest of this section is retained because the *reasoning* — conditional writes, the
+> actuals freeze, ownership — still governs the human-edit latch on the six production FACT
+> tables above, which is untouched. Read it as history, not as a live contract.
+
+The schedule **UI** lived in `components/digest/` (rendered at BOTH `/?view=schedule` and `/production/schedule`),
+but its **server actions** stayed here at `app/(app)/production/schedule/actions.ts`
+— this was the plan's domain module. Both are now under `_archived/prod-schedule-v1/`
+at the same relative paths.
 
 **Ownership model** (`production_schedule.owner`, migration
 `20260730060000_production_schedule_ownership.sql`):
@@ -249,6 +285,22 @@ Consequences for the frontend:
 - `row_version` optimistic concurrency is **unchanged on every path**.
 
 ## Setup library + projection (2026-07-30)
+
+> **Status note (2026-08-28): `public.production_setups` is NOT dropped and NOT archived —
+> it is still live, with all its rows and grants.** It is called out here only because its
+> one consumer was the schedule day-grid's setup dropdown, which is gone, so the table is
+> now ORPHANED. That is a decision for Renzo, not a side effect of the schedule removal,
+> and nothing was assumed on his behalf. Note the design below already anticipated this:
+> `production_schedule.setup` was deliberately free text with **no FK**, so removing the
+> schedule cannot break, cascade into, or silently empty this table.
+>
+> **The UI and the projection helper DID move** (they had no other consumer once the
+> schedule grid was archived): `setups/page.tsx`, `setups/setups-manager.tsx`,
+> `setups/actions.ts`, `components/production/setup-form-dialog.tsx`,
+> `lib/production/setup-projection.ts` and `scripts/verify-setup-projection.ts` all live
+> under `_archived/prod-schedule-v1/` at the same relative paths, and the projection
+> rules below are history rather than a live contract. Restoring a setup-management
+> screen means restoring those six files — the TABLE is already waiting for them.
 
 `public.production_setups` — reference data the operator maintains. One row per named
 **per-shift grade mix**: `code` (the literal string that goes into
@@ -373,7 +425,7 @@ The Year + Batch picker is a **module-level, shared period control** — NOT per
 Additive Archetype C card views for the read surfaces — the dense desktop grids/tables are wrapped `hidden sm:block` and are otherwise **untouched** (editing / keyboard / paste stay desktop-only). Each mobile view is fed the SAME row data the desktop uses (single source of truth), never a second fetch:
 - **Daily** (`daily/daily-cards-mobile.tsx`): built on `MobileCardList`, one card per run row from the grid's exported `buildGridRows()`; derived metrics from `ledger-derive.ts::deriveDailyMetrics`. Wrapped in `daily-view.tsx` (`h-[72dvh] sm:hidden`).
 - **Electricity** (`electricity/electricity-cards-mobile.tsx`): `MobileCardList` over the `readings` rows. Wrapped in `electricity-view.tsx` (`h-[70dvh] sm:hidden`).
-- **Schedule** — its own route again (`/production/schedule`, outside the `(tabs)` group) AND a view on `/`; **not a Production TAB.** Its phone card list moved with it to `components/digest/schedule-cards-mobile.tsx` (a full-month list of the shared `ScheduleRowCard`), rendered by `components/digest/schedule-month-view.tsx` on `/?view=schedule`. The month switcher + prev/next `<Link>`s stay shared across breakpoints. See `app/(app)/CONTEXT.md`.
+- **Schedule** — REMOVED 2026-08-28 (route, month view and phone card list all archived to `_archived/prod-schedule-v1/`).
 - **Trucks** is intentionally NOT covered here — it is a frozen-pane matrix (Archetype E), handled in a later phase.
 - No ₱ exists anywhere in Production → no price gating on any mobile surface.
 
@@ -383,7 +435,7 @@ Additive Archetype C card views for the read surfaces — the dense desktop grid
 - **Tab persistence:** localStorage key `production_active_tab`, default `'daily'`.
 - **Period persistence:** URL params `?y=` (year or `all`) and `?b=` (batch name or `all`), owned by `ProductionPeriodProvider`.
 - **Error handling:** Each lazy tab has Retry button on fetch failure. The shared picker stays interactive even when a tab is in its error/loading state.
-- **Navbar:** Registered in `getBreadcrumb()` at `startsWith('/production')`. Production enabled in `MODULES` array.
+- **Navbar:** Registered in `getBreadcrumb()` at `startsWith('/production')`. Production enabled in `MODULES` array. The `exact('/production/schedule')` and `exact('/production/setups')` entries and their `ICTC_MODULES` links were removed on 2026-08-28 with those routes.
 
 ## Schema References
 

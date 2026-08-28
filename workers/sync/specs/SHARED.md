@@ -91,8 +91,10 @@ at roughly **15 simultaneous connections** and answers past that with
 Wave 4A, but nothing checked it, and three call sites quietly violated it — the labelers
 (`makeLabeler`, a NEW session on every label application, ×4 writers), the flecon
 workbook fetcher (`makeFleconFetcher`) and the production-schedule fetcher
-(`prodSchedule/josephEmail.ts`). A single run reached **7+ sessions** and every run
-started failing in 3–5s. See `docs/BUG_LEDGER.md` BUG-027 for the full post-mortem,
+(`prodSchedule/josephEmail.ts` — that report was **removed on 2026-08-28** along with the
+rest of the schedule feature, so a run's Gmail users are now the clerk + 4 labelers +
+flecon; the session rule is unchanged and still enforced the same way). A single run
+reached **7+ sessions** and every run started failing in 3–5s. See `docs/BUG_LEDGER.md` BUG-027 for the full post-mortem,
 including the day-long misdiagnosis it caused.
 
 **How it is enforced.** `src/lib/gmailSession.ts` — a process-scoped, reference-counted

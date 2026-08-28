@@ -13,8 +13,8 @@
 //
 // This module owns the way BACK. Without a release path ownership only
 // ratchets one way and the production data slowly freezes — exactly the
-// failure the schedule work called out (see 20260730070000 /
-// `production/schedule/actions.ts`).
+// failure the (now retired) production-schedule work called out; see
+// migration 20260730070000 and `_archived/prod-schedule-v1/`.
 //
 // The stamp CANNOT be cleared by an ordinary write: the trigger re-stamps any
 // authenticated UPDATE, including one that sends `human_edited_at: null`.

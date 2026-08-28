@@ -26,7 +26,8 @@
  * ── ENFORCEMENT (2026-07-28, BUG-019) ──────────────────────────────────────────
  * That rule was stated here but NOT enforced: `reportDeps.makeLabeler` opened a fresh
  * session on EVERY label application, `makeFleconFetcher` opened its own, and
- * `prodSchedule/josephEmail` opened another — so one run could open 7+ sessions and
+ * `prodSchedule/josephEmail` opened another (that file was removed with the
+ * production-schedule feature on 2026-08-28) — so one run could open 7+ sessions and
  * blow Gmail's ~15 simultaneous-connection cap. The rule is now enforced by
  * `lib/gmailSession.ts` (a process-scoped, reference-counted broker): NOTHING in the
  * worker constructs a GmailClient directly any more — every caller goes through

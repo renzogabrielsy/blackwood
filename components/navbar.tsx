@@ -52,9 +52,13 @@ interface QueryParams {
  * Ordered breadcrumb registry. Each entry's `test` decides whether it applies to the
  * current pathname (plus, when a route hosts several URL-driven views, its query
  * params); the FIRST match wins, so MORE-SPECIFIC routes must come BEFORE their
- * parent catch-alls (e.g. `/inventory/blocking` precedes the `/inventory` catch-all,
- * `/cenapro/production` precedes `/cenapro`, and `/?view=schedule` precedes the bare
- * `/` — which deliberately has NO entry). Replaces the old long if-chain.
+ * parent catch-alls (e.g. `/inventory/blocking` precedes the `/inventory` catch-all
+ * and `/cenapro/production` precedes `/cenapro`). The bare `/` deliberately has NO
+ * entry. Replaces the old long if-chain.
+ *
+ * `params` is still threaded through (the predicate signature is unchanged) even
+ * though no entry consults it today — `/?view=schedule` was the one that did, and it
+ * went with the retired production schedule (`_archived/prod-schedule-v1/`).
  */
 interface BreadcrumbEntry extends Breadcrumb {
     test: (pathname: string, params: QueryParams) => boolean;
@@ -64,30 +68,15 @@ const exact = (path: string) => (pathname: string) => pathname === path;
 const prefix = (path: string) => (pathname: string) => pathname.startsWith(path);
 
 const BREADCRUMB_REGISTRY: BreadcrumbEntry[] = [
-    // `/` hosts two views (BUG-003): the bare digest board has NO breadcrumb (the
-    // dashboard shows none by design), but the schedule view is a distinct surface,
-    // so it gets a title + a "Back to Digest" escape that clears the view param.
-    {
-        test: (pathname, params) => pathname === '/' && params.get('view') === 'schedule',
-        backLabel: 'Back to Digest',
-        backHref: '/',
-        pageTitle: 'Production Schedule',
-        pageDescription: 'Month plan vs actual — click a cell to edit the plan',
-    },
     { test: prefix('/edit/'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Edit Discussion' },
     // Inventory sub-routes — MUST precede the `/inventory` catch-all below.
     { test: prefix('/inventory/blocking'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Blocking', pageDescription: 'Warehouse grid — block occupancy & balances' },
     { test: prefix('/inventory/rc-movement'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Movement', pageDescription: 'Daily feed matrix — campaign-scoped day × block' },
     { test: prefix('/inventory/flecon-bags'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Bag Inventory', pageDescription: 'FLECON bag stock — balances & movement ledger' },
     { test: prefix('/inventory'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Inventory', pageDescription: 'Raw charcoal deliveries, usage & tracking' },
-    // `/production/schedule` renders the SAME editable month grid as `/?view=schedule`
-    // (two doors, one surface) — so it needs its own entry, and it MUST precede the
-    // `/production` catch-all below.
-    { test: exact('/production/schedule'), backLabel: 'Back to Production', backHref: '/production', pageTitle: 'Production Schedule', pageDescription: 'Month plan vs actual — click a cell to edit the plan' },
-    // The reference data behind the schedule's Setup dropdown. Its "back" points
-    // at the schedule, not at Production — the schedule is where you came from
-    // and where the setups are used.
-    { test: exact('/production/setups'), backLabel: 'Back to Schedule', backHref: '/production/schedule', pageTitle: 'Setup Library', pageDescription: 'Named per-shift grade mixes — add, edit, retire & reorder' },
+    // NOTE (2026-08-28): the `/production/schedule` and `/production/setups` entries
+    // were removed with the production plan — both routes are gone. See
+    // `_archived/prod-schedule-v1/`.
     { test: prefix('/production'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Production', pageDescription: 'Daily runs, downtime, waste, electricity & trucks' },
     { test: prefix('/summaries'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Summaries', pageDescription: 'Delivery price & volume analysis — by period or supplier' },
     // Shipments — export-doc readiness + ZIP download (Trello-backed). Detail route
@@ -162,14 +151,6 @@ const ICTC_INVENTORY: Module[] = [
 // ICTC / Davao top-level modules shown as siblings BELOW the Inventory sub-group.
 const ICTC_MODULES: Module[] = [
     { name: 'Production', href: '/production' },
-    // The editable month plan. Listed as its own destination because it is NOT a
-    // production tab — the only other way in is the Schedule toggle on `/`, which
-    // is easy to miss entirely.
-    { name: 'Prod Schedule', href: '/production/schedule' },
-    // The setup library. Listed here for the same reason Prod Schedule is: the
-    // only other door is a small "Setup library" link on the month grid, and a
-    // reference screen nobody can find is a reference screen nobody maintains.
-    { name: 'Setup Library', href: '/production/setups' },
     { name: 'Summaries', href: '/summaries' },
     { name: 'Shipments', href: '/shipments' },
     { name: 'Accounting', href: '/accounting', disabled: true },
@@ -287,8 +268,8 @@ export function Navbar() {
 
     React.useEffect(() => setMounted(true), []);
 
-    // Query params participate in breadcrumb resolution because `/` hosts two
-    // URL-driven views (digest board vs `?view=schedule`).
+    // Query params are still threaded into breadcrumb resolution (the registry's
+    // `test` signature takes them) — no entry consults them at present.
     const breadcrumb = getBreadcrumb(pathname, searchParams);
     const initials = getInitials(displayName, user?.email ?? null);
     const canSwitchRoles = PRIVILEGED_ROLES.includes(dbRole);

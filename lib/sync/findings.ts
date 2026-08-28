@@ -753,6 +753,11 @@ function fieldDeltas(c: ScheduleConflict): string {
  * app. Joseph's proposed value is PARKED (`production_schedule.pending_upstream`), not
  * applied — the operator picks. `attention`, never auto-resolved: this is the schedule's
  * instance of the project-wide "disagreements are arbitrated by a human" rule.
+ *
+ * HISTORICAL (2026-08-28): the production plan was retired and Stage 3c no longer runs,
+ * so nothing produces a new one. The builder stays so stored run payloads still render
+ * in the Sync panel and the Excel report; the resolve AFFORDANCE went with the feature.
+ * See `_archived/prod-schedule-v1/`.
  */
 function fromScheduleConflict(c: ScheduleConflict): RunFinding {
   return {

@@ -201,16 +201,12 @@ function AsOfChip({ status }: { status: KpiDayStatus }) {
  *  Kept to one short phrase; the sub-line shares its row with the 7-day avg. */
 function lagNote(status: KpiDayStatus): string | null {
   if (!status.asOf) return null;
-  const parts: string[] = [
-    isLate(status) && status.missedDays != null
-      ? fmtReportsDue(status.missedDays)
-      : fmtDayAge(status.asOfAgeDays),
-  ];
-  if (status.restToday) parts.push("rest day today");
-  return parts.join(" · ");
+  return isLate(status) && status.missedDays != null
+    ? fmtReportsDue(status.missedDays)
+    : fmtDayAge(status.asOfAgeDays);
 }
 
-/** State pill for a non-reported card (Awaiting report / Rest day / …). */
+/** State pill for a non-reported card (Awaiting report / Report overdue / …). */
 function StateChip({ state }: { state: KpiDayStatus["state"] }) {
   return (
     <span
@@ -226,7 +222,7 @@ function StateChip({ state }: { state: KpiDayStatus["state"] }) {
 
 /** A non-reported card — a state label + severity rail + ghosted projection
  *  instead of a misleading zero, and NO sparkline (the stream has no active
- *  value today). Covers `awaiting` / `rest` / `stale` / `idle`.
+ *  value today). Covers `awaiting` / `stale` / `idle`.
  *
  *  An OVERDUE lag-by-design stream (`stale` with an `asOf`) keeps the alarm —
  *  red rail, red chip, an explicit "N working days behind" — but no longer
@@ -237,23 +233,16 @@ function StateCard({ kpi, status }: { kpi: DigestKpi; status: KpiDayStatus }) {
   // An overdue stream we still have a real last reading for.
   const lastReading = state === "stale" && status.asOf ? status.asOf : null;
 
+  // NOTE (2026-08-28): an `awaiting` card used to ghost the day's PROJECTED
+  // tonnage from the `production_schedule` plan. The plan is retired, so the
+  // card simply says the report is awaited rather than inventing a target.
   const ghost =
-    state === "awaiting" && status.projectedTons != null ? (
-      <>
-        projected{" "}
-        <b className="font-mono font-semibold text-violet-600 dark:text-violet-300">
-          {status.projectedTons.toFixed(1)} t
-        </b>
-        {" · 1 shift"}
-      </>
-    ) : lastReading ? (
+    lastReading ? (
       <>last reported {fmtShortDate(lastReading)}</>
     ) : state === "stale" && status.staleDays != null ? (
       // No usable last reading (never reported, or older than the loaded
       // 120-day window) — `staleDays` counts WORKING days, same as missedDays.
       <>{fmtMissedDays(status.staleDays)}</>
-    ) : state === "rest" ? (
-      <>planned rest — zero is correct</>
     ) : state === "idle" ? (
       <>procurement — not shift-bound</>
     ) : null;

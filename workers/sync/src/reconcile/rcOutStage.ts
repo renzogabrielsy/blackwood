@@ -28,7 +28,6 @@ import { reconcileRcOut, proposedLegsSelfConsistent } from "./rcOut.js";
 import { isKnownPatioAlias, normalizeProposedBlock } from "./blockAliases.js";
 import type { BlockReconciliation } from "./blockBalance.js";
 import type { BatchClose } from "../lib/gsheetCloseScan.js";
-import type { ScheduleConflict } from "../reports/prodSchedule/plan.js";
 import type { StaleStream } from "../lib/streamStaleness.js";
 // TYPE-ONLY, and deliberately so: the mail clerk is a workflow, this is a reconcile
 // module, and a runtime edge between them would be a cycle waiting to happen.
@@ -123,9 +122,7 @@ export interface RcOutReconciliation {
  *  block-balance cross-check (`./blockBalance.ts`) — an ORTHOGONAL, read-only net.
  *  `batch_closes` is the gsheet close-scan outcome (`../lib/gsheetCloseScan.ts`) — batches
  *  flipped IN-USE→CLOSED from a Google Sheet RC OUT close remark the R4b cutover would
- *  drop. `schedule_conflicts` is the production-PLAN Stage-3c outcome
- *  (`../reports/prodSchedule/plan.ts`) — days a human owns whose upstream (Joseph) value
- *  the sync WITHHELD and parked instead of applying. `stale_streams` is the freshness
+ *  drop. `stale_streams` is the freshness
  *  watch (`../lib/streamStaleness.ts`) — streams that have missed a planned working day,
  *  read straight off `view_digest_stream_status`. Unlike the others it is not about what
  *  this run WROTE; it is about what never arrived, which is exactly the failure a clean
@@ -134,7 +131,18 @@ export interface ReconciliationChannel {
   rc_out?: RcOutReconciliation;
   blocking?: BlockReconciliation;
   batch_closes?: BatchClose[];
-  schedule_conflicts?: ScheduleConflict[];
+  /**
+   * `schedule_conflicts` was a member here until 2026-08-28. It carried the production-PLAN
+   * Stage-3c outcome — days a human owned whose upstream (Joseph) value the sync withheld
+   * and parked. The schedule feature is gone (`_archived/prod-schedule-v1/`), so the worker
+   * has no producer for it and the key never appears on a new run.
+   *
+   * It is deliberately NOT re-declared as an optional legacy field: this type describes what
+   * a run WRITES, and a slot nothing can fill is an invitation to fill it. The READ side is
+   * unchanged — `app/(app)/sync/types.ts` still declares `ScheduleConflict`, `cases-fold.ts`
+   * still folds it and `lib/sync/findings.ts` still renders the `schedule_conflict` kind, so
+   * historic run payloads in `sync_runs.result` keep rendering exactly as they did.
+   */
   stale_streams?: StaleStream[];
   /**
    * Gmail searches that blew the per-search budget this run (BUG-026, 2026-08-19). Like

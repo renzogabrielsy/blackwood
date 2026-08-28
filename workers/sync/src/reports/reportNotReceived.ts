@@ -21,11 +21,14 @@
  * NO SECOND STALENESS RULE — THE VIEW ALREADY OWNS IT
  * ─────────────────────────────────────────────────────────────────────────────
  * `view_digest_stream_status.missed_working_days` is the ONE definition of "late", and it
- * is lag-aware in ways nothing here should try to re-derive: it counts only
- * `production_schedule` days with `shifts > 0`, STRICTLY between the stream's latest
- * reported day and the operational date, so a Sunday is never late and a report that is
- * not due yet is never late. This module reads that number and decides only HOW LOUDLY to
- * say the mail is missing. It computes no calendar of its own.
+ * is lag-aware in ways nothing here should try to re-derive: it counts the days ANY OTHER
+ * STREAM REPORTED, STRICTLY between the stream's latest reported day and the operational
+ * date, so a Sunday is never late and a report that is not due yet is never late. This
+ * module reads that number and decides only HOW LOUDLY to say the mail is missing. It
+ * computes no calendar of its own — and that is the whole reason it survived the
+ * production-schedule removal (2026-08-28) without a line changing: the definition moved
+ * from a planned-days count to an activity-derived one INSIDE the view, where it belongs.
+ * A second copy of the calendar here would have had to be found and rewritten.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * HOW THIS DIFFERS FROM THE `stale_stream` FINDING (they are not duplicates)
@@ -75,7 +78,7 @@ export interface ReportNotReceived {
   /** The operational date the view measured lateness against. */
   operational_date: string | null;
   /**
-   * Planned working days missed, straight from the view. NULL when the number was not
+   * Active working days missed, straight from the view. NULL when the number was not
    * measured — never 0, because 0 means "measured, not late" and a guess must not
    * impersonate a measurement. When it is null, `lateness_unknown_reason` says WHY.
    */

@@ -94,41 +94,6 @@ export function relativeTime(iso: string | null): string {
   return `${mo} mo ago`;
 }
 
-/** One grade's projected tonnage parsed from the production_schedule `grades`
- *  JSONB ({ "3X50": 21, "4X8": 5 } → grade → projected tons). */
-export interface GradeTon {
-  grade: string;
-  tons: number;
-}
-
-/** Parse the production_schedule `grades` JSONB into { grade, tons } entries,
- *  heaviest first, dropping null / zero / non-finite tonnage. Defensive: returns
- *  [] for null, arrays, strings, or any non-object shape (rest days / legacy
- *  rows), so a rest day renders a clean dash. */
-export function parseGradeTons(grades: unknown): GradeTon[] {
-  if (grades == null || typeof grades !== "object" || Array.isArray(grades)) {
-    return [];
-  }
-  const out: GradeTon[] = [];
-  for (const [grade, raw] of Object.entries(grades as Record<string, unknown>)) {
-    const tons = typeof raw === "number" ? raw : Number(raw);
-    if (!grade || !Number.isFinite(tons) || tons === 0) continue;
-    out.push({ grade, tons });
-  }
-  return out.sort((a, b) => b.tons - a.tons);
-}
-
-/** Compact tons label for grade chips — whole numbers bare, else one decimal. */
-export function fmtGradeTons(v: number): string {
-  return Number.isInteger(v) ? String(v) : v.toFixed(1);
-}
-
-/** Compact plain-text grade breakdown for a `title`/tooltip, e.g.
- *  "3X50 · 21t   4X8 · 5t". Empty string when no grades. */
-export function gradeTonsTitle(entries: GradeTon[]): string {
-  return entries.map((g) => `${g.grade} · ${fmtGradeTons(g.tons)}t`).join("   ");
-}
-
 /** Compact stringification of an unknown diff value for chip rendering. */
 export function diffValue(v: unknown): string {
   if (v === null || v === undefined || v === "") return "∅";

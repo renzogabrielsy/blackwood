@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Retired features kept for reference only (dashboard-v1, prod-schedule-v1).
+    // Already excluded from `tsconfig.json`; ignoring them here too keeps their
+    // now-dangling `@/...` imports and unused locals out of the lint report.
+    "_archived/**",
   ]),
 ]);
 
