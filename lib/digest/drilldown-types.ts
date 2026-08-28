@@ -58,6 +58,11 @@ export interface RcInPoint {
 
 /** One row of the by-supplier ranking for the selected range. */
 export interface RcInSupplierSlice {
+  /** The CANONICAL supplier, `public.canonical_supplier(supplier)` — the ONE
+   *  definition of supplier identity, applied in SQL by
+   *  `view_digest_rcin_supplier_daily` and shared with every Summaries
+   *  by-supplier view. Always UPPER; render it as given. It is NOT the raw
+   *  stored spelling — `RcInRecentRow.supplier` is, deliberately. */
   supplier: string;
   kg: number;
   /** kg / range total, 0–100, 1 dp. */
@@ -72,6 +77,9 @@ export interface RcInSupplierSlice {
 export interface RcInRecentRow {
   id: string;
   date: string;
+  /** The RAW STORED spelling, on purpose — these are the underlying records,
+   *  so they must read as the row reads. The canonical name lives on
+   *  `RcInSupplierSlice.supplier`. */
   supplier: string;
   truckPlate: string | null;
   sacks: number | null;
