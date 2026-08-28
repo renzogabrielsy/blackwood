@@ -1,28 +1,40 @@
 "use client";
 
-// Client Component — the cards are interactive: clicking a block fetches a
-// batch-accurate BlockData (fetchBlockDataForBatch) and opens the ESTABLISHED
-// Blocking slide-over (BlockingDetailPanel). This mirrors the RC Movement
-// matrix's exact click→fetch→panel pattern. Cross-importing the Blocking
-// tenant code is fine — both this band and Blocking are charcoal-tenant code.
+// Client Component — the cards are interactive: clicking a block OPENS the
+// ESTABLISHED Blocking slide-over (BlockingDetailPanel) on the click frame and
+// fetches the batch-accurate BlockData (fetchBlockDataForBatch) concurrently.
+// Cross-importing the Blocking tenant code is fine — both this band and
+// Blocking are charcoal-tenant code.
+//
+// THE REFERENCE IMPLEMENTATION of the app's optimistic-drawer pattern (see the
+// panel's header comment): open first, skeleton while loading, fade the content
+// in, keep the drawer open on failure. The band owns three things the panel
+// cannot: the request-token staleness guard, the error text, and making the
+// FIRST click as instant as the rest (the panel is a lazy chunk — the Suspense
+// fallback below is the same skeleton drawer, so a click that beats the chunk
+// still opens immediately).
 import * as React from "react";
 import { createPortal } from "react-dom";
-import dynamic from "next/dynamic";
 import { cn } from "@/lib/utils";
 import { fmtKg, fmtPhpNumber } from "./format";
+import { DetailDrawerSkeleton } from "@/components/shared/detail-drawer-skeleton";
 import type { OpenBlock } from "@/lib/digest/types";
 import { fetchBlockDataForBatch } from "@/app/(app)/inventory/blocking/actions";
 import type { BlockData } from "@/app/(app)/inventory/blocking/types";
 
 // Lazily load the slide-over so the (heavy) Blocking detail panel + its edit /
-// print dependencies stay out of the digest's initial bundle — the panel only
-// mounts once a user actually clicks a block.
-const BlockingDetailPanel = dynamic(
-  () =>
-    import("@/app/(app)/inventory/_shared/blocking-detail-panel").then(
-      (m) => m.BlockingDetailPanel,
-    ),
-  { ssr: false },
+// print dependencies stay out of the digest's initial bundle. React.lazy rather
+// than next/dynamic BECAUSE OF THE FALLBACK: next/dynamic's `loading` component
+// receives no props, so it cannot know whether the drawer should be open, and
+// would render nothing on a click that lands before the chunk does. A Suspense
+// fallback is rendered by THIS component, so it can be the open skeleton drawer.
+// The import still starts at hydration (the portal is permanently mounted), so
+// in practice the chunk is ready long before the first click; this is the guard
+// for the case where it is not.
+const BlockingDetailPanel = React.lazy(() =>
+  import("@/app/(app)/inventory/_shared/blocking-detail-panel").then((m) => ({
+    default: m.BlockingDetailPanel,
+  })),
 );
 
 interface OpenBlocksProps {
@@ -68,10 +80,14 @@ function depletionFill(fraction: number): string {
  * remaining, a left-anchored fill grown on mount via transform: scaleX) · a
  * single condensed row of all 7 lab stats.
  *
- * Each card is a CLICKABLE control: activating it fetches a batch-accurate
- * BlockData (fetchBlockDataForBatch) and opens the shared Blocking detail
- * slide-over (BlockingDetailPanel) with the full balance / quality / delivery
- * + usage history. Only one panel is open at a time.
+ * Each card is a CLICKABLE control: activating it opens the shared Blocking
+ * detail slide-over (BlockingDetailPanel) IMMEDIATELY — on the click frame —
+ * and fetches the batch-accurate BlockData (fetchBlockDataForBatch) at the same
+ * time. The drawer shows a layout-matched skeleton until the data lands, then
+ * fades the real balance / quality / delivery + usage history in; a failure
+ * leaves it open with a persistent, copyable banner + Retry. Only one panel is
+ * open at a time, and a late reply for a block the user has already navigated
+ * away from is discarded (request-token guard).
  *
  * Price gating: the CARD ₱/kg is INFERRED from the data (no canViewPrices flag
  * on the contract — when Production is gated the backend nulls EVERY card's
@@ -90,11 +106,10 @@ export function OpenBlocks({ openBlocks, operationalDate }: OpenBlocksProps) {
     null,
   );
   const [panelCanViewPrices, setPanelCanViewPrices] = React.useState(false);
-  // The batchId currently being fetched (in-flight), so the clicked card can
-  // show a subtle pending affordance until its data resolves and the panel opens.
-  const [loadingBatchId, setLoadingBatchId] = React.useState<string | null>(
-    null,
-  );
+  // In-flight / failed state for the OPEN drawer (not for the card — the drawer
+  // is already out, so that is where the user is looking).
+  const [panelLoading, setPanelLoading] = React.useState(false);
+  const [panelError, setPanelError] = React.useState<string | null>(null);
 
   // The slide-over renders through a portal to document.body so it escapes this
   // band's transformed/blurred ancestors (hover-lift transform + backdrop-blur
@@ -104,25 +119,64 @@ export function OpenBlocks({ openBlocks, operationalDate }: OpenBlocksProps) {
   const [mounted, setMounted] = React.useState(false);
   React.useEffect(() => setMounted(true), []);
 
-  // Fetch FIRST, then open. The panel stays permanently mounted (see the render
-  // below) in its closed (translate-x-full) state; we only flip it open once the
-  // batch-accurate BlockData is ready — setting panelBlockData + selected in the
-  // SAME tick. That way the panel transitions from mounted-closed straight to
-  // open with content already present: one clean slide-in, no empty-panel flash.
-  const handleSelect = React.useCallback((block: OpenBlock) => {
-    setLoadingBatchId(block.batchId);
-    fetchBlockDataForBatch(block.batchId).then((result) => {
-      setPanelBlockData(result.blockData);
-      setPanelCanViewPrices(result.canViewPrices);
-      setSelected(block);
-      setLoadingBatchId(null);
-    });
+  // ── Staleness guard ──
+  // One monotonic token per click. A response is applied ONLY if its token is
+  // still the current one, so: clicking B while A is in flight discards A's late
+  // reply, and closing the drawer discards whatever was still coming. Keyed on a
+  // token rather than the batchId because re-clicking the SAME block after a
+  // failure must also invalidate the first attempt.
+  const requestRef = React.useRef(0);
+
+  // Open FIRST, fetch concurrently. `selected` flips on the click frame with
+  // panelBlockData cleared, so the drawer slides out over a skeleton and can
+  // never flash the previously-opened block's numbers. The panel is permanently
+  // mounted (see the render below), so this is a pure translate-x transition.
+  const loadBlock = React.useCallback((block: OpenBlock) => {
+    const token = ++requestRef.current;
+    setPanelBlockData(null);
+    setPanelError(null);
+    setPanelLoading(true);
+    setSelected(block);
+
+    fetchBlockDataForBatch(block.batchId)
+      .then((result) => {
+        if (requestRef.current !== token) return; // stale — a newer click won
+        if (!result.blockData) {
+          setPanelError(
+            `No block record came back for batch ${block.batchCode} (${block.batchId}). It may have been closed or removed since this page loaded.`,
+          );
+          setPanelLoading(false);
+          return;
+        }
+        setPanelBlockData(result.blockData);
+        setPanelCanViewPrices(result.canViewPrices);
+        setPanelLoading(false);
+      })
+      .catch((err: unknown) => {
+        if (requestRef.current !== token) return;
+        setPanelError(err instanceof Error ? err.message : String(err));
+        setPanelLoading(false);
+      });
   }, []);
 
-  // Close only clears `selected` → locKey becomes null → the still-mounted panel
-  // slides OUT (never unmounts). panelBlockData is intentionally left in place so
-  // its content doesn't blank mid-animation; the closed branch ignores it anyway.
+  const handleSelect = React.useCallback(
+    (block: OpenBlock) => loadBlock(block),
+    [loadBlock],
+  );
+
+  const handleRetry = React.useCallback(() => {
+    if (selected) loadBlock(selected);
+  }, [selected, loadBlock]);
+
+  // Close clears `selected` → locKey becomes null → the still-mounted panel
+  // slides OUT (never unmounts). Bumping the token first means a reply that
+  // arrives after the close can never repopulate a shut drawer. panelBlockData
+  // is intentionally left in place so the content doesn't blank mid-animation;
+  // the next open clears it before the drawer is out again.
   const handleClose = React.useCallback(() => {
+    requestRef.current++;
+    setPanelLoading(false);
+    setPanelError(null);
     setSelected(null);
   }, []);
 
@@ -155,23 +209,21 @@ export function OpenBlocks({ openBlocks, operationalDate }: OpenBlocksProps) {
           const pct = fraction * 100;
           const pctLabel = Math.round(pct);
           const isSelected = selected?.batchId === b.batchId;
-          const isLoading = loadingBatchId === b.batchId;
 
           return (
             <button
               type="button"
               key={`${b.blockLoc}-${b.batchCode}-${i}`}
               onClick={() => handleSelect(b)}
-              disabled={isLoading}
-              aria-busy={isLoading}
               aria-label={`Open details for ${b.blockLoc} (${b.batchCode})`}
               className={cn(
                 "hover-lift flex cursor-pointer flex-col gap-3 rounded-xl border bg-card/95 p-4 text-left backdrop-blur transition-colors duration-150 supports-backdrop-filter:bg-card/70",
                 "hover:border-primary/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 isSelected && "border-primary/60 ring-1 ring-primary/40",
-                // In-flight: subtle pulse + primary ring so the click feels
-                // responsive while BlockData loads (panel opens on resolve).
-                isLoading && "animate-pulse border-primary/60 ring-1 ring-primary/40",
+                // NOTE: no per-card pending affordance any more. The drawer now
+                // opens on the click frame and shows its own skeleton, so the
+                // feedback lives there; a card that also pulsed (and was
+                // `disabled`, i.e. momentarily unfocusable) only competed with it.
               )}
             >
               {/* Header: block_loc + batch (left); status dot + label with the
@@ -276,20 +328,38 @@ export function OpenBlocks({ openBlocks, operationalDate }: OpenBlocksProps) {
           back to null → it slides shut, WITHOUT unmounting (so the exit slide
           plays). This mirrors the Blocking grid's always-mounted usage — the
           conditional mount was what killed both the enter and exit slides.
-          blockData is the batch-accurate summary from fetchBlockDataForBatch
-          (already resolved before we set `selected`, so no empty-panel flash);
-          canViewPrices is the server gate it returns. onNavigateToBatch is
-          OMITTED — the panel's internal fallback handles "Edit All" navigation.
-          Portaled to document.body to escape this band's transformed/blurred
-          ancestors (see the `mounted` note above). */}
+
+          OPTIMISTIC OPEN: `locKey` is set on the click frame while blockData is
+          still null, and `loading`/`error`/`onRetry` drive the panel's skeleton
+          and its persistent inline failure banner. canViewPrices is the server
+          gate fetchBlockDataForBatch returns. onNavigateToBatch is OMITTED —
+          the panel's internal fallback handles "Edit All" navigation.
+
+          The Suspense fallback is the SAME skeleton drawer the panel renders
+          internally, so the very first click (which also downloads the panel
+          chunk) opens with no dead frame either. Portaled to document.body to
+          escape this band's transformed/blurred ancestors (see `mounted`). */}
       {mounted &&
         createPortal(
-          <BlockingDetailPanel
-            locKey={selected ? selected.blockLoc : null}
-            blockData={panelBlockData}
-            canViewPrices={panelCanViewPrices}
-            onClose={handleClose}
-          />,
+          <React.Suspense
+            fallback={
+              <DetailDrawerSkeleton
+                open={selected !== null}
+                title={selected ? selected.blockLoc : null}
+                onClose={handleClose}
+              />
+            }
+          >
+            <BlockingDetailPanel
+              locKey={selected ? selected.blockLoc : null}
+              blockData={panelBlockData}
+              canViewPrices={panelCanViewPrices}
+              loading={panelLoading}
+              error={panelError}
+              onRetry={handleRetry}
+              onClose={handleClose}
+            />
+          </React.Suspense>,
           document.body,
         )}
     </div>

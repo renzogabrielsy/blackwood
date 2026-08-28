@@ -26,6 +26,9 @@ import {
 import { cn } from "@/lib/utils";
 import { fmtKg, fmtPhpNumber } from "./format";
 import { ProductionHoursChart } from "./production-hours-chart";
+import { useDrilldown } from "./drilldown/use-drilldown";
+import { RcInPriceDrilldownModal } from "./drilldown/rc-in-price-drilldown";
+import { getRcInPriceDrilldown } from "@/app/(app)/drilldown-actions";
 import type {
   FlowPoint,
   PricePoint,
@@ -54,6 +57,14 @@ interface ChartCardProps {
   empty?: boolean;
   /** optional custom legend rendered between the header and the chart body */
   legend?: React.ReactNode;
+  /**
+   * DRILL-DOWN OVERRIDE. When supplied, the header's expand button stops being
+   * the phone-only "same chart, bigger" Dialog trigger and becomes an
+   * ALL-SIZES button that calls this instead — the card's owner then opens the
+   * drill-down modal (a longer range, a breakdown and the underlying rows).
+   * The two never coexist: one card, one expand affordance.
+   */
+  onExpand?: () => void;
   children: React.ReactNode;
   className?: string;
 }
@@ -63,6 +74,7 @@ function ChartCard({
   subtitle,
   empty,
   legend,
+  onExpand,
   children,
   className,
 }: ChartCardProps) {
@@ -93,17 +105,28 @@ function ChartCard({
             {subtitle && (
               <span className="text-[11px] text-muted-foreground">{subtitle}</span>
             )}
-            {!empty && (
-              <DialogTrigger asChild>
+            {!empty &&
+              (onExpand ? (
+                // Drill-down card: one expand button at EVERY size.
                 <button
                   type="button"
-                  aria-label={`Expand ${title} chart`}
-                  className="-m-1 inline-flex size-9 items-center justify-center self-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:hidden"
+                  onClick={onExpand}
+                  aria-label={`Open ${title} detail`}
+                  className="-m-1 inline-flex size-9 cursor-pointer items-center justify-center self-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <Maximize2 className="size-3.5" />
                 </button>
-              </DialogTrigger>
-            )}
+              ) : (
+                <DialogTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label={`Expand ${title} chart`}
+                    className="-m-1 inline-flex size-9 items-center justify-center self-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:hidden"
+                  >
+                    <Maximize2 className="size-3.5" />
+                  </button>
+                </DialogTrigger>
+              ))}
           </div>
         </div>
         {legend && !empty && <div className="mb-2">{legend}</div>}
@@ -116,7 +139,10 @@ function ChartCard({
         )}
       </div>
 
-      {!empty && (
+      {/* The phone-only "same chart, bigger" modal. A drill-down card
+          (`onExpand`) never reaches it — that card's button opens the
+          drill-down instead, so this content would be dead markup. */}
+      {!empty && !onExpand && (
         <DialogContent className="max-h-[85dvh] gap-0 p-4">
           <DialogHeader className="pb-2">
             <DialogTitle>{title}</DialogTitle>
@@ -301,7 +327,13 @@ function fmtPctSigned(v: number): string {
   })}%`;
 }
 
-function PriceChart({ price }: { price: PricePoint[] }) {
+function PriceChart({
+  price,
+  onExpand,
+}: {
+  price: PricePoint[];
+  onExpand?: () => void;
+}) {
   const tip = tooltipChrome();
   const rows = React.useMemo(() => withPctChange(price), [price]);
   // A single point yields no meaningful DoD change; still render the ₱/kg line.
@@ -329,6 +361,7 @@ function PriceChart({ price }: { price: PricePoint[] }) {
       title="RC In price"
       subtitle="₱/kg · DoD %"
       empty={price.length === 0}
+      onExpand={onExpand}
     >
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={rows} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
@@ -677,13 +710,19 @@ export function DigestCharts({
   // empty data.
   const showPrice = price.length > 0;
   const showHours = productionHours.length > 0;
+  // Open-first drill-down for the RC In price card (the chart-card half of the
+  // prototype). One controller here, one modal at the bottom — adding the Feed
+  // In vs Out card is the same two lines plus its own fetcher.
+  const priceDrilldown = useDrilldown(getRcInPriceDrilldown);
   return (
     <div className="flex flex-col gap-3">
       {/* Row 1 — Feed In vs Out + RC In price. When price is gated the flow
           chart spans the full width (no empty half). */}
       <div className={cn("grid grid-cols-1 gap-3", showPrice && "lg:grid-cols-2")}>
         <FlowChart flow={flow} />
-        {showPrice && <PriceChart price={price} />}
+        {showPrice && (
+          <PriceChart price={price} onExpand={priceDrilldown.open} />
+        )}
       </div>
       {/* Row 2 — Production by grade (left) paired with the Work & downtime
           hours stacked bar chart (right). This pairing is INDEPENDENT of the
@@ -694,6 +733,13 @@ export function DigestCharts({
         <GradeChart grades={grades} />
         {showHours && <ProductionHoursChart rows={productionHours} />}
       </div>
+
+      {/* The RC In price drill-down. Mounted once, independent of the card's
+          own (phone-only) expand modal, which this card does not use. */}
+      <RcInPriceDrilldownModal
+        {...priceDrilldown.modalProps}
+        data={priceDrilldown.data}
+      />
     </div>
   );
 }
