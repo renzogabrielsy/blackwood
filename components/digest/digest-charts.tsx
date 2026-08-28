@@ -28,7 +28,11 @@ import { fmtKg, fmtPhpNumber } from "./format";
 import { ProductionHoursChart } from "./production-hours-chart";
 import { useDrilldown } from "./drilldown/use-drilldown";
 import { RcInPriceDrilldownModal } from "./drilldown/rc-in-price-drilldown";
-import { getRcInPriceDrilldown } from "@/app/(app)/drilldown-actions";
+import { FlowDrilldownModal } from "./drilldown/flow-drilldown";
+import {
+  getRcInPriceDrilldown,
+  getFlowDrilldown,
+} from "@/app/(app)/drilldown-actions";
 import type {
   FlowPoint,
   PricePoint,
@@ -195,7 +199,13 @@ interface FlowChartRow {
   outKg: number | null;
 }
 
-function FlowChart({ flow }: { flow: FlowPoint[] }) {
+function FlowChart({
+  flow,
+  onExpand,
+}: {
+  flow: FlowPoint[];
+  onExpand?: () => void;
+}) {
   const tip = tooltipChrome();
 
   const { rows, yMax } = React.useMemo(() => {
@@ -233,6 +243,7 @@ function FlowChart({ flow }: { flow: FlowPoint[] }) {
       subtitle="last 30 days · kg"
       empty={flow.length === 0}
       legend={legend}
+      onExpand={onExpand}
     >
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={rows} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
@@ -710,16 +721,22 @@ export function DigestCharts({
   // empty data.
   const showPrice = price.length > 0;
   const showHours = productionHours.length > 0;
-  // Open-first drill-down for the RC In price card (the chart-card half of the
-  // prototype). One controller here, one modal at the bottom — adding the Feed
-  // In vs Out card is the same two lines plus its own fetcher.
+  // Open-first drill-downs for the two chart cards that have one. Each is a
+  // controller here + a modal at the bottom.
+  //
+  // The FLOW controller is a SECOND instance of the same fetcher the NET FLOW
+  // KPI tile uses — deliberately: two independently-opened surfaces must own
+  // separate range selections and separate in-flight tokens. The MODAL is the
+  // shared thing, and this one leads with the two lines rather than the net
+  // bars (`emphasis="flow"`).
   const priceDrilldown = useDrilldown(getRcInPriceDrilldown);
+  const flowDrilldown = useDrilldown(getFlowDrilldown);
   return (
     <div className="flex flex-col gap-3">
       {/* Row 1 — Feed In vs Out + RC In price. When price is gated the flow
           chart spans the full width (no empty half). */}
       <div className={cn("grid grid-cols-1 gap-3", showPrice && "lg:grid-cols-2")}>
-        <FlowChart flow={flow} />
+        <FlowChart flow={flow} onExpand={flowDrilldown.open} />
         {showPrice && (
           <PriceChart price={price} onExpand={priceDrilldown.open} />
         )}
@@ -734,11 +751,17 @@ export function DigestCharts({
         {showHours && <ProductionHoursChart rows={productionHours} />}
       </div>
 
-      {/* The RC In price drill-down. Mounted once, independent of the card's
-          own (phone-only) expand modal, which this card does not use. */}
+      {/* The chart-card drill-downs. Mounted once each, independent of the
+          phone-only "same chart, bigger" modal — a card with `onExpand` never
+          renders that one. */}
       <RcInPriceDrilldownModal
         {...priceDrilldown.modalProps}
         data={priceDrilldown.data}
+      />
+      <FlowDrilldownModal
+        {...flowDrilldown.modalProps}
+        data={flowDrilldown.data}
+        emphasis="flow"
       />
     </div>
   );

@@ -264,6 +264,13 @@ export type Database = {
             foreignKeyName: "fk_batch_code"
             columns: ["batch_code"]
             isOneToOne: false
+            referencedRelation: "view_digest_rcout_batch_daily"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
             referencedRelation: "view_rc_movement_batch_price"
             referencedColumns: ["batch_code"]
           },
@@ -2976,6 +2983,13 @@ export type Database = {
             foreignKeyName: "fk_batch_code"
             columns: ["batch_code"]
             isOneToOne: false
+            referencedRelation: "view_digest_rcout_batch_daily"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
             referencedRelation: "view_rc_movement_batch_price"
             referencedColumns: ["batch_code"]
           },
@@ -3215,10 +3229,32 @@ export type Database = {
         }
         Relationships: []
       }
+      view_digest_power_meter_daily: {
+        Row: {
+          kwh: number | null
+          meter: string | null
+          raw_diff_kwh: number | null
+          reading_count: number | null
+          reading_date: string | null
+        }
+        Relationships: []
+      }
       view_digest_prod_actual_tons: {
         Row: {
           actual_tons: number | null
           date: string | null
+        }
+        Relationships: []
+      }
+      view_digest_production_grade_daily: {
+        Row: {
+          grade: string | null
+          kg: number | null
+          run_count: number | null
+          runs_with_sacks: number | null
+          sacks: number | null
+          shift_count: number | null
+          transaction_date: string | null
         }
         Relationships: []
       }
@@ -3236,6 +3272,17 @@ export type Database = {
           kg: number | null
           sack_count: number | null
           supplier_canonical: string | null
+          transaction_date: string | null
+        }
+        Relationships: []
+      }
+      view_digest_rcout_batch_daily: {
+        Row: {
+          batch_code: string | null
+          block_loc: string | null
+          destination: string | null
+          feeding_count: number | null
+          kg: number | null
           transaction_date: string | null
         }
         Relationships: []
@@ -3305,6 +3352,13 @@ export type Database = {
             columns: ["batch_code"]
             isOneToOne: false
             referencedRelation: "view_blocking_grid"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_digest_rcout_batch_daily"
             referencedColumns: ["batch_code"]
           },
           {
@@ -3441,6 +3495,13 @@ export type Database = {
             columns: ["batch_code"]
             isOneToOne: false
             referencedRelation: "view_blocking_grid"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_digest_rcout_batch_daily"
             referencedColumns: ["batch_code"]
           },
           {
@@ -3905,6 +3966,13 @@ export type Database = {
             columns: ["batch_code"]
             isOneToOne: false
             referencedRelation: "view_blocking_grid"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_digest_rcout_batch_daily"
             referencedColumns: ["batch_code"]
           },
           {
