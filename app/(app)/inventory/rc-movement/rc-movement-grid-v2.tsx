@@ -5,8 +5,11 @@ import { usePathname, useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 
 import { BlackwoodTable } from '@/components/shared/table';
-import type { BlackwoodTableApi, TableChromeRowApi } from '@/components/shared/table';
-import { pinnedOffsets } from '@/lib/table';
+import type {
+    BlackwoodTableApi,
+    TableSummaryCell,
+    TableSummaryRow,
+} from '@/components/shared/table';
 import type { ColumnSpec, GridRow, RowKind, TableSettings } from '@/lib/table';
 import { useTableColumns } from '@/lib/hooks/use-table-columns';
 import { useTableEdits } from '@/lib/hooks/use-table-edits';
@@ -78,40 +81,109 @@ import type {
 // unreachable, which is the same guarantee `max-content` gives the live matrix.
 // ═════════════════════════════════════════════════════════════════════════════════
 
-// ─── Geometry — the live matrix's numbers, unchanged ─────────────────────────────
+// ─── Geometry — MEASURED, never eyeballed (2026-08-29) ───────────────────────────
+//
+// Renzo, on the v2 grid: *"a bunch of the column headers are wrapping weirdly or are being
+// '…' truncated. This does not happen in our original table. Column widths must accommodate
+// the header so we can see everything."*
+//
+// **The reason the v2 headers clipped where the live matrix's do not, and it is not the
+// font.** The live matrix's `<th>` spends `px-2` + a 1px border and gives everything left
+// to the label. This grid runs `scope="focus"`, which turns the platform's built-in SORT
+// and FILTER controls on for every column that is not `cellKind: 'derived'` and has not
+// opted out — and `HeaderCell` lays them out as flex SIBLINGS of the label, `opacity-0`
+// until the header is hovered. INVISIBLE, and still occupying layout: two 16px buttons
+// plus two 4px gaps. So the budget is
+//
+//     usable label width = declared − 16 (px-2) − 40 (two controls) − 1 (border-r) = −57
+//     usable label width = declared − 16 − 1 = −17          (no controls on the column)
+//
+// and every width carried over from the live matrix was 40px short of the one it needed.
+// This is the same trap the QC ledger hit on 2026-08-26 (`scripts/verify-qc-grid.ts` §12);
+// the widths below are the same remedy, measured the same way.
+//
+// **AND ONE MORE FLEX CHILD THIS SHEET PAYS FOR AND THE QC LEDGER DOES NOT.** The two
+// columns that start a section (`PRODUCED` and the FIRST block column) hang their 2px group
+// rule off `renderHeaderSlot`, which `HeaderCell` renders as a fourth flex child. The
+// SLIVER is `absolute` and 0px wide — but the `gap-1` before it is not, so those columns
+// pay a further **4px**. Measured, not reasoned: the first version of this table budgeted
+// 57/17 and both of them still clipped by exactly 2 and 4 pixels.
+//
+// The numbers are MEASURED in a browser against the real computed fonts — the lane header
+// at Geist 11px/500 `uppercase tracking-wide`, a block header at Geist Mono 11px/600, a
+// body figure at Geist Mono 12px with `tabular-nums`. Node has no font engine, so they
+// cannot be re-derived in a test — only ENFORCED, which `scripts/verify-rc-movement-grid.ts`
+// now does against this table.
+//
+//   key       label                  px   chrome   floor   declared
+//   rownum    #                    7.42       17   24.42       48
+//   date      DATE                29.52       57   86.52      100
+//   day       DAY                 22.92       57   79.92       84
+//   fedprice  FED ₱/KG            52.63       57  109.63      112
+//   total     TOTAL FED           62.32       57  119.32      124
+//   produced  PRODUCED            64.67    57+4  125.67      128
+//   grade     3X50 / 6X50 / 8X50  30.25       57   87.25       92
+//   block     MARCH-26-SUNDRY7   115.53    17+4  136.53      148
+//
+// Every declared width clears its floor with a few px of slack, deliberately: a column
+// sized to the exact measurement is one font-hinting change away from an ellipsis.
 
 const W_ROWNUM = 48;
 const W_DATE = 100;
-const W_DAY = 52;
-const W_FEDPRICE = 96;
-const W_TOTAL = 88;
-const W_PRODUCED = 88;
-const W_GRADE = 80;
+/** 84, not 52: `DAY` is 22.92px of label against 57px of invisible chrome. */
+const W_DAY = 84;
+/** 112, not 96: `FED ₱/KG` needs 109.63 and read `FED ₱…` at 96. */
+const W_FEDPRICE = 112;
 /**
- * 92 — the live matrix's number, restored (2026-08-20).
+ * 120, not 88 — and `headerWrap` is GONE with it.
  *
- * It was 104 with `headerWrap: true`, on the reasoning that a batch code is the longest
- * string on this sheet (`SEPTEMBER-26-BLK12`) and a truncating one-line header read
- * `JAN-26-B…`. That reasoning was right about the problem and wrong about the fix: the
- * live matrix solves it with a SECOND LINE carrying the BLOCK LOCATION, not by wrapping
- * the code — Renzo: *"the display and frontend [must be] exactly the same as current rc
- * movement table … wrapping is weird and not behaving like the current version and there
- * is no block location underneath it as a subheading."*
- *
- * So the header is now two DECLARED lines — `label` (the batch code, one truncated line,
- * exactly as the live `<th>` renders it) over `subLabel` (the block loc) — and the wrap
- * is gone. With `sortable: false` / `filterable: false` on these columns the header cell
- * carries no chrome buttons either, so the label's usable width is `92 − 16` (the
- * module's `px-2`) = **76px**, which is the same 76px the live matrix's `px-2` `<th>`
- * gives it. Same width, same truncation point.
- *
- * The body cells are unaffected — a fed figure is at most `123,456` — and stay right-
- * aligned mono, because the header's shape is a property of the `<th>` alone.
+ * `TOTAL FED` wrapped to two lines at 88px, which is what Renzo saw. Wrapping was the
+ * wrong answer to a width problem twice over: the header row grows to its tallest cell, so
+ * one wrapped header raises every other one, and a name broken across two lines is not
+ * more readable than the same name on one line that fits.
  */
-const W_BLOCK = 92;
+const W_TOTAL = 124;
+/**
+ * 128, not 88. `PRODUCED` is the widest lane name on the sheet at 64.67px, and this is one
+ * of the two columns that also pays 4px for the group-rule slot — 64.67 + 61 = 125.67.
+ */
+const W_PRODUCED = 128;
+/** 92, not 80. Also drops `headerWrap` — `3X50` fits on one line at this width. */
+const W_GRADE = 92;
+/**
+ * 148, not 92.
+ *
+ * A block header is the batch code (`label`, re-styled to the live matrix's mono
+ * identifier by `labelNode`) over the block location (`subLabel`), and the code is the
+ * longest string on the sheet. These columns opt out of sort and filter (see the spec
+ * below), so they pay 17px of chrome — 21 on the FIRST one, which carries the group rule.
+ *
+ * **The floor is the longest code that EXISTS: 16 characters.** `MARCH-26-SUNDRY7` /
+ * `APRIL-26-SUNDRY2`, measured over all 531 batch codes `rc_out` has ever fed, render
+ * 115.53px — so the floor is 136.53 and that is what the verify script enforces.
+ *
+ * **The declared 148 buys the naming convention's own headroom** rather than only today's
+ * data: `SEPTEMBER-26-BLK12` — the longest month + the ordinary `BLK` kind, 18 characters
+ * — is 123.74px and clears 148 with the group-rule slot included. A hypothetical
+ * `SEPTEMBER-26-SUNDRY12` would still truncate, and its full code is on the `title`; the
+ * line is drawn where a wider column would cost every campaign real scroll width for a
+ * code nobody has ever typed.
+ *
+ * **The live matrix truncates a 16-character code and this does not**, which is the one
+ * place the two headers deliberately differ: the whole complaint was `…` in a header, and
+ * a batch code is an IDENTIFIER — half of one names nothing. The cost is 56px per block
+ * column of extra scroll width, which "never crush, always scroll" is exactly the rule for.
+ */
+const W_BLOCK = 148;
 
 const ROW_H = 32; // h-8, Excel Standard
-/** The totals rule-off: four stacked lines on a block column, three tricolor bands. */
+/**
+ * The totals rule-off's MINIMUM height — a `<tr>` height is a floor, and content taller
+ * than it wins. Measured: 76px for a viewer who can see prices (a block cell stacks four
+ * lines), which is why this is stated as a floor rather than pinned to 76: the same footer
+ * is two lines shorter for Production, where the ₱/kg and ACTUAL lines do not render at
+ * all, and a hard 76 would leave that render with 20px of empty band.
+ */
 const TOTALS_H = 62;
 
 /** The 2px section rule the live matrix draws at the start of each scrolling group. */
@@ -307,9 +379,9 @@ function buildColumns(
         {
             key: KEY_TOTAL,
             label: 'TOTAL FED',
-            // Nine characters against 88 − 17 = 71 usable — one line does not fit, and
-            // `TOTAL F…` is not a column name. Two lines, at the space.
-            headerWrap: true,
+            // NO `headerWrap`. It was true at 88px, where the name did not fit on one
+            // line — but the column is 120px now (62.32 of label + 57 of chrome), so the
+            // name fits, and wrapping it would raise the whole header row for nothing.
             title: 'Total kg fed across every block that day',
             width: W_TOTAL,
             pin: 'start',
@@ -353,11 +425,12 @@ function buildColumns(
         out.push({
             key: gradeKey(grade),
             label: grade,
-            // Grade names come from `production_runs.grade` — operator text, not a closed
-            // enum — so their length is not something this file gets to assume. Wrapping
-            // costs nothing when the name is short and is the difference between a
-            // readable header and `4X8 SPE…` when it is not.
-            headerWrap: true,
+            // NO `headerWrap`. Every grade the plant has ever run is four characters or
+            // fewer (`3X50` · `6X50` · `4X8` · `2X6`, measured over `production_runs`), and
+            // the widest of them is 30.25px against 92 − 57 = 35 usable. A longer name
+            // TRUNCATES rather than wrapping, deliberately: the header row grows to its
+            // tallest cell, so one long grade would raise all sixteen headers on the sheet
+            // — and the full name is on the `title` either way.
             title: `Kg produced of grade ${grade}`,
             width: W_GRADE,
             align: 'right',
@@ -400,6 +473,9 @@ function buildColumns(
              *
              * `headerWrap` is deliberately ABSENT (it was `true`): the second line here is
              * a SUBTITLE, not the name spilling over, and those are different questions.
+             * The `truncate` stays as the LAST resort — `W_BLOCK` is now sized so that no
+             * batch code in the database reaches it (see the constant), so in practice
+             * nothing here truncates at all.
              */
             labelNode: (
                 <span className="block truncate font-mono text-[11px] font-semibold normal-case leading-tight tracking-normal text-foreground">
@@ -469,8 +545,10 @@ function buildColumns(
 // ─── Row families ────────────────────────────────────────────────────────────────
 
 /**
- * Two families, and only the first is a coordinate: the day rows, and the totals
- * rule-off, which is CHROME (`addressable: false`) and therefore never enters `navRows`.
+ * ONE family — the day rows. The totals rule-off used to be a second, non-addressable
+ * one, because it rode as the last ITEM of the body; since 2026-08-29 it is a PINNED
+ * SUMMARY ROW (`TableSummaryRow.cell`), which lives in the `<tfoot>` and is not an item at
+ * all, so the family it needed is gone with it.
  *
  * The `#` column is the one cell a day row RENDERS without offering the caret a stop —
  * `addressable: false`. Marked here rather than only on the column because it is a
@@ -495,12 +573,6 @@ function buildKinds(
             height: ROW_H,
             addressable: true,
             occupies: (colKey) => slots.get(colKey) ?? null,
-        }],
-        ['summary', {
-            kind: 'summary',
-            height: TOTALS_H,
-            addressable: false,
-            occupies: () => null,
         }],
     ]);
 }
@@ -670,17 +742,12 @@ export function RcMovementGridV2({ data, searchParams }: RcMovementGridV2Props) 
         [specs],
     );
 
+    // Day rows, and nothing else. The totals rule-off is NOT an item any more — it is a
+    // pinned summary row in the `<tfoot>` (see `summaryRows` below), which is what makes it
+    // stay on screen while the campaign scrolls under it.
     const items = React.useMemo<MovementItem[]>(() => {
         if (columns.length === 0 || rows.length === 0) return [];
-        const out: MovementItem[] = rows.map((row) => ({
-            kind: 'day',
-            id: row.date,
-            data: row,
-        }));
-        // The totals rule-off rides as the last ITEM rather than as a `summaryRows`
-        // entry. See the note on `renderChromeRow` below for why it cannot be the latter.
-        out.push({ kind: 'summary', key: 'totals' });
-        return out;
+        return rows.map((row) => ({ kind: 'day', id: row.date, data: row }));
     }, [columns.length, rows]);
 
     const byId = React.useMemo(() => {
@@ -749,290 +816,236 @@ export function RcMovementGridV2({ data, searchParams }: RcMovementGridV2Props) 
         [firstBlockKey],
     );
 
-    // ── The totals rule-off ──────────────────────────────────────────────────────
+    // ── The campaign totals rule-off — PINNED TO THE BOTTOM (2026-08-29) ─────────
     //
-    // A CHROME ROW, not a `summaryRows` entry, and the reason is structural: a summary
-    // row tiles six DECLARED lanes (label · frozen · spacer · figure · note · total ·
-    // trailing), so it can carry one headline figure and one total — while this footer
-    // carries a DIFFERENT figure under every one of ~40 columns. `renderChromeRow`
-    // returns the row's own cells, one `<td>` per column, which is the only shape that
-    // fits. The cost is stated in the report: it is the last row of the body instead of
-    // being pinned to the bottom of the scrollport.
-    const renderChromeRow = React.useCallback(
+    // Renzo: *"Footer must also 'freeze' same as original."*
+    //
+    // It used to be a `renderChromeRow`, because a `TableSummaryRow` tiled six DECLARED
+    // lanes (label · frozen · spacer · figure · note · total · trailing) and could carry
+    // one headline figure and one total — while this footer carries a DIFFERENT stack
+    // under every one of ~40 columns. `renderChromeRow` fitted the shape and reached the
+    // BODY only, so the payoff of the screen scrolled away with the rows it summarises.
+    //
+    // `TableSummaryRow.cell` is the platform seam that closes that gap: one cell per
+    // RESOLVED column, rendered in the `<tfoot>`. This file returns the CONTENT and a
+    // className; the `<td>` itself — its opaque background, its cumulative sticky `left`,
+    // its z-rank and both seams — stays the module's, so the `pinnedOffsets` arithmetic
+    // this callback used to do by hand is gone. A column hidden by the price gate takes
+    // its footer cell with it and the offsets recompute themselves.
+    const totalsCell = React.useCallback(
         (
-            item: MovementItem,
-            api: TableChromeRowApi<RcMovementMatrixRow, RcMovementGridCtx>,
-        ) => {
-            if ('data' in item) return null;
-            const left = pinnedOffsets(api.cols);
-            const frozenCount = left.length;
-            const base = 'border-y border-y-border align-middle';
+            spec: ColumnSpec<RcMovementMatrixRow, RcMovementGridCtx>,
+        ): TableSummaryCell | null => {
+            // The platform's shell pads `px-2 py-1`; this rule-off is tighter and
+            // vertically centred. Merged OVER, so position and z-rank cannot be lost.
+            const PAD = 'px-2 py-0.5 align-middle';
 
-            return (
-                <>
-                    {api.cols.map((spec, ci) => {
-                        const frozen = ci < frozenCount;
-                        const style: React.CSSProperties = { height: TOTALS_H };
-                        if (frozen) style.left = left[ci];
+            if (spec.key === KEY_ROWNUM || spec.key === KEY_DAY) {
+                return { className: PAD, ariaHidden: true };
+            }
 
-                        // A pinned totals cell is OPAQUE (`bg-muted`, never glass) and
-                        // carries the seam on the last column of the run.
-                        const shell = cn(
-                            base,
-                            frozen && 'frozen-col bg-muted',
-                            frozen && ci === frozenCount - 1
-                                ? 'frozen-edge'
-                                : 'border-r border-r-border/50',
-                        );
+            if (spec.key === KEY_DATE) {
+                return {
+                    className: cn(
+                        PAD,
+                        'text-[10px] font-medium uppercase tracking-wide text-muted-foreground',
+                    ),
+                    content: 'Totals',
+                };
+            }
 
-                        if (spec.key === KEY_ROWNUM || spec.key === KEY_DAY) {
-                            return (
-                                <td
-                                    key={spec.key}
-                                    aria-hidden="true"
-                                    className={cn(shell, 'px-2 py-0.5')}
-                                    style={style}
-                                />
-                            );
-                        }
-
-                        if (spec.key === KEY_DATE) {
-                            return (
-                                <td
-                                    key={spec.key}
-                                    className={cn(
-                                        shell,
-                                        'px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground',
-                                    )}
-                                    style={style}
+            // The campaign's DELIVERED weighted-average ₱/kg (the reference line) and,
+            // beneath a hairline, the ACTUAL FED ₱/kg with its coverage. Both blank —
+            // never ₱0.00 — when null. This cell only exists at all when the column does,
+            // i.e. never for a gated viewer, and `showFedPrice` is checked again here.
+            if (spec.key === KEY_FEDPRICE) {
+                if (!showFedPrice) return { className: PAD };
+                return {
+                    className: PAD,
+                    content: (
+                        <div className="flex flex-col gap-0 leading-tight">
+                            <span className="text-[9px] uppercase tracking-wide text-muted-foreground">
+                                camp. avg
+                            </span>
+                            {campaignAvgFedPrice !== null ? (
+                                <span className="flex items-baseline justify-between gap-1 font-mono text-xs font-bold tabular-nums">
+                                    <span className="text-muted-foreground">&#8369;</span>
+                                    <span>{fmtPrice(campaignAvgFedPrice)}</span>
+                                </span>
+                            ) : null}
+                            {actual ? (
+                                <div
+                                    className="mt-0.5 flex flex-col gap-0 border-t border-border/60 pt-0.5 leading-tight"
+                                    title={`Actual fed ₱/kg over the ${actual.blocksInPrice} of ${actual.blocksFed} blocks that are closed AND fully priced${actual.campaignFedKgIncludedPct !== null ? ` — ${fmtFractionPct2(actual.campaignFedKgIncludedPct)} of this campaign's fed kg` : ''}. ${actual.blocksOpen} still open, ${actual.blocksClosedUnpriced} closed but awaiting a price.`}
                                 >
-                                    Totals
-                                </td>
-                            );
-                        }
-
-                        // The campaign's DELIVERED weighted-average ₱/kg (the reference
-                        // line) and, beneath a hairline, the ACTUAL FED ₱/kg with its
-                        // coverage. Both blank — never ₱0.00 — when null. This cell only
-                        // exists at all when the column does, i.e. never for a gated
-                        // viewer, and `showFedPrice` is checked again here.
-                        if (spec.key === KEY_FEDPRICE) {
-                            return (
-                                <td
-                                    key={spec.key}
-                                    className={cn(shell, 'px-2 py-0.5')}
-                                    style={style}
-                                >
-                                    {showFedPrice ? (
-                                        <div className="flex flex-col gap-0 leading-tight">
-                                            <span className="text-[9px] uppercase tracking-wide text-muted-foreground">
-                                                camp. avg
-                                            </span>
-                                            {campaignAvgFedPrice !== null ? (
-                                                <span className="flex items-baseline justify-between gap-1 font-mono text-xs font-bold tabular-nums">
-                                                    <span className="text-muted-foreground">&#8369;</span>
-                                                    <span>{fmtPrice(campaignAvgFedPrice)}</span>
-                                                </span>
-                                            ) : null}
-                                            {actual ? (
-                                                <div
-                                                    className="mt-0.5 flex flex-col gap-0 border-t border-border/60 pt-0.5 leading-tight"
-                                                    title={`Actual fed ₱/kg over the ${actual.blocksInPrice} of ${actual.blocksFed} blocks that are closed AND fully priced${actual.campaignFedKgIncludedPct !== null ? ` — ${fmtFractionPct2(actual.campaignFedKgIncludedPct)} of this campaign's fed kg` : ''}. ${actual.blocksOpen} still open, ${actual.blocksClosedUnpriced} closed but awaiting a price.`}
-                                                >
-                                                    <span className="text-[9px] uppercase tracking-wide text-muted-foreground">
-                                                        actual fed
-                                                    </span>
-                                                    {actual.actualFedPhpKg !== null ? (
-                                                        <span className="flex items-baseline justify-between gap-1 font-mono text-[13px] font-bold tabular-nums">
-                                                            <span className="text-muted-foreground">&#8369;</span>
-                                                            <span>{fmtPrice(actual.actualFedPhpKg)}</span>
-                                                        </span>
-                                                    ) : null}
-                                                    {/* Coverage of the number DIRECTLY ABOVE —
-                                                        `blocksInPrice`, not `blocksClosed`: a
-                                                        closed-but-unpriced block is closed and
-                                                        still excluded. */}
-                                                    <span className="text-[9px] tabular-nums text-muted-foreground">
-                                                        {actual.blocksInPrice}/{actual.blocksFed} priced
-                                                    </span>
-                                                </div>
-                                            ) : null}
-                                        </div>
-                                    ) : null}
-                                </td>
-                            );
-                        }
-
-                        if (spec.key === KEY_TOTAL) {
-                            return (
-                                <td
-                                    key={spec.key}
-                                    className={cn(
-                                        shell,
-                                        'px-2 py-0.5 text-right font-mono font-semibold tabular-nums',
-                                    )}
-                                    style={style}
-                                >
-                                    {fmtKg(grandTotalFed)}
-                                </td>
-                            );
-                        }
-
-                        // The yield/loss payoff — three LABEL-LESS opaque tricolor bands
-                        // filling the cell edge to edge (amber produced · emerald yield ·
-                        // red loss), with a `title` per band so the meaning stays
-                        // discoverable. `1 − yield` is a display transform of the SQL
-                        // fraction, never a second definition of loss.
-                        if (spec.key === KEY_PRODUCED) {
-                            return (
-                                <td
-                                    key={spec.key}
-                                    className={cn(shell, 'bg-muted p-0', GROUP_DIVIDER)}
-                                    style={style}
-                                >
-                                    <div className="flex h-full flex-col leading-tight">
-                                        <div
-                                            title="Produced"
-                                            className="flex w-full flex-1 items-center justify-end bg-amber-100 pr-1 font-mono text-[11px] font-bold tabular-nums text-amber-950 dark:bg-amber-950 dark:text-amber-50"
-                                        >
-                                            {fmtKg(campaignTotalProduced) || '—'}
-                                        </div>
-                                        <div
-                                            title="Yield"
-                                            className="flex w-full flex-1 items-center justify-end bg-emerald-100 pr-1 font-mono text-[11px] font-bold tabular-nums text-emerald-950 dark:bg-emerald-950 dark:text-emerald-50"
-                                        >
-                                            {fmtYieldPct(campaignYieldPct)}
-                                        </div>
-                                        <div
-                                            title="Loss"
-                                            className="flex w-full flex-1 items-center justify-end bg-red-100 pr-1 font-mono text-[11px] font-bold tabular-nums text-red-950 dark:bg-red-950 dark:text-red-50"
-                                        >
-                                            {fmtYieldPct(
-                                                campaignYieldPct === null ? null : 1 - campaignYieldPct,
-                                            )}
-                                        </div>
-                                    </div>
-                                </td>
-                            );
-                        }
-
-                        const gradeTotal = gradeTotals.get(spec.key);
-                        if (gradeTotal !== undefined) {
-                            return (
-                                <td
-                                    key={spec.key}
-                                    className={cn(shell, 'bg-muted px-2 py-0.5 text-right')}
-                                    style={style}
-                                >
-                                    <span className="font-mono text-xs font-bold tabular-nums">
-                                        {fmtKg(gradeTotal)}
+                                    <span className="text-[9px] uppercase tracking-wide text-muted-foreground">
+                                        actual fed
                                     </span>
-                                </td>
-                            );
-                        }
-
-                        const block = byKey.get(spec.key);
-                        if (!block) {
-                            return (
-                                <td
-                                    key={spec.key}
-                                    aria-hidden="true"
-                                    className={cn(shell, 'bg-muted px-2 py-0.5')}
-                                    style={style}
-                                />
-                            );
-                        }
-
-                        const isClosedTint = block.status === 'CLOSED' || block.status === 'FEED';
-                        const lossClass =
-                            block.blockLoss === null
-                                ? 'text-muted-foreground'
-                                : isClosedTint
-                                  ? '' // inherit the red cell's foreground — legible there
-                                  : block.blockLoss < 0
-                                    ? 'text-red-600 dark:text-red-400'
-                                    : 'text-emerald-600 dark:text-emerald-400';
-
-                        return (
-                            <td
-                                key={spec.key}
-                                className={cn(
-                                    shell,
-                                    'p-0',
-                                    spec.key === firstBlockKey && GROUP_DIVIDER,
-                                    // WHOLE-CELL state colour, opaque, REPLACING bg-muted.
-                                    statusTint(block.status),
-                                )}
-                                style={style}
-                                title={[
-                                    `${block.batchCode} · ${block.blockLoc ?? '—'} · ${block.status}`,
-                                    `Fed ${fmtKg(block.totalOut) || '0'} kg · In ${fmtKg(block.totalIn) || '0'} kg`,
-                                    `MC ${fmtPct2(block.mc)} · Ash ${fmtPct2(block.ash)} · Loss ${fmtSignedPct(block.blockLoss)}`,
-                                    showFedPrice && block.actualFedPrice === null
-                                        ? `Actual fed: ${!block.isClosed ? 'block still open' : block.hasUnpricedDelivery ? 'awaiting price' : '—'}`
-                                        : '',
-                                    `Opened ${block.firstFedDate}`,
-                                ]
-                                    .filter(Boolean)
-                                    .join('\n')}
-                            >
-                                <div className="flex flex-col gap-0 px-2 py-0.5 leading-tight">
-                                    <div className="flex items-baseline justify-between gap-1 tabular-nums">
-                                        <span className="text-[10px] uppercase tracking-wide opacity-70">
-                                            fed
+                                    {actual.actualFedPhpKg !== null ? (
+                                        <span className="flex items-baseline justify-between gap-1 font-mono text-[13px] font-bold tabular-nums">
+                                            <span className="text-muted-foreground">&#8369;</span>
+                                            <span>{fmtPrice(actual.actualFedPhpKg)}</span>
                                         </span>
-                                        <span className="font-mono text-xs font-semibold">
-                                            {fmtKg(block.totalOut) || '0'}
-                                        </span>
-                                    </div>
-                                    <div className="flex items-baseline justify-between gap-1 tabular-nums">
-                                        <span className="text-[10px] uppercase tracking-wide opacity-70">
-                                            loss
-                                        </span>
-                                        <span className={cn('font-mono text-[10px]', lossClass)}>
-                                            {fmtSignedPct(block.blockLoss)}
-                                        </span>
-                                    </div>
-                                    {showFedPrice ? (
-                                        <div className="flex items-baseline justify-between gap-1 tabular-nums">
-                                            <span className="text-[10px] uppercase tracking-wide opacity-70">
-                                                &#8369;/kg
-                                            </span>
-                                            {block.avgFedPrice !== null ? (
-                                                <span className="font-mono text-[10px]">
-                                                    {fmtPrice(block.avgFedPrice)}
-                                                </span>
-                                            ) : null}
-                                        </div>
                                     ) : null}
-                                    {/* ACTUAL FED ₱/kg. BLANK when null — an OPEN block, or
-                                        a closed block with an unpriced delivery, has no
-                                        actual price. Never ₱0.00, never a dash that reads as
-                                        a value. The label slot is KEPT when blank so every
-                                        per-block cell stays the same height. */}
-                                    {showFedPrice ? (
-                                        <div className="mt-0.5 flex items-baseline justify-between gap-1 border-t border-border/60 pt-0.5 tabular-nums">
-                                            <span className="text-[10px] uppercase tracking-wide opacity-70">
-                                                actual
-                                            </span>
-                                            {block.actualFedPrice !== null ? (
-                                                <span className="font-mono text-[11px] font-bold">
-                                                    {fmtPrice(block.actualFedPrice)}
-                                                </span>
-                                            ) : null}
-                                        </div>
-                                    ) : null}
+                                    {/* Coverage of the number DIRECTLY ABOVE —
+                                        `blocksInPrice`, not `blocksClosed`: a
+                                        closed-but-unpriced block is closed and
+                                        still excluded. */}
+                                    <span className="text-[9px] tabular-nums text-muted-foreground">
+                                        {actual.blocksInPrice}/{actual.blocksFed} priced
+                                    </span>
                                 </div>
-                            </td>
-                        );
-                    })}
-                </>
-            );
+                            ) : null}
+                        </div>
+                    ),
+                };
+            }
+
+            if (spec.key === KEY_TOTAL) {
+                return {
+                    className: cn(PAD, 'text-right font-mono font-semibold tabular-nums'),
+                    content: fmtKg(grandTotalFed),
+                };
+            }
+
+            // The yield/loss payoff — three LABEL-LESS opaque tricolor bands filling the
+            // cell edge to edge (amber produced · emerald yield · red loss), with a
+            // `title` per band so the meaning stays discoverable. `1 − yield` is a
+            // display transform of the SQL fraction, never a second definition of loss.
+            if (spec.key === KEY_PRODUCED) {
+                return {
+                    className: cn('bg-muted p-0 align-middle', GROUP_DIVIDER),
+                    content: (
+                        <div className="flex h-full flex-col leading-tight">
+                            <div
+                                title="Produced"
+                                className="flex w-full flex-1 items-center justify-end bg-amber-100 pr-1 font-mono text-[11px] font-bold tabular-nums text-amber-950 dark:bg-amber-950 dark:text-amber-50"
+                            >
+                                {fmtKg(campaignTotalProduced) || '—'}
+                            </div>
+                            <div
+                                title="Yield"
+                                className="flex w-full flex-1 items-center justify-end bg-emerald-100 pr-1 font-mono text-[11px] font-bold tabular-nums text-emerald-950 dark:bg-emerald-950 dark:text-emerald-50"
+                            >
+                                {fmtYieldPct(campaignYieldPct)}
+                            </div>
+                            <div
+                                title="Loss"
+                                className="flex w-full flex-1 items-center justify-end bg-red-100 pr-1 font-mono text-[11px] font-bold tabular-nums text-red-950 dark:bg-red-950 dark:text-red-50"
+                            >
+                                {fmtYieldPct(campaignYieldPct === null ? null : 1 - campaignYieldPct)}
+                            </div>
+                        </div>
+                    ),
+                };
+            }
+
+            const gradeTotal = gradeTotals.get(spec.key);
+            if (gradeTotal !== undefined) {
+                return {
+                    className: cn(PAD, 'text-right'),
+                    content: (
+                        <span className="font-mono text-xs font-bold tabular-nums">
+                            {fmtKg(gradeTotal)}
+                        </span>
+                    ),
+                };
+            }
+
+            const block = byKey.get(spec.key);
+            if (!block) return { className: PAD, ariaHidden: true };
+
+            const isClosedTint = block.status === 'CLOSED' || block.status === 'FEED';
+            const lossClass =
+                block.blockLoss === null
+                    ? 'text-muted-foreground'
+                    : isClosedTint
+                      ? '' // inherit the red cell's foreground — legible there
+                      : block.blockLoss < 0
+                        ? 'text-red-600 dark:text-red-400'
+                        : 'text-emerald-600 dark:text-emerald-400';
+
+            return {
+                className: cn(
+                    'p-0 align-middle',
+                    spec.key === firstBlockKey && GROUP_DIVIDER,
+                    // WHOLE-CELL state colour, opaque, REPLACING the shell's bg-muted.
+                    statusTint(block.status),
+                ),
+                title: [
+                    `${block.batchCode} · ${block.blockLoc ?? '—'} · ${block.status}`,
+                    `Fed ${fmtKg(block.totalOut) || '0'} kg · In ${fmtKg(block.totalIn) || '0'} kg`,
+                    `MC ${fmtPct2(block.mc)} · Ash ${fmtPct2(block.ash)} · Loss ${fmtSignedPct(block.blockLoss)}`,
+                    showFedPrice && block.actualFedPrice === null
+                        ? `Actual fed: ${!block.isClosed ? 'block still open' : block.hasUnpricedDelivery ? 'awaiting price' : '—'}`
+                        : '',
+                    `Opened ${block.firstFedDate}`,
+                ]
+                    .filter(Boolean)
+                    .join('\n'),
+                content: (
+                    <div className="flex flex-col gap-0 px-2 py-0.5 leading-tight">
+                        <div className="flex items-baseline justify-between gap-1 tabular-nums">
+                            <span className="text-[10px] uppercase tracking-wide opacity-70">fed</span>
+                            <span className="font-mono text-xs font-semibold">
+                                {fmtKg(block.totalOut) || '0'}
+                            </span>
+                        </div>
+                        <div className="flex items-baseline justify-between gap-1 tabular-nums">
+                            <span className="text-[10px] uppercase tracking-wide opacity-70">loss</span>
+                            <span className={cn('font-mono text-[10px]', lossClass)}>
+                                {fmtSignedPct(block.blockLoss)}
+                            </span>
+                        </div>
+                        {showFedPrice ? (
+                            <div className="flex items-baseline justify-between gap-1 tabular-nums">
+                                <span className="text-[10px] uppercase tracking-wide opacity-70">
+                                    &#8369;/kg
+                                </span>
+                                {block.avgFedPrice !== null ? (
+                                    <span className="font-mono text-[10px]">
+                                        {fmtPrice(block.avgFedPrice)}
+                                    </span>
+                                ) : null}
+                            </div>
+                        ) : null}
+                        {/* ACTUAL FED ₱/kg. BLANK when null — an OPEN block, or a closed
+                            block with an unpriced delivery, has no actual price. Never
+                            ₱0.00, never a dash that reads as a value. The label slot is
+                            KEPT when blank so every per-block cell stays the same height. */}
+                        {showFedPrice ? (
+                            <div className="mt-0.5 flex items-baseline justify-between gap-1 border-t border-border/60 pt-0.5 tabular-nums">
+                                <span className="text-[10px] uppercase tracking-wide opacity-70">
+                                    actual
+                                </span>
+                                {block.actualFedPrice !== null ? (
+                                    <span className="font-mono text-[11px] font-bold">
+                                        {fmtPrice(block.actualFedPrice)}
+                                    </span>
+                                ) : null}
+                            </div>
+                        ) : null}
+                    </div>
+                ),
+            };
         },
         [
             byKey, gradeTotals, showFedPrice, actual, campaignAvgFedPrice, grandTotalFed,
             campaignTotalProduced, campaignYieldPct, firstBlockKey,
         ],
+    );
+
+    /**
+     * ONE summary row, `sticky` — the whole of "footer must also freeze same as original".
+     *
+     * `height` is declared because the block cells stack four lines and the tallest cell
+     * would otherwise decide the row height for every other column.
+     */
+    const summaryRows = React.useMemo<
+        TableSummaryRow<RcMovementMatrixRow, RcMovementGridCtx>[]
+    >(
+        () => [{ key: 'totals', sticky: true, height: TOTALS_H, cell: totalsCell }],
+        [totalsCell],
     );
 
     const rowClassFor = React.useCallback(
@@ -1127,14 +1140,12 @@ export function RcMovementGridV2({ data, searchParams }: RcMovementGridV2Props) 
                     </span>
                 ) : null}
 
-                <span className="rounded-sm border border-amber-500/40 px-1 text-[11px] font-medium text-amber-600 dark:text-amber-400">
-                    grid=v2
-                </span>
                 <span className="text-[11px] text-muted-foreground">
                     Read-only. Selection, keyboard, copy, the right-click menu, the
-                    selection summary, column resize and the block-header detail panel
-                    (click a block column&apos;s header) are live; the open-blocks dialog,
-                    the hover info cards and the bottom-pinned footer are not.
+                    selection summary, column resize, the bottom-pinned totals footer and
+                    the block-header detail panel (click a block column&apos;s header) are
+                    live; the open-blocks dialog and the Radix hover info cards are not —
+                    the footer&apos;s figures are on a hover tooltip instead.
                 </span>
             </div>
 
@@ -1164,7 +1175,7 @@ export function RcMovementGridV2({ data, searchParams }: RcMovementGridV2Props) 
                     scope="focus"
                     rowRules={ROW_RULES}
                     rowClassFor={rowClassFor}
-                    renderChromeRow={renderChromeRow}
+                    summaryRows={summaryRows}
                     renderHeaderSlot={renderHeaderSlot}
                     emptyMessage="No feeding recorded for this campaign."
                     className="min-h-0 flex-1"

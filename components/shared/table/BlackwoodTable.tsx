@@ -95,6 +95,14 @@ import type { RowHandlers } from './Row';
 //   • **`renderChromeRow`** lets a NON-ADDRESSABLE row render its own cells — a group
 //     heading, a per-group rule-off — where `summaryRows` can only reach the footer. It
 //     returns CELLS and never a `<tr>`, because the virtualiser owns the row element.
+//   • **`TableSummaryRow.cell`** is the mirror of that at the OTHER edge: a summary row
+//     with ONE CELL PER COLUMN rather than six declared lanes, PINNED to the bottom of the
+//     scrollport. A pivot's rule-off carries a different figure under each of ~40 columns,
+//     which the lanes cannot express — so RC Movement's campaign footer had to ride as a
+//     body chrome row and SCROLLED AWAY with the rows it was summarising. The consumer
+//     returns content per column; the `<td>` (opaque background, cumulative `left`, z-rank,
+//     both seams) stays the platform's, because all four are facts about where the column
+//     sits and not about what is printed in it.
 //   • **`apiRef`** is the imperative half — "go to row N", and handing the caret back
 //     after a dialog closes. See `BlackwoodTableApi`.
 //   • **`renderHeaderSlot`** reaches `HeaderCell.filterSlot`, which existed from the start
@@ -163,8 +171,46 @@ export interface TableEditorArgs<Row, Ctx> {
     commit(): void;
 }
 
-/** One summary row — a totals rule-off, a sticky month footer. Lanes, never `colSpan`s. */
-export interface TableSummaryRow {
+/**
+ * ONE CELL of a PER-COLUMN summary row — what `TableSummaryRow.cell` returns.
+ *
+ * Content only. The `<td>` itself — its opaque background, its sticky offset, its z-rank,
+ * its seams — belongs to the table, because every one of those is a property of WHERE the
+ * column sits and not of what the consumer wants to print in it.
+ */
+export interface TableSummaryCell {
+    /** What the cell shows. Omitted (or null) renders an empty, still-correct cell. */
+    content?: React.ReactNode;
+    /**
+     * Extra classes, merged OVER the platform's shell — so a tint that must REPLACE the
+     * opaque `bg-muted` (a status colour) or a cell that needs its own padding (`p-0` for
+     * a full-bleed band) says so and wins, while position, z-rank and the seams do not
+     * move. Whatever it paints must be OPAQUE: this row overlaps scrolling content.
+     */
+    className?: string;
+    /** A native `title` on the whole cell — a multi-line hover card without a portal. */
+    title?: string;
+    /** Decoration with nothing to announce. */
+    ariaHidden?: boolean;
+}
+
+/**
+ * One summary row — a totals rule-off, a sticky month footer.
+ *
+ * **Two shapes, and a row is exactly one of them.**
+ *
+ *   • **LANES** (`label` / `figure` / `note` / `total`) — the original, and still the right
+ *     answer for a ledger whose rule-off is one headline figure and one total. Four
+ *     `colSpan`s tiled over the declared `summaryLane` groups.
+ *   • **PER COLUMN** (`cell`) — one cell under EVERY column. A pivot's footer carries a
+ *     different figure under each of ~40 columns, which six lanes cannot express; before
+ *     this the only shape that fit was `renderChromeRow`, and that reaches the BODY only,
+ *     so such a footer scrolled away with the rows it was summarising.
+ *
+ * `cell` WINS when both are supplied, and supplying neither renders the lanes exactly as
+ * they were — so a consumer written before this field existed is byte-identical.
+ */
+export interface TableSummaryRow<Row = unknown, Ctx = unknown> {
     key: string;
     /** Everything left of the first figure. */
     label?: React.ReactNode;
@@ -174,7 +220,39 @@ export interface TableSummaryRow {
     note?: React.ReactNode;
     /** The `summaryLane: 'total'` column. */
     total?: React.ReactNode;
-    /** Pin to the bottom of the scrollport. */
+    /**
+     * ONE CELL PER COLUMN, instead of the four lanes above.
+     *
+     * Called once per RESOLVED column, in display order, so a column hidden for this
+     * viewer, reordered by a saved layout or resized moves the footer with it — the
+     * consumer never indexes its own column table and never re-derives a sticky offset.
+     * Returning `null` renders the platform's own empty cell, which is still pinned,
+     * still opaque and still carries its seam.
+     *
+     * Must be referentially stable (`useCallback`) — it is a dependency of the footer.
+     */
+    cell?(
+        spec: ColumnSpec<Row, Ctx>,
+        index: number,
+        api: TableChromeRowApi<Row, Ctx>,
+    ): TableSummaryCell | null;
+    /**
+     * Explicit row height in px — a per-column footer commonly stacks several lines and
+     * the tallest cell would otherwise decide for all of them. Absent ⇒ the content's
+     * natural height, which is what a lane row has always used.
+     */
+    height?: number;
+    /**
+     * Pin to the bottom of the scrollport.
+     *
+     * The pinning is the SAME mechanism for both shapes and it is the platform's: cells
+     * under the start-pinned run are BOTH sticky-bottom and sticky-left, so they take
+     * `.frozen-corner-bottom` (z30) and the run's cumulative `left`; every other cell
+     * takes `.frozen-row-bottom` (z20). `.frozen-edge-top` kills the seam against the
+     * scrolling body and `.frozen-edge` kills the vertical one on the last pinned column.
+     * Backgrounds are solid tokens throughout — a frozen surface that overlaps scrolling
+     * content is opaque or the rows bleed through it (CLAUDE.md → "Frozen Panes").
+     */
     sticky?: boolean;
     className?: string;
 }
@@ -362,7 +440,7 @@ export interface BlackwoodTableProps<Row, Ctx> {
      * header cell, so a fresh identity per render rebuilds the whole header row.
      */
     renderHeaderSlot?(spec: ColumnSpec<Row, Ctx>, index: number): React.ReactNode;
-    summaryRows?: readonly TableSummaryRow[];
+    summaryRows?: readonly TableSummaryRow<Row, Ctx>[];
     /** Show the blank-row pool's `Add N more rows` control. */
     drafts?: { enabled: boolean; defaultCount?: number };
     /** Append N blank rows and return their ids, so an undo can take them away again. */
@@ -1055,6 +1133,21 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
 
     const fixedHeaderContent = React.useCallback(() => headerRow, [headerRow]);
 
+    /**
+     * The lanes and the column table a chrome row — and a PER-COLUMN summary row — tiles.
+     * Memoized because it is a dependency of every row's content: a fresh object here
+     * re-renders the whole sheet.
+     *
+     * Declared ABOVE the footer because the footer consumes it too. That is the whole
+     * point of `TableSummaryRow.cell`: a pinned per-column footer and a body chrome row
+     * are the same tiling problem at two different edges, and they now read the same
+     * resolved column table rather than each re-deriving one.
+     */
+    const chromeApi = React.useMemo<TableChromeRowApi<Row, Ctx>>(
+        () => ({ cols, spans: columns.spans, colCount: cols.length }),
+        [cols, columns.spans],
+    );
+
     // ── Summary rows ─────────────────────────────────────────────────────────────
     const summary = React.useMemo(() => {
         if (!summaryRows || summaryRows.length === 0) return null;
@@ -1065,7 +1158,67 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
         const stickyCell = (corner: boolean) =>
             corner ? 'frozen-corner-bottom frozen-edge frozen-edge-top' : 'frozen-row-bottom frozen-edge-top';
 
-        return summaryRows.map((row) => (
+        return summaryRows.map((row) => {
+            // ── PER-COLUMN shape ─────────────────────────────────────────────────
+            //
+            // One `<td>` per resolved column, in display order. The consumer supplies the
+            // CONTENT; the platform owns the `<td>` — its opaque background, its sticky
+            // offset, its z-rank and both seams — because every one of those is a fact
+            // about where the column sits, not about what is printed in it. A consumer
+            // computing its own `left` would be a second definition of the pinned run.
+            if (row.cell) {
+                const pinnedCount = columns.pinned.start;
+                const style = row.height !== undefined ? { height: row.height } : undefined;
+                return (
+                    <tr key={row.key} className={row.className} style={style}>
+                        {cols.map((spec, ci) => {
+                            const out = row.cell!(spec, ci, chromeApi);
+                            const pinned = ci < pinnedCount;
+                            const cellStyle: React.CSSProperties | undefined = pinned
+                                ? { left: columns.pinnedLeft[ci] }
+                                : undefined;
+                            return (
+                                <td
+                                    key={spec.key}
+                                    aria-hidden={out?.ariaHidden ? 'true' : undefined}
+                                    title={out?.title}
+                                    style={cellStyle}
+                                    className={cn(
+                                        base,
+                                        // A pinned footer cell is sticky on BOTH axes, so it
+                                        // out-ranks the frozen body column (10) AND the
+                                        // scrolling footer cells (20) — the documented 30.
+                                        row.sticky && (pinned ? 'frozen-corner-bottom' : 'frozen-row-bottom'),
+                                        // The VERTICAL seam belongs to the LAST pinned
+                                        // column and to nothing else; every other cell keeps
+                                        // the ordinary column separator `base` already has.
+                                        // The HORIZONTAL one belongs to every cell of a
+                                        // pinned row. On the one cell that owes BOTH they are
+                                        // composed (`.frozen-edge-corner`) rather than
+                                        // stacked: `box-shadow` is a single property, so
+                                        // `frozen-edge frozen-edge-top` is not two shadows —
+                                        // it is the later rule winning and the vertical seam
+                                        // vanishing.
+                                        pinned && ci === pinnedCount - 1
+                                            ? row.sticky
+                                                ? 'frozen-edge-corner'
+                                                : 'frozen-edge'
+                                            : row.sticky && 'frozen-edge-top',
+                                        // Merged LAST so a status tint may replace `bg-muted`
+                                        // and a full-bleed band may replace the padding —
+                                        // while nothing above can be overridden away.
+                                        out?.className,
+                                    )}
+                                >
+                                    {out?.content}
+                                </td>
+                            );
+                        })}
+                    </tr>
+                );
+            }
+
+            return (
             <tr key={row.key} className={row.className}>
                 {/* A span of 0 renders NO cell at all — `colSpan={0}` means "to the end of
                     the column group" in HTML, which is the opposite of nothing. */}
@@ -1109,21 +1262,13 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
                     <td colSpan={s.trailing} className={cn(base, row.sticky && stickyCell(false))} />
                 ) : null}
             </tr>
-        ));
-    }, [summaryRows, columns.spans]);
+            );
+        });
+    }, [summaryRows, columns.spans, columns.pinned.start, columns.pinnedLeft, cols, chromeApi]);
 
     const fixedFooterContent = React.useCallback(() => <>{summary}</>, [summary]);
 
     // ── Rows ─────────────────────────────────────────────────────────────────────
-
-    /**
-     * The lanes and the column table a chrome row tiles. Memoized because it is a
-     * dependency of every row's content — a fresh object here re-renders the whole sheet.
-     */
-    const chromeApi = React.useMemo<TableChromeRowApi<Row, Ctx>>(
-        () => ({ cols, spans: columns.spans, colCount: cols.length }),
-        [cols, columns.spans],
-    );
 
     /** Everything a row needs that is NOT static, resolved per item. */
     const cellsFor = React.useCallback(

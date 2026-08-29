@@ -715,6 +715,28 @@ input[type=number] {
     0 -2px 6px rgba(0, 0, 0, 0.4);
 }
 
+/* BOTH seams on ONE cell — the bottom-left corner of a pinned footer.
+   That cell is the LAST frozen column (it owes a vertical seam) AND part of the pinned
+   footer band (it owes a horizontal one), and `box-shadow` is a SINGLE property: putting
+   `.frozen-edge` and `.frozen-edge-top` on the same element is not two shadows, it is the
+   later rule winning and the vertical seam silently disappearing. So the pair is composed
+   here rather than stacked at the call site. Same tokens, same weights, same dark variant —
+   only the combination is new. */
+.frozen-edge-corner {
+  box-shadow:
+    inset -1px 0 0 0 var(--border),
+    inset 0 1px 0 0 var(--border),
+    2px 0 4px rgba(0, 0, 0, 0.12),
+    0 -2px 4px rgba(0, 0, 0, 0.12);
+}
+:is(.dark) .frozen-edge-corner {
+  box-shadow:
+    inset -1px 0 0 0 var(--border),
+    inset 0 1px 0 0 var(--border),
+    2px 0 6px rgba(0, 0, 0, 0.4),
+    0 -2px 6px rgba(0, 0, 0, 0.4);
+}
+
 /* Heatmap "no deliveries" cell — a muted diagonal hatch so empty months read as
    ABSENT data, never as a cheap/zero value. Theme-aware via semantic tokens.
    Used by the Price & Volume Analysis heatmap demo (/price-demos/demo3). */

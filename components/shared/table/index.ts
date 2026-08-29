@@ -12,6 +12,7 @@ export type {
     BlackwoodTableProps,
     TableEditorArgs,
     TableSummaryRow,
+    TableSummaryCell,
     TableChromeRowApi,
     TableContextTarget,
     TableState,
