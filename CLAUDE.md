@@ -390,6 +390,16 @@ n×MIN_BAG_W`), and `schedule-table.tsx` (explicit `minWidthClass` prop, require
 every caller). The CSS-grid form of the rule is `.blocking-grid-cols` in `globals.css`
 — `minmax(104px, 1fr)`, never `minmax(0, 1fr)`.
 
+**The header owes chrome, not just its label (2026-08-29).** Any grid on the Blackwood
+Table in `scope="focus"` pays **57px** of invisible header chrome per column (the
+hover-revealed sort + filter buttons are `opacity-0` flex SIBLINGS of the label — unseen
+but occupying layout — plus padding/border), and **61px** when the column also carries a
+`renderHeaderSlot`; a `cellKind: 'derived'` column pays only 17. A column width sized to
+the label alone therefore clips with `…` in v2 while the classic `<th>` shows the same
+label fine — QC (2026-08-26) and RC Movement (2026-08-29) both shipped exactly this bug.
+Size widths as `measured label px + chrome budget`, and pin them with assertions the way
+`verify-qc-grid.ts` / `verify-rc-movement-grid.ts` do (both carry the measured tables).
+
 ## Error Toasts (HARD RULE)
 
 Every error toast — and every inline error UI — MUST persist until the user manually dismisses it and MUST include a Copy button that copies the full error text to the clipboard.

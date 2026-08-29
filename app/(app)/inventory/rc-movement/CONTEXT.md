@@ -13,11 +13,11 @@ A cross-tab / pivot of feeding activity, mirroring how the user reasons about a 
 | File | Lines | Role |
 |------|-------|------|
 | `actions.ts` | ~700 | Backend. Single server action `fetchRcMovementMatrix(campaign?)` → `RcMovementMatrix`. `campaign` = the encoded campaign key `"PRODUCTION_BATCH-YEAR"` (e.g. `"JUNE-2026"`); absent/invalid → resolves to the most recent campaign. Builds `campaignOptions` from `view_rc_movement_campaign_options` (filtered `campaign_year >= 2025`, ordered `max_date` desc). For the resolved `(pb, yr)` it pivots `view_rc_movement_campaign_cells` into ordered block-columns × calendar-day-rows (day-range from the options view's `min_date`→`max_date`), and reads the campaign fed-price views (`_campaign_day_price`, `_campaign_price`) + the campaign production/yield views (`_campaign_production_daily`, `_campaign_production_daily_total`, `_campaign_production`, `_campaign_yield`). Every campaign view is filtered `.eq('production_batch', pb).eq('campaign_year', yr)`. The per-block footer pass (status / totalIn / totalOut / mc / ash / blockLoss / `avgFedPrice`) is **all-time per-batch, campaign-independent** — unchanged (`batches`, `deliveries`, `rc_out`, `view_rc_movement_batch_price`). Pages through every view via the **shared `fetchAllRows()` helper** (`@/lib/supabase/paginate`, DUP-1 — a thin local `fetchAll` delegates to it; the helper's throw surfaces as the action's `empty` fallback) to bypass PostgREST's 1000-row cap. |
-| `page.tsx` | ~70 | **Standalone route entry (`/inventory/rc-movement`).** Server component. Reads **`?grid=v2`** and picks the grid (see "The `?grid=v2` rewire" below): the LIVE branch renders `<RcMovementRouteView>` inside a `<Suspense>` exactly as before (the view uses `useSearchParams`), while the v2 branch awaits `fetchRcMovementMatrix(campaign)` HERE and hands the payload down as a prop. |
+| `page.tsx` | ~78 | **Standalone route entry (`/inventory/rc-movement`).** Server component. **DEFAULTS TO v2 since 2026-08-29** — `resolveGrid(params.grid, GRID_V2)`; the Classic matrix is `?grid=v1` (see "The flip" below). The Classic branch renders `<RcMovementRouteView>` inside a `<Suspense>` exactly as before (the view uses `useSearchParams`), while the v2 branch awaits `fetchRcMovementMatrix(campaign)` HERE and hands the payload down as a prop. |
 | `rc-movement-route-view.tsx` | ~95 | **NEW. Standalone-route host.** Client component owning the matrix fetch (`fetchRcMovementMatrix(campaign?)`), the spinner/empty states, the `?campaign=` URL param (read via `useSearchParams`, written via `router.replace`), and the `onNavigateToBatch` wiring (`router.push('/inventory?tab=…')`). SHELL-AGNOSTIC — does NOT use `useInventoryTab`. Repurposed from the deleted `rc-movement-matrix-lazy-tab`. |
 | `rc-movement-matrix.tsx` | ~1400 | **Matrix** client table. Frozen-pane sticky table: **5** pinned left columns (Row # / Date / Day / Fed ₱/kg / Total fed) + frozen header row + pinned top-left corner **+ frozen summary footer pinned to the container bottom** (per-column stacked summary + bottom-left corner). Scrolling region: **PRODUCED group (TOTAL PRODUCED + dynamic per-grade columns)** FIRST, then the dynamic per-batch BLOCK columns; 2px `GROUP_DIVIDER` borders separate the two scrolling groups. `table-fixed`, explicit px widths, `h-8` rows, mono right-aligned numerics, thousands separators, blank zero cells. **Active campaign** is shown as a prominent toolbar label (eyebrow "Campaign" over the `campaignLabel` heading, e.g. "June 2026") beside the **campaign picker** (shadcn `Select`, value = encoded key, options = `campaignOptions`); selecting calls `onCampaignChange?(campaign)` → the route view writes it to the `?campaign=` URL param and re-fetches. Block column headers are **clickable** → open the shared `BlockingDetailPanel` (slide-over) for that column's batch. **Props:** `data`, `onCampaignChange?`, **`onNavigateToBatch?`** (passed straight to the detail panel's "Edit All"; the standalone route wires it to `router.push('/inventory?tab=…')`). |
 
-| `rc-movement-grid-v2.tsx` | ~840 | **NEW (2026-08-19).** The same day×block matrix on the **Blackwood Table** (`lib/table/` + `components/shared/table/`), reachable only at `?grid=v2`. READ-ONLY, built BESIDE the live matrix, which is not edited by one character — nor is `rc-movement-route-view.tsx`. Owns its own campaign picker (writes `?campaign=`, preserving every other param) and a `useTransition` busy state. See "The `?grid=v2` rewire". |
+| `rc-movement-grid-v2.tsx` | ~1200 | **THE DEFAULT GRID since 2026-08-29** (built 2026-08-19). The same day×block matrix on the **Blackwood Table** (`lib/table/` + `components/shared/table/`). READ-ONLY, built BESIDE the Classic matrix, which is not edited by one character — nor is `rc-movement-route-view.tsx`. Owns its own campaign picker (writes `?campaign=`, preserving every other param) and a `useTransition` busy state. Its column widths are **measured, not eyeballed** (see "Header widths") and its campaign totals row is a **bottom-pinned summary row**. See "The flip". |
 
 > The folder now HAS a `page.tsx` (Phase 2) — `/inventory/rc-movement` is a real standalone route. The matrix is reached there (no longer via a tab).
 
@@ -198,13 +198,122 @@ Footer height grew by one line; the frozen geometry is unchanged (`.frozen-corne
 - The route renders in the thin inventory layout's content area (full height) with **no tab-bar footer** — it is shell-agnostic (does NOT use `useInventoryTab`). The old in-tab `RcMovementMatrixLazyTab` was deleted this wave.
 - Campaign switching re-fetches the server action **without a page reload** — the spinner shows only when there is no prior data.
 
-## The `?grid=v2` rewire (universal-table migration, 2026-08-19)
+## The flip — v2 is the DEFAULT (2026-08-29)
+
+Renzo: *"RC Movement is an essential table — it gives me the best idea of how my rc and pc
+are moving daily and monthly. Visibility is key."*
+
+`/inventory/rc-movement` now serves the **Blackwood Table** on a paramless URL; the Classic
+matrix is `?grid=v1`. A DEFAULT FLIP, not a cutover — `rc-movement-matrix.tsx`,
+`rc-movement-route-view.tsx` and `actions.ts` are still byte-identical, the Classic branch
+still mounts, and **two surfaces still live only there** (see "Not reproduced in v2"). Only
+`page.tsx` changed for the flip itself: `resolveGrid(params.grid, GRID_V2) === GRID_V2`, and
+`GridVersionBar defaultVersion={GRID_V2}` so the toggle lights the side the page rendered.
+The screen is registered in `FLIPPED_PAGES` in `scripts/verify-table-core.ts`, which reads
+the registry BOTH ways — flipping without listing fails, listing without flipping fails.
+
+Two things shipped with the flip, both of them Renzo's own findings.
+
+### Header widths — MEASURED, and 40px larger than the Classic matrix's
+
+*"a bunch of the column headers are wrapping weirdly or are being '…' truncated. This does
+not happen in our original table. Column widths must accommodate the header so we can see
+everything."*
+
+**The cause is invisible chrome, not the font.** The Classic `<th>` spends `px-2` + a 1px
+border and gives everything left to its label. This grid runs `scope="focus"`, which turns
+the platform's built-in SORT and FILTER controls on for every column that is not
+`cellKind: 'derived'` and has not opted out — and `HeaderCell` lays them out as flex
+SIBLINGS of the label, `opacity-0` until the header is hovered. **Invisible, and still
+occupying layout:** two 16px buttons plus two 4px gaps. And the two columns that START a
+section (`PRODUCED`, the first block column) hang their 2px group rule off
+`renderHeaderSlot`, a fourth flex child whose sliver is `absolute` and 0px wide — but whose
+`gap-1` is not, so those two pay a further **4px**.
+
+    usable label width = declared − 16 (px-2) − 40 (two controls) − 1 (border-r)
+                       = declared − 57            ( − 61 with a header slot )
+    usable label width = declared − 17            ( a column offering neither control )
+
+Every width carried over from the Classic matrix was therefore ~40px short. Same trap and
+same remedy as the QC ledger's 2026-08-26 pass (`scripts/verify-qc-grid.ts` §12).
+
+| key | label | label px | chrome | floor | was | now |
+|---|---|---|---|---|---|---|
+| `rownum` | `#` | 7.42 | 17 | 24.42 | 48 | **48** |
+| `date` | `DATE` | 29.52 | 57 | 86.52 | 100 | **100** |
+| `day` | `DAY` | 22.92 | 57 | 79.92 | 52 | **84** |
+| `fedprice` | `FED ₱/KG` | 52.63 | 57 | 109.63 | 96 | **112** |
+| `total` | `TOTAL FED` | 62.32 | 57 | 119.32 | 88 | **124** |
+| `produced` | `PRODUCED` | 64.67 | 57+4 | 125.67 | 88 | **128** |
+| `grade:*` | `3X50` · `6X50` · `8X50` | 30.25 | 57 | 87.25 | 80 | **92** |
+| `blk:*` | `MARCH-26-SUNDRY7` | 115.53 | 17+4 | 136.53 | 92 | **148** |
+
+Measured in Chrome against the real computed fonts (lane header Geist 11px/500
+`uppercase tracking-wide`; block header Geist Mono 11px/600; body figure Geist Mono 12px
+`tabular-nums`). Node has no font engine, so they cannot be re-derived — only ENFORCED, which
+**`scripts/verify-rc-movement-grid.ts`** does: it parses each `W_*` off this file and
+compares it against both the header floor AND the widest real VALUE the lane can hold (the
+half the QC pass forgot the first time).
+
+Three decisions inside that table:
+
+1. **`headerWrap` is gone from every column.** It was the old answer on `TOTAL FED` and the
+   grade lanes and it was wrong twice over — the header row grows to its TALLEST cell, so one
+   wrapped header raises all sixteen, and a name broken across two lines is not more readable
+   than the same name on one line that fits. The block header's second line stays: that is a
+   `subLabel` (the block location), a subtitle rather than the name spilling over.
+2. **`W_BLOCK`'s floor is the longest batch code that EXISTS** — 16 characters
+   (`MARCH-26-SUNDRY7` / `APRIL-26-SUNDRY2`, measured over all 531 codes `rc_out` has ever
+   fed). The declared 148 additionally clears `SEPTEMBER-26-BLK12` (18 chars, 123.74px), i.e.
+   the longest the naming convention produces with an ordinary `BLK` kind. A hypothetical
+   `SEPTEMBER-26-SUNDRY12` would still truncate and its full code is on the `title`; the line
+   is drawn where a wider column would cost every campaign real scroll width for a code
+   nobody has typed. **This is the one place the two headers deliberately differ — the
+   Classic matrix truncates a 16-character code at 92px and this does not.**
+3. **Every declared width clears its floor with a few px of slack**, deliberately: a column
+   sized to the exact measurement is one font-hinting change away from an ellipsis.
+
+The frozen-left run is now **468px** (48+100+84+112+124) with prices, **356px** without.
+Verified at 375px: the PAGE does not scroll sideways, the grid's own scroller does —
+"never crush, always scroll", with the `maxWidth: useTableColumns(...).minWidth` clamp
+unchanged.
+
+### The footer is PINNED
+
+*"Footer must also 'freeze' same as original."*
+
+The campaign totals row was a `renderChromeRow`, i.e. the LAST ROW OF THE BODY, and it
+scrolled away with the rows it summarises. It is now **one `sticky` `TableSummaryRow` with a
+`cell` renderer** — the platform seam built for it, `TableSummaryRow.cell` (see
+`lib/table/CONTEXT.md`). What changed here:
+
+- `renderChromeRow`, the `summary` row family and the `{ kind: 'summary' }` item are **gone**,
+  not left beside it — a second copy of this footer is how the two would drift.
+- **~15 lines of hand-rolled geometry deleted.** `pinnedOffsets(api.cols)`, the `frozen-col`
+  / `frozen-edge` / `left:` bookkeeping and the per-cell shell are all the platform's now.
+  The consumer returns `{ content, className, title }` per column and nothing else.
+- The whole-cell `statusTint()` still REPLACES the shell's `bg-muted` (merged last, and
+  opaque — a pinned surface that overlaps scrolling content is opaque or the rows bleed),
+  the tricolor produced/yield/loss bands still get `p-0` for their full bleed, and the ₱
+  lines are still gated on the server-resolved `showFedPrice`.
+- `height: TOTALS_H` (62) is a **floor**: measured 76px for a price-seeing viewer (four
+  stacked lines per block), and legitimately shorter for Production.
+- Measured after the change: the footer's pinned `left` offsets are **identical** to the
+  body's on every frozen column, in both the priced and the gated render; the bottom-left
+  corner is `position: sticky; bottom: 0; left: 0; z-index: 30` with an opaque background,
+  and it carries **both** seams via the new `.frozen-edge-corner` (see below).
+
+**`.frozen-edge-corner` (new in `globals.css`).** `box-shadow` is ONE property, so
+`.frozen-edge` + `.frozen-edge-top` on the same element is not two shadows — the later rule
+wins and the VERTICAL seam silently disappears. The one cell that owes both (the bottom-left
+corner of a pinned footer) now takes a composed utility. Same tokens, same weights, same dark
+variant; only the combination is new. The Classic matrix sidesteps this by putting
+`.frozen-edge-top` only on its SCROLLING footer cells.
+
+### Everything below this line describes the grid as originally built (2026-08-19)
 
 `rc-movement-grid-v2.tsx` renders the SAME `RcMovementMatrix` payload on the platform grid,
-so the two can be compared cell-for-cell on the same campaign. Reachable only at
-`/inventory/rc-movement?grid=v2`; `?grid=` absent, misspelt or `V2` all mean the live
-matrix. Only `page.tsx` changed — `rc-movement-matrix.tsx`, `rc-movement-route-view.tsx`
-and `actions.ts` are byte-identical.
+so the two can still be compared cell-for-cell on the same campaign.
 
 - **Why the v2 branch is fetched on the SERVER.** The live branch's payload is fetched
   client-side by `rc-movement-route-view.tsx`, and that file may not be edited — so rather
@@ -226,14 +335,15 @@ and `actions.ts` are byte-identical.
   `columnSelectable` also excludes it from rectangles) and the `day` row family returns
   `addressable: false` for that one slot. Every Tab run and every jump key steps straight
   over it.
-- **The summary footer is a CHROME ROW (`renderChromeRow`), not `summaryRows`.** A
-  `TableSummaryRow` tiles six DECLARED lanes, so it can carry one headline figure and one
-  total — this footer carries a different stack under every one of ~40 columns (per-block
-  `fed` / `loss` / `₱/kg` / `actual` with the opaque `statusTint()` state colour, the
-  tricolor produced/yield/loss bands, each grade's campaign total, the grand total fed and
-  the campaign delivered + actual ₱/kg). `renderChromeRow` returns one `<td>` per column,
-  which is the only shape that fits. **The cost:** it is the LAST ROW OF THE BODY rather
-  than pinned to the container bottom — `summaryRows` is the only route to the footer.
+- ~~**The summary footer is a CHROME ROW (`renderChromeRow`), not `summaryRows`.**~~
+  **SUPERSEDED 2026-08-29 — see "The footer is PINNED" above.** The reasoning was right
+  about the problem: a `TableSummaryRow` tiled six DECLARED lanes, so it could carry one
+  headline figure and one total, while this footer carries a different stack under every one
+  of ~40 columns (per-block `fed` / `loss` / `₱/kg` / `actual` with the opaque
+  `statusTint()` state colour, the tricolor produced/yield/loss bands, each grade's campaign
+  total, the grand total fed and the campaign delivered + actual ₱/kg). It was wrong to
+  accept the cost — being the LAST ROW OF THE BODY rather than pinned — as permanent: the
+  right answer was a platform seam, and `TableSummaryRow.cell` is now it.
 - **The 2px `GROUP_DIVIDER` is painted from inside the cells.** The module owns every
   `<td>`/`<th>` className (`cell-classes.ts` builds it from ten enums), so a consumer cannot
   add a border to one. Body cells draw the rule on their own `absolute inset-0` inner span
@@ -260,17 +370,22 @@ and `actions.ts` are byte-identical.
   `labelNode` re-styles the name to the live `<th>`'s own
   `font-mono text-[11px] font-semibold normal-case` in `text-foreground`, because the
   platform's default header type is uppercase sans in `text-muted-foreground` and a batch
-  code is an identifier, not a lane label. **`W_BLOCK` is back to the live matrix's 92** —
-  with no header chrome on these columns the label's budget is `92 − 16` (the module's
+  code is an identifier, not a lane label. ~~**`W_BLOCK` is back to the live matrix's 92**
+  — with no header chrome on these columns the label's budget is `92 − 16` (the module's
   `px-2`) = 76px, the same 76px the live `<th>`'s `px-2` gives it, so the truncation point
-  matches. **The sub-line's type now matches too:** `HeaderCell`'s `subLabel` shipped as
+  matches.~~ **REVISED 2026-08-29 to 148** — matching the Classic matrix's width also
+  matched its TRUNCATION, and the whole of Renzo's next complaint was `…` in a header. See
+  "Header widths" above; the budget was also 4px short (the group-rule `renderHeaderSlot` on
+  the first block column is a fourth flex child). **The sub-line's type matches:**
+  `HeaderCell`'s `subLabel` shipped as
   `text-[9px] text-muted-foreground/70` and was corrected to
   `text-[10px] leading-tight text-muted-foreground` in the same pass — a platform edit,
   made deliberately rather than worked around, because these block headers are `subLabel`'s
   ONLY real consumer (a grep over `app/ components/ lib/` returns this file and the dev
   playground fixture, nothing else) and a default every consumer has to route around via
   `labelNode` is the wrong default. See `lib/table/CONTEXT.md` → the review pass, item 4.
-  **No known pixel difference remains between the two headers.**
+  **One deliberate pixel difference remains: v2's block column is 148px against the Classic
+  matrix's 92, so a 16-character batch code renders whole here and truncates there.**
 - **Clicking a block header opens the shared `BlockingDetailPanel`** — the live matrix's
   behaviour, on `ColumnSpec.onHeaderClick`, which replaces the column sweep entirely (a
   header naming a *thing* is not a lane label, and sweeping ~31 cells behind the slide-over
@@ -308,13 +423,25 @@ and `actions.ts` are byte-identical.
   one click would delete this grid's entire campaign footer. The date/day/kg lanes keep
   both affordances (they are lanes), **with the same footer caveat — sorting any of them
   hides the totals rule-off until the sort is cleared.**
-- **Not reproduced in v2** (left out rather than stubbed): the `OpenBlocksDialog` behind
-  the coverage badge (an inert pill in v2), the Radix hover info card per footer column (a
-  native multi-line `title` carries the same figures), the `sm:hidden` phone summary, and
-  the floating selection-aggregate pill (the module computes the aggregates inside
-  `useTableInteraction` and exposes only the RANGE, so the toolbar shows `rows × cols`).
+- **Not reproduced in v2 — the REMAINING GAPS, and they are why `?grid=v1` still matters**
+  (left out rather than stubbed):
+  1. **The `OpenBlocksDialog`** behind the coverage badge. In v2 the badge is an inert pill
+     that still prints the SQL-counted `blocksClosed` / `blocksFed` / `openBlocks.length`;
+     clicking it does nothing. The dense per-open-block table (Block · Status · Fed here ·
+     Share · Balance · Feeds · Last fed · ₱/kg in) exists **only** in
+     `rc-movement-matrix.tsx`. **To see it today: `?grid=v1`.**
+  2. **The Radix hover info card** per footer column — the `w-[180px]` glass popover with the
+     state pill and the `<dl>` of Fed / In / MC / Ash / Fed price / Loss / Opened. v2 carries
+     the same figures on a native multi-line `title`: the same DATA, a plainer surface.
+  3. **The `sm:hidden` phone summary** (`RcMovementSummaryMobile`) — the campaign KPI strip,
+     the tappable block list and the per-day feed list. v2 at 375px shows the real grid with
+     its own horizontal scroller instead (verified: the PAGE does not scroll sideways).
+  4. **A hand-rolled selection-size chip.** Deliberate rather than missing: the table now
+     publishes the real SUM/AVERAGE/COUNT/MIN/MAX of a rectangle to the app's floating status
+     bar by itself, so a `rows × cols` chip beside it would be a second, worse answer.
+
   *(The block-header detail panel and two-line block headers were on this list until
-  2026-08-20; both are now built — see the two bullets above.)*
+  2026-08-20, and the bottom-pinned footer until 2026-08-29; all three are now built.)*
 - **What IS live from the module:** cell selection and rectangular ranges, the full keyboard
   (arrows, Tab, Ctrl/Cmd+Arrow, Home/End, Ctrl+Home/End, PageUp/PageDown), Ctrl/Cmd+C as
   TSV, column resize (session-local), the 5-column frozen block with the price column
@@ -333,6 +460,18 @@ and `actions.ts` are byte-identical.
 - `../_shared/blocking-detail-panel` — `BlockingDetailPanel` + `BlockingDetailNavTarget`, reused for the column-header slide-over **by BOTH grids since 2026-08-20** (`rc-movement-matrix.tsx` and `rc-movement-grid-v2.tsx`), each with its own `fetchBlockDataForBatch` call and its own `onNavigateToBatch`. The panel itself is untouched by the v2 work. **The panel was hoisted out of `blocking/` into the neutral `_shared/` folder** so it carries no inventory-tab-shell dependency. On this standalone route the matrix forwards an explicit `onNavigateToBatch` (from `rc-movement-route-view.tsx`) to the panel's "Edit All", which `router.push`es to `/inventory?tab=…`. (When the panel is rendered in-shell elsewhere with `onNavigateToBatch` omitted, it falls back to the `INVENTORY_NAVIGATE_EVENT` window event handled by `InventoryTabProvider`.)
 - `../blocking/actions` — `fetchBlockDataForBatch(batchId)` (batch-accurate header summary) — the matrix calls this; detail history is fetched by the panel itself via `fetchBlockingDetail`
 - `../blocking/types` — `BlockData` (panel header-summary shape)
+- `@/components/shared/table` + `@/lib/table` — the **Blackwood Table** platform module, which
+  `rc-movement-grid-v2.tsx` (the DEFAULT grid) is built on. The pinned campaign footer uses
+  `TableSummaryRow.cell`, a seam added for this screen on 2026-08-29 — see
+  `lib/table/CONTEXT.md`. The Classic matrix imports none of it.
+- **`scripts/verify-rc-movement-grid.ts`** — the tenant-side guard for this module: it parses
+  every `W_*` off `rc-movement-grid-v2.tsx` and enforces it against the MEASURED header and
+  value widths, pins the header-chrome budget against `HeaderCell.tsx` (where the 40px + 4px
+  actually come from), asserts the totals row is a pinned summary row rather than a chrome
+  row, and asserts the Classic matrix and its host were not edited by the flip. Run it after
+  ANY width change on this sheet — Node has no font engine, so a width is enforceable here
+  and not re-derivable. `scripts/verify-table-core.ts` owns the platform half (the seam and
+  the `FLIPPED_PAGES` registry).
 
 ## See Also
 - [RC IN](../rc-in/CONTEXT.md) — Source of `deliveries.lab_results`, `deliveries.cost_basis`, `deliveries.block_loc` which feed `view_rc_movement` via `batch_meta` CTE

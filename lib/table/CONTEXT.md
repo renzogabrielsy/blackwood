@@ -305,6 +305,52 @@ with the data was inexpressible. `renderChromeRow(item, api)` fills that seam:
   column stays OPAQUE** — a solid token, never glass, or the scrolling rows bleed through.
 - Must be referentially stable (`useCallback`): it is a dependency of every row's content.
 
+### `TableSummaryRow.cell` — the same tiling problem at the OTHER edge (2026-08-29)
+
+A summary row tiled **six declared lanes** (`frozen · spacer · weight · note · total ·
+trailing`), so it could carry one headline figure and one total. A PIVOT's rule-off carries
+a different stack under **every** column — RC Movement's campaign footer prints a per-block
+`fed` / `loss` / `₱/kg` / `actual` band with an opaque status tint under each of ~40
+columns, plus a tricolor produced/yield/loss cell, plus every grade's campaign total. Six
+lanes cannot say that, so it had to ride as a `renderChromeRow` — which reaches the **body**,
+so the payoff of the screen scrolled away with the rows it was summarising. Renzo: *"Footer
+must also 'freeze' same as original."*
+
+```ts
+cell?(spec: ColumnSpec<Row, Ctx>, index: number, api: TableChromeRowApi<Row, Ctx>)
+    : TableSummaryCell | null
+```
+
+- **The consumer returns CONTENT; the `<td>` stays the platform's.** `TableSummaryCell` is
+  `{ content?, className?, title?, ariaHidden? }` and nothing else. The background, the
+  cumulative sticky `left`, the z-rank and both seams are facts about **where the column
+  sits**, not about what is printed in it — a consumer computing its own offset would be a
+  second definition of the pinned run, which is exactly what `pinnedOffsets` exists to
+  prevent. RC Movement's footer deleted ~15 lines of hand-rolled `pinnedOffsets` /
+  `frozen-col` / `left` arithmetic by moving to this.
+- **Called once per RESOLVED column, in display order.** A column hidden by a price gate
+  takes its footer cell with it and every offset after it recomputes — no runtime `LEFT_*`
+  maths anywhere in the consumer.
+- **The z-scale is the documented one** (CLAUDE.md → *Frozen Panes*): a cell under the
+  start-pinned run is sticky on BOTH axes, so `.frozen-corner-bottom` (30); every other cell
+  of the row is `.frozen-row-bottom` (20). `.frozen-edge-top` kills the seam against the
+  scrolling body; `.frozen-edge` kills the vertical one on the last pinned column.
+- **`.frozen-edge-corner` is new, and it is not a style preference.** `box-shadow` is ONE
+  property, so `frozen-edge frozen-edge-top` on the same element is not two shadows — the
+  later rule in `globals.css` wins and the vertical seam silently disappears. The one cell
+  that owes both (the bottom-left corner) therefore takes a composed utility. *(The
+  lane-shaped path still stacks the two, unchanged: it is the shipped behaviour of nine
+  screens and fixing it there would move pixels nobody asked to move.)*
+- `className` is merged **LAST**, so a status tint may replace `bg-muted` and a full-bleed
+  band may replace the padding — while position, z and the seams above it in the same `cn()`
+  cannot be unset. Whatever it paints must be **OPAQUE**: this row overlaps scrolling content.
+- `height` is a **floor**, not a fixed height — content taller than it wins, which is what
+  lets the same footer be two lines shorter for a viewer who cannot see prices.
+- **Purely additive.** `cell` is optional and wins over the lanes when present; both type
+  parameters default to `unknown`, so every existing `TableSummaryRow[]` annotation compiles
+  untouched and the nine lane-shaped consumers are byte-identical. Asserted in
+  `scripts/verify-table-core.ts` → *"the seam is ADDITIVE"*.
+
 ### `renderHeaderSlot` — the wire to a seam that already existed
 
 `HeaderCell` has carried a `filterSlot` since it was written, and `BlackwoodTable` builds
@@ -647,6 +693,7 @@ not one was predicted by the plan.
 | `ColumnSpec.onHeaderClick` *(2026-08-20)* | *"Clicking this header opens the block, it does not sweep 400 cells."* The label's click was hard-wired to column-selection. |
 | `ColumnSpec.subLabel` *(2026-08-20)* | *"`C-8B`, and under it `JAN-26-BLK22`."* `labelNode` could draw it; nothing declared it, so every consumer would draw it differently. |
 | `BlackwoodTableProps.sizing` *(2026-08-20)* | *"Use the whole monitor without moving my frozen columns."* The stretch bug, closed at the platform layer instead of by N consumer clamps. |
+| `TableSummaryRow.cell` *(2026-08-29)* | *"Pin a rule-off that carries a DIFFERENT stack under each of ~40 columns."* Six declared lanes could not say it, and `renderChromeRow` — the only shape that fitted — reaches the BODY, so the footer scrolled away with the rows it summarised. |
 
 Purely additive — a consumer that passes none of them, and a `RowKind` whose `occupies()`
 never mentions `addressable`, behaves exactly as before.

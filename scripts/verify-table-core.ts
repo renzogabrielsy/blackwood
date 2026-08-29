@@ -2207,6 +2207,119 @@ check('the component measures the container and renders at the width it resolved
   assert.match(code, /Math\.abs\(prev - w\) < 1 \? prev : w/)
 })
 
+// ═══ THE PINNED PER-COLUMN SUMMARY ROW (`TableSummaryRow.cell`, 2026-08-29) ════
+//
+// Renzo, of RC Movement: *"Footer must also 'freeze' same as original."*
+//
+// A summary row tiled six DECLARED lanes, so a pivot's rule-off — a different stack under
+// each of ~40 columns — could only be expressed as a `renderChromeRow`, and that reaches
+// the BODY. The payoff of the screen therefore scrolled away with the rows it summarised.
+// `cell` is the seam that closes it: one cell per RESOLVED column, in the `<tfoot>`.
+//
+// **What has to stay true, and is asserted rather than described.** The `<td>` belongs to
+// the PLATFORM — its opaque background, its cumulative sticky `left`, its z-rank and both
+// seams — because all four are facts about where a column sits and not about what a
+// consumer prints in it. A consumer computing its own `left` would be a second definition
+// of the pinned run, which is the class of bug `pinnedOffsets` exists to prevent.
+
+const TABLE_TSX = readFileSync(join(ROOT, 'components/shared/table/BlackwoodTable.tsx'), 'utf8')
+const TABLE_CODE = TABLE_TSX.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+
+check('a per-column summary row is PINNED by the platform, with the documented z-scale', () => {
+  assert.ok(TABLE_CODE.includes('export function BlackwoodTable'), 'comment-stripping ate the source')
+
+  // The branch exists at all, and it WINS over the lanes — a row is one shape or the
+  // other, never both tiled on top of each other.
+  assert.match(TABLE_CODE, /if \(row\.cell\) \{/)
+
+  // THE Z-SCALE, from CLAUDE.md → "Frozen Panes". A footer cell under the start-pinned
+  // run is sticky on BOTH axes, so it is a CORNER (30) and out-ranks both the frozen body
+  // column (10) and the scrolling footer cells (20). Getting this one ternary backwards is
+  // exactly how a pinned footer bleeds.
+  assert.match(
+    TABLE_CODE,
+    /row\.sticky && \(pinned \? 'frozen-corner-bottom' : 'frozen-row-bottom'\)/,
+  )
+  // Both seams: the vertical one on the LAST pinned column and nowhere else, the
+  // horizontal one on every OTHER cell of a pinned row — and COMPOSED on the single cell
+  // that owes both, because `box-shadow` is one property and `frozen-edge frozen-edge-top`
+  // on one element is the later rule winning, not two shadows.
+  assert.match(
+    TABLE_CODE,
+    /pinned && ci === pinnedCount - 1\s*\?\s*row\.sticky\s*\?\s*'frozen-edge-corner'\s*:\s*'frozen-edge'\s*:\s*row\.sticky && 'frozen-edge-top'/,
+  )
+  // …and the composed utility must actually exist, carrying BOTH inset borders.
+  const css = readFileSync(join(ROOT, 'app/globals.css'), 'utf8')
+  const rule = css.slice(css.indexOf('.frozen-edge-corner {'))
+  assert.ok(rule.startsWith('.frozen-edge-corner {'), '.frozen-edge-corner must be defined')
+  const body = rule.slice(0, rule.indexOf('}'))
+  assert.ok(body.includes('inset -1px 0 0 0 var(--border)'), 'it must keep the vertical seam')
+  assert.ok(body.includes('inset 0 1px 0 0 var(--border)'), 'it must keep the horizontal seam')
+  assert.ok(css.includes(':is(.dark) .frozen-edge-corner'), 'it must have a dark variant like its two halves')
+})
+
+check('the offsets come from the RESOLVED column table, never from the consumer', () => {
+  // `columns.pinnedLeft` is `useTableColumns`' own cumulative run — the same array the
+  // header cells and the body cells are placed with. A consumer that re-summed widths
+  // here would drift the instant a column is resized or the price gate closes one.
+  assert.match(TABLE_CODE, /const pinnedCount = columns\.pinned\.start/)
+  assert.match(TABLE_CODE, /\{ left: columns\.pinnedLeft\[ci\] \}/)
+  // One cell per RESOLVED column, in display order — so a hidden column takes its footer
+  // cell with it rather than leaving a hole the offsets then mis-count.
+  assert.match(TABLE_CODE, /\{cols\.map\(\(spec, ci\) => \{[\s\S]{0,400}?row\.cell!\(spec, ci, chromeApi\)/)
+  // The footer and the body chrome rows read the SAME tiling api. Two would be two
+  // definitions of the column table.
+  assert.match(TABLE_CODE, /const chromeApi = React\.useMemo<TableChromeRowApi<Row, Ctx>>/)
+})
+
+check('the consumer may TINT and REPAD, and may not lose position, z or the seams', () => {
+  // The consumer's className is merged LAST, so an opaque status colour can replace
+  // `bg-muted` and a full-bleed band can replace the padding — while nothing above it in
+  // the same `cn()` (the sticky classes, the seams) is reachable to override away.
+  const branch = TABLE_CODE.slice(TABLE_CODE.indexOf('if (row.cell) {'))
+  const cell = branch.slice(0, branch.indexOf('</tr>'))
+  assert.ok(cell.includes('out?.className'), 'the consumer className must be merged in')
+  assert.ok(
+    cell.indexOf('out?.className') > cell.indexOf("'frozen-edge'"),
+    'the consumer className must be merged AFTER the sticky classes, or it could unset them',
+  )
+  // The shell is the SAME opaque `base` the lane rows use — one definition of "a summary
+  // cell looks like this", not two that drift.
+  assert.ok(cell.includes('base,'), 'the per-column cell must reuse the lane rows own base')
+  assert.match(TABLE_CODE, /const base = 'border-b border-b-border border-r border-r-border\/40 bg-muted/)
+})
+
+check('the seam is ADDITIVE — a lane-only consumer is byte-identical', () => {
+  // Nine screens shipped summary rows before this field existed. `cell` is optional and
+  // the lane path is unchanged below the branch, so none of them can have moved.
+  const src = readFileSync(join(ROOT, 'components/shared/table/BlackwoodTable.tsx'), 'utf8')
+  assert.match(src, /cell\?\(\s*\n\s*spec: ColumnSpec<Row, Ctx>,/, '`cell` must be OPTIONAL')
+  assert.match(src, /export interface TableSummaryRow<Row = unknown, Ctx = unknown>/,
+    'both parameters must default, or every existing `TableSummaryRow[]` annotation breaks')
+  // The lane tiling still runs for a row with no `cell`, on the same six spans.
+  for (const lane of ['s.frozen', 's.spacer', 's.weight', 's.note', 's.total', 's.trailing']) {
+    assert.ok(TABLE_CODE.includes(`${lane} > 0 ?`), `the ${lane} lane must still tile`)
+  }
+  // …and every screen that had a summary row before today still passes one, unchanged.
+  const LANE_CONSUMERS = [
+    'app/(app)/inventory/rc-in/delivery-grid-v2.tsx',
+    'app/(app)/inventory/rc-out/rc-out-grid-v2.tsx',
+    'app/(app)/cenapro/qc/qc-ledger-grid-v2.tsx',
+    'app/(app)/cenapro/deliveries/deliveries-grid-v2.tsx',
+    'app/(app)/cenapro/production/production-ledger-grid-v2.tsx',
+    'app/(app)/cenapro/production/production-endless-sheet-v2.tsx',
+    'app/(app)/production/daily/daily-grid-v2.tsx',
+  ]
+  for (const rel of LANE_CONSUMERS) {
+    const src2 = readFileSync(join(ROOT, rel), 'utf8')
+    assert.ok(src2.includes('summaryRows'), `${rel} must still declare summary rows`)
+    assert.ok(
+      !/\bcell:\s/.test(src2.slice(src2.indexOf('summaryRows'), src2.indexOf('summaryRows') + 2000)),
+      `${rel} must NOT have opted into the per-column shape`,
+    )
+  }
+})
+
 // ═══ `?grid=` — ONE axis, a per-page DEFAULT ═══════════════════════════════════
 //
 // RC IN / RC OUT flipped to v2-by-default on 2026-08-21 while nine other screens stayed
@@ -2346,6 +2459,7 @@ const FLIPPED_PAGES = [
   join('app', '(app)', 'cenapro', 'qc', 'page.tsx'), // QC ledger, 2026-08-21
   join('app', '(app)', 'production', '(tabs)', 'page.tsx'), // Daily · Electricity · Trucks, 2026-08-26
   join('app', '(app)', 'cenapro', 'deliveries', 'page.tsx'), // RC Deliveries, 2026-08-26
+  join('app', '(app)', 'inventory', 'rc-movement', 'page.tsx'), // RC Movement, 2026-08-29
 ]
 
 check('a flipped page states its default ONCE, and only the registered ones are flipped', () => {
