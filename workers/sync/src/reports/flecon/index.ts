@@ -34,6 +34,7 @@ import {
 } from "./classify.js";
 import { applyFlecon, type FleconApplyDeps, type FleconApplyResult } from "./apply.js";
 import { errText } from "../../lib/operatorError.js";
+import { rosterFrom } from "../../lib/senderRoster.js";
 import {
   computeFleconSettlements,
   correctedDate,
@@ -197,8 +198,17 @@ export interface RunReportResult {
 }
 
 const REPORT_TYPE = "flecon";
-const GMAIL_QUERY =
-  'from:edilloivymae306ictc@gmail.com subject:"FLECON BAGGED" after:{since} -label:"Blackwood-Processed"';
+/**
+ * ROSTER, not identity (2026-08-29, L-045). This was `from:edilloivymae306ictc@gmail.com`
+ * — Ivy alone. `subject:"FLECON BAGGED"` is what identifies the report; the `from:` only
+ * narrows the search to the office, and is built from `lib/senderRoster.ts` so this copy
+ * and the Mail Clerk's `flecon` entry cannot drift apart. Nothing else about the query,
+ * the window, or the extractor's validation changed.
+ *
+ * EXPORTED so a test can assert it is byte-identical to the Mail Clerk's `flecon` entry —
+ * two copies of one query are a drift hazard even when they share a builder.
+ */
+export const GMAIL_QUERY = `${rosterFrom()} subject:"FLECON BAGGED" after:{since} -label:"Blackwood-Processed"`;
 
 /**
  * The two-phase run (fetch→extract→classify→apply), mirroring sync_flecon.py end to

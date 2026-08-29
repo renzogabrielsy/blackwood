@@ -23,6 +23,15 @@ Read SHARED.md first.
 
 1. **Watermark**: `watermark = data_watermark(db, "flecon_bag_movements")`. If present, `since = watermark - 3 days` (tail-scope), Gmail `since_gmail` same offset. If ABSENT (first run ever), `since = "2026-01-01"` (hardcoded — NOT `2025-01-01` like other pipelines' first-run default; flecon's DB history starts 2026) and `since_gmail = "2025/12/31"` (one day before, so the Gmail `after:` filter is inclusive of Jan 1).
 2. **Fetch**: `from:edilloivymae306ictc@gmail.com subject:"FLECON BAGGED" after:{since_gmail} -label:"Blackwood-Processed"`. No xlsx → early-return `ok:true`.
+
+   > **LIVE-WORKER DEVIATION (2026-08-29, L-045) — THE SENDER IS A ROSTER.** The `from:`
+   > is now the whole ICTC roster (`rosterFrom()`), not Ivy alone — a bag report MC files
+   > while she is out must be visible, exactly as her cover for him must be.
+   > `subject:"FLECON BAGGED"` is what identifies this report and is unchanged, as are
+   > `after:` and the `-label:"Blackwood-Processed"` guard. Note this query exists TWICE —
+   > `src/reports/flecon/index.ts::GMAIL_QUERY` (flecon re-fetches its own workbook) and
+   > the Mail Clerk's `flecon` entry — and both are built from the same roster, with a test
+   > asserting the rendered strings are byte-identical. See **SHARED.md §1.2a**.
 3. **Extract**: `extract_flecon_bags.py --file {xlsx} --since {since}` (NOT `--all-sheets` — see extraction spec; this workbook has ONE cumulative sheet per YEAR, not per day/month, so there's nothing to select from a list the way other pipelines do).
 4. **Classify**: `classify_flecon_bags.py --extract-json {extract} --since {since} --output {classified}` — the classifier SELF-FETCHES the DB movements, bag-type registry, and balance-view via `lib/db.py` internally (no `--db-rows-json` etc. passed by the orchestrator; those flags exist purely for OFFLINE/test invocation).
 5. **Emit envelope**: `counts.insert = new_days`, `counts.update = date_changed_days`, `counts.flagged = 1 if column_flagged else 0` (a SINGLE flag bit, not a per-column count, despite there possibly being multiple unmapped/missing columns).

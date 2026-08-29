@@ -940,4 +940,56 @@ no migration, no DB write. The four ₱0 rows are **not self-healing** — see �
 
 ---
 
+## L-045 — WHO SENT IT IS A ROSTER, NOT AN IDENTITY (2026-08-29)
+
+**MC was out of the office, so Ivy sent his report — and the sync could not see it.** Ivy
+(`edilloivymae306ictc@gmail.com`) sent the **Daily Production Report** on MC's behalf on
+2026-08-28 00:38 and 2026-08-29 00:24 (threads `1a045ce449758d18`, `1a04ae728f2a6b82`):
+correct subject, correct workbook, ~1.2 MB attachment, unlabelled, sitting in the inbox.
+The worker searched `from:mccontinedo.ictc@gmail.com subject:"Daily Production Report" …`,
+so **both were invisible**. Runs, downtime, electricity and trucks all ride in that one
+workbook, so **three streams went stale together** and the run raised three `stale_stream`
+findings about reports that had already arrived. Renzo: *"sync has to take into account
+that sometimes Ivy sends reports for MC when MC is not in the office and vice versa."*
+
+**THE LESSON, and it is the fourth time this ledger has written it down: a human-varying
+attribute must never be an identity key.** L-039 was a hand-typed tab name (`"Aug. 2026"`
+vs a generated `"August 2026"`). L-040b was `batch_code` inside a natural key. L-042 was an
+operator's shorthand (`FEEDING # 1` vs `FEEDING AREA 1`). This one is **which colleague
+pressed send** — and it failed exactly the way the other three did: silently, by not
+recognising something that was right there.
+
+**The fix.** `workers/sync/src/lib/senderRoster.ts` is the ONE list of ICTC report-sender
+mailboxes and the ONE renderer (`rosterFrom()` → `from:(a OR b OR …)`). Every sender-scoped
+query now asks the whole roster; **the SUBJECT identifies the report** (and for the price
+file, L-044's filename guard, which is stronger still). Both writers of a sender-scoped
+query use the roster — the Mail Clerk and `reports/flecon/index.ts`, which keeps its own
+copy of the FLECON query — so the two cannot drift, and a test asserts they are
+byte-identical. `deliveries`, `rc_out` and `rc_out_movement` carry no `from:` at all and
+were already immune; they are untouched.
+
+**Nothing was widened except the search.** Subject predicates are byte-identical,
+`after:{since}` and `-label:"Blackwood-Processed"` are untouched (watermark scoping and
+label idempotency behave exactly as before), and the extractors' structural validation is
+unchanged — a wrong workbook from a roster address still fails loudly where it always did.
+The roster is exactly the four addresses this repo already knew; **no address was
+invented**, and each entry records where it came from.
+
+**Two properties worth stating because a roster makes them askable for the first time.**
+(1) **Provenance stays honest** — `MailClerkManifest.emailMeta[].sender` now records the
+ACTUAL envelope sender, verbatim, so a report Ivy filed for MC reads as *Ivy*. A roster
+widens what we LOOK for; it must never launder the fact of who sent something.
+(2) **Two candidates in one window → the NEWEST wins, deterministically** — Gmail assigns
+UIDs in arrival order, the clerk sorts ascending and walks backwards, and UIDs are unique,
+so there is no tie and sender order plays no part. The losing email is still recorded in
+`emailMeta` under its own real sender.
+
+**Provenance:** 2026-08-29, branch `feat/sync-roster-senders`. Worker-only — no migration,
+no app change, no DB write. Specs: `workers/sync/specs/SHARED.md` §1.2a (the roster table
+and the per-query audit), plus deviation notes in `production.md` §1, `flecon.md` §1 and
+`deliveries.md` §9.9a. **Inert until the Fly worker is deployed** — merging to `main` ships
+the app, not `workers/sync/`.
+
+---
+
 *This ledger is the source of truth for hard-won corrections. When in doubt, it wins over the agent's heuristics.*

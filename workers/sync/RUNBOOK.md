@@ -122,6 +122,30 @@ Common, EXPECTED `partial` causes (not bugs):
 A `partial` from these is the system working as designed. A `partial` with an `error`
 string on a report is a real problem — read the error (it's copyable in the modal).
 
+### A stream says "stale" but the report IS sitting in the mailbox
+
+**First, check the SUBJECT line, not the sender.** Since 2026-08-29 (L-045) the worker
+searches the whole ICTC roster — MC, Ivy, Czarina, Angel — for every report, precisely so
+that a colleague covering for someone on leave is found normally. What identifies a report
+is its **subject** (`"Daily Production Report"`, `"WASTE PRODUCTION REPORT"`,
+`"FLECON BAGGED"`) or, for the price file, its **filename**. So the remaining causes of a
+"stale but it's right there" are:
+
+- **the subject was retyped** (a new thread rather than a reply — `Re: …` is fine, the
+  subject operator matches it). Ask for the usual subject line and it is picked up on the
+  next run; nothing needs a code change.
+- **the thread already carries `Blackwood-Processed`.** Every query excludes it. Check the
+  label in Gmail — a run that applied the report and then failed later still labelled it.
+- **the email is older than the watermark window** (`after:{since}`); see
+  *Re-running safely* below.
+- **a genuinely new sender** — someone outside the four roster addresses. That is the one
+  case that needs a code change: add the address to `src/lib/senderRoster.ts` (nowhere
+  else), and remember it only reaches production on a worker **deploy**, not a merge.
+
+To see who actually sent what a run found, read `emailMeta` in the Mail Clerk manifest —
+it records the **real** envelope sender per email, so a report Ivy filed for MC reads as
+Ivy, never as MC.
+
 ### A run finished as `failed`
 
 `failed` means the **orchestration itself** broke (not just one report) — e.g. the Mail

@@ -40,6 +40,84 @@ File: `.claude/skills/sync-ictc/scripts/fetch_gmail.py` (573 lines).
   - flecon (Ivy bags): `from:edilloivymae306ictc@gmail.com subject:"FLECON BAGGED" after:{since} -label:"Blackwood-Processed"` (sync_flecon.py:52)
   - gsheet: no Gmail query — pulled via `curl` from a Google Sheets export URL (see gsheet.md).
 
+> **LIVE-WORKER DEVIATION (2026-08-29, L-045) — every `from:` above is now the WHOLE
+> ROSTER.** See §1.2a immediately below. The Python strings are kept verbatim as the
+> oracle; the worker's are built from `src/lib/senderRoster.ts`.
+
+### 1.2a THE SENDER IS A ROSTER, NOT AN IDENTITY (2026-08-29, L-045)
+
+**The incident.** MC was out of the office. Ivy (`edilloivymae306ictc@gmail.com`) sent the
+**Daily Production Report** on his behalf on 2026-08-28 00:38 and 2026-08-29 00:24 (threads
+`1a045ce449758d18`, `1a04ae728f2a6b82`) — correct subject, correct workbook, ~1.2 MB
+attachment, unlabelled, sitting in the inbox. The worker's search was pinned to
+`from:mccontinedo.ictc@gmail.com`, so **both were invisible**. That one workbook carries
+runs, downtime, electricity AND trucks, so three streams went stale together and the run
+raised three `stale_stream` findings about reports that had already arrived. Renzo:
+*"sync has to take into account that sometimes Ivy sends reports for MC when MC is not in
+the office and vice versa."*
+
+**The rule.** The **SUBJECT** — plus `has:attachment` and the extractor's own structural
+validation — identifies a report. **The SENDER never does.** A `from:` clause narrows the
+search to the office; it must never be the thing that decides whether a report exists.
+
+This is the same class of mistake as **L-039** (`"Aug. 2026"` vs a generated
+`"August 2026"`), **L-040b** (`batch_code` inside a natural key) and **L-042**
+(`FEEDING # 1` vs `FEEDING AREA 1`): **a human-varying attribute — spelling, casing, WHICH
+COLLEAGUE PRESSED SEND — must never be an identity key.** All four failed the same way,
+silently, by not recognising something that was right there.
+
+**The mechanism.** `src/lib/senderRoster.ts` is the ONE list and the ONE renderer
+(`rosterFrom()` → `from:(a OR b OR …)`). Both writers of a sender-scoped query use it —
+`src/workflows/mailClerk.ts` and `src/reports/flecon/index.ts` — so the two copies of the
+flecon query cannot drift (asserted in `test/workflows/mailClerk.test.ts`). The roster is
+exactly the four ICTC addresses this repo already knew; nothing is invented, and each entry
+records where it came from.
+
+| # | Address | Person | Known for |
+|---|---|---|---|
+| 1 | `mccontinedo.ictc@gmail.com` | MC Continedo | Daily Production Report |
+| 2 | `edilloivymae306ictc@gmail.com` | Ivy Mae Edillo | WASTE PRODUCTION REPORT, FLECON BAGGED |
+| 3 | `czarinaloumaximoictc@gmail.com` | Czarina Lou Maximo | RAW CHARCOAL PURCHASES -Daily (prices) |
+| 4 | `angelicagustilo26.ictc@gmail.com` | Angelica Gustilo | QC workbooks — not ingested yet |
+
+**Which queries changed, and what still identifies each report:**
+
+| Query | `from:` | The identifier that does the work |
+|---|---|---|
+| `production_mc` | roster | `subject:"Daily Production Report"` |
+| `production_waste` | roster | `subject:"WASTE PRODUCTION REPORT"` |
+| `flecon` | roster | `subject:"FLECON BAGGED"` |
+| `deliveries_czarina` | roster | `attachmentMatches` — the FILENAME (L-044) |
+| `deliveries`, `rc_out`, `rc_out_movement` | *(none, and never had one)* | label + subject / subject |
+
+**Czarina is in the roster deliberately.** Her query has no subject, so it would look like
+the exposed case — but since L-044 the price file is identified by NAME at three layers
+(`filename:xlsx` hint → `attachmentPatterns` download glob → `attachmentMatches` guard),
+which is *stronger* than a subject because it re-reads the actual filename instead of
+trusting a Gmail operator. Who sent it was never what made that query correct, and a price
+file forwarded by a colleague while Czarina is out is exactly as plausible as Ivy sending
+MC's report. The `newer_than:5d` window and the 50-UID cap are unchanged, and a roster-mate's
+daily report is refused by the same predicate that refuses the BDO / VAN LOADING / POWDER
+workbooks — and never even has its bytes downloaded, because it does not match the glob.
+
+**Nothing else moved.** The subject predicates are byte-identical; `after:{since}` and
+`-label:"Blackwood-Processed"` are untouched, so watermark scoping and label idempotency
+behave exactly as before; the extractors' structural validation is unchanged, so a wrong
+workbook from a roster address still fails loudly where it always did.
+
+**PROVENANCE STAYS HONEST.** `MailClerkManifest.emailMeta[].sender` now records the ACTUAL
+envelope sender, verbatim. A roster widens what the clerk LOOKS for; it must never launder
+the fact of who sent something. A Daily Production Report Ivy filed for MC reads as **Ivy**
+in the manifest — never as MC, and never normalised to "whose report this is".
+
+**MULTIPLE CANDIDATES IN ONE WINDOW → NEWEST WINS, DETERMINISTICALLY.** If two roster
+members both send the same report before a run, the clerk takes the newest and only the
+newest. Gmail assigns UIDs in arrival order; `searchLatestAttachment` sorts them ascending,
+keeps the newest `limit` (50), then walks **backwards** and materializes the FIRST matching
+attachment part — and `pickLatestXlsx` walks backwards too. UIDs are unique, so there is no
+tie and no sender ordering involved. The losing email is still recorded in `emailMeta` under
+its own real sender: one workbook was chosen, the other was not pretended away.
+
 ### 1.3 UID handling, ordering, size caps
 
 - UIDs returned by search are sorted ascending as **byte-strings cast to int**: `sorted(uids, key=lambda b: int(b))` (fetch_gmail.py:380). If `--limit` (default 50) is exceeded, **keeps the tail** (newest): `uids_sorted[-limit:]` (fetch_gmail.py:381-382).

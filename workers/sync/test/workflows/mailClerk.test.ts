@@ -40,13 +40,24 @@ import {
   gmailSessionStats,
   _resetGmailSessionForTest,
 } from "../../src/lib/gmailSession.js";
+import { rosterFrom } from "../../src/lib/senderRoster.js";
+import { GMAIL_QUERY as FLECON_REPORT_GMAIL_QUERY } from "../../src/reports/flecon/index.js";
 
-function emailWith(uid: number, filename: string, sizeBytes: number): FetchedEmail {
+/** The two mailboxes in the 2026-08-29 incident (L-045). */
+const MC = "mccontinedo.ictc@gmail.com";
+const IVY = "edilloivymae306ictc@gmail.com";
+
+function emailWith(
+  uid: number,
+  filename: string,
+  sizeBytes: number,
+  sender = "x@example.com"
+): FetchedEmail {
   return {
     uid,
     threadId: `t${uid}`,
     subject: `S${uid}`,
-    sender: "x@example.com",
+    sender,
     date: new Date("2026-07-02T00:00:00Z").toISOString(),
     sizeBytes,
     attachments: [
@@ -291,5 +302,159 @@ describe("Czarina price file — identified by NAME (L-044)", () => {
       expect(q.attachmentMatches).toBeUndefined();
       expect(q.attachmentPatterns).toBeUndefined();
     }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE SENDER IS A ROSTER, NOT AN IDENTITY (2026-08-29, L-045)
+//
+// MC was out of the office. Ivy sent the "Daily Production Report" on his behalf on
+// 2026-08-28 00:38 and 2026-08-29 00:24 — correct subject, correct workbook, ~1.2 MB
+// attachment, unlabelled in the inbox. The query was pinned to MC's address alone, so
+// both were INVISIBLE: production, electricity and trucks all ride in that one workbook,
+// so three streams went stale together and the run raised three `stale_stream` findings
+// about reports that had already arrived.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("sender roster (L-045)", () => {
+  const byKey = (k: string) => mailQueries().find((q) => q.key === k)!;
+  const ROSTER_FROM = rosterFrom();
+
+  it("every sender-scoped query asks the WHOLE roster, never one person", () => {
+    for (const key of ["production_mc", "production_waste", "flecon", "deliveries_czarina"]) {
+      const q = byKey(key).query;
+      expect(q).toContain(ROSTER_FROM);
+      // Both people in the incident, in every one of them.
+      expect(q).toContain(MC);
+      expect(q).toContain(IVY);
+      // Exactly one `from:` clause — a leftover single-sender one would silently AND.
+      expect(q.match(/from:/g)).toHaveLength(1);
+    }
+  });
+
+  it("keeps the SUBJECT as the thing that identifies each report", () => {
+    expect(byKey("production_mc").query).toContain('subject:"Daily Production Report"');
+    expect(byKey("production_waste").query).toContain('subject:"WASTE PRODUCTION REPORT"');
+    expect(byKey("flecon").query).toContain('subject:"FLECON BAGGED"');
+    // Czarina has no subject — her identifier is the FILENAME predicate (L-044), which is
+    // still in place and is what makes widening her `from:` safe.
+    expect(byKey("deliveries_czarina").attachmentMatches).toBeTypeOf("function");
+  });
+
+  it("leaves the three queries that never had a `from:` completely alone", () => {
+    for (const key of ["deliveries", "rc_out", "rc_out_movement"]) {
+      expect(byKey(key).query).not.toContain("from:");
+    }
+    expect(byKey("deliveries").query).toBe(
+      'label:"Work/ICTC Daily" subject:"RC DELIVERIES" after:{since} -label:"Blackwood-Processed"'
+    );
+    expect(byKey("rc_out").query).toBe(
+      'label:"Work/ICTC Daily" subject:"PROPOSED DAILY REPORT" after:{since} -label:"Blackwood-Processed"'
+    );
+    expect(byKey("rc_out_movement").query).toBe('subject:"RC MOVEMENT" newer_than:7d -in:sent');
+  });
+
+  it("keeps `-label:\"Blackwood-Processed\"` on every watermark-scoped query — idempotency is untouched", () => {
+    for (const key of ["deliveries", "rc_out", "production_mc", "production_waste", "flecon"]) {
+      expect(byKey(key).query).toContain('-label:"Blackwood-Processed"');
+      expect(byKey(key).query).toContain("after:{since}");
+    }
+  });
+
+  it("flecon's own copy of the query cannot drift from the clerk's", () => {
+    // reports/flecon/index.ts builds its GMAIL_QUERY from the same roster. Assert the
+    // rendered strings are identical rather than trusting two hand-typed copies.
+    expect(FLECON_REPORT_GMAIL_QUERY).toBe(byKey("flecon").query);
+  });
+
+  // ── THE INCIDENT, replayed ────────────────────────────────────────────────
+  it("FINDS the Daily Production Report Ivy sent for MC — and would NOT have before", async () => {
+    // A mailbox in which MC has sent nothing and Ivy has sent his report. The fixture
+    // answers a query only when its `from:` actually covers Ivy, exactly as Gmail would.
+    searchLatestAttachment.mockImplementation(async (query: string) => {
+      const coversIvy = query.includes(IVY);
+      const isProdReport = query.includes('subject:"Daily Production Report"');
+      if (isProdReport && !coversIvy) {
+        return { ok: true, query, emailCount: 0, emails: [] }; // the old behaviour
+      }
+      return {
+        ok: true,
+        query,
+        emailCount: 1,
+        emails: [
+          emailWith(
+            126_500,
+            isProdReport ? "Daily Production Report 2026 3Q.xlsx" : mockFilenameFor(query),
+            1_200_000,
+            `Ivy Mae Edillo <${IVY}>`
+          ),
+        ],
+      };
+    });
+
+    const manifest = await runMailClerk({ runId: "r", since: "2026/08/25", dryRun: true });
+
+    // The report is found, and its bytes are in the manifest.
+    expect(manifest.reports.production_mc).toHaveLength(1);
+    expect(manifest.reports.production_mc[0].filename).toBe(
+      "Daily Production Report 2026 3Q.xlsx"
+    );
+
+    // Proof the fixture is honest: the OLD single-sender query finds nothing in it.
+    const old = await searchLatestAttachment(
+      `from:${MC} subject:"Daily Production Report" after:2026/08/25 -label:"Blackwood-Processed"`
+    );
+    expect(old.emails).toHaveLength(0);
+  });
+
+  it("records the ACTUAL sender — a report Ivy filed for MC reads as IVY", async () => {
+    searchLatestAttachment.mockImplementation(async (query: string) => ({
+      ok: true,
+      query,
+      emailCount: 1,
+      emails: [
+        emailWith(126_500, mockFilenameFor(query), 4096, `Ivy Mae Edillo <${IVY}>`),
+      ],
+    }));
+
+    const manifest = await runMailClerk({ runId: "r", since: "2026/08/25", dryRun: true });
+
+    // Verbatim, never normalised to "whose report this is". A roster widens what we look
+    // for; it must never launder the fact of who sent it.
+    expect(manifest.emailMeta.production_mc[0].sender).toBe(`Ivy Mae Edillo <${IVY}>`);
+    expect(manifest.emailMeta.production_mc[0].sender).not.toContain(MC);
+  });
+
+  // ── MULTI-CANDIDATE: two roster members, one window ───────────────────────
+  it("is DETERMINISTIC when two roster members both send: the NEWEST email wins", async () => {
+    // Gmail UIDs are assigned in arrival order, the clerk sorts them ascending and walks
+    // BACKWARDS, so "newest" means "highest UID" — never sender order, never chance.
+    searchLatestAttachment.mockImplementation(async (query: string) => {
+      if (!query.includes('subject:"Daily Production Report"')) {
+        return { ok: true, query, emailCount: 1, emails: [emailWith(100, "report.xlsx", 4096)] };
+      }
+      return {
+        ok: true,
+        query,
+        emailCount: 2,
+        emails: [
+          // MC's own, earlier.
+          emailWith(126_400, "mc.xlsx", 4096, `MC Continedo <${MC}>`),
+          // Ivy's cover, later — the one the plant actually means.
+          emailWith(126_500, "ivy.xlsx", 4096, `Ivy Mae Edillo <${IVY}>`),
+        ],
+      };
+    });
+
+    const manifest = await runMailClerk({ runId: "r", since: "2026/08/25", dryRun: true });
+    expect(manifest.reports.production_mc).toHaveLength(1);
+    expect(manifest.reports.production_mc[0].filename).toBe("ivy.xlsx");
+    expect(manifest.reports.production_mc[0].emailUid).toBe(126_500);
+    // Both candidates are still RECORDED, each under its real sender — the clerk chose
+    // one workbook, it did not pretend the other email was not there.
+    expect(manifest.emailMeta.production_mc.map((e) => e.uid)).toEqual([126_400, 126_500]);
+    expect(manifest.emailMeta.production_mc.map((e) => e.sender)).toEqual([
+      `MC Continedo <${MC}>`,
+      `Ivy Mae Edillo <${IVY}>`,
+    ]);
   });
 });
