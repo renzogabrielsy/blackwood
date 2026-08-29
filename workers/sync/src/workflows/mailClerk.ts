@@ -22,10 +22,17 @@
  *                        GMAIL_IVY  from:edilloivymae306ictc@gmail.com subject:"WASTE PRODUCTION REPORT" after:{since} -label:"Blackwood-Processed"
  *   sync_flecon.py     : GMAIL     from:edilloivymae306ictc@gmail.com subject:"FLECON BAGGED" after:{since} -label:"Blackwood-Processed"
  *
- * ONE of those queries is no longer verbatim: `GMAIL_CZ` is sender-only, and on 2026-08-17
- * that let the clerk hand the price enricher a BANK CHEQUE-REQUISITION workbook (L-044).
- * It now also pins the FILENAME — see the comment on the `deliveries_czarina` entry, and
- * the audit of the other six queries above `mailQueries()`.
+ * TWO deliberate divergences from that verbatim set, both because a query said too little
+ * about the DOCUMENT and too much about the PERSON:
+ *
+ *   1. `GMAIL_CZ` was sender-only, and on 2026-08-17 that let the clerk hand the price
+ *      enricher a BANK CHEQUE-REQUISITION workbook (L-044). It now also pins the FILENAME
+ *      — see the comment on the `deliveries_czarina` entry.
+ *   2. Every `from:` is now the WHOLE ICTC ROSTER, not one person (L-045, 2026-08-29).
+ *      Ivy sent MC's Daily Production Report while he was out and the single-sender query
+ *      could not see it, so production/electricity/trucks all went stale with the report
+ *      sitting in the mailbox. `lib/senderRoster.ts` owns the list; the SUBJECT is what
+ *      identifies a report, never who pressed send.
  *
  * `{since}` is the DATA watermark (MAX(transaction_date)) minus a lookback, computed
  * per report by the per-report workflows in M3. For the Mail Clerk (M1) the caller
@@ -37,6 +44,7 @@
  */
 import { DBOS } from "../dbos.js";
 import { isGmailConnectionLimit, type FetchedEmail } from "../lib/gmail.js";
+import { rosterFrom } from "../lib/senderRoster.js";
 import { withGmailSession, describeGmailFailure } from "../lib/gmailSession.js";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { DbClient } from "../lib/db.js";
@@ -128,6 +136,22 @@ export type ReportType =
  * deliberately left alone: adding a filename predicate to a query that is already pinned to
  * a subject buys nothing and costs a second place for a rename to break the sync silently.
  * If one of them ever becomes sender-only, it inherits this exposure — pin it then.
+ *
+ * ── THE SENDER IS A ROSTER (2026-08-29, L-045) ────────────────────────────────
+ * Every `from:` below is `rosterFrom()` — the whole ICTC roster, never one person. Read
+ * the audit above again with that in mind: the four sender-scoped queries were only ever
+ * SAFE because of their second predicate, and it is that second predicate that still does
+ * the identifying now.
+ *
+ *   production_mc      subject:"Daily Production Report"  ← identifies the report
+ *   production_waste   subject:"WASTE PRODUCTION REPORT"  ← identifies the report
+ *   flecon             subject:"FLECON BAGGED"            ← identifies the report
+ *   deliveries_czarina attachmentMatches (L-044)          ← identifies the DOCUMENT, and
+ *                      is strictly stronger than a subject, because it re-reads the actual
+ *                      filename rather than trusting a Gmail operator.
+ *
+ * `deliveries`, `rc_out` and `rc_out_movement` carry no `from:` at all and never did —
+ * they were already immune to who pressed send, and they are untouched.
  */
 export function mailQueries(): MailQuery[] {
   return [
@@ -172,11 +196,17 @@ export function mailQueries(): MailQuery[] {
       // If all three come up empty the manifest gets NO price file, and the enricher's
       // "no price file" path fires and reports it (`price_file_missing`).
       // ---------------------------------------------------------------------
+      // ROSTER (L-045): the price file is identified by its NAME at three layers, so who
+      // sent it was never what made this query correct — and a price file forwarded by a
+      // colleague while Czarina is out is exactly as plausible as Ivy sending MC's report.
+      // Widening `from:` therefore costs nothing here: the predicate that already refuses
+      // the BDO / VAN LOADING / POWDER workbooks refuses a roster-mate's daily report for
+      // the same reason, and `attachmentPatterns` means a non-price workbook never even has
+      // its bytes downloaded. The `newer_than:5d` window and the 50-UID cap are unchanged.
       key: "deliveries_czarina",
       reportType: "deliveries",
       role: "auxiliary",
-      query:
-        "from:czarinaloumaximoictc@gmail.com has:attachment filename:xlsx newer_than:5d",
+      query: `${rosterFrom()} has:attachment filename:xlsx newer_than:5d`,
       // Wider than the predicate on purpose: any spacing/punctuation between the words,
       // any suffix, .xls or .xlsx. It only has to be narrow enough to skip the BDO / VAN
       // LOADING / POWDER workbooks when choosing which part to download.
@@ -198,25 +228,27 @@ export function mailQueries(): MailQuery[] {
       query: 'subject:"RC MOVEMENT" newer_than:7d -in:sent',
     },
     {
+      // ROSTER (L-045): THE query the incident was about. It was pinned to MC alone, so
+      // the two reports Ivy sent for him on 2026-08-28/29 were invisible and production,
+      // electricity and trucks all went stale at once. The subject is the identifier.
       key: "production_mc",
       reportType: "production",
       role: "primary",
-      query:
-        'from:mccontinedo.ictc@gmail.com subject:"Daily Production Report" after:{since} -label:"Blackwood-Processed"',
+      query: `${rosterFrom()} subject:"Daily Production Report" after:{since} -label:"Blackwood-Processed"`,
     },
     {
       key: "production_waste",
       reportType: "production",
       role: "primary",
-      query:
-        'from:edilloivymae306ictc@gmail.com subject:"WASTE PRODUCTION REPORT" after:{since} -label:"Blackwood-Processed"',
+      query: `${rosterFrom()} subject:"WASTE PRODUCTION REPORT" after:{since} -label:"Blackwood-Processed"`,
     },
     {
+      // Kept byte-identical to `reports/flecon/index.ts`'s own copy by construction —
+      // both build the `from:` from the same roster (see that file's GMAIL_QUERY).
       key: "flecon",
       reportType: "flecon",
       role: "primary",
-      query:
-        'from:edilloivymae306ictc@gmail.com subject:"FLECON BAGGED" after:{since} -label:"Blackwood-Processed"',
+      query: `${rosterFrom()} subject:"FLECON BAGGED" after:{since} -label:"Blackwood-Processed"`,
     },
   ];
 }
@@ -264,10 +296,25 @@ export interface MailClerkManifest {
   since: string;
   /** key -> stored attachments (latest xlsx per query). */
   reports: Record<string, StoredAttachment[]>;
-  /** Per-query email metadata (even when no attachment matched). */
+  /**
+   * Per-query email metadata (even when no attachment matched).
+   *
+   * `sender` is THE ACTUAL ENVELOPE SENDER, verbatim (2026-08-29, L-045) — the roster
+   * widened what the clerk LOOKS for, and this is what keeps that from laundering a fact:
+   * a Daily Production Report Ivy sent while MC was out reads as Ivy here, never as MC.
+   * Nothing branches on it; it exists so "who actually filed this?" is answerable from the
+   * run rather than reconstructed from a mailbox weeks later. Optional, so a manifest
+   * written by an older build still parses.
+   */
   emailMeta: Record<
     string,
-    { uid: number; subject: string; date: string | null; hadAttachment: boolean }[]
+    {
+      uid: number;
+      subject: string;
+      date: string | null;
+      hadAttachment: boolean;
+      sender?: string;
+    }[]
   >;
   /**
    * Searches that blew the budget. OMITTED (not `[]`) on a normal run, so a healthy
@@ -406,6 +453,8 @@ async function mailClerkBody(params: MailClerkParams): Promise<MailClerkManifest
       subject: e.subject,
       date: e.date,
       hadAttachment: e.hasMatchingAttachment ?? e.attachments.length > 0,
+      // Verbatim — never normalised to "whose report this is" (L-045).
+      sender: e.sender,
     }));
 
     const latest = pickLatestXlsx(res?.emails ?? [], q.attachmentMatches);
@@ -694,6 +743,8 @@ export async function runMailClerk(
       subject: e.subject,
       date: e.date,
       hadAttachment: e.hasMatchingAttachment ?? e.attachments.length > 0,
+      // Verbatim — never normalised to "whose report this is" (L-045).
+      sender: e.sender,
     }));
 
     const latest = pickLatestXlsx(res?.emails ?? [], q.attachmentMatches);

@@ -14,6 +14,10 @@ Read SHARED.md first — this spec does not repeat the Gmail/db.py/orchestrator_
 1. **Watermark** (sync_deliveries.py:81-83): `watermark = data_watermark(db, "deliveries")` (MAX `transaction_date`). `since = watermark - 3 days` if watermark exists, else `"2025-01-01"`. The `-3d` offset is a **tail-scope safety margin** — it re-classifies the last 3 days even though they're presumably already ingested, catching same-window edits. `since_gmail = since.replace("-", "/")` for the Gmail query.
 2. **Fetch operator file** (sync_deliveries.py:86-99): Gmail query `label:"Work/ICTC Daily" subject:"RC DELIVERIES" after:{since_gmail} -label:"Blackwood-Processed"` (GMAIL_OP, sync_deliveries.py:67). If no xlsx found → early-return `ok:true` with `note` and empty `classified_path` (a legitimate no-op run).
 3. **Fetch Czarina prices** (sync_deliveries.py:102-104): `from:czarinaloumaximoictc@gmail.com newer_than:5d` (GMAIL_CZ, sync_deliveries.py:68) — always a fixed 5-day window, NOT watermark-scoped. Optional — proceeds without it if absent.
+
+   > **LIVE-WORKER DEVIATIONS.** This query is the most-changed of the seven: it gained a
+   > filename identity in **§9.9** (L-044) and its `from:` became the whole ICTC roster in
+   > **§9.9a** (L-045). Step 2's query has no `from:` at all and is unchanged.
 4. **Extract + tail-filter** (sync_deliveries.py:107-113): runs `extract_rc_deliveries.py --file {op_xlsx}` (no `--sheet`/`--all-sheets` flag — defaults to the WORKBOOK's `active` sheet, i.e. whatever sheet was open when last saved, NOT necessarily the latest month). Then Python-side filters `rows = [r for r in extract["rows"] if str(r["transaction_date"])[:10] >= since]` — a SECOND, redundant-looking filter after the extractor already ran on one sheet; this is the "tail-scope" the module docstring refers to (the extractor is cumulative year-to-date on whichever sheet it picked, so filtering by `since` bounds it to the sync window regardless of what the extractor emitted).
 5. **Enrich prices** (sync_deliveries.py:118-140): if `cz_xlsx` present and `rows` non-empty, picks the Czarina sheet name via `_month_sheet(max(transaction_date for rows))` (sync_deliveries.py:73-75: `date(year, month, 1).strftime("%B")` + space + year, e.g. `"June 2026"`). Runs `enrich_prices.py` as a subprocess and reads its `--output` file directly (does NOT parse `enrich_prices.py`'s stdout — that script prints HUMAN-readable lines, not JSON, by design). If the output file is missing/empty/`rc!=0`, logs a warning and proceeds with `enriched_path = extract_path` (i.e., un-enriched — every row's `cost_basis` stays `None` → L-008 placeholder at apply time).
 6. **Classify vs DB window** (sync_deliveries.py:142-150): fetches `db.read_rows("deliveries", since_date=since, columns=DELIVERIES_COLS)` and writes to `db_rows.json`, then shells out to `classify_deliveries.py`.
@@ -465,6 +469,26 @@ pin the DOCUMENT — only the sender or the window. `deliveries_czarina` was the
 one. `rc_out_movement` is subject-scoped (`subject:"RC MOVEMENT"`), and the other five are pinned by
 subject AND (label or sender). Adding a predicate to a subject-pinned query buys nothing and costs a
 second place for a rename to break the sync silently.
+
+### 9.9a …and it is no longer pinned to Czarina either (2026-08-29, L-045)
+
+`GMAIL_CZ`'s `from:` is now the **whole ICTC roster** (`rosterFrom()`, `src/lib/senderRoster.ts`) —
+`from:(mc OR ivy OR czarina OR angel) has:attachment filename:xlsx newer_than:5d`. Read §9.9 again to
+see why that is safe rather than a reversal of it: **who sent the price file was never what made this
+query correct.** The three layers above identify the DOCUMENT by name, and layer 3 re-reads the actual
+filename instead of trusting a Gmail operator — a stronger identifier than any subject. A roster-mate's
+daily report is refused by exactly the predicate that refuses the BDO / VAN LOADING / POWDER workbooks,
+and layer 2 means it never even has its bytes downloaded.
+
+**What it buys:** a price file forwarded by a colleague while Czarina is out is as plausible as Ivy
+sending MC's Daily Production Report — which is the incident that prompted this (SHARED.md §1.2a).
+**What it costs:** the search returns more UIDs (the roster's other daily mail inside the same
+`newer_than:5d`), so pass 1 does a few more metadata-only fetches. The window and the 50-UID cap are
+unchanged, and `has:attachment filename:xlsx` still does most of the narrowing at the server.
+
+**§9.10 is unaffected.** `price_no_row_matched` watches the RESULT, not the sender, so it still catches
+a wrong-but-correctly-named workbook from anyone — and `price_file_missing` still fires when all three
+layers come up empty, whoever was or was not in the mailbox.
 
 ### 9.10 A 100% unmatched rate is a FILE problem (`price_no_row_matched`, **high**)
 
