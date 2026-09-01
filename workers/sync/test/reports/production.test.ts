@@ -22,8 +22,9 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { loadProductionWorkbook } from "../../src/reports/production/sheet.js";
-import { extractMc, type DowntimeRow, type RunRow } from "../../src/reports/production/extractMc.js";
+import { extractMc, type DowntimeRow, type McExtract, type RunRow } from "../../src/reports/production/extractMc.js";
 import { extractIvy } from "../../src/reports/production/extractIvy.js";
+import { reconcile } from "../../src/reports/production/reconcile.js";
 import { classifyRuns, classifyWaste, type ShiftDbRow } from "../../src/reports/production/classify.js";
 import {
   applyProduction,
@@ -180,6 +181,156 @@ describe("L-028 — month-transition second waste row", () => {
     expect(b.class).toBe("NEW");
     expect(a.needs_shift_upsert).toBe(false);
     expect(b.needs_shift_upsert).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// L-046 — THE TAB IS THE BATCH. Ivy files each batch's waste in that batch's own
+// tab, so a changeover day carries the SAME DATE twice with DIFFERENT figures:
+// the outgoing tab's last row and the new tab's first row. Deriving
+// production_batch from the DATE's calendar month collapsed both onto one
+// (date, batch, shift) triplet — one shift_id — and production_waste's
+// UNIQUE(shift_id) then admitted only whichever arrived first.
+//
+// Shape reproduced verbatim from the stored workbook of run 6649d16f
+// (sync-inbox/6649d16f-.../production_waste/260829 WASTE PRODUCTION REPORT 2026.xlsx):
+//   AUGUST 2026    row 27  2026-08-29  550/550/50/196/97/50/0.5/16   ttl 1509.5
+//   SEPTEMBER 2026 row  5  2026-08-29  550/550/100/179/74/55/0.5/20  ttl 1528.5
+// ---------------------------------------------------------------------------
+describe("L-046 — the TAB is the batch, not the date's calendar month", () => {
+  /** The real 2026-08-29 pair, one row per tab. */
+  const AUG_29_AUGUST_TAB = {
+    date: "2026-08-29",
+    rs1a: 550, rs1b: 550, bf: 50, rs23: 196, rs5: 97,
+    trml1: 50, trml2: 0.5, grit: 16, ttl: 1509.5, remarks: "ZAMBAONGA",
+  };
+  const AUG_29_SEPTEMBER_TAB = {
+    date: "2026-08-29",
+    rs1a: 550, rs1b: 550, bf: 100, rs23: 179, rs5: 74,
+    trml1: 55, trml2: 0.5, grit: 20, ttl: 1528.5, remarks: "ZAMBAONGA",
+  };
+
+  const changeoverWorkbook = () =>
+    fakeIvyWorkbook([
+      { name: "AUGUST 2026", rows: [AUG_29_AUGUST_TAB] },
+      { name: "SEPTEMBER 2026", rows: [AUG_29_SEPTEMBER_TAB] },
+    ]);
+
+  it("both same-date rows extract under their OWN tab's batch, with their OWN figures", () => {
+    const { waste } = extractIvy(changeoverWorkbook(), "2026-08-28");
+    expect(waste).toHaveLength(2);
+
+    const aug = waste.find((w) => w.production_batch === "AUGUST")!;
+    const sep = waste.find((w) => w.production_batch === "SEPTEMBER")!;
+    expect(aug).toBeDefined();
+    expect(sep).toBeDefined();
+
+    // The TRUE date is preserved on both — only the batch follows the tab.
+    expect(aug.transaction_date).toBe("2026-08-29");
+    expect(sep.transaction_date).toBe("2026-08-29");
+    expect(aug._source_sheet).toBe("AUGUST 2026");
+    expect(sep._source_sheet).toBe("SEPTEMBER 2026");
+
+    // No crossover: each row carries its own tab's figures.
+    expect([aug.bf_kg, aug.rs23_kg, aug.rs5_kg, aug.trml1_kg, aug.grit_kg]).toEqual([50, 196, 97, 50, 16]);
+    expect([sep.bf_kg, sep.rs23_kg, sep.rs5_kg, sep.trml1_kg, sep.grit_kg]).toEqual([100, 179, 74, 55, 20]);
+    expect(aug._summed_kg).toBe(1509.5);
+    expect(sep._summed_kg).toBe(1528.5);
+  });
+
+  it("only the carryover row is noted, and the note names the batch it was filed under", () => {
+    const { waste } = extractIvy(changeoverWorkbook(), "2026-08-28");
+    const aug = waste.find((w) => w.production_batch === "AUGUST")!;
+    const sep = waste.find((w) => w.production_batch === "SEPTEMBER")!;
+
+    expect(aug.warnings).toEqual([]); // 08-29 on the AUGUST tab is not a carryover
+    expect(sep.warnings).toHaveLength(1);
+    expect(sep.warnings[0]).toContain("Carryover date 2026-08-29");
+    expect(sep.warnings[0]).toContain("SEPTEMBER 2026");
+    // The row was FILED, not rejected — the note must not read as a defect.
+    expect(sep.warnings[0]).toContain("filed under the SEPTEMBER batch");
+  });
+
+  it("the two rows key to DIFFERENT shifts — the second is NEW, never an overwrite of the first", () => {
+    const { waste } = extractIvy(changeoverWorkbook(), "2026-08-28");
+    // The live DB shape at run 6649d16f: the AUGUST shift + its waste row exist,
+    // the SEPTEMBER shift does not exist at all.
+    const shifts: ShiftDbRow[] = [
+      { id: "SID-AUG", transaction_date: "2026-08-29", production_batch: "AUGUST", shift: "M" },
+    ];
+    const dbWaste = [
+      {
+        id: "W-AUG", shift_id: "SID-AUG",
+        rs1a_kg: 550, rs1b_kg: 550, bf_kg: 50, rs23_kg: 196, rs5_kg: 97,
+        trml1_kg: 50, trml2_kg: 0.5, grit_kg: 16, remarks: "ZAMBAONGA",
+      },
+    ];
+    const res = classifyWaste(waste, dbWaste, shifts);
+    const byBatch = new Map(
+      res.classifications.map((c) => [(c.record as { production_batch: string }).production_batch, c]),
+    );
+
+    const aug = byBatch.get("AUGUST")!;
+    const sep = byBatch.get("SEPTEMBER")!;
+    expect(aug.class).toBe("DUPLICATE_NOOP"); // already stored, unchanged
+    expect(sep.class).toBe("NEW");
+    expect(sep.needs_shift_upsert).toBe(true);
+    // THE REGRESSION: under the date-derived batch the SEPTEMBER-tab row resolved
+    // to SID-AUG and proposed OVERWRITING August's waste with September's figures.
+    expect(sep.existing_id).toBeNull();
+    expect(res.classifications.some((c) => c.class === "VALUE_CHANGED")).toBe(false);
+  });
+
+  it("apply upserts TWO shifts and inserts BOTH waste rows — no already_exists collision", async () => {
+    const { waste } = extractIvy(changeoverWorkbook(), "2026-08-28");
+    const res0 = classifyWaste(waste, [], []); // nothing in the DB yet
+
+    const shiftInserts: Row[] = [];
+    const wasteInserts: Row[] = [];
+    let sid = 0;
+    const db = mockDb({
+      onInsertIfAbsent: (table, rows) => {
+        if (table === "production_shifts") shiftInserts.push(rows[0]);
+        if (table === "production_waste") wasteInserts.push(rows[0]);
+        return {
+          inserted: [{ ...rows[0], id: `NEW-${++sid}` }],
+          skipped: [], insertedCount: 1, skippedCount: 0,
+        };
+      },
+    });
+
+    const sections = emptySections();
+    sections.waste = res0.classifications;
+    const out = await applyProduction(compactWith(sections), { db });
+
+    expect(shiftInserts.map((s) => s.production_batch).sort()).toEqual(["AUGUST", "SEPTEMBER"]);
+    expect(shiftInserts.every((s) => s.transaction_date === "2026-08-29")).toBe(true);
+    expect(wasteInserts).toHaveLength(2);
+    expect(wasteInserts.map((w) => w.bf_kg).sort((a, b) => Number(a) - Number(b))).toEqual([50, 100]);
+    expect(out.held).toEqual([]);
+    expect(out.errors).toEqual([]);
+  });
+
+  it("reconcile totals a two-batch day BY DATE — both rows count, neither is a mismatch", () => {
+    const { waste } = extractIvy(changeoverWorkbook(), "2026-08-28");
+    // The per-DATE informational drift check must sum BOTH batches' waste for the
+    // day (it groups on transaction_date, which the fix does not touch), and the
+    // per-ROW internal check compares each row against its OWN reported total.
+    const mc = { runs: [], downtime: [], electricity: [], trucks: [], dayTotals: {} };
+    const rep = reconcile(mc as unknown as McExtract, { waste }, { "2026-08-29": 100000 });
+    const day = rep.rc_out_drift.find((r) => r.date === "2026-08-29")!;
+    expect(day.total_waste_kg).toBe(1509.5 + 1528.5);
+    expect(rep.waste_mismatches).toEqual([]);
+  });
+
+  it("an ordinary in-month row is unaffected — no note, batch = the tab it lives on", () => {
+    const wb = fakeIvyWorkbook([
+      { name: "AUGUST 2026", rows: [{ ...AUG_29_AUGUST_TAB, date: "2026-08-28" }] },
+    ]);
+    const { waste } = extractIvy(wb, "2026-08-27");
+    expect(waste).toHaveLength(1);
+    expect(waste[0].production_batch).toBe("AUGUST");
+    expect(waste[0].warnings).toEqual([]);
   });
 });
 
@@ -511,6 +662,52 @@ function newRunClass(sid: string, customer: string, grade: string, ttlKg: number
     },
     reasons: ["shift exists; no run for this customer+grade"],
     confidence: 0.97,
+  };
+}
+
+/** One row of a fake Ivy WASTE tab, in the workbook's own column order. */
+interface FakeWasteRow {
+  date: string;
+  rs1a: number; rs1b: number; bf: number; rs23: number;
+  rs5: number; trml1: number; trml2: number; grit: number;
+  ttl: number | null;
+  remarks?: string | null;
+  shift?: CellValue;
+}
+
+/**
+ * Minimal in-memory Ivy WASTE workbook: one sheet per month, data from row 5, with
+ * the extractor's POSITIONAL column map (A date · C/E/G/I/K/M/O/Q the 8 KLS streams ·
+ * R reported total · S remarks · V shift). The interleaved SACKS columns are left
+ * null — the extractor drops them, and leaving them empty proves it.
+ */
+function fakeIvyWorkbook(sheets: Array<{ name: string; rows: FakeWasteRow[] }>): LoadedWorkbook {
+  const built = new Map<string, LoadedSheet>();
+  for (const s of sheets) {
+    const cells = new Map<string, CellValue>();
+    s.rows.forEach((rr, i) => {
+      const row = 5 + i; // DATA_START_ROW
+      const put = (col: number, v: CellValue) => cells.set(`${row},${col}`, v);
+      // The loader hands the extractor a Date for a date-typed cell; coerceDate
+      // reads its UTC parts, so build it in UTC exactly as exceljs does.
+      const [y, m, d] = rr.date.split("-").map(Number);
+      put(1, new Date(Date.UTC(y, m - 1, d)));
+      put(3, rr.rs1a); put(5, rr.rs1b); put(7, rr.bf); put(9, rr.rs23);
+      put(11, rr.rs5); put(13, rr.trml1); put(15, rr.trml2); put(17, rr.grit);
+      put(18, rr.ttl); put(19, rr.remarks ?? null); put(22, rr.shift ?? null);
+    });
+    built.set(s.name, {
+      name: s.name,
+      rowCount: 5 + s.rows.length - 1,
+      columnCount: 22,
+      cell: (row: number, col: number) => cells.get(`${row},${col}`) ?? null,
+    });
+  }
+  const names = sheets.map((s) => s.name);
+  return {
+    sheetNames: names,
+    sheet: (n: string) => built.get(n) ?? null,
+    sheetAt: (i: number) => built.get(names[i]) ?? null,
   };
 }
 

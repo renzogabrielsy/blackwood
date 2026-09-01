@@ -309,7 +309,14 @@ A row without a parseable date in column A is skipped SILENTLY (drops both the b
 
 `--since` (exclusive, same semantics as production): `if since is not None and txn_date <= since: continue` (row-level skip, silent — no warning).
 
-**Carryover detection**: `if txn_date.month != sheet_month: row_warnings.append(...)` — the row is STILL EXTRACTED with its TRUE date (never suppressed), just flagged with a warning noting it's a carryover. This is the L-028 scenario (a July-tab row dated June 30).
+**Carryover detection**: `if txn_date.month != sheet_month: row_warnings.append(...)` — the row is STILL EXTRACTED with its TRUE date (never suppressed), just flagged with a note. This is the L-028 scenario (a July-tab row dated June 30).
+
+> **TS PORT DEVIATION (2026-09-01, L-046) — the note no longer implies wrongness.** It still
+> fires on exactly the same condition and the date is still the row's true date, but it now
+> says where the row was FILED — `"Carryover date 2026-06-30 in sheet 'JULY 2026' (sheet
+> month=07) — kept its true date and filed under the JULY batch (the tab names the batch)"`.
+> A carryover row is the CHANGEOVER SIGNAL (see the batch box below), not a defect, and a
+> note read by an operator must not describe a correct row as a problem.
 
 ### Waste stream coercion
 
@@ -335,6 +342,57 @@ For every extracted row: `summed = round(sum(8 streams), 4)`. Compared against `
 ### `production_batch` (waste's own convention — matches production's, NOT rc_out's)
 
 `NUM_TO_MONTH_NAME[txn_date.month]` — full uppercase month name, derived from the ROW's actual date (which may differ from the sheet's month, per carryover rows).
+
+> **TS PORT DEVIATION (2026-09-01, Renzo-approved) — THE TAB IS THE BATCH (L-046).**
+> `extractIvy.ts` derives `production_batch` from the **SHEET (tab) month**, never from the
+> row date's calendar month. This is the SAME defect `productionBatch.ts` fixed on MC's side
+> on 2026-08-03 (§2 above), one file over — **the calendar is not the batch** — and it is the
+> third instance of that confusion (MC runs 2026-08-03; MC changeover downtime 2026-08-04;
+> waste, here).
+>
+> **Why the tab is authoritative.** Ivy files each BATCH's waste in that batch's own tab. So a
+> carryover date in the NEXT tab is not an operator slip — **it IS the changeover signal**,
+> exactly as `ENDING`/`STARTING` in column H are on the runs side, and it is the only such
+> signal Ivy's workbook carries. It is also the reason the L-028 rule below is stated as "must
+> resolve to a DISTINCT shift": that rule was always right, and the date-derived batch was
+> what prevented it from holding.
+>
+> **What it cost, measured (run `6649d16f`, 2026-09-01).** Renzo closed AUGUST and opened
+> SEPTEMBER on the same day, 2026-08-29, after emptying the tank. Ivy's workbook therefore
+> carries that date twice with DIFFERENT figures:
+>
+> | Tab | Row | rs1a / rs1b / bf / rs23 / rs5 / trml1 / trml2 / grit | TOTAL |
+> |---|---|---|---|
+> | `AUGUST 2026` | 27 | 550 / 550 / 50 / 196 / 97 / 50 / 0.5 / 16 | 1,509.5 |
+> | `SEPTEMBER 2026` | 5 | 550 / 550 / 100 / 179 / 74 / 55 / 0.5 / 20 | 1,528.5 |
+>
+> Both were stamped `AUGUST`, so both keyed to ONE `(2026-08-29, AUGUST, M)` triplet and one
+> `shift_id`; `production_waste`'s `UNIQUE(shift_id)` admitted the first and HELD the second
+> `already_exists`. **That row could never self-heal** — `--since` is row-level and exclusive
+> (`txnIso <= since -> skip`) and the watermark had already passed 2026-08-29 — so it needed a
+> one-time repair (below).
+>
+> **And the fixture corpus shows the worse variant.** In `production_real_latest` the
+> 2026-06-30 row on the `JULY 2026` tab resolved to JUNE's 2026-06-30 shift and classified
+> **VALUE_CHANGED against JUNE's stored waste row** — one batch's waste proposed as a silent
+> OVERWRITE of another's. Under the fix it resolves to the (already existing) JULY 2026-06-30
+> shift instead.
+>
+> **`transaction_date` is untouched** — still the true date the operator wrote. Only the batch
+> the row is FILED under follows the tab. Nothing downstream needed a special case: the
+> classifiers already key on the `(date, batch, shift)` triplet, apply already upserts one
+> parent per distinct triplet, and `reconcile.ts`'s per-DATE waste total already SUMS every row
+> on a date (`wasteByDate`), so a two-batch day totals correctly with no change.
+>
+> **Parity deviates by construction and is registered.** The Python oracle
+> (`extract_waste_production.py`) keeps the calendar derivation and is NOT edited — it stays
+> the parity ground truth. `test/parity/expected-deviations.json` carries rule `L-046` for
+> `production_real_latest` at `/waste/classifications/**`; all 56 diffs are under that path
+> (runs/downtime/electricity/trucks byte-identical), the `/waste/summary` counts are unchanged,
+> and most are positional (the canonicalizer sorts classifications by `natural_key.shift_id`).
+> Tests: `test/reports/production.test.ts` → `describe("L-046 — the TAB is the batch …")`,
+> reproducing the real two-tab 2026-08-29 shape; 4 of its 6 cases fail against the old
+> derivation.
 
 ---
 
@@ -533,7 +591,8 @@ Rolled-back `DO` block (MCP `execute_sql`), accumulating a `log text` and ending
 | L-025 (blank shift → Morning default) | extract_daily_production.py:275-297, `SHIFT_DEFAULT_NOTE` constant duplicated in classify_production_runs.py:84 | A blank/absent/unrecognized shift cell (e.g. `DAY SHIFT`, `OVERTIME`) → `shift="M"`, `_shift_defaulted=true`, note appended; an EXPLICIT "MORNING SHIFT" cell → same `shift="M"` but `_shift_defaulted=false`, no note. **`STARTING`/`ENDING` are NO LONGER on this path** — see the L-007 row above. |
 | L-026 (combine duplicate shift+customer+grade rows) | sync_production.py:320-338 | Two NEW run rows resolving to the same `(shift_id,customer,grade)` combine into ONE inserted row with summed `ttl_kg`/`sacks_bags`. |
 | L-027 (4X8 / 3-gate grade allowlist) | extract_daily_production.py:79, classify_production_runs.py:71 | `VALID_GRADES` sets in BOTH files contain exactly `{3X50,6X50,8X50,2X6,4X8}`; a grade outside this set is dropped at extract (silent) and/or MALFORMED at classify. |
-| L-028 (month-transition 2nd waste row = new shift) | extract_waste_production.py carryover detection (warning only) + the NATURAL KEY `(shift_id,)` on production_waste naturally prevents collision IF the two rows resolve to genuinely different shifts (different production_batch) | A carryover waste row dated on the outgoing month's last day, appearing on the NEW month's sheet, must resolve to a DISTINCT shift (different production_batch) rather than colliding with the outgoing shift's existing waste row. |
+| L-028 (month-transition 2nd waste row = new shift) | **The "IF" is what L-046 supplied.** `extract_waste_production.py`'s carryover detection is a warning only, and its date-derived `production_batch` gave BOTH rows the same batch — so the two never resolved to different shifts and `UNIQUE(shift_id)` collided instead of separating them. `extractIvy.ts` now derives the batch from the TAB (L-046 row below), which is what makes this rule hold. | A carryover waste row dated on the outgoing month's last day, appearing on the NEW month's sheet, must resolve to a DISTINCT shift (different production_batch) rather than colliding with the outgoing shift's existing waste row. |
+| L-046 (the TAB is the batch) 2026-09-01 | `extractIvy.ts::extractWasteSheet` — `production_batch = NUM_TO_MONTH_NAME[sheetMonth]`, never the row date's month. Python oracle unchanged; parity deviation registered for `production_real_latest` at `/waste/classifications/**`. | Two waste rows on ONE date, one per tab, extract under their OWN tabs' batches with their OWN figures (no crossover); only the carryover row carries a note and the note names the batch it was filed under; classify gives them DIFFERENT `shift_id`s so the second is NEW, never a VALUE_CHANGED overwrite of the first; apply upserts TWO `production_shifts` parents and inserts BOTH waste rows with no `already_exists` hold. An ordinary in-month row is unchanged. Covered by `test/reports/production.test.ts` → `describe("L-046 …")`. |
 | parent-shift-first FK order | sync_production.py apply step 1-2 | Shifts always insert/resolve BEFORE any child row referencing them is attempted. |
 | generated-cols-never-written | sync_production.py:413-415 | `diff_kwh`, `consumption_kwh`, `ttl_km` never appear in any INSERT or UPDATE payload. |
 
@@ -556,6 +615,6 @@ Rolled-back `DO` block (MCP `execute_sql`), accumulating a `log text` and ending
 2. **`classify_production_downtime.py` compares a `remarks` field the DB table doesn't have.** Depending on how the TS port's DB-row-fetch shapes the "denormalized child" object (mirroring `sync_production.py::_child_db`, which explicitly OMITS `remarks` from `production_downtime`'s `extra_cols`), this comparison is comparing "extracted remarks" against "always None" — likely causing every downtime day with any extracted remarks text to permanently classify VALUE_CHANGED even though there is no column to patch. Flag for a human decision on whether to drop this comparison.
 3. **`classify_electricity.py`/`classify_trucks.py` use PLAIN ROUNDED EQUALITY (round to 2dp, then `==`), not a `nums_equal`-style tolerance BAND**, despite their own docstrings claiming "numeric tolerance 0.01". This differs meaningfully from `classify_production_runs/downtime/waste.py`'s actual tolerance-band `nums_equal` helper. A value pair like `(10.006, 10.0)` classifies EQUAL under the tolerance-band functions but classifies DIFFERENT under electricity/trucks' plain-rounded-equality (since `round(10.006,2)=10.01 != round(10.0,2)=10.0`). Port each classifier's ACTUAL comparison, not its docstring's claim.
 4. **`normalize_shift` exists as TWO DIFFERENT functions** — exact-dict-match in `extract_daily_production.py`, substring-`in`-match in `extract_waste_production.py`. Do not unify into one shared helper without an explicit decision; they are used for different sheets with different operator conventions.
-5. **`production_batch` has THREE different derivation conventions across the whole ICTC pipeline**: production/waste use full-month-name always (`MONTH_NAME_UPPER`); rc_out uses 3-letter `%b` EXCEPT May/June overridden to full words; gsheet's RC OUT extractor just takes whatever raw text is in the Sheet's column B verbatim (no derivation at all). A TS port must NOT create one shared "derive production_batch" utility across pipelines — each pipeline's convention is a distinct, independently-evolved historical artifact.
+5. **`production_batch` has THREE different derivation conventions across the whole ICTC pipeline**: production/waste use full-month-name always (`MONTH_NAME_UPPER`); rc_out uses 3-letter `%b` EXCEPT May/June overridden to full words; gsheet's RC OUT extractor just takes whatever raw text is in the Sheet's column B verbatim (no derivation at all). A TS port must NOT create one shared "derive production_batch" utility across pipelines — each pipeline's convention is a distinct, independently-evolved historical artifact. **The NAMING convention is not the same question as WHERE THE NAME COMES FROM**, and the two Python extractors are wrong on the second: MC's derived it from the sheet DATE (fixed 2026-08-03 — it comes from the plant's running state, `productionBatch.ts`) and Ivy's derived it from the ROW date (fixed 2026-09-01, L-046 — it comes from the TAB). Both fixes are TS-only; both leave the full-month-name spelling untouched.
 6. **`_child_db`'s no-date-filter-then-join-filter pattern** (fetch ALL rows of a child table, THEN drop any whose shift isn't in the pre-windowed shift set) means a TS port's equivalent function must NOT try to optimize this into a single windowed query via a SQL JOIN unless it verifies the join produces IDENTICAL results — in particular, a child row whose `shift_id` points to a shift OUTSIDE the `[lo,hi]` window (e.g., a stale/orphaned FK, which shouldn't normally happen but the code defensively handles it) is silently DROPPED from the classifier's DB view entirely, meaning it becomes invisible to dedup and could theoretically be re-inserted as a duplicate. This is arguably a latent edge-case bug worth flagging, not necessarily porting faithfully without comment.
 7. **Downtime and waste's `natural_key=("shift_id",)` is a ONE-TUPLE key** — a TS port's `insert_if_absent`-equivalent must handle a natural key of length 1 the same way it handles length-3+ keys (no special-casing that assumes multi-column keys).

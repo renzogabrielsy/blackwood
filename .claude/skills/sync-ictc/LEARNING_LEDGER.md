@@ -993,3 +993,73 @@ the app, not `workers/sync/`.
 ---
 
 *This ledger is the source of truth for hard-won corrections. When in doubt, it wins over the agent's heuristics.*
+## L-046 — THE TAB IS THE BATCH; THE CALENDAR IS NOT (2026-09-01)
+
+**Renzo closed AUGUST and opened SEPTEMBER on the same day, and half of that day's waste
+was thrown away.** On 2026-08-29 the tank was emptied and a new production batch started.
+Ivy's WASTE PRODUCTION REPORT is one tab per BATCH, so it carries 2026-08-29 **twice**, with
+different figures — the `AUGUST 2026` tab's last row (row 27: 550 / 550 / 50 / 196 / 97 / 50
+/ 0.5 / 16, total 1,509.5 kg) and the `SEPTEMBER 2026` tab's first row (row 5: 550 / 550 /
+100 / 179 / 74 / 55 / 0.5 / 20, total 1,528.5 kg). `extractIvy.ts` stamped
+`production_batch = NUM_TO_MONTH_NAME[the ROW DATE's month]`, so **both rows came out
+`AUGUST`**, both keyed to one `(2026-08-29, AUGUST, M)` shift, and `production_waste`'s
+`UNIQUE(shift_id)` let exactly one through. Run `6649d16f` wrote the August row and held the
+September one `already_exists`.
+
+**THE LESSON IS THE ONE `productionBatch.ts` ALREADY WROTE DOWN, IN A FILE THAT DID NOT READ
+IT: a production batch is a fact about the PLANT, and the calendar is not a witness to it.**
+That is the third instance. 2026-08-03 — MC's runs derived the batch from the sheet date, so
+a changeover day's `ENDING` and `STARTING` rows collapsed into one and apply's L-026 combine
+summed 1,326 kg + 11,830 kg into one wrong 13,156 kg row. 2026-08-04 — changeover downtime
+was dumped whole onto the outgoing batch. 2026-09-01 — this. Each time the source *did* say
+where the boundary was; each time we asked the date instead of the source.
+
+**Ivy's signal is the TAB.** She files each batch's waste in that batch's own sheet, so a
+carryover date appearing in the NEXT tab **is** the changeover announcement — the exact
+counterpart of MC's `ENDING`/`STARTING` markers in column H, and the only such signal that
+workbook carries. The extractor had been *detecting* carryovers since the port (an L-028
+warning) and then discarding the very thing the detection proved.
+
+**Two failures, not one, and the second is why this needed a repair and not just a fix.**
+(1) The held row can **never** self-heal: `--since` is ROW-level and exclusive for waste
+(`txnIso <= since -> skip`) and the watermark had already passed 2026-08-29, so no future run
+will ever look at that row again. A hold that no run can retry is data loss with a receipt.
+(2) The collision is not always a hold — in the parity fixture `production_real_latest` the
+2026-06-30 row on the `JULY 2026` tab resolved to **JUNE's** shift and classified
+**VALUE_CHANGED against June's stored waste**, i.e. one batch's waste proposed as a silent
+overwrite of another's. Same root cause, quieter and worse.
+
+**The fix.** `production_batch` now comes from the SHEET month
+(`extractIvy.ts::extractWasteSheet`). `transaction_date` is untouched — still the true date
+the operator wrote; only the batch the row is FILED under follows the tab. The carryover note
+stays (it correctly flags an unusual row) but no longer implies wrongness: it now says the row
+*"kept its true date and filed under the SEPTEMBER batch (the tab names the batch)"*. **Nothing
+downstream needed a special case** — the classifiers already key on the `(date, batch, shift)`
+triplet, apply already upserts one parent per distinct triplet, and `reconcile.ts` already SUMS
+every waste row on a date (`wasteByDate`), so a two-batch day totals correctly as-is. This also
+finally makes **L-028** true: that rule always said the second same-date waste row "must resolve
+to a DISTINCT shift", and the date-derived batch was precisely what stopped it from doing so.
+
+**The Python is NOT edited.** `extract_waste_production.py` keeps the calendar derivation and
+stays the parity ground truth; the divergence is registered as expected deviation `L-046` on
+`production_real_latest` at `/waste/classifications/**`. Scope was measured, not assumed: all
+56 diffs sit under that path (runs, downtime, electricity, trucks byte-identical), the
+`/waste/summary` counts are unchanged, and most diffs are positional because the canonicalizer
+sorts classifications by `natural_key.shift_id`.
+
+**One-time repair (the sync could not do it itself).** Shift `(2026-08-29, SEPTEMBER, M)` and
+its waste row were inserted by hand with the SEPTEMBER tab's own figures, read from the stored
+workbook and mapped through `STREAM_COLS`, with a `write_ingestion_audit` trail on both rows
+naming run `6649d16f` and the watermark reason. Both 2026-08-29 shifts now exist, each with
+exactly one waste row matching its own tab.
+
+**Provenance:** 2026-09-01, branch `feat/sync-waste-tab-batch`. Worker + one DB repair; no
+migration, no app change. Spec: `workers/sync/specs/production.md` §3 (the deviation box beside
+the L-007 marker rule) and §7 (L-028 + a new L-046 row). Tests:
+`test/reports/production.test.ts` → `describe("L-046 …")`, six cases built from the real
+two-tab 2026-08-29 shape; four of them fail against the old derivation. Gates: worker
+typecheck clean, 848/848 vitest, parity clean (58 registered deviations, 0 fail),
+`verify:container-build` OK, root `tsc --noEmit` clean. **Inert until the Fly worker is
+deployed** — merging to `main` ships the app, not `workers/sync/`.
+
+---

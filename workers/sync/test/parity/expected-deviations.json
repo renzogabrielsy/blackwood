@@ -8,6 +8,13 @@
       "case": "production_downtime_ge60",
       "path": "/**",
       "note": "PORTING_DECISIONS #5: a downtime day with dt_mins>=60 violates the production_downtime CHECK (dt_mins<60). The Python never splits (hrs += mins//60; mins %= 60); the TS port implements the split. The split happens at APPLY/extract shaping; whether it surfaces in the CLASSIFY envelope depends on where the port applies it. Registered so the split's downstream value change is an expected deviation, not a porter bug. FIRES at classify parity (unlike the gsheet apply-phase set) — the production port shapes the split before classify."
+    },
+    {
+      "rule": "L-046",
+      "type": "production",
+      "case": "production_real_latest",
+      "path": "/waste/classifications/**",
+      "note": "L-046 (2026-09-01): Ivy's waste `production_batch` is now derived from the SHEET (tab) month, not the row date's calendar month — the same 'the calendar is not the batch' fix `productionBatch.ts` applied on MC's side in 2026-08-03 (L-007). The oracle keeps the calendar derivation (extract_waste_production.py is unported and stays the parity ground truth), so any fixture carrying a CARRYOVER waste row now deviates by construction. This fixture has exactly one: 2026-06-30 on the 'JULY 2026' tab. Oracle files it as JUNE, which resolves to JUNE's 2026-06-30 shift and classifies VALUE_CHANGED against JUNE's already-stored waste row — i.e. it proposes OVERWRITING one batch's waste with another's. The TS port files it as JULY, resolving to the (real, already-existing) JULY 2026-06-30 shift. Scope is measured, not assumed: ALL diffs are under /waste/classifications (runs, downtime, electricity and trucks are byte-identical), the /waste/summary counts are UNCHANGED (new:1, value_changed:1, duplicate_noop:5, malformed:0, needs_shift_upsert:1), and most of the individual diffs are positional — the canonicalizer sorts classifications by natural_key (shift_id), so re-pointing one row's shift renumbers the array. Cover: test/reports/production.test.ts describe('L-046 …'), which reproduces the real two-tab 2026-08-29 shape and fails 4/6 against the old derivation."
     }
   ],
   "apply_phase_deferred": [
