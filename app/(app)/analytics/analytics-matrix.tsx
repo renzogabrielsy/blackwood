@@ -9,22 +9,18 @@
 // are fields, and the machinery it brings (cell selection, inline editing,
 // paste, keyboard nav, the pinned per-column footer) is machinery a ledger
 // wants. This surface inverts that. Its rows are METRICS and its columns are
-// PERIODS, which breaks three of the grid's load-bearing assumptions at once:
+// PERIODS, which breaks two of the grid's load-bearing assumptions at once:
 //
 //   1. **The formatter belongs to the ROW, not the column.** `ColumnSpec.format`
 //      is per column by construction; here `Mar` must print ₱48.26 on one row,
 //      1,864.1 t on the next and 14 on the next. Every column would have to
 //      switch on the row, which is the column spec turned inside out.
 //   2. **A cell is three things, none of them editable** — a value, a
-//      period-over-period delta and a year-ago chip. Nothing on this page is
+//      period-over-period delta and a comparison chip. Nothing on this page is
 //      ever written, so the edit journal, the paste sink and the caret model
 //      are all cost with no benefit.
-//   3. **The row expand is the point of the page.** A metric's chart is the
-//      drill-down, and the grid reaches a non-addressable row only through
-//      `renderChromeRow`, which returns cells INSIDE a `table-fixed` row — a
-//      chart in there would be as wide as the whole scrolling table.
 //
-// Twelve rows also means virtualisation buys nothing. So: a plain table that
+// Sixteen rows also means virtualisation buys nothing. So: a plain table that
 // obeys the same two rules the grid obeys.
 //
 //   • **"Never crush, always scroll"** — `table-fixed`, `width: max-content`, a
@@ -34,21 +30,47 @@
 //   • **Frozen panes are OPAQUE** — the KPI-name column is sticky-left
 //     (`.frozen-col`, z10) over scrolling cells, so it paints a SOLID token and
 //     repaints the hover tint solidly too; `.frozen-edge` kills the seam. The
-//     header row is deliberately NOT sticky-top: the table is twelve rows and
-//     never scrolls vertically inside its own box, so a sticky header would be
-//     chrome with nothing to pin against.
+//     header row is deliberately NOT sticky-top: the table never scrolls
+//     vertically inside its own box, so a sticky header would be chrome with
+//     nothing to pin against.
 //
-// ── AND ONE THING THAT IS DELIBERATELY NOT HERE: COLOUR SEMANTICS ────────────
-// The plan withholds threshold colouring until Renzo states real targets. So a
-// delta is a DIRECTION GLYPH and a muted number — never red or green. A rising
-// purchase price is not "up" in the cheerful sense, and inventing that
-// judgement is exactly the invented-breach-rule the plan refuses.
+// ── OWNER FEEDBACK ROUND 1 (2026-09-01) — THREE CHANGES HERE ─────────────────
+//
+// **1. The row expand now opens IN PLACE.** Renzo: "such a long scroll." It
+// used to render below the whole table, which was a layout decision with a real
+// reason — a `colSpan` panel inside an `overflow-x-auto` table is as wide as the
+// scrolling table (up to ~1,500 px) and scrolls sideways with the columns. The
+// fix is not to give up the colSpan, it is to make the panel INSIDE it
+// `position: sticky; left: 0` at the SCROLLER's own width: the row spans every
+// column so it sits exactly beneath the row that was clicked, and the panel
+// inside it stays pinned to the visible frame however far the periods are
+// scrolled. The width is measured, never assumed, and is clamped to the table's
+// own width so a narrow table cannot be made to overflow by its own expand.
+//
+// **2. Everything moved up a type scale.** "The numbers look so tiny." Cell
+// values went 12 → 14 px, row labels 12 → 13 px, and every explicit width was
+// re-measured against the new metrics rather than left to clip: 208 → 232 (name),
+// 100 → 116 (period), 112 → 128 (summary).
+//
+// **3. Colour, and what KIND of colour.** Each band wears its section accent as
+// a left rule, and a change carries a green/red DIRECTION tint — the same
+// convention the Home Digest uses for a signed number. Neither is a threshold:
+// the accent says where you are and the tint says which way a number moved.
+// There is still no cell anywhere on this page that turns amber because a value
+// is high, and a rising purchase price is still not "up" in the cheerful sense —
+// the tint follows the arithmetic sign and stops there.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as React from "react";
 import { ChevronRight, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { Matrix, MatrixCell, MatrixRow } from "@/lib/analytics/matrix";
+import type {
+  Change,
+  ComparisonMode,
+  Matrix,
+  MatrixCell,
+  MatrixRow,
+} from "@/lib/analytics/matrix";
 import { DELTA_LABEL, groupBySection } from "@/lib/analytics/matrix";
 import type {
   MetricKey,
@@ -66,12 +88,20 @@ import {
 import { MetricInfo, dictionaryTitle } from "./metric-info";
 
 // Explicit pixel widths — the sum below IS the table's minWidth.
-const W_NAME = 208;
-const W_PERIOD = 100;
-const W_TOTAL = 112;
+//
+// RE-MEASURED for the R1 type bump. The frozen name column carries, left to
+// right: 12 px chevron + 4 gap + the label at 13 px + 4 gap + a 16 px info
+// button, inside 8 px padding either side. The longest label on the board is
+// "Output per reported day" (~150 px at 13 px medium), so 232 leaves headroom
+// and nothing truncates. A period cell prints at most "1,864.1" plus two marks
+// at 14 px mono (~74 px) inside 16 px of padding — 116 fits with room, and the
+// summary column is wider because it also carries "All time".
+const W_NAME = 232;
+const W_PERIOD = 116;
+const W_TOTAL = 128;
 
 /**
- * Big magnitudes are printed COMPACT in a 100px cell and exactly in the hover.
+ * Big magnitudes are printed COMPACT in a period cell and exactly in the hover.
  * Pesos qualify, and so does kWh: a full year of metering runs to seven
  * figures, and 2026-03 alone reads 696,924 because of the mis-keyed reading
  * this page exists to flag.
@@ -96,22 +126,59 @@ function exactText(spec: MetricSpec, value: number): string {
   return n;
 }
 
-/** The change pair under a value. Direction only — no good/bad colour. */
+/**
+ * The DIRECTION tint. Green up, red down, muted flat — the same convention the
+ * digest's signed numbers already use.
+ *
+ * This is arithmetic, not judgement: it says which way the number moved and
+ * nothing about whether that is good. The page still has no threshold anywhere.
+ */
+function directionCls(value: number): string {
+  if (value > 0) return "text-emerald-600 dark:text-emerald-400";
+  if (value < 0) return "text-red-600 dark:text-red-400";
+  return "text-muted-foreground";
+}
+
+/** The change pair under a value: the move, then whichever chip is selected. */
 function ChangeLine({
   cell,
   spec,
   deltaWord,
+  comparison,
 }: {
   cell: MatrixCell;
   spec: MetricSpec;
   deltaWord: string;
+  comparison: ComparisonMode;
 }) {
+  // OWNER FEEDBACK R1: the FIRST line is always the period-over-period move.
+  // Only the SECOND is switchable.
+  const secondary: { change: Change; label: string; title: string } | null =
+    comparison === "yoy"
+      ? cell.yoy
+        ? {
+            change: cell.yoy,
+            label: "Y",
+            title: "Against the same period one year earlier",
+          }
+        : null
+      : cell.deltaAbs
+        ? {
+            change: cell.deltaAbs,
+            label: "Δ",
+            title: `The same ${deltaWord} move as a real amount rather than a percentage`,
+          }
+        : null;
+
   return (
     <>
-      <div className="mt-0.5 h-3 truncate text-right font-mono text-[10px] leading-3 text-muted-foreground tabular-nums">
+      <div className="mt-1 h-4 truncate text-right font-mono text-[11px] leading-4 tabular-nums">
         {cell.delta ? (
-          <span title={`${deltaWord} change`}>
-            <span aria-hidden className="mr-0.5 text-[8px]">
+          <span
+            title={`${deltaWord} change`}
+            className={directionCls(cell.delta.value)}
+          >
+            <span aria-hidden className="mr-0.5 text-[9px]">
               {directionGlyph(cell.delta.value)}
             </span>
             {fmtChange(cell.delta, spec)}
@@ -120,14 +187,14 @@ function ChangeLine({
           <span aria-hidden>&nbsp;</span>
         )}
       </div>
-      <div className="mt-0.5 flex h-[13px] justify-end">
-        {cell.yoy ? (
+      <div className="mt-0.5 flex h-[15px] justify-end">
+        {secondary ? (
           <span
-            title="Against the same period one year earlier"
-            className="inline-flex items-center rounded border border-border/70 px-1 font-mono text-[9.5px] leading-[11px] text-muted-foreground tabular-nums"
+            title={secondary.title}
+            className="inline-flex items-center rounded border border-border/70 px-1 font-mono text-[10px] leading-[13px] text-muted-foreground tabular-nums"
           >
-            <span className="mr-0.5 opacity-70">Y</span>
-            {fmtChange(cell.yoy, spec)}
+            <span className="mr-0.5 opacity-70">{secondary.label}</span>
+            {fmtChange(secondary.change, spec)}
           </span>
         ) : null}
       </div>
@@ -137,8 +204,7 @@ function ChangeLine({
 
 /**
  * The marks a figure can carry, all meaning "read the hover before you quote
- * this". Deliberately glyphs and not colour: the page has no threshold
- * semantics anywhere, and an amber cell would read as a judgement.
+ * this".
  *
  *   `·` the period summed over a hole — a FLOOR, not a total;
  *   `~` the figure is the coverage-adjusted ESTIMATE, because some of the
@@ -150,9 +216,8 @@ function ChangeLine({
  *       genuinely different and one shared sentence would be wrong on two of
  *       them.
  *
- * The ⚠ is the one mark that carries colour, and it is not a threshold: it
- * says a figure is known to rest on a broken or missing input, which is a
- * fact about the record rather than a judgement about the business.
+ * The ⚠ carries amber, and it is not a threshold: it says a figure is known to
+ * rest on a broken or missing input, which is a fact about the record.
  */
 function CellMarks({
   cell,
@@ -164,7 +229,7 @@ function CellMarks({
   const ownMark = cell.annotation?.mark;
   if (!cell.holed && !cell.estimated && !ownMark) return null;
   return (
-    <span className="flex shrink-0 items-baseline gap-px text-[10px] leading-none">
+    <span className="flex shrink-0 items-baseline gap-px text-[11px] leading-none">
       {cell.estimated && (
         <span
           title={estimateTitle(coveragePct)}
@@ -200,12 +265,14 @@ function ValueCell({
   cell,
   spec,
   deltaWord,
+  comparison,
   coveragePct,
   emphasis,
 }: {
   cell: MatrixCell;
   spec: MetricSpec;
   deltaWord: string;
+  comparison: ComparisonMode;
   /** Fed-price coverage for the period, for the `~` hover. Null when N/A. */
   coveragePct?: number | null;
   emphasis?: boolean;
@@ -222,7 +289,7 @@ function ValueCell({
     return (
       <td
         className={cn(
-          "border-l px-2 py-1 align-top",
+          "border-l px-2 py-1.5 align-top",
           emphasis && "bg-muted/40",
         )}
         // The row's OWN sentence REPLACES the generic one rather than
@@ -238,12 +305,12 @@ function ValueCell({
             : (ann?.title ?? BLANK_TITLE[reason])
         }
       >
-        <div className="flex h-[17px] items-center justify-end gap-1 font-mono text-xs text-muted-foreground/60">
-          {reason === "restricted" && <Lock className="size-2.5" aria-hidden />}
+        <div className="flex h-5 items-center justify-end gap-1 font-mono text-sm text-muted-foreground/60">
+          {reason === "restricted" && <Lock className="size-3" aria-hidden />}
           {ann?.mark && (
             <span
               aria-hidden
-              className="text-[10px] leading-none text-amber-600 dark:text-amber-400"
+              className="text-[11px] leading-none text-amber-600 dark:text-amber-400"
             >
               {ann.mark}
             </span>
@@ -251,7 +318,7 @@ function ValueCell({
           <span>{alt ? fmtMetricValue(spec, alt.value) : "—"}</span>
         </div>
         {alt && (
-          <div className="mt-0.5 h-3 truncate text-right text-[9px] leading-3 text-muted-foreground">
+          <div className="mt-0.5 h-4 truncate text-right text-[10px] leading-4 text-muted-foreground">
             {alt.label}
           </div>
         )}
@@ -276,30 +343,35 @@ function ValueCell({
 
   return (
     <td
-      className={cn("border-l px-2 py-1 align-top", emphasis && "bg-muted/40")}
+      className={cn("border-l px-2 py-1.5 align-top", emphasis && "bg-muted/40")}
       title={titleParts.join(" · ")}
     >
       {/* Accounting format for ₱: glyph pinned left, number pinned right. */}
       {spec.unit === "php_per_kg" || spec.unit === "php" ? (
-        <div className="flex h-[17px] items-baseline justify-between gap-1 font-mono text-xs tabular-nums">
-          <span className="shrink-0 text-[10px] text-muted-foreground">₱</span>
+        <div className="flex h-5 items-baseline justify-between gap-1 font-mono text-sm tabular-nums">
+          <span className="shrink-0 text-[11px] text-muted-foreground">₱</span>
           <span className="flex min-w-0 items-baseline gap-0.5">
             <span className="truncate font-medium">{shown}</span>
             {marks}
           </span>
         </div>
       ) : (
-        <div className="flex h-[17px] items-baseline justify-end gap-1 font-mono text-xs tabular-nums">
+        <div className="flex h-5 items-baseline justify-end gap-1 font-mono text-sm tabular-nums">
           <span className="truncate font-medium">
             {shown}
             {spec.unit === "pct" && (
-              <span className="ml-px text-[10px] text-muted-foreground">%</span>
+              <span className="ml-px text-[11px] text-muted-foreground">%</span>
             )}
           </span>
           {marks}
         </div>
       )}
-      <ChangeLine cell={cell} spec={spec} deltaWord={deltaWord} />
+      <ChangeLine
+        cell={cell}
+        spec={spec}
+        deltaWord={deltaWord}
+        comparison={comparison}
+      />
     </td>
   );
 }
@@ -311,12 +383,20 @@ export interface AnalyticsMatrixProps {
   onSelect(key: MetricKey | null): void;
   /** The working-day toggle is on — the affected rows say so in their label. */
   perWorkingDay: boolean;
+  /** What the second chip under every value shows. */
+  comparison: ComparisonMode;
+  /**
+   * The detail panel for `selected`, rendered as a full-width row DIRECTLY
+   * beneath that row. Omitted when the selected metric belongs to a band this
+   * instance does not render — the production room passes its own.
+   */
+  expand?: React.ReactNode;
   /**
    * Which bands this instance renders. Omitted = all of them.
    *
    * The page mounts this component TWICE — flow + money at the top, and the
    * production band down in its own section after the supplier room — because
-   * the reading order is PERIOD → CAMPAIGN → SUPPLIER → PRODUCTION → PILE and
+   * the reading order is PERIOD → CAMPAIGN → SUPPLIER → PRODUCTION and
    * production belongs where the plant does, not where the yard does. It is
    * still ONE `buildMatrix` fold behind both, so the two tables and the
    * callout strip are the same numbers by construction.
@@ -329,11 +409,12 @@ export function AnalyticsMatrix({
   selected,
   onSelect,
   perWorkingDay,
+  comparison,
+  expand,
   sections: only,
 }: AnalyticsMatrixProps) {
   const deltaWord = DELTA_LABEL[matrix.granularity];
-  const minWidth =
-    W_NAME + matrix.periods.length * W_PERIOD + W_TOTAL;
+  const minWidth = W_NAME + matrix.periods.length * W_PERIOD + W_TOTAL;
 
   const sections = React.useMemo(
     () => groupBySection(matrix.rows, only),
@@ -341,7 +422,41 @@ export function AnalyticsMatrix({
   );
 
   /**
-   * Fed-price coverage per COLUMN, for the `~` hover only.
+   * The VISIBLE width of the scroller, for the in-place expand.
+   *
+   * The expand row spans every column, so its `<td>` is as wide as the whole
+   * table. The panel inside it is `sticky left-0` at this width instead, so it
+   * stays in the visible frame while the periods scroll under it — and it is
+   * clamped to the table's own width so a table narrower than the viewport
+   * cannot be pushed into horizontal overflow by its own expand.
+   *
+   * Measured, never assumed: `null` until the first paint, where the panel
+   * falls back to 100% of the cell (correct, just not yet pinned).
+   */
+  const scrollerRef = React.useRef<HTMLDivElement | null>(null);
+  const [frameWidth, setFrameWidth] = React.useState<number | null>(null);
+
+  React.useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    // A NON-POSITIVE measurement is treated as "not measured yet" and leaves
+    // the panel at 100% of its cell. Measured: an observer callback can land
+    // while the element has no layout at all (a hidden pane, a reload mid-
+    // paint) and reported 0, which pinned the expand to zero width.
+    const measure = () => {
+      const w = el.clientWidth;
+      if (w > 0) setFrameWidth(w);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const panelWidth =
+    frameWidth == null ? undefined : Math.min(frameWidth, minWidth);
+
+  /** Fed-price coverage per COLUMN, for the `~` hover only.
    *
    * Σ traceable ÷ Σ all over the column's months — the same Σnum ÷ Σden the
    * weighted rows use, over two columns the SQL layer publishes. It is
@@ -383,10 +498,12 @@ export function AnalyticsMatrix({
     );
   }
 
+  const colCount = matrix.periods.length + 2;
+
   return (
-    <div className="overflow-x-auto rounded-lg border bg-card">
+    <div ref={scrollerRef} className="overflow-x-auto rounded-lg border bg-card">
       <table
-        className="table-fixed text-xs"
+        className="table-fixed text-sm"
         style={{ width: "max-content", minWidth, borderCollapse: "separate", borderSpacing: 0 }}
       >
         <colgroup>
@@ -398,11 +515,11 @@ export function AnalyticsMatrix({
         </colgroup>
 
         <thead>
-          <tr className="h-8 border-b">
+          <tr className="h-9 border-b">
             {/* Sticky-left AND opaque — it overlaps scrolling cells. */}
             <th
               scope="col"
-              className="frozen-col frozen-edge border-b bg-muted px-2 py-1 text-left text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground"
+              className="frozen-col frozen-edge border-b bg-muted px-2 py-1 text-left text-[11.5px] font-medium uppercase tracking-wide text-muted-foreground"
               style={{ left: 0 }}
             >
               Metric
@@ -413,7 +530,7 @@ export function AnalyticsMatrix({
                 scope="col"
                 title={p.fullLabel + (p.isPartial ? " · in progress" : "")}
                 className={cn(
-                  "border-b border-l bg-muted px-2 py-1 text-right text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground",
+                  "border-b border-l bg-muted px-2 py-1 text-right text-[11.5px] font-medium uppercase tracking-wide text-muted-foreground",
                   p.isPartial && "text-foreground/70",
                 )}
               >
@@ -428,7 +545,7 @@ export function AnalyticsMatrix({
             <th
               scope="col"
               title={matrix.totalFullLabel}
-              className="border-b border-l bg-muted px-2 py-1 text-right text-[10.5px] font-semibold uppercase tracking-wide text-foreground/80"
+              className="border-b border-l bg-muted px-2 py-1 text-right text-[11.5px] font-semibold uppercase tracking-wide text-foreground/80"
             >
               {matrix.totalLabel}
             </th>
@@ -442,18 +559,39 @@ export function AnalyticsMatrix({
                 id={`band-${section.key}`}
                 label={section.label}
                 hint={section.hint}
+                accent={section.accent}
                 span={matrix.periods.length + 1}
               />
               {section.rows.map((row) => (
-                <MatrixRowView
-                  key={row.metric.key}
-                  row={row}
-                  deltaWord={deltaWord}
-                  selected={selected === row.metric.key}
-                  onSelect={onSelect}
-                  perWorkingDay={perWorkingDay}
-                  coverageByPeriod={coverageByPeriod}
-                />
+                <React.Fragment key={row.metric.key}>
+                  <MatrixRowView
+                    row={row}
+                    deltaWord={deltaWord}
+                    comparison={comparison}
+                    accent={section.accent}
+                    selected={selected === row.metric.key}
+                    onSelect={onSelect}
+                    perWorkingDay={perWorkingDay}
+                    coverageByPeriod={coverageByPeriod}
+                  />
+                  {/* ── The expand, IN PLACE ────────────────────────────
+                      A full-width row directly beneath the row that was
+                      clicked, with the panel `sticky left-0` inside it at the
+                      scroller's measured width so it never drifts off-screen
+                      when the periods are scrolled. */}
+                  {expand && selected === row.metric.key && (
+                    <tr className="border-b">
+                      <td colSpan={colCount} className="p-0 align-top">
+                        <div
+                          className="sticky left-0 p-2"
+                          style={{ width: panelWidth ?? "100%" }}
+                        >
+                          {expand}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
               ))}
             </React.Fragment>
           ))}
@@ -464,38 +602,51 @@ export function AnalyticsMatrix({
 }
 
 /**
- * A thin band naming the group of rows beneath it. Twenty rows in one
- * undifferentiated stack is a wall; two named groups is a page.
+ * A thin band naming the group of rows beneath it, wearing that section's
+ * accent as a left rule (owner feedback R1 — "a splash of color").
  *
  * The label cell is `.frozen-col` like every other cell in that column, so
  * it stays put while the periods scroll — a band that scrolled away would
  * leave the rows under it unlabelled exactly when the reader is furthest
- * from the header.
+ * from the header. The accent is an inset box-shadow rather than a
+ * background: a frozen cell has to stay fully opaque.
  */
 function SectionBand({
   id,
   label,
   hint,
+  accent,
   span,
 }: {
   /** Anchor target for the in-page nav. `scroll-mt-*` clears the sticky bar. */
   id?: string;
   label: string;
   hint: string;
+  accent: string;
   span: number;
 }) {
   return (
-    <tr id={id} className="h-6 scroll-mt-24 border-b bg-muted/40">
+    <tr id={id} className="h-7 scroll-mt-24 border-b bg-muted/40">
+      {/* The accent is a real LEFT BORDER here, not `.bw-accent-rule`.
+          `.frozen-edge` already owns this cell's `box-shadow` (the inset right
+          border that kills the frozen↔scroll seam) and is deliberately
+          unlayered so a caller cannot override it — measured: the accent's
+          shadow was being dropped entirely. A border does not collide, and the
+          cell stays fully opaque either way. */}
       <th
         scope="colgroup"
         title={hint}
-        className="frozen-col frozen-edge border-b bg-muted px-2 py-0.5 text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground"
-        style={{ left: 0 }}
+        className="frozen-col frozen-edge border-b bg-muted py-0.5 pl-2 pr-2 text-left text-[11px] font-semibold uppercase tracking-[0.08em]"
+        style={{
+          left: 0,
+          color: accent,
+          borderLeft: `3px solid ${accent}`,
+        }}
       >
         {label}
       </th>
       <td colSpan={span} className="border-b border-l px-2 py-0.5">
-        <span className="block truncate text-[10px] leading-4 text-muted-foreground/80">
+        <span className="block truncate text-[11px] leading-4 text-muted-foreground/80">
           {hint}
         </span>
       </td>
@@ -506,6 +657,8 @@ function SectionBand({
 function MatrixRowView({
   row,
   deltaWord,
+  comparison,
+  accent,
   selected,
   onSelect,
   perWorkingDay,
@@ -513,6 +666,8 @@ function MatrixRowView({
 }: {
   row: MatrixRow;
   deltaWord: string;
+  comparison: ComparisonMode;
+  accent: string;
   selected: boolean;
   onSelect(key: MetricKey | null): void;
   perWorkingDay: boolean;
@@ -524,7 +679,7 @@ function MatrixRowView({
   return (
     <tr
       className={cn(
-        "group h-[52px] border-b transition-all duration-150 last:border-0",
+        "group h-[62px] border-b transition-all duration-150",
         selected ? "bg-muted/50" : "hover:bg-muted/30",
       )}
     >
@@ -533,10 +688,8 @@ function MatrixRowView({
       <th
         scope="row"
         className={cn(
-          "frozen-col frozen-edge border-b px-2 py-1 text-left align-top font-normal",
-          selected
-            ? "bg-accent"
-            : "bg-card group-hover:bg-muted",
+          "frozen-col frozen-edge border-b px-2 py-1.5 text-left align-top font-normal",
+          selected ? "bg-accent" : "bg-card group-hover:bg-muted",
         )}
         style={{ left: 0 }}
       >
@@ -551,15 +704,28 @@ function MatrixRowView({
             <ChevronRight
               aria-hidden
               className={cn(
-                "mt-0.5 size-3 shrink-0 text-muted-foreground transition-transform duration-150",
+                "mt-0.5 size-3.5 shrink-0 text-muted-foreground transition-transform duration-150",
                 selected && "rotate-90 text-foreground",
               )}
             />
             <span className="min-w-0">
-              <span className="block truncate text-xs font-medium leading-4">
+              <span
+                className={cn(
+                  "block truncate text-[13px] font-medium leading-[17px]",
+                  // A ₱ row wears its band's accent on the LABEL only — a
+                  // quiet way to say "this one is money" without colouring a
+                  // single figure. Direction tints below are separate.
+                  spec.price && "text-[color:var(--bw-accent)]",
+                )}
+                style={
+                  spec.price
+                    ? ({ "--bw-accent": accent } as React.CSSProperties)
+                    : undefined
+                }
+              >
                 {spec.label}
               </span>
-              <span className="block truncate text-[10px] leading-3 text-muted-foreground">
+              <span className="block truncate text-[11px] leading-4 text-muted-foreground">
                 {normalised ? `${spec.sublabel} / working day` : spec.sublabel}
               </span>
             </span>
@@ -567,7 +733,7 @@ function MatrixRowView({
           <MetricInfo spec={spec} className="mt-0.5" />
         </div>
         {row.restricted && (
-          <span className="mt-1 inline-flex items-center gap-1 rounded border border-border/70 px-1 text-[9.5px] leading-[13px] text-muted-foreground">
+          <span className="mt-1 inline-flex items-center gap-1 rounded border border-border/70 px-1 text-[10px] leading-[14px] text-muted-foreground">
             <Lock className="size-2.5" aria-hidden />
             Restricted
           </span>
@@ -580,6 +746,7 @@ function MatrixRowView({
           cell={cell}
           spec={spec}
           deltaWord={deltaWord}
+          comparison={comparison}
           coveragePct={coverageByPeriod.get(cell.periodKey) ?? null}
         />
       ))}
@@ -589,6 +756,7 @@ function MatrixRowView({
           cell={row.total}
           spec={spec}
           deltaWord={deltaWord}
+          comparison={comparison}
           coveragePct={coverageByPeriod.get(row.total.periodKey) ?? null}
           emphasis
         />

@@ -251,17 +251,16 @@ export const PRODUCTION_DICTIONARY: Record<
     label: "Grade mix",
     sublabel: "tonnes made, by product",
     dictionary: {
-      definition:
-        "What the plant actually made, split by product — the monthly output figure broken out by grade.",
+      definition: "What the plant made, split by product.",
       basis:
-        "Each grade's kilos come from the same RC Movement production view the monthly total is built from, so the grade rows are not a second count of the same charcoal: they are the same arithmetic, split. The share under each cell is that grade over everything made that month, with the denominator read from the monthly production view rather than re-added, so the shares of a month always come to 100.",
+        "Each grade's kilos come from the same RC Movement view the monthly total is built from — the same arithmetic, split, not a second count. The share under a cell is that grade over everything made that month.",
       exclusions:
-        "Nothing. Every production entry belongs to exactly one grade, so no tonnage can fall between the rows.",
+        "Nothing. Every production entry belongs to exactly one grade, so no tonnage falls between the rows.",
       rollup:
-        "The year column is a plain sum of the months, and the year share is the year's kilos over the year's produced kilos — a weighted figure by construction, never the average of monthly percentages.",
+        "The year column is a plain sum of the months; the year share is the year's kilos over the year's produced kilos, never the average of monthly percentages.",
       source: "view_analytics_production_grade_monthly.kg",
       caveat:
-        "The Σ made footer is the matrix's own Production output figure, not a sum of the rows above it — so the grade mix and the output row can never disagree about a month. March and January 2026 were single-product months (3X50 only); July 2026 is the most mixed book on record.",
+        "The Σ made footer is the matrix's own Production output figure, not a sum of the rows above it — and the two are checked against each other on every render, not assumed equal.",
     },
   },
   reported_days: {
@@ -269,15 +268,15 @@ export const PRODUCTION_DICTIONARY: Record<
     sublabel: "production's own denominator",
     dictionary: {
       definition:
-        "The number of days production actually reported in a month — the denominator behind every per-day figure in this section.",
+        "How many days production actually reported in a month — the denominator behind every per-day figure here.",
       basis:
-        "Days carrying at least one production entry, which is the same rule the home dashboard's stream freshness uses. One definition, not two.",
+        "Days carrying at least one production entry. The same rule the home dashboard's stream freshness uses, so there is one definition and not two.",
       exclusions:
-        "A day the yard took in charcoal but the plant did not run is not a reported production day, so it cannot dilute an output-per-day figure.",
+        "A day the yard took charcoal in but the plant did not run is not a reported production day, so it cannot dilute an output-per-day figure.",
       rollup: "Quarters and years are plain sums of their months.",
       source: "view_analytics_production_monthly.reported_days",
       caveat:
-        "This is deliberately NOT the Working days row in the volume band, which counts days the SITE did something — a delivery, a feeding or a production shift. The two answer different questions and substituting one for the other silently changes what a per-day figure means, which is also why the per-working-day toggle leaves this whole band alone.",
+        "Deliberately NOT the days the whole SITE was busy — the yard can take deliveries on a day the plant is idle. That is also why the per-working-day toggle leaves this band alone.",
     },
   },
 };

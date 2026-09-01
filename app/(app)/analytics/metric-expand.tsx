@@ -3,12 +3,25 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // THE ROW EXPAND — one KPI's whole history, plus the honesty copy it owes.
 //
-// It renders BELOW the matrix rather than inside it, and that is a layout fact
-// rather than a preference: the matrix is `table-fixed` inside an
-// `overflow-x-auto` wrapper, so a `colSpan` panel would be as wide as the
-// scrolling table (up to ~1,500px) and a chart in it would need horizontal
-// scrolling to read. Below the table the panel is page-width and responsive,
-// and the expanded row stays highlighted so the connection is never lost.
+// ── WHERE IT RENDERS (owner feedback R1) ────────────────────────────────────
+// IN PLACE, in a full-width row directly beneath the row that was clicked. It
+// used to render below the whole table, and the reason was real — a `colSpan`
+// panel inside an `overflow-x-auto` table is as wide as the scrolling table and
+// drifts sideways with the columns. Renzo's verdict on the result was "such a
+// long scroll", so the panel is now pinned instead of relocated: the row spans
+// every column and the panel inside it is `sticky left-0` at the scroller's
+// measured width (see `analytics-matrix.tsx`). This component is unchanged by
+// that — it is still a plain page-width block — it simply has a new parent.
+//
+// ── PRINTING ONE METRIC (owner feedback R1) ─────────────────────────────────
+// The Print button tags this panel's ancestors, adds `bw-printing` to <body>
+// and calls `window.print()`; the print stylesheet in `globals.css` then
+// `display: none`s everything that is not the card, not inside it and not on
+// the path down to it, so one card lands at the top of one A4 sheet. Browser
+// print-to-PDF, no PDF library, no server round trip. Two blocks exist only on
+// paper: a title line naming the metric and the window, and the page's own
+// restatement footer, because a printed figure that does not say what it is or
+// when it was true is a figure someone will misquote later.
 //
 // ── WHAT IS REUSED, AND THE ONE THING THAT COULD NOT BE ─────────────────────
 // `DrilldownSection`, `DrilldownStat`, `BreakdownRail`, `DRILLDOWN_AXIS_TICK`
@@ -40,7 +53,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { Lock, X } from "lucide-react";
+import { Lock, Printer, X } from "lucide-react";
 import {
   DRILLDOWN_AXIS_TICK,
   DrilldownSection,
@@ -268,44 +281,88 @@ function MetricTrendChart({
 }
 
 /**
- * The ending-inventory split — the caveat the plan says the page OWES its
- * reader, rendered as numbers rather than as a sentence they have to trust.
+ * WHAT THE ENDING-INVENTORY HEADLINE IS, AND THE THREE THINGS IT IS NOT.
+ *
+ * The row has been wrong in two directions and the second is the instructive
+ * one. It began on the NET of every batch balance (8,492 t) — *"kind of a weird
+ * basis"*, because a net subtracts a bookkeeping artefact from a physical
+ * quantity. The first correction over-shot to every POSITIVE balance
+ * (11,707.9 t), which bounces off Renzo's anchor from the other side: it folds
+ * in closed-block residue, and by the project's standing resiko doctrine that
+ * residue is LOSS already recognised, never stock anyone can walk out and use.
+ *
+ * The headline is now `openKg` — still-open piles with a positive balance, the
+ * population the Blocking screen totals. So this panel exists to print, as
+ * numbers rather than as claims, the three things it deliberately leaves out.
  */
 function InventorySplit({ month }: { month: AnalyticsMonth }) {
-  const pos = month.positiveBalanceKg ?? 0;
+  const open = month.openKg ?? 0;
+  const residue = month.closedResidueKg ?? 0;
   const neg = Math.abs(month.negativeBalanceKg ?? 0);
-  const gross = pos + neg;
-  const items: RailItem[] = [
+  const gross = open + residue;
+  const t1 = (kg: number) =>
+    (kg / 1000).toLocaleString("en-US", { maximumFractionDigits: 1 });
+
+  const items: RailItem[] = gross <= 0 ? [] : [
     {
-      key: "positive",
-      label: "Piles holding stock",
-      value: (pos / 1000).toLocaleString("en-US", { maximumFractionDigits: 1 }),
+      key: "open",
+      label: "Open piles — this row",
+      meta: `${month.openBatches ?? 0} piles`,
+      value: t1(open),
       unit: "t",
-      sharePct: gross > 0 ? (pos / gross) * 100 : 0,
-      title: "The positive half of the balance — this is what the peso value is priced against.",
+      sharePct: (open / gross) * 100,
+      title:
+        "Charcoal in piles that were still open at this month-end — the population the Blocking screen totals. Whether a pile was open is judged as of that month, never as of today.",
     },
     {
-      key: "negative",
-      label: "Filed against the wrong pile",
-      meta: `${month.negativeBatchCount ?? 0} batches`,
-      value: `−${(neg / 1000).toLocaleString("en-US", { maximumFractionDigits: 1 })}`,
+      key: "residue",
+      label: "Closed-block residue — excluded",
+      meta: `${month.closedResidueBatches ?? 0} blocks`,
+      value: t1(residue),
       unit: "t",
-      sharePct: gross > 0 ? (neg / gross) * 100 : 0,
+      sharePct: (residue / gross) * 100,
       title:
-        "Charcoal fed out under one batch name whose arrival was booked under a different spelling of it. The kilos are real and in the yard.",
+        "Weight still logged against blocks that have been closed out. This is the resiko — charcoal that evaporated while it sat. It is loss already taken, not stock, so it is not in the headline.",
     },
   ];
+
   return (
     <div className="flex flex-col gap-2">
       <BreakdownRail items={items} emptyText="No balances." maxHeight={120} />
-      <p className="px-3 pb-1 text-[11px] leading-relaxed text-muted-foreground">
-        The headline is the NET of those two. The negative half is{" "}
-        <strong className="font-semibold">misattribution, not evaporation</strong> —
-        charcoal fed out under one batch name while its arrival was booked under a
-        different spelling of that name. The two sides are the same physical yard, so
-        they cancel in the total; the split is printed because a right number with an
-        invisible hole in it is worse than a smaller one.
-      </p>
+      <ul className="flex flex-col gap-1.5 px-3 pb-1 text-[11.5px] leading-relaxed text-muted-foreground">
+        <li>
+          <strong className="font-semibold text-foreground">
+            Resiko is not stock.
+          </strong>{" "}
+          Counting the <span className="font-mono">{t1(residue)} t</span> above
+          would read <span className="font-mono">{t1(gross)} t</span> — every
+          positive balance on the books. That is weight the yard has already
+          lost; it is disclosed here and never in the headline.
+        </li>
+        <li>
+          <strong className="font-semibold text-foreground">
+            Against Blocking.
+          </strong>{" "}
+          The headline is the same population the Blocking grand total counts,
+          bar any pile with no block location — measured 2026-09-01, exactly one:{" "}
+          <span className="font-mono">AUGUST-26-FEED2</span>, 18.7 t, the L-042
+          phantom, which has no cell in the 220-slot grid.
+        </li>
+        <li>
+          <strong className="font-semibold text-foreground">
+            Negative balances are not netted off.
+          </strong>{" "}
+          <span className="font-mono">−{t1(neg)} t</span> across{" "}
+          {month.negativeBatchCount ?? 0} batches would take it to{" "}
+          <span className="font-mono">{t1(Math.max(open - neg, 0))} t</span>.
+          Those are kilos fed out under one batch name while their arrival was
+          booked under a different spelling of it —{" "}
+          <strong className="font-semibold">
+            misattribution, not missing charcoal
+          </strong>
+          .
+        </li>
+      </ul>
     </div>
   );
 }
@@ -348,7 +405,7 @@ function CoverageSplit({ month }: { month: AnalyticsMonth }) {
   return (
     <div className="flex flex-col gap-2">
       <BreakdownRail items={items} emptyText="Nothing fed this month." maxHeight={120} />
-      <p className="px-3 pb-1 text-[11px] leading-relaxed text-muted-foreground">
+      <p className="px-3 pb-1 text-[11.5px] leading-relaxed text-muted-foreground">
         Untraceable kilos drag the raw published price DOWN, because they add
         weight to the sum and no money.{" "}
         <strong className="font-semibold">
@@ -398,7 +455,7 @@ function ClosedBlocksSplit({ month }: { month: AnalyticsMonth }) {
   return (
     <div className="flex flex-col gap-2">
       <BreakdownRail items={items} emptyText="No block closed this month." maxHeight={130} />
-      <p className="px-3 pb-1 text-[11px] leading-relaxed text-muted-foreground">
+      <p className="px-3 pb-1 text-[11.5px] leading-relaxed text-muted-foreground">
         A block with one truckload still awaiting its price is left out{" "}
         <strong className="font-semibold">entirely</strong>, never valued at part
         of its money — a numerator missing pesos against a full denominator would
@@ -444,7 +501,7 @@ function AgingSplit({ month }: { month: AnalyticsMonth }) {
   return (
     <div className="flex flex-col gap-2">
       <BreakdownRail items={items} emptyText="No open stock." maxHeight={130} />
-      <p className="px-3 pb-1 text-[11px] leading-relaxed text-muted-foreground">
+      <p className="px-3 pb-1 text-[11.5px] leading-relaxed text-muted-foreground">
         Closed blocks are kept OUT of all of this. Their{" "}
         <span className="font-mono">
           {((month.closedResidueKg ?? 0) / 1000).toLocaleString("en-US", {
@@ -514,7 +571,7 @@ function DowntimeSplit({ month }: { month: AnalyticsMonth }) {
   return (
     <div className="flex flex-col gap-2">
       <BreakdownRail items={items} emptyText="No downtime record this month." maxHeight={130} />
-      <p className="px-3 pb-1 text-[11px] leading-relaxed text-muted-foreground">
+      <p className="px-3 pb-1 text-[11.5px] leading-relaxed text-muted-foreground">
         A downtime total of zero can mean two completely different things.{" "}
         <strong className="font-semibold">
           A shift that named the repair and left the duration blank is real
@@ -563,7 +620,7 @@ function PowerSplit({ month }: { month: AnalyticsMonth }) {
   return (
     <div className="flex flex-col gap-2">
       <BreakdownRail items={items} emptyText="No meter reading this month." maxHeight={120} />
-      <p className="px-3 pb-1 text-[11px] leading-relaxed text-muted-foreground">
+      <p className="px-3 pb-1 text-[11.5px] leading-relaxed text-muted-foreground">
         The kWh total is published{" "}
         <strong className="font-semibold">exactly as metered</strong> — it is
         the record, and it must agree with the daily power tile on the home
@@ -612,6 +669,46 @@ function sidePanelFor(key: MetricSpec["key"]): SidePanel {
   }
 }
 
+/**
+ * PRINT ONE CARD.
+ *
+ * `bw-printing` on <body> is what the print stylesheet keys off, and every
+ * ancestor from the card up to <body> is tagged `data-print-ancestor` so the
+ * sheet can `display: none` everything ELSE rather than merely hide it. That
+ * distinction is the whole mechanism — see the block comment on the print
+ * rules in `globals.css`: hiding by visibility leaves the page's full height
+ * behind and the card lands on page three of a mostly blank document.
+ *
+ * Both marks come off on `afterprint`, whether the user printed, saved a PDF
+ * or cancelled the dialog. The `setTimeout` fallback is there because not every
+ * engine fires `afterprint` on a dismissed dialog, and a body left in the
+ * printing class would print the wrong thing NEXT time.
+ */
+function printCard(card: HTMLElement | null) {
+  if (typeof document === "undefined" || !card) return;
+  const body = document.body;
+
+  const tagged: HTMLElement[] = [];
+  for (
+    let el: HTMLElement | null = card.parentElement;
+    el && el !== document.documentElement;
+    el = el.parentElement
+  ) {
+    el.setAttribute("data-print-ancestor", "");
+    tagged.push(el);
+  }
+
+  const clear = () => {
+    body.classList.remove("bw-printing");
+    for (const el of tagged) el.removeAttribute("data-print-ancestor");
+  };
+
+  body.classList.add("bw-printing");
+  window.addEventListener("afterprint", clear, { once: true });
+  window.setTimeout(clear, 1000);
+  window.print();
+}
+
 export interface MetricExpandProps {
   row: MatrixRow;
   granularity: Granularity;
@@ -621,6 +718,10 @@ export interface MetricExpandProps {
   /** The newest month inside the displayed window — the split panel's subject. */
   anchorMonth: AnalyticsMonth | null;
   perWorkingDay: boolean;
+  /** What the printed sheet says the reader was looking at. */
+  scopeLabel: string;
+  /** The newest record date, stamped on the printed sheet. */
+  asOfDate: string | null;
   onClose(): void;
 }
 
@@ -631,9 +732,12 @@ export function MetricExpand({
   totalFullLabel,
   anchorMonth,
   perWorkingDay,
+  scopeLabel,
+  asOfDate,
   onClose,
 }: MetricExpandProps) {
   const spec = row.metric;
+  const cardRef = React.useRef<HTMLElement | null>(null);
   const noun = bucketNounFor(granularity);
   const unit = unitSuffix(spec.unit);
   const normalised = perWorkingDay && spec.perWorkingDay;
@@ -687,25 +791,53 @@ export function MetricExpand({
       : "");
 
   return (
-    <section className="animate-fade-up rounded-lg border bg-card/60">
-      <header className="flex flex-wrap items-baseline justify-between gap-2 border-b px-3 py-2">
+    <section
+      ref={cardRef}
+      // THE PRINT TARGET. Everything else on the page is hidden while
+      // `bw-printing` is on <body>; this subtree is what lands on the sheet.
+      data-print-card
+      className="animate-fade-up rounded-lg border bg-card/60"
+    >
+      {/* Paper only. A printed figure that does not say WHAT it is and WHEN it
+          was true is a figure someone will misquote a month from now. */}
+      <div className="hidden print:block print:pb-2">
+        <h1 className="text-base font-semibold tracking-tight">{spec.label}</h1>
+        <p className="text-[11px] text-muted-foreground">
+          {normalised ? `${spec.sublabel} / working day` : spec.sublabel} ·{" "}
+          {scopeLabel} · {GRANULARITY_LABEL[granularity].toLowerCase()} columns
+          {asOfDate ? ` · records through ${asOfDate}` : ""}
+        </p>
+      </div>
+
+      <header className="flex flex-wrap items-baseline justify-between gap-2 border-b px-3 py-2 print:hidden">
         <div className="min-w-0">
           <h3 className="truncate text-sm font-semibold tracking-tight">
             {spec.label}
           </h3>
-          <p className="truncate text-[11px] text-muted-foreground">
+          <p className="truncate text-[11.5px] text-muted-foreground">
             {normalised ? `${spec.sublabel} / working day` : spec.sublabel} ·{" "}
             {GRANULARITY_LABEL[granularity].toLowerCase()} history, all records
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[10.5px] text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <X className="size-3" aria-hidden />
-          Close
-        </button>
+        <div className="flex shrink-0 items-center gap-1.5" data-print-hide>
+          <button
+            type="button"
+            onClick={() => printCard(cardRef.current)}
+            title="Print just this metric — its chart, its figures and its definition — or save it as a PDF from the print dialog."
+            className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Printer className="size-3" aria-hidden />
+            Print
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <X className="size-3" aria-hidden />
+            Close
+          </button>
+        </div>
       </header>
 
       {row.restricted ? (
@@ -763,6 +895,7 @@ export function MetricExpand({
             )}
           >
             <DrilldownSection
+              className="print:break-inside-avoid"
               title={`${spec.label} — every ${noun} on record`}
               subtitle={
                 granularity === "Y"
@@ -778,7 +911,7 @@ export function MetricExpand({
                 granularity={granularity}
               />
               {spec.pair && (
-                <p className="px-1 pb-1 pt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+                <p className="px-1 pb-1 pt-1.5 text-xs leading-relaxed text-muted-foreground">
                   {spec.pair.note}
                 </p>
               )}
@@ -791,7 +924,7 @@ export function MetricExpand({
                   {annotated.map((h) => (
                     <li
                       key={h.periodKey}
-                      className="flex items-start gap-1.5 text-[11px] leading-relaxed text-muted-foreground"
+                      className="flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground"
                     >
                       <span
                         aria-hidden
@@ -874,36 +1007,51 @@ export function MetricExpand({
 
           {/* The dictionary, spelled out — the same copy the row's info button
               shows, so the two can never drift. */}
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" data-print-block>
             <div className="rounded-lg border bg-background/40 px-3 py-2">
-              <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                How it is worked out
+              <div className="text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
+                What it is
               </div>
-              <p className="mt-1 text-[11.5px] leading-relaxed">
+              <p className="mt-1 text-xs leading-relaxed">
+                {spec.dictionary.definition}
+              </p>
+              <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+                <span className="font-medium text-foreground">Worked out as: </span>
                 {spec.dictionary.basis}
               </p>
               {spec.dictionary.exclusions && (
-                <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted-foreground">
+                <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
                   <span className="font-medium text-foreground">Leaves out: </span>
                   {spec.dictionary.exclusions}
                 </p>
               )}
             </div>
             <div className="rounded-lg border bg-background/40 px-3 py-2">
-              <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              <div className="text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
                 Quarter &amp; year columns
               </div>
-              <p className="mt-1 text-[11.5px] leading-relaxed">
+              <p className="mt-1 text-xs leading-relaxed">
                 {spec.dictionary.rollup}
               </p>
               {spec.dictionary.caveat && (
-                <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted-foreground">
+                <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
                   <span className="font-medium text-foreground">Worth knowing: </span>
                   {spec.dictionary.caveat}
                 </p>
               )}
+              <p className="mt-1.5 font-mono text-[10px] text-muted-foreground/80">
+                {spec.dictionary.source}
+              </p>
             </div>
           </div>
+
+          {/* Paper only — the page's own restatement policy, travelling with
+              the figure rather than staying behind on the screen. */}
+          <p className="hidden text-[10px] leading-relaxed text-muted-foreground print:block">
+            Figures reflect the underlying records as of{" "}
+            {asOfDate ?? "today"}; nothing is snapshotted, so corrections to
+            past records restate history (audited). A blank is never a zero.
+          </p>
         </div>
       )}
     </section>

@@ -5,14 +5,14 @@
 //
 // ── WHY IT IS A SECTION HERE AND NOT A BAND AT THE TOP ───────────────────────
 // The page reads as one descending axis: PERIOD (the KPI matrix) → CAMPAIGN
-// (the batch panel) → SUPPLIER (the room above) → PRODUCTION (here) → PILE (the
-// watchlist). Each block re-keys the same charcoal, and production is where the
-// yard's kilos stop being charcoal and start being product — so it belongs
-// after the three blocks that are about buying and holding it, not stacked into
-// the volume band above them.
+// (the batch panel) → SUPPLIER (the room above) → PRODUCTION (here). Each block
+// re-keys the same charcoal, and production is where the yard's kilos stop
+// being charcoal and start being product — so it belongs after the two blocks
+// that are about buying and holding it, not stacked into the volume band above
+// them.
 //
 // It is still ONE `buildMatrix` fold: the six rows below live in the same
-// registry as the twenty above, go through the same rollup machinery, expand
+// registry as the ten above, go through the same rollup machinery, expand
 // through the same panel and — the point — are ranked by the same callout
 // strip. `AnalyticsMatrix` simply renders the `production` band here instead of
 // at the top.
@@ -35,7 +35,8 @@
 
 import * as React from "react";
 import { Factory } from "lucide-react";
-import type { Matrix } from "@/lib/analytics/matrix";
+import type { ComparisonMode, Matrix } from "@/lib/analytics/matrix";
+import { SECTION_ACCENT } from "@/lib/analytics/metrics";
 import type { MetricKey, MetricSection } from "@/lib/analytics/metrics";
 import type { Granularity } from "@/lib/analytics/matrix";
 import { buildGradeYear, PRODUCTION_DICTIONARY } from "@/lib/analytics/production";
@@ -77,15 +78,15 @@ function Chip({
 }) {
   return (
     <div className="min-w-0 rounded-md border bg-background/40 px-2.5 py-1.5" title={title}>
-      <div className="truncate text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+      <div className="truncate text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
       <div className="flex items-baseline gap-1">
-        <span className="truncate font-mono text-sm font-semibold tabular-nums">
+        <span className="truncate font-mono text-[15px] font-semibold tabular-nums">
           {value}
         </span>
         {sub && (
-          <span className="truncate text-[10px] text-muted-foreground">{sub}</span>
+          <span className="truncate text-[11px] text-muted-foreground">{sub}</span>
         )}
       </div>
     </div>
@@ -104,6 +105,11 @@ export interface ProductionRoomProps {
   selected: MetricKey | null;
   onSelect(key: MetricKey | null): void;
   perWorkingDay: boolean;
+  /** What the second chip under every value shows — the page's own control. */
+  comparison: ComparisonMode;
+  /** What a printed metric card says the reader was looking at. */
+  printScope: string;
+  asOfDate: string | null;
 }
 
 export function ProductionRoom({
@@ -115,6 +121,9 @@ export function ProductionRoom({
   selected,
   onSelect,
   perWorkingDay,
+  comparison,
+  printScope,
+  asOfDate,
 }: ProductionRoomProps) {
   const gradeYear = React.useMemo(
     () => buildGradeYear(grades.rows, months, year),
@@ -166,12 +175,20 @@ export function ProductionRoom({
 
   return (
     <section id="section-production" className="flex scroll-mt-24 flex-col gap-3">
-      <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+      <header
+        className="bw-accent-rule flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 pl-2.5"
+        style={
+          { "--bw-accent": SECTION_ACCENT.production } as React.CSSProperties
+        }
+      >
         <div className="min-w-0">
-          <h2 className="text-xs font-semibold uppercase tracking-wide">
+          <h2
+            className="text-[13px] font-semibold uppercase tracking-wide"
+            style={{ color: SECTION_ACCENT.production }}
+          >
             Production
           </h2>
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
+          <p className="text-xs leading-relaxed text-muted-foreground">
             What the plant made in {gradeYear.year}, how long it stood still and
             what it burned doing it. Everything here is measured against
             production&rsquo;s own reported days rather than the yard&rsquo;s
@@ -179,7 +196,7 @@ export function ProductionRoom({
             live for every role.
           </p>
         </div>
-        <span className="shrink-0 text-[10.5px] text-muted-foreground">
+        <span className="shrink-0 text-[11.5px] text-muted-foreground">
           {summary.reportedMonths} month
           {summary.reportedMonths === 1 ? "" : "s"} reported ·{" "}
           <span className="font-mono">{t1(gradeYear.totalKg)}</span> t
@@ -218,7 +235,7 @@ export function ProductionRoom({
         />
       </div>
 
-      <div className="-mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10.5px] text-muted-foreground">
+      <div className="-mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px] text-muted-foreground">
         <Factory className="size-3 shrink-0" aria-hidden />
         <span className="inline-flex items-center gap-1">
           Reported days, not working days
@@ -256,20 +273,24 @@ export function ProductionRoom({
         selected={selected}
         onSelect={onSelect}
         perWorkingDay={perWorkingDay}
+        comparison={comparison}
         sections={PRODUCTION_BAND}
+        expand={
+          expandedRow ? (
+            <MetricExpand
+              row={expandedRow}
+              granularity={granularity}
+              totalLabel={matrix.totalLabel}
+              totalFullLabel={matrix.totalFullLabel}
+              anchorMonth={anchorMonth}
+              perWorkingDay={perWorkingDay}
+              scopeLabel={printScope}
+              asOfDate={asOfDate}
+              onClose={() => onSelect(null)}
+            />
+          ) : undefined
+        }
       />
-
-      {expandedRow && (
-        <MetricExpand
-          row={expandedRow}
-          granularity={granularity}
-          totalLabel={matrix.totalLabel}
-          totalFullLabel={matrix.totalFullLabel}
-          anchorMonth={anchorMonth}
-          perWorkingDay={perWorkingDay}
-          onClose={() => onSelect(null)}
-        />
-      )}
 
       {/* ── The grade mix ────────────────────────────────────────────────
           Follows the YEAR picker and deliberately not the Y/Q/M toggle: a

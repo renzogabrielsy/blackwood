@@ -4,8 +4,8 @@
 // THE SUPPLIER ROOM (P3) — who we bought from, and on what terms.
 //
 // ── WHY IT IS A SECTION BELOW THE CAMPAIGN PANEL, NOT A TAB ──────────────────
-// The page now reads as one descending axis: PERIOD (the KPI matrix) → CAMPAIGN
-// (the batch panel) → SUPPLIER (here) → PILE (the watchlist). Each block
+// The page reads as one descending axis: PERIOD (the KPI matrix) → CAMPAIGN
+// (the batch panel) → SUPPLIER (here) → PRODUCTION (below). Each block
 // re-cuts the same yard by a different key, and putting the supplier room
 // behind a tab would hide it from exactly the reader who has just seen the
 // purchase-volume row move and wants to know WHO moved it. The room is also
@@ -26,6 +26,7 @@
 
 import * as React from "react";
 import { Users } from "lucide-react";
+import { SECTION_ACCENT } from "@/lib/analytics/metrics";
 import type { AnalyticsMonth, SupplierData } from "@/lib/analytics/types";
 import {
   buildExplorer,
@@ -67,15 +68,15 @@ function Chip({
       className="min-w-0 rounded-md border bg-background/40 px-2.5 py-1.5"
       title={title}
     >
-      <div className="truncate text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+      <div className="truncate text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
       <div className="flex items-baseline gap-1">
-        <span className="truncate font-mono text-sm font-semibold tabular-nums">
+        <span className="truncate font-mono text-[15px] font-semibold tabular-nums">
           {value}
         </span>
         {sub && (
-          <span className="truncate text-[10px] text-muted-foreground">{sub}</span>
+          <span className="truncate text-[11px] text-muted-foreground">{sub}</span>
         )}
       </div>
     </div>
@@ -122,19 +123,25 @@ export function SupplierRoom({
 
   return (
     <section className="flex flex-col gap-3">
-      <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+      <header
+        className="bw-accent-rule flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 pl-2.5"
+        style={{ "--bw-accent": SECTION_ACCENT.suppliers } as React.CSSProperties}
+      >
         <div className="min-w-0">
-          <h2 className="text-xs font-semibold uppercase tracking-wide">
+          <h2
+            className="text-[13px] font-semibold uppercase tracking-wide"
+            style={{ color: SECTION_ACCENT.suppliers }}
+          >
             Suppliers
           </h2>
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
+          <p className="text-xs leading-relaxed text-muted-foreground">
             Who we actually bought from in {data.year}, what share of the yard
             each one is, and whether we paid them above or below the going rate.
             Sun-drying returns and re-cooks are never counted as a purchase —
             we already paid for those kilos once.
           </p>
         </div>
-        <span className="shrink-0 text-[10.5px] text-muted-foreground">
+        <span className="shrink-0 text-[11.5px] text-muted-foreground">
           {data.totalDeliveries.toLocaleString("en-US")} truckloads ·{" "}
           <span className="font-mono">{t1(data.totalKg)}</span> t
         </span>
@@ -174,7 +181,7 @@ export function SupplierRoom({
         />
       </div>
 
-      <div className="-mt-1 flex items-center gap-1 text-[10.5px] text-muted-foreground">
+      <div className="-mt-1 flex items-center gap-1 text-[11.5px] text-muted-foreground">
         <Users className="size-3 shrink-0" aria-hidden />
         <span>Concentration is dependency, measured — no thresholds applied.</span>
         <DictionaryPopover
@@ -222,7 +229,7 @@ export function SupplierRoom({
         />
       </div>
 
-      <p className="text-[10.5px] leading-relaxed text-muted-foreground">
+      <p className="text-[11.5px] leading-relaxed text-muted-foreground">
         A cell is tonnes bought with that supplier&rsquo;s share of the month
         under it; a <span className="font-mono">·</span> means they did nothing
         at all that month. The <span className="font-mono">Σ market</span> row is

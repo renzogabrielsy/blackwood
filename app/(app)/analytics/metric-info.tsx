@@ -48,10 +48,10 @@ export function dictionaryTitle(spec: MetricSpec): string {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+      <div className="text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
-      <p className="mt-0.5 text-[11.5px] leading-relaxed text-foreground">
+      <p className="mt-0.5 text-xs leading-relaxed text-foreground">
         {children}
       </p>
     </div>
@@ -91,7 +91,7 @@ export function DictionaryPopover({
             className,
           )}
         >
-          <Info className="size-3" aria-hidden />
+          <Info className="size-3.5" aria-hidden />
         </button>
       </PopoverTrigger>
       <PopoverContent
@@ -109,8 +109,8 @@ export function DictionaryPopover({
         className="max-h-[var(--radix-popover-content-available-height)] w-[min(360px,calc(100vw-2rem))] overflow-y-auto p-0"
       >
         <div className="border-b px-3 py-2">
-          <div className="text-xs font-semibold tracking-tight">{label}</div>
-          <div className="text-[10.5px] text-muted-foreground">{sublabel}</div>
+          <div className="text-[13px] font-semibold tracking-tight">{label}</div>
+          <div className="text-[11.5px] text-muted-foreground">{sublabel}</div>
         </div>
         <div className="flex flex-col gap-2.5 px-3 py-2.5">
           <Field label="What it is">{d.definition}</Field>
@@ -122,7 +122,7 @@ export function DictionaryPopover({
               <div className="text-[10px] font-medium uppercase tracking-wide text-amber-700 dark:text-amber-400">
                 Worth knowing
               </div>
-              <p className="mt-0.5 text-[11.5px] leading-relaxed text-muted-foreground">
+              <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
                 {d.caveat}
               </p>
             </div>

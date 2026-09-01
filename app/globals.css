@@ -750,3 +750,141 @@ input[type=number] {
     color-mix(in oklab, var(--muted-foreground) 22%, transparent) 5px
   );
 }
+
+/* ─── /analytics — SECTION ACCENTS + DIRECTION TINTS (owner feedback R1) ─────
+   Renzo, 2026-09-01: "put a splash of color". These are AESTHETIC identity
+   colours for the five reading blocks of the analytics page, plus the two
+   direction tints a signed number carries — the same green/red convention the
+   Home Digest already uses for signed figures.
+
+   THEY ARE NOT THRESHOLDS. Nothing on the page turns amber because a value is
+   high; the plan still withholds target-based colouring until Renzo states real
+   targets. A section colour says WHERE you are, and a direction tint says WHICH
+   WAY a number moved — both are facts, neither is a verdict.
+
+   Declared as plain custom properties (never only inside a media/theme block)
+   so an inline `style` can reference one, and re-declared in .dark at a higher
+   lightness so they stay legible on the zinc-950 ground. Frozen table surfaces
+   never use them as a BACKGROUND — a frozen pane must stay fully opaque. */
+:root {
+  --bw-sec-flow: oklch(0.55 0.13 235);
+  --bw-sec-money: oklch(0.62 0.14 62);
+  --bw-sec-campaigns: oklch(0.55 0.11 168);
+  --bw-sec-suppliers: oklch(0.58 0.16 350);
+  --bw-sec-production: oklch(0.55 0.16 296);
+}
+
+.dark {
+  --bw-sec-flow: oklch(0.72 0.13 235);
+  --bw-sec-money: oklch(0.79 0.14 72);
+  --bw-sec-campaigns: oklch(0.74 0.13 168);
+  --bw-sec-suppliers: oklch(0.74 0.16 350);
+  --bw-sec-production: oklch(0.74 0.15 296);
+}
+
+/* The band a section wears: a 3px coloured rule down its left edge. Used on the
+   matrix's own band rows and on each block's header. `--bw-accent` is set
+   inline by the component from `SECTIONS[].accentVar`. */
+.bw-accent-rule {
+  box-shadow: inset 3px 0 0 0 var(--bw-accent, var(--border));
+}
+
+/* ─── /analytics — PRINT ONE METRIC CARD ────────────────────────────────────
+   Renzo asked for a per-metric PDF, and the pragmatic route is the browser's
+   own print-to-PDF. The expand panel carries `data-print-card`; the Print
+   button tags every ancestor from the card up to <body> with
+   `data-print-ancestor`, adds `bw-printing` to <body>, and calls
+   `window.print()`. Both marks come off again on `afterprint`.
+
+   ── WHY THE ANCESTOR TAGS, AND NOT JUST `visibility: hidden` ──────────────
+   The obvious version — hide everything, un-hide the card — was BUILT AND
+   MEASURED FAILING. `visibility: hidden` leaves an element occupying its
+   space, so the sheet came out as several blank pages with the card wherever
+   its row happened to sit; and the card lives inside a `position: sticky`
+   wrapper, which is a POSITIONED ancestor, so `position: absolute; top: 0` on
+   the card resolved against that wrapper rather than the page and did not lift
+   it either.
+
+   So: everything that is neither the card, nor inside it, nor on the path down
+   to it is `display: none` — removed from the flow, not merely invisible — and
+   the path itself is flattened to plain blocks with no width, position,
+   overflow or chrome of their own. What prints is one card at the top of one
+   sheet, whatever depth of table it was nested in.
+
+   The chart is a recharts SVG carrying explicit width/height attributes sized
+   for the screen, so it is scaled to the printable column rather than clipped
+   at the margin. */
+@page {
+  size: A4;
+  margin: 14mm;
+}
+
+@media print {
+  body.bw-printing {
+    margin: 0 !important;
+    background: none !important;
+  }
+
+  body.bw-printing
+    *:not([data-print-ancestor]):not([data-print-card]):not([data-print-card] *) {
+    display: none !important;
+  }
+
+  /* The path from <body> down to the card: present, but contributing nothing
+     of its own — no width, no scroller, no sticky, no border, no background. */
+  body.bw-printing [data-print-ancestor] {
+    display: block !important;
+    position: static !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: none !important;
+    box-shadow: none !important;
+    transform: none !important;
+  }
+
+  body.bw-printing [data-print-card] {
+    width: 100% !important;
+    margin: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    animation: none !important;
+  }
+
+  /* Keep the tokens' colours on paper — a chart printed as grey boxes says
+     nothing, and the reader asked for the chart. */
+  body.bw-printing [data-print-card],
+  body.bw-printing [data-print-card] * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    animation: none !important;
+    transition: none !important;
+  }
+
+  body.bw-printing [data-print-card] svg {
+    max-width: 100% !important;
+    height: auto !important;
+  }
+
+  /* Controls do not print. */
+  body.bw-printing [data-print-card] [data-print-hide] {
+    display: none !important;
+  }
+
+  /* Nothing inside the card may scroll on paper. */
+  body.bw-printing [data-print-card] .overflow-x-auto,
+  body.bw-printing [data-print-card] .overflow-y-auto {
+    overflow: visible !important;
+  }
+
+  body.bw-printing [data-print-card] [data-print-block] {
+    break-inside: avoid;
+  }
+}

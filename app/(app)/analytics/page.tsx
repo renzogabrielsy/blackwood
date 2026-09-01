@@ -21,7 +21,7 @@
 
 import { getAnalyticsData } from "@/lib/analytics/queries";
 import type { AnalyticsData } from "@/lib/analytics/types";
-import type { Granularity } from "@/lib/analytics/matrix";
+import type { ComparisonMode, Granularity } from "@/lib/analytics/matrix";
 import { METRIC_BY_KEY, type MetricKey } from "@/lib/analytics/metrics";
 import { AnalyticsView } from "./analytics-view";
 import { AnalyticsError } from "./analytics-error";
@@ -45,6 +45,11 @@ function resolveGranularity(raw: Param): Granularity {
 function resolveYear(raw: Param, years: readonly number[], fallback: number): number {
   const v = Number(first(raw));
   return Number.isInteger(v) && years.includes(v) ? v : fallback;
+}
+
+/** What the second chip under every value shows. Defaults to the year-ago read. */
+function resolveComparison(raw: Param): ComparisonMode {
+  return first(raw) === "actual" ? "actual" : "yoy";
 }
 
 function resolveMetric(raw: Param): MetricKey | null {
@@ -95,6 +100,7 @@ export default async function AnalyticsPage({
         initialYear={resolveYear(params.year, data.years, data.defaultYear)}
         initialGranularity={resolveGranularity(params.g)}
         initialPerWorkingDay={first(params.wd) === "1"}
+        initialComparison={resolveComparison(params.cmp)}
         initialMetric={resolveMetric(params.metric)}
       />
     </div>

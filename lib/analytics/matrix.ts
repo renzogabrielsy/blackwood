@@ -227,6 +227,20 @@ export interface MatrixCell {
    * a reporting boundary is a fact about when reporting started.
    */
   deltaQuotable: boolean;
+  /**
+   * The SAME period-over-period change as `delta`, always expressed as the raw
+   * difference in the row's own unit — kilos, pesos, days, counts.
+   *
+   * OWNER FEEDBACK R1. The primary indicator under a value is always the
+   * period-over-period move; the SECOND chip is what the page-level Compare
+   * control switches, between the year-ago comparison and this. "Purchase
+   * volume rose 12.4%" and "purchase volume rose 214.8 t" are the same fact
+   * asked two ways, and which one is useful depends on the row.
+   *
+   * Null on a row whose `deltaMode` is already `abs` — the primary line IS the
+   * actual change there, and printing it twice is noise, not a second reading.
+   */
+  deltaAbs: Change | null;
   /** Change against the same period one year earlier. Null in the YEAR view — it would repeat `delta`. */
   yoy: Change | null;
   /** The same rule for the year-ago comparison. */
@@ -495,11 +509,41 @@ function foldPeriod(
   };
 }
 
+/**
+ * WHAT THE SECOND CHIP UNDER A VALUE SHOWS (owner feedback R1).
+ *
+ * The FIRST indicator is always the period-over-period move and is not
+ * switchable — it is the question the page is built around. This control only
+ * decides what rides beside it: the same period a year earlier, or the same
+ * move again as a raw amount in the row's own unit.
+ */
+export type ComparisonMode = "yoy" | "actual";
+
+export const COMPARISON_MODES: readonly {
+  key: ComparisonMode;
+  label: string;
+  title: string;
+}[] = [
+  {
+    key: "yoy",
+    label: "YoY %",
+    title: "Second chip: the same period one year earlier, as a percentage.",
+  },
+  {
+    key: "actual",
+    label: "Δ actual",
+    title:
+      "Second chip: the change against the previous column as a real amount — tonnes, pesos, days — instead of a percentage.",
+  },
+];
+
 /** One visual band of the matrix, with the rows that belong to it. */
 export interface MatrixSection {
   key: MetricSection;
   label: string;
   hint: string;
+  /** The band's accent colour — a CSS var reference, applied as a left rule. */
+  accent: string;
   rows: MatrixRow[];
 }
 
@@ -525,6 +569,7 @@ export function groupBySection(
       key: s.key,
       label: s.label,
       hint: s.hint,
+      accent: s.accent,
       rows: rows.filter((r) => r.metric.section === s.key),
     }))
     .filter((s) => s.rows.length > 0);
@@ -620,6 +665,8 @@ export function buildMatrix(
         annotation: anns[i],
         calloutable: quotable(i),
         delta: change(raw.value, prev, spec.deltaMode),
+        deltaAbs:
+          spec.deltaMode === "abs" ? null : change(raw.value, prev, "abs"),
         deltaQuotable: i > 0 && quotable(i - 1),
         yoy:
           yoyIdx === undefined
@@ -692,6 +739,13 @@ export function buildMatrix(
             // A summary column has no "previous column" in view; the honest
             // comparison for a full year IS the year before it.
             delta: null,
+            // A summary column has no previous column, so its "actual change"
+            // is the same year-on-year comparison its chip already makes —
+            // expressed in the row's own unit rather than as a percentage.
+            deltaAbs:
+              spec.deltaMode === "abs"
+                ? null
+                : change(totalRaw.value, priorTotalRaw?.value ?? null, "abs"),
             deltaQuotable: false,
             yoy: change(totalRaw.value, priorTotalRaw?.value ?? null, spec.deltaMode),
             yoyQuotable: false,

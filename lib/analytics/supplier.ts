@@ -450,17 +450,15 @@ export const SUPPLIER_DICTIONARY: Record<SupplierFigureKey, SupplierFigure> = {
     label: "Supplier volume",
     sublabel: "tonnes bought",
     dictionary: {
-      definition:
-        "How much charcoal one supplier actually sold us in a month, and across the year.",
+      definition: "How much charcoal one supplier sold us in a month, and across the year.",
       basis:
-        "The sum of the delivered weights on that supplier's market deliveries. A supplier is the canonical name, so the different spellings of one seller — and the joint-vendor entries — are ONE supplier here, not several.",
+        "Their market deliveries, added up. A supplier is the canonical name, so every spelling of one seller counts once.",
       exclusions:
-        "Our own charcoal coming back from sun-drying, and anything re-cooked or re-fed, are not purchases and are left out of the kilos entirely. Returning material is reported separately, as a returns figure, and is never added to what a supplier sold.",
-      rollup:
-        "The year column is a plain sum of the months — a volume is the one thing that is honestly additive.",
+        "Sun-dried returns and re-cooks. We already paid for those kilos once; they ride separately as a returns figure.",
+      rollup: "The year column is a plain sum of the months.",
       source: "view_analytics_supplier_monthly.kg",
       caveat:
-        "The Σ market footer row is the monthly matrix's own Purchase volume figure, carried through the same join — so the supplier breakdown and the matrix above can never disagree about a month's kilos.",
+        "The Σ market row is the KPI matrix's own Purchase volume figure, not a sum of the rows above it, so the two cannot disagree.",
     },
   },
   share_of_month: {
@@ -468,13 +466,13 @@ export const SUPPLIER_DICTIONARY: Record<SupplierFigureKey, SupplierFigure> = {
     sublabel: "% of everything bought",
     dictionary: {
       definition:
-        "What proportion of everything the plant bought that month came from this one supplier.",
+        "What proportion of everything bought that month came from this one supplier.",
       basis:
-        "Their kilos ÷ the month's total market kilos, where the denominator is read straight from the monthly analytics view rather than re-added here.",
+        "Their kilos ÷ the month's total market kilos, with the denominator read from the monthly view rather than re-added here.",
       exclusions:
-        "Sun-drying returns are in neither half of the fraction, so a supplier whose material merely came back cannot claim a share of a month's purchases.",
+        "Sun-dried returns are in neither half, so a supplier whose material merely came back cannot claim a share.",
       rollup:
-        "The year share is the year's kilos over the year's market kilos — a weighted figure by construction, never the average of twelve monthly percentages.",
+        "The year share is the year's kilos over the year's market kilos, never the average of twelve monthly percentages.",
       source: "view_analytics_supplier_monthly.share_of_month_pct",
     },
   },
@@ -483,17 +481,16 @@ export const SUPPLIER_DICTIONARY: Record<SupplierFigureKey, SupplierFigure> = {
     sublabel: "top-1 / top-3 share",
     dictionary: {
       definition:
-        "How much of our supply comes from the biggest one, and the biggest three, sellers — the dependency question.",
+        "How much of our supply comes from the biggest one, and the biggest three, sellers.",
       basis:
-        "The year's kilos from the top-ranked supplier (and from the top three added together) over the year's total market kilos.",
+        "The year's kilos from the top seller (and from the top three together) over the year's total market kilos.",
       exclusions:
-        "Suppliers with no purchase in the year are not counted as sellers, however much of their material came back from drying.",
-      rollup:
-        "Ranking is by kilos bought over the whole displayed year, not an average of the monthly rankings.",
+        "A supplier who bought nothing in the year is not counted as a seller, however much of their material came back from drying.",
+      rollup: "Ranked by kilos over the whole year, not by averaging monthly rankings.",
       source:
         "view_analytics_supplier_monthly.kg_rank_in_month / cumulative_share_pct",
       caveat:
-        "This is a magnitude, not a verdict. Nothing on this page turns amber or red because a share is high — the plan withholds threshold colouring until real targets are stated.",
+        "A magnitude, not a verdict. Nothing here turns amber because a share is high.",
     },
   },
   premium: {
@@ -501,19 +498,19 @@ export const SUPPLIER_DICTIONARY: Record<SupplierFigureKey, SupplierFigure> = {
     sublabel: "₱/kg vs the market",
     dictionary: {
       definition:
-        "Whether we paid a supplier more or less than the going rate that month — their weighted price minus the month's overall market price. POSITIVE means we paid them ABOVE market.",
+        "Whether we paid a supplier above or below the going rate that month. Positive means above market.",
       basis:
-        "Their total pesos ÷ their total priced kilos, minus the month's own published market price. Both sides count only truckloads that already carry a price.",
+        "Their weighted price minus the month's own market price. Both sides count only truckloads that already carry a price.",
       exclusions:
-        "A truckload still awaiting its price is in neither half of either average, rather than being counted as free. The figure is left BLANK — never shown as zero — when either side has no priced kilos, because “we do not know yet” is not the same answer as “exactly at market”.",
+        "A truckload still awaiting its price is in neither average. The figure is blank, never zero, when a side has no priced kilos — \u201Cwe do not know yet\u201D is not \u201Cexactly at market\u201D.",
       rollup:
-        "Averaged across suppliers or months it is ALWAYS weighted by priced kilos. Weighted that way it comes to zero every month by construction, because the market price IS the kilo-weighted average of the supplier prices. An unweighted average of this column is meaningless and the page never offers one.",
+        "Always weighted by priced kilos. Weighted that way it comes to zero every month by construction, because the market price IS the kilo-weighted average of the supplier prices. There is no unweighted average anywhere on this page.",
       source: "view_analytics_supplier_monthly.premium_php_kg",
       // ₱-FREE ON PURPOSE. This card renders for every role, including the
       // one the server withholds prices from, so a worked example with a real
       // peso figure in it would be a price leak dressed as documentation.
       caveat:
-        "The big sellers sit near market BY CONSTRUCTION — once the top two are three quarters of the volume, they largely are the market average, so their premium is small whatever they charge. The spread lives at the bottom of the book, where a single month can separate the dearest and the cheapest seller by several pesos a kilo. And every row is measured against the months THAT supplier sold in, never against the year, so a seller who only appeared while charcoal was dear can look expensive against the year and still read as a discount.",
+        "The big sellers sit near market by construction — once the top two are three quarters of the volume they largely ARE the average. The spread lives at the bottom of the book. And every row is measured against the months that supplier sold in, never the whole year.",
     },
   },
   sundry_returns: {
@@ -521,15 +518,15 @@ export const SUPPLIER_DICTIONARY: Record<SupplierFigureKey, SupplierFigure> = {
     sublabel: "tonnes, traceability only",
     dictionary: {
       definition:
-        "Kilos of our OWN charcoal that came back into the yard after sun-drying, carrying this supplier's name — the name says where it originally came from, not that anyone sold it to us again.",
+        "Our OWN charcoal coming back after sun-drying, carrying this supplier's name. The name says where it came from originally, not that anyone sold it to us again.",
       basis:
-        "The sum of delivered weights on sundry-class deliveries, after stripping the batch suffix the sundry entries carry (“Layupan - JAN-26-BLK9”) and folding the result through the same canonical supplier name.",
+        "Sundry-class deliveries, with the batch suffix stripped and the name folded through the same canonical rule.",
       exclusions:
-        "It is excluded from the supplier's kilos, share, rank, price and premium — every other figure on the row. We already paid for those kilos once; counting them again would inflate the tonnage and drag the average price toward the recovery price.",
+        "It is out of the supplier's kilos, share, rank, price and premium — every other figure on the row. Counting it twice would inflate the tonnage and drag the price toward the recovery price.",
       rollup: "A plain sum, and it never joins the purchase totals.",
       source: "view_analytics_supplier_monthly.sundry_origin_kg",
       caveat:
-        "A supplier can appear with zero purchased kilos in a year where only their returning material moved — SEVILLA in 2026 is exactly that, 140.6 t back and nothing bought. Those rows are always shown, because a purchase-only view would have rendered that as absence.",
+        "A supplier can appear with nothing bought in a year where only their returning material moved — SEVILLA in 2026, 140.6 t back and no sale. Those rows are always shown.",
     },
   },
   explorer: {
@@ -537,17 +534,15 @@ export const SUPPLIER_DICTIONARY: Record<SupplierFigureKey, SupplierFigure> = {
     sublabel: "the three-line story",
     dictionary: {
       definition:
-        "The measured relationship between what charcoal cost, how much of it we bought, and how many different sellers turned up.",
-      basis:
-        "All three lines are the monthly analytics view's own published figures — market price, market kilos and distinct market sellers — for the selected year.",
+        "What charcoal cost, how much we bought, and how many different sellers turned up — the three, together.",
+      basis: "All three lines are the monthly view's own published figures for the year.",
       // ₱-FREE ON PURPOSE — see the premium entry's note above.
       exclusions:
-        "Sun-drying returns and re-cooks are excluded from all three, which matters: counting them made April 2026 look like 7 sellers when only 4 of them actually sold us anything, and pulled that month's price down with kilos we had already bought once.",
-      rollup:
-        "None — every point is one month as published. Nothing here is aggregated.",
+        "Sun-dried returns and re-cooks are out of all three. Counting them made April 2026 read 7 sellers when only 4 sold us anything.",
+      rollup: "None. Every point is one month, exactly as published.",
       source: "view_analytics_rcin_monthly",
       caveat:
-        "Read this as an observation, never as a cause. The dear months of early 2026 drew about three times the sellers the cheap summer did, but the chart shows the association and cannot tell you which way it runs.",
+        "An observation, never a cause. The dear months of early 2026 drew about three times the sellers the cheap summer did; the chart cannot tell you which way that runs.",
     },
   },
 };

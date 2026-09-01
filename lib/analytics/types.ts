@@ -607,8 +607,11 @@ export interface AnalyticsData {
    * scroll to its right edge and land on the current one). 32 rows today.
    */
   campaigns: CampaignCost[];
-  /** The LIVE aging watchlist + its SQL-owned headline. */
-  watchlist: AgingWatchlist;
+  // OWNER FEEDBACK R1 (2026-09-01): `watchlist: AgingWatchlist` was here and
+  // was REMOVED with the section that rendered it. `AgingWatchItem` and
+  // `AgingWatchlist` above are deliberately kept — the view still exists, and
+  // `aging-watchlist.tsx` still compiles against them, so restoring the block
+  // is one read and one JSX element rather than a rewrite.
   /** P3 — the supplier room's (month × supplier) rows, all history. */
   suppliers: SupplierData;
   /** P4 — the (month × grade) rows behind the grade mix, all history. */

@@ -42,22 +42,29 @@
 import type { AnalyticsMonth } from "./types";
 
 /**
- * The twelve Phase-1 rows + the eight Phase-2 money rows + the six Phase-4
- * production rows, in display order.
+ * The eight volume rows + the eight money rows + the six production rows, in
+ * display order.
+ *
+ * ── OWNER FEEDBACK ROUND 1 (2026-09-01) — FOUR ROWS RETIRED ─────────────
+ * Renzo read the live page and cut `sundry_reentry`, `runway`,
+ * `active_batches` and `working_days`: none of them was a number he acts on,
+ * and twelve rows in the volume band was a wall. **Only the ROWS went.** Every
+ * underlying field still crosses the wire and is still read elsewhere —
+ * `workingDays` is the divisor behind the per-working-day toggle (which is why
+ * that toggle keeps working with its row gone), and the sundry kilos are the
+ * supplier room's ↩ column. Nothing in SQL changed.
+ *
+ * `active_suppliers` was on that list and Renzo put it back — it stays.
  */
 export type MetricKey =
   | "market_price"
   | "purchase_volume"
   | "active_suppliers"
-  | "sundry_reentry"
   | "rc_in_total"
   | "rc_out"
   | "net_flow"
   | "ending_inventory"
   | "inventory_value"
-  | "runway"
-  | "active_batches"
-  | "working_days"
   // ── P2, the money layer ──────────────────────────────────────────
   | "delivered_fed_price"
   | "php_per_produced"
@@ -82,27 +89,57 @@ export type MetricKey =
  */
 export type MetricSection = "flow" | "money" | "production";
 
+/**
+ * The five reading blocks of the page and the accent each one wears.
+ *
+ * `accentVar` names a custom property declared in `globals.css` (both themes).
+ * It is applied INLINE as `--bw-accent` so a component can wear a section's
+ * colour without a dynamic Tailwind class — and it is only ever a RULE or a
+ * label tint, never a background on a frozen pane, which must stay opaque.
+ *
+ * Aesthetic identity only: a section colour says where you are, it never says
+ * a number is good or bad. The page still has no threshold semantics.
+ */
+export type SectionAccentKey =
+  | "flow"
+  | "money"
+  | "campaigns"
+  | "suppliers"
+  | "production";
+
+export const SECTION_ACCENT: Record<SectionAccentKey, string> = {
+  flow: "var(--bw-sec-flow)",
+  money: "var(--bw-sec-money)",
+  campaigns: "var(--bw-sec-campaigns)",
+  suppliers: "var(--bw-sec-suppliers)",
+  production: "var(--bw-sec-production)",
+};
+
 export const SECTIONS: readonly {
   key: MetricSection;
   label: string;
   hint: string;
+  accent: string;
 }[] = [
   {
     key: "flow",
     label: "Volume & stock",
-    hint: "What moved through the yard and what was left standing in it.",
+    hint: "What moved through the yard, and what was left standing in it.",
+    accent: SECTION_ACCENT.flow,
   },
   {
     key: "money",
     label: "Money",
     hint:
-      "What the charcoal we fed actually cost — on arrival, and again after the weight it lost while it sat. Calendar basis; the campaign basis is in the panel below.",
+      "What the charcoal we fed cost — on arrival, and again after the weight it lost sitting. Calendar months; the campaign view is the panel below.",
+    accent: SECTION_ACCENT.money,
   },
   {
     key: "production",
     label: "Production",
     hint:
-      "What the plant made, how long it stood still, and what it burned doing it. Measured against production's OWN reported days, never the yard's working days — and there is no ₱ anywhere in this band.",
+      "What the plant made, how long it stood still, and what it burned doing it. No ₱ anywhere in this band.",
+    accent: SECTION_ACCENT.production,
   },
 ];
 
@@ -339,17 +376,13 @@ const FLOW_METRICS: readonly Omit<MetricSpec, "section">[] = [
     avgColor: "var(--chart-3)",
     decimals: 2,
     dictionary: {
-      definition:
-        "What a kilo of bought charcoal cost us on average, for the month.",
-      basis:
-        "Total pesos paid ÷ total kilos priced — a weighted average, never the average of the daily prices.",
+      definition: "What a kilo of bought charcoal cost us, on average, that month.",
+      basis: "Total pesos paid ÷ total kilos priced. Weighted, not an average of averages.",
       exclusions:
-        "Our own charcoal returning from sun-drying and anything re-cooked or re-fed are left out: we already paid for those kilos once, and the peso figure on a re-cook is a token processing fee, not a market price. A truckload still waiting on its price is left out of BOTH halves of the sum rather than counted as free.",
-      rollup:
-        "A quarter or a year is total-pesos ÷ total-kilos across its months — never the mean of the monthly prices.",
+        "Sun-dried returns and re-cooks: we already paid for those kilos once. A truckload still waiting on its price is out of both halves, never counted as free.",
+      rollup: "A quarter or a year is total pesos ÷ total kilos, not the mean of the months.",
       source: "view_analytics_rcin_monthly.market_avg_price",
-      caveat:
-        "Price coverage reads 100% on every month today — every delivery in the table is priced. The coverage figure is structural honesty for the next time the price file lags, not a live alarm.",
+      caveat: "Every delivery on record is priced today, so coverage reads 100%.",
     },
   },
   {
@@ -367,10 +400,10 @@ const FLOW_METRICS: readonly Omit<MetricSpec, "section">[] = [
     avgColor: "var(--chart-4)",
     decimals: 1,
     dictionary: {
-      definition: "How much charcoal we actually BOUGHT that month.",
-      basis: "The sum of the delivered weights on market-class deliveries.",
+      definition: "How much charcoal we actually bought that month.",
+      basis: "The delivered weights on market deliveries, added up.",
       exclusions:
-        "Sun-drying returns and re-cooked material are excluded — counting them would book the same kilos twice. They are reported on their own rows.",
+        "Sun-dried returns and re-cooks. Counting them would book the same kilos twice.",
       rollup: "Quarters and years are plain sums of their months.",
       source: "view_analytics_rcin_monthly.market_kg",
     },
@@ -390,39 +423,13 @@ const FLOW_METRICS: readonly Omit<MetricSpec, "section">[] = [
     avgColor: "var(--chart-3)",
     decimals: 0,
     dictionary: {
-      definition:
-        "How many different suppliers actually sold to us that month — the participation half of the price story.",
-      basis:
-        "Distinct suppliers on market deliveries, after folding the spelling variants together.",
+      definition: "How many different suppliers actually sold to us that month.",
+      basis: "Distinct suppliers on market deliveries, spelling variants folded together.",
       exclusions:
-        "A sun-drying return carries its origin supplier's name but is not a sale, so it does not make that supplier active.",
+        "A sun-dried return carries its origin supplier's name but is not a sale, so it does not make them active.",
       rollup:
-        "A quarter or a year shows its BUSIEST MONTH's count, not the distinct sellers over the whole period — that is not derivable from monthly counts without double-counting anyone who sold twice. Labelled as a peak, never presented as a total.",
+        "A quarter or a year shows its BUSIEST MONTH, not the distinct sellers across the period — monthly counts cannot be added without double-counting anyone who sold twice.",
       source: "view_analytics_rcin_monthly.active_suppliers",
-    },
-  },
-  {
-    key: "sundry_reentry",
-    label: "Sundry re-entry",
-    sublabel: "tonnes",
-    unit: "tonnes",
-    rollup: "sum",
-    read: (m) => t(m.sundryReentryKg),
-    deltaMode: "pct",
-    perWorkingDay: true,
-    price: false,
-    chart: "bar",
-    color: "var(--chart-5)",
-    avgColor: "var(--chart-3)",
-    decimals: 1,
-    dictionary: {
-      definition:
-        "Our own charcoal coming back into the yard after sun-drying — a recovery figure, not a purchase.",
-      basis: "The sum of delivered weights on sundry-class deliveries.",
-      exclusions:
-        "A delivery filed on a sundry batch but remarked FOR SUNDRYING is fresh charcoal on its way OUT to dry, so it counts as a market purchase instead.",
-      rollup: "Quarters and years are plain sums of their months.",
-      source: "view_analytics_rcin_monthly.sundry_reentry_kg",
     },
   },
   {
@@ -441,10 +448,10 @@ const FLOW_METRICS: readonly Omit<MetricSpec, "section">[] = [
     decimals: 1,
     dictionary: {
       definition:
-        "Everything that physically rolled through the gate — bought, returned from drying and re-cooked alike.",
-      basis: "The sum of every delivery's weight for the month.",
+        "Everything that rolled through the gate — bought, returned from drying and re-cooked alike.",
+      basis: "Every delivery's weight for the month, added up.",
       exclusions:
-        "Nothing. The yard does not care who owned the kilos; the purchase question is the Purchase volume row's job.",
+        "Nothing. The yard does not care who owned the kilos; Purchase volume is the row that does.",
       rollup: "Quarters and years are plain sums of their months.",
       source: "view_analytics_flow_monthly.in_kg",
     },
@@ -466,12 +473,12 @@ const FLOW_METRICS: readonly Omit<MetricSpec, "section">[] = [
     dependsOn: ["outflow"],
     dictionary: {
       definition: "Everything fed to the plant that month.",
-      basis: "The sum of every feeding's weight.",
+      basis: "Every feeding's weight, added up.",
       exclusions: "Nothing.",
       rollup: "Quarters and years are plain sums of their months.",
       source: "view_analytics_flow_monthly.out_kg",
       caveat:
-        "Feedings were only recorded from January 2024. Months before that are BLANK here, never zero — a structural zero would sum into a quarter and a year as if the plant had fed nothing.",
+        "Feedings were only written down from January 2024. Earlier months are blank, never zero — a zero would sum into a year as if the plant had fed nothing.",
     },
   },
   {
@@ -492,22 +499,55 @@ const FLOW_METRICS: readonly Omit<MetricSpec, "section">[] = [
     dependsOn: ["outflow"],
     dictionary: {
       definition:
-        "Did the pile grow or shrink that month. Positive means we built stock; negative means we ate into it.",
+        "Did the pile grow or shrink. Positive means we built stock; negative means we ate into it.",
       basis: "Everything in, minus everything fed.",
       exclusions: "Nothing.",
       rollup: "Quarters and years are plain sums of their months.",
       source: "view_analytics_flow_monthly.net_kg",
-      caveat:
-        "Blank before January 2024, for the same reason RC OUT is: half the subtraction did not exist yet.",
+      caveat: "Blank before January 2024 — half the subtraction did not exist yet.",
     },
   },
   {
     key: "ending_inventory",
     label: "Ending inventory",
-    sublabel: "tonnes",
+    sublabel: "tonnes on hand",
     unit: "tonnes",
     rollup: "periodEnd",
-    read: (m) => t(m.endingKg),
+    // ── OWNER FEEDBACK R1: the OPEN-PILES basis ─────────────────────────
+    // This row has now been wrong in two directions, and the second one is
+    // the instructive one.
+    //
+    // It began on `endingKg`, the NET of every batch balance: 8,492 t against
+    // a Blocking screen reading 10,000+. Renzo: "kind of a weird basis." It
+    // is — the net silently subtracts ~3,200 t of BOOKKEEPING, batches
+    // carrying a negative balance because charcoal was fed out under one
+    // spelling of a name whose arrival was booked under another. Nothing
+    // evaporated.
+    //
+    // The first fix over-corrected to `positiveBalanceKg` (11,707.9 t), which
+    // bounces off Renzo's anchor from the OTHER side, because it folds in
+    // 1,214.6 t of CLOSED-BLOCK RESIDUE. Per the project's standing resiko
+    // doctrine that residue is LOSS — weight that evaporated in the yard and
+    // is still logged — never stock anyone can walk out and use. A stock row
+    // that counts it is not a stock row.
+    //
+    // So the headline is `openKg`: every pile with a positive balance that
+    // was NOT YET CLOSED at that month-end. Two properties make it the right
+    // one rather than merely the closest:
+    //   • it is Renzo's own anchor — `view_blocking_grid`'s population;
+    //   • it is AS-OF, not a snapshot of today. `view_analytics_aging_eom`
+    //     tests `close_date IS NULL OR close_date > as_of_date`, so a block
+    //     closed last week still counts in the months it was open. A
+    //     current-`status` rule would have retroactively emptied history.
+    // Measured: non-null and non-zero on all 75 months of the spine, so the
+    // row can never go structurally blank.
+    //
+    // Tie, 2026-09-01: 10,493,304 kg here − 18,650 kg (the L-042
+    // AUGUST-26-FEED2 phantom, which carries no `location_ref` and so has no
+    // cell in the 220-slot grid) = 10,474,654 kg — `view_blocking_grid`'s
+    // grand total to the kilo. Both the residue and the phantom are printed
+    // in the row's expand rather than quietly netted away.
+    read: (m) => t(m.openKg),
     deltaMode: "pct",
     perWorkingDay: false,
     price: false,
@@ -517,15 +557,15 @@ const FLOW_METRICS: readonly Omit<MetricSpec, "section">[] = [
     decimals: 1,
     dictionary: {
       definition:
-        "How much charcoal we were holding when the month closed. Nothing is snapshotted — it is rebuilt from the delivery and feeding records themselves, so correcting an old record correctly restates history.",
-      basis: "Everything in, minus everything out, per batch, as of month-end.",
+        "How much usable charcoal was standing in the yard when the month closed — the same piles the Blocking screen counts.",
+      basis:
+        "Every still-open pile with a positive balance, added up. Rebuilt from the delivery and feeding rows, never snapshotted, so correcting an old record correctly restates an old month.",
       exclusions:
-        "Nothing is excluded — but read the split in the row's expand. This is a NET.",
-      rollup:
-        "A quarter or a year shows the value at the PERIOD END, not a sum: a stock level is not additive.",
-      source: "view_analytics_inventory_eom.ending_kg",
+        "Closed-block residue — about 1,215 t of weight that evaporated but is still logged. It is loss, not stock. Piles with a negative balance are also out: they are bookkeeping, not missing charcoal.",
+      rollup: "A quarter or a year shows the month-end level. A stock is not additive.",
+      source: "view_analytics_aging_eom.open_kg",
       caveat:
-        "The total nets roughly −3,200 t spread over 77 batches carrying a negative balance. Those kilos are real and in the yard — they were fed out under one batch name while their arrival was booked under a different spelling of it. Misattribution, not evaporation. The split is in the row's expand.",
+        "Whether a pile was open is judged as of THAT month-end, not today, so closing a block this week does not empty last year. It ties to the Blocking grand total bar one pile — AUGUST-26-FEED2, 18.7 t, which has no block location and so has no cell in the grid.",
     },
   },
   {
@@ -546,90 +586,22 @@ const FLOW_METRICS: readonly Omit<MetricSpec, "section">[] = [
       definition:
         "What the charcoal on hand had COST us at month-end — not what it would fetch.",
       basis:
-        "Each pile's remaining kilos priced at that pile's own weighted average purchase cost, summed.",
+        "Each pile's remaining kilos priced at that pile's own average purchase cost, added up over every pile with a positive balance.",
       exclusions:
-        "Only piles with a POSITIVE balance are valued, so this figure pairs with the positive half of the stock, never with the net total. It does not yet include the extra cost of charcoal that shrank while it sat — that is a later layer, and mixing the two would make a third definition of what a kilo cost.",
-      rollup: "The PERIOD-END month's value. A stock value is not additive.",
+        "It does not include the extra cost of charcoal that shrank while it sat — that is the True ₱/kg row. Piles with a negative balance are out.",
+      rollup: "The month-end value. A stock value is not additive.",
       source: "view_analytics_inventory_eom.ending_value_php",
-    },
-  },
-  {
-    key: "runway",
-    label: "Runway",
-    sublabel: "working days",
-    unit: "days",
-    rollup: "periodEnd",
-    read: (m) => m.runwayDays,
-    deltaMode: "abs",
-    perWorkingDay: false,
-    price: false,
-    chart: "line",
-    color: "var(--chart-3)",
-    avgColor: "var(--chart-4)",
-    decimals: 1,
-    dependsOn: ["outflow"],
-    dictionary: {
-      definition:
-        "The plain survival number: at the rate we fed the plant that month, how many working days the pile on hand would last.",
-      basis: "Month-end stock ÷ that month's average feeding per working day.",
-      exclusions: "Nothing.",
-      rollup:
-        "The PERIOD-END month's figure — a runway is a state, not something you add up.",
-      source: "view_analytics_inventory_eom.runway_days",
+      // ── THE ONE PLACE THE TWO STOCK ROWS DO NOT AGREE, SAID OUT LOUD ──
+      // The Ending inventory row above moved to the OPEN-PILES basis in owner
+      // feedback R1; this row still values every POSITIVE balance, closed
+      // blocks included, because `view_analytics_inventory_eom` has no notion
+      // of a close date at all — it derives balances from `batch_code` deltas
+      // and never joins `batches`. Making the two agree is a new SQL column,
+      // not a client-side division, and inventing one here would be a second
+      // definition of what a kilo cost. So the gap is DISCLOSED and measured
+      // rather than papered over.
       caveat:
-        "Blank before January 2024: without a recorded feeding rate there is no denominator.",
-    },
-  },
-  {
-    key: "active_batches",
-    label: "Active batches",
-    sublabel: "piles > 500 kg",
-    unit: "count",
-    rollup: "periodEnd",
-    read: (m) => m.activeBatches,
-    deltaMode: "abs",
-    perWorkingDay: false,
-    price: false,
-    chart: "bar",
-    color: "var(--chart-1)",
-    avgColor: "var(--chart-3)",
-    decimals: 0,
-    dictionary: {
-      definition:
-        "How many piles were actually holding stock at month-end.",
-      basis: "Batches whose rebuilt balance was above 500 kg.",
-      exclusions:
-        "Anything at or below 500 kg — rounding dust and closed-out residue, not a pile anyone would walk out to look at.",
-      rollup: "The PERIOD-END month's count. A count of what exists is not additive.",
-      source: "view_analytics_inventory_eom.active_batches",
-      caveat:
-        "This is a count of BATCHES, not of warehouse blocks. How many of the 220 blocks were occupied in a past month is not reconstructable — a batch only records where it is now — so block occupancy is shown live, beside the matrix, and never as history.",
-    },
-  },
-  {
-    key: "working_days",
-    label: "Working days",
-    sublabel: "days active",
-    unit: "days",
-    rollup: "sum",
-    read: (m) => m.workingDays,
-    deltaMode: "abs",
-    perWorkingDay: false,
-    price: false,
-    chart: "bar",
-    color: "var(--chart-5)",
-    avgColor: "var(--chart-3)",
-    decimals: 0,
-    dictionary: {
-      definition:
-        "Days the site actually did something — a delivery arrived, charcoal was fed, or a production shift was reported.",
-      basis:
-        "Measured from what happened, not from a calendar or a roster. It typically lands at 22–27 days against a 28–31 day month, which is a six-day week with rest days.",
-      exclusions: "Rest days, and any day nothing was recorded.",
-      rollup: "Quarters and years are plain sums of their months.",
-      source: "view_analytics_flow_monthly.working_days",
-      caveat:
-        "One blind spot: a day the whole site was down looks exactly like a rest day. Nothing in the database records intent since the shift plan was retired.",
+        "This values a slightly wider set of piles than the row above: it still includes closed-block residue, which is 8.19% of the figure today (₱34.75M of ₱424.33M). Read it as the cost of everything still on the books, not of the open piles alone.",
     },
   },
 ] as const;
@@ -646,8 +618,12 @@ const FLOW_METRICS: readonly Omit<MetricSpec, "section">[] = [
 const MONEY_METRICS: readonly Omit<MetricSpec, "section">[] = [
   {
     key: "delivered_fed_price",
-    label: "Delivered ₱/kg fed",
-    sublabel: "arrival cost",
+    // ── OWNER FEEDBACK R1: renamed. "Delivered ₱/kg fed" was the SQL column
+    // read out loud. Renzo's own words for it: "the price of the charcoal when
+    // it arrived at the block." The key is unchanged, so every `?metric=` deep
+    // link still resolves, and "True price" keeps its name.
+    label: "Block price",
+    sublabel: "₱/kg on arrival",
     unit: "php_per_kg",
     rollup: "weighted",
     read: (m) => m.deliveredPhpKgFedCovered,
@@ -664,22 +640,21 @@ const MONEY_METRICS: readonly Omit<MetricSpec, "section">[] = [
     dependsOn: ["outflow"],
     dictionary: {
       definition:
-        "What the charcoal we actually FED cost us on the day it arrived at the gate — the same monthly figure the RC Movement screen shows, so the two can never disagree.",
+        "The price of the charcoal when it arrived at the block — for the charcoal we actually fed that month.",
       basis:
-        "Total pesos paid for the kilos fed ÷ those kilos. A weighted average, never the mean of the daily prices.",
+        "Pesos paid for the kilos fed ÷ those kilos. The same figure the RC Movement screen shows, so the two cannot disagree.",
       exclusions:
-        "Some kilos were fed out of piles with no delivery record at all — old pre-system stock, and the misfiled 'FEEDING # 2' pile — and those kilos carry no price. They are left out of BOTH halves of the sum rather than counted as free, so the figure speaks only for the kilos it can actually price.",
-      rollup:
-        "A quarter or a year is total-pesos ÷ total-kilos-fed across its months — never the mean of the monthly prices.",
+        "Kilos fed out of piles with no delivery record — old pre-system stock, and the misfiled FEEDING # 2 pile. They carry no price, so they are out of both halves rather than counted as free.",
+      rollup: "A quarter or a year is total pesos ÷ total kilos fed, not the mean of the months.",
       source: "view_analytics_cost_monthly.delivered_php_kg_fed_covered",
       caveat:
-        "Seven months are short of full price coverage and are marked with a ~. Early 2024 is the worst — March 2024 can price only 1.6% of what it fed — and August 2026 is 97.3% because of the 18,650 kg phantom pile. On those months this row shows the price of the kilos it CAN trace, which is the honest answer; the raw published figure for March 2024 would be a tiny fraction of the real one.",
+        "Seven months cannot price everything they fed and are marked ~. March 2024 can price 1.6% of it; August 2026 is 97.3%. Those cells show the price of the kilos we CAN trace, which is the honest answer.",
     },
   },
   {
     key: "php_per_produced",
     label: "₱ per produced kg",
-    sublabel: "arrival basis",
+    sublabel: "block-price basis",
     unit: "php_per_kg",
     rollup: "weighted",
     read: (m) => m.phpPerProducedKg ?? m.phpPerProducedKgCovered,
@@ -696,16 +671,16 @@ const MONEY_METRICS: readonly Omit<MetricSpec, "section">[] = [
     dependsOn: ["outflow", "production"],
     dictionary: {
       definition:
-        "The owner number: what ONE KILO of finished product cost us in raw charcoal that month.",
+        "The owner number: what one kilo of finished product cost us in raw charcoal that month.",
       basis:
-        "The month's charcoal bill ÷ the kilos of product that came out. Identically, the fed price divided by the yield — a low yield makes every produced kilo carry more charcoal.",
+        "The month's charcoal bill ÷ the kilos of product that came out. Same thing as block price ÷ yield — a poor yield makes every produced kilo carry more charcoal.",
       exclusions:
-        "Only the charcoal. No labour, no power, no bags, no depreciation. And it uses the ARRIVAL price: the extra cost of the weight charcoal loses while it sits is not in here, because that is only final once a block closes — it is in the True ₱/kg row below and in the campaign panel.",
+        "Charcoal only: no labour, power, bags or depreciation. It is on the BLOCK PRICE, so the weight lost while the charcoal sat is not in here — that is the True ₱/kg row below.",
       rollup:
-        "A quarter or a year is total charcoal bill ÷ total kilos produced across its months — never the mean of the monthly figures.",
+        "A quarter or a year is total charcoal bill ÷ total kilos produced, not the mean of the months.",
       source: "view_analytics_cost_monthly.php_per_produced_kg",
       caveat:
-        "Production has only been reported since November 2025, so this row is blank before then — blank, never zero. November 2025 itself covers only part of the month and reads implausibly high — a reporting boundary rather than a real cost — so it is excluded from every headline on this page. Months where the fed price cannot cover all the kilos are marked ~ and show the honest estimate rather than the naive published figure.",
+        "Blank before November 2025, when production reporting started. November itself is a part-month and reads absurdly high, so it is kept out of every headline on this page.",
     },
   },
   {
@@ -731,14 +706,12 @@ const MONEY_METRICS: readonly Omit<MetricSpec, "section">[] = [
       definition:
         "How much finished product came out of every hundred kilos of charcoal fed in.",
       basis:
-        "Kilos produced ÷ kilos fed, for the month. The change under a cell is in percentage POINTS, not a percentage of a percentage.",
-      exclusions:
-        "Nothing. Everything fed is in the denominator and everything produced is in the numerator, whichever pile or grade it came from.",
-      rollup:
-        "A quarter or a year is total produced ÷ total fed across its months — never the mean of the monthly yields.",
+        "Kilos produced ÷ kilos fed. The change under a cell is in percentage POINTS, not a percentage of a percentage.",
+      exclusions: "Nothing — every pile and every grade is in it.",
+      rollup: "A quarter or a year is total produced ÷ total fed, not the mean of the months.",
       source: "view_analytics_cost_monthly.yield_pct",
       caveat:
-        "Blank before November 2025, when production reporting started — blank, never 0%, because a structural zero would roll into a quarter as if the plant had turned eight thousand tonnes of charcoal into nothing. November 2025 itself covers only part of the month (11.9%) and is excluded from every headline for the same reason.",
+        "Blank before November 2025, never 0% — a zero would roll into a year as if the plant had turned eight thousand tonnes into nothing. November itself is a part-month at 11.9% and is kept out of the headlines.",
     },
   },
   {
@@ -757,16 +730,14 @@ const MONEY_METRICS: readonly Omit<MetricSpec, "section">[] = [
     decimals: 0,
     dependsOn: ["outflow"],
     dictionary: {
-      definition:
-        "How many piles were finished off that month — fed down and closed out.",
+      definition: "How many piles were finished off that month — fed down and closed out.",
       basis:
-        "Blocks whose LAST FEEDING fell in the month. Status changes are not dated anywhere in the database, so the last feeding (or the feeding remarked CLOSED) is what stands in for the closing date.",
-      exclusions:
-        "A pile still being fed at month-end belongs to no month yet, so it is not counted anywhere until it finishes.",
+        "Blocks whose LAST FEEDING fell in the month. Nothing in the database dates a status change, so the last feeding stands in for the closing date.",
+      exclusions: "A pile still being fed at month-end belongs to no month until it finishes.",
       rollup: "Quarters and years are plain sums of their months.",
       source: "view_analytics_cost_monthly.closed_blocks_count",
       caveat:
-        "This is the SAME approximation the RC Movement screen uses, deliberately — reusing it is what keeps the two screens from disagreeing about which month a block closed in.",
+        "The same approximation the RC Movement screen uses, on purpose — so the two screens cannot disagree about which month a block closed in.",
     },
   },
   {
@@ -789,16 +760,15 @@ const MONEY_METRICS: readonly Omit<MetricSpec, "section">[] = [
     dependsOn: ["outflow"],
     dictionary: {
       definition:
-        "How much weight the piles that closed that month lost while they sat — charcoal dries out, and the money already spent on it does not shrink with it.",
+        "How much weight the piles that closed that month lost while they sat. Charcoal dries out; the money spent on it does not shrink with it.",
       basis:
-        "Weight lost ÷ weight delivered in, added up over every block that closed that month, weighted by size. Never the average of the per-block percentages.",
+        "Weight lost ÷ weight delivered in, over every block that closed, weighted by size. Never the average of the per-block percentages.",
       exclusions:
-        "Nothing. Loss is physical and needs no price, so this uses every closed block — including the ones whose peso figures are missing.",
-      rollup:
-        "A quarter or a year is total kilos lost ÷ total kilos delivered across its closed blocks.",
+        "Nothing. Loss is physical and needs no price, so every closed block counts — including ones whose peso figures are missing.",
+      rollup: "A quarter or a year is total kilos lost ÷ total kilos delivered.",
       source: "view_analytics_cost_monthly.closed_blocks_loss_pct",
       caveat:
-        "It can go slightly NEGATIVE — February 2026 reads −0.10% — meaning those blocks fed out marginally more than was booked into them. That is misfiled paperwork, not a measurement error, and it is shown as measured rather than clamped to zero.",
+        "It can go slightly negative — February 2026 reads −0.10%, meaning those blocks fed out a little more than was booked in. Misfiled paperwork, shown as measured rather than clamped to zero.",
     },
   },
   {
@@ -819,27 +789,27 @@ const MONEY_METRICS: readonly Omit<MetricSpec, "section">[] = [
     decimals: 2,
     dependsOn: ["outflow"],
     pair: {
-      label: "Delivered ₱/kg (same blocks)",
+      label: "Block price (same blocks)",
       color: "var(--chart-2)",
       read: (m) => m.closedBlocksDeliveredPhpKg,
       numerator: (m) =>
         mul(m.closedBlocksDeliveredPhpKg, m.closedBlocksPricedFedKg),
       denominator: (m) => m.closedBlocksPricedFedKg,
       note:
-        "The gap between the two lines IS the cost of letting charcoal sit. Both are the same blocks and the same money; the true line divides it by the kilos that actually reached the plant, the delivered line by the kilos that arrived.",
+        "The gap between the two lines IS the cost of letting charcoal sit. Same blocks, same money — the true line divides it by the kilos that reached the plant, the block-price line by the kilos that arrived.",
     },
     dictionary: {
       definition:
-        "What the charcoal in the piles that closed that month REALLY cost by the time it was fed — after paying for the weight that evaporated in the yard.",
+        "What the charcoal in the piles that closed that month really cost by the time it was fed, after paying for the weight that evaporated.",
       basis:
-        "Every peso spent on those blocks ÷ every kilo that actually came out of them. Because the weight shrinks and the money does not, this always sits above the arrival price.",
+        "Every peso spent on those blocks ÷ every kilo that came out of them. The weight shrinks and the money does not, so this always sits above the block price.",
       exclusions:
-        "A block with even one truckload still awaiting a price is left out ENTIRELY rather than valued at part of its money — a numerator missing pesos against a full denominator would understate the figure and point the exact opposite way from the thing this row exists to show. Blocks with no delivery record at all are left out for the same reason. The row's expand says how many that was.",
+        "A block with even one truckload still awaiting a price is left out ENTIRELY, never valued at part of its money — that would understate the cost and point the opposite way from what this row exists to show. Blocks with no delivery record are out too.",
       rollup:
-        "A quarter or a year is total pesos ÷ total kilos fed across its fully-priced closed blocks.",
+        "A quarter or a year is total pesos ÷ total kilos fed, across its fully-priced closed blocks.",
       source: "view_analytics_cost_monthly.closed_blocks_true_php_kg",
       caveat:
-        "Blank — never zero — for a month with no fully-priced closed block. A closed block always costs more per kilo than it arrived at — the gap is pure storage time (July 2026 lost 4.68% of its weight while sitting).",
+        "Blank, never zero, in a month with no fully-priced closed block. The gap above the block price is pure storage time — July 2026 lost 4.68% of its weight sitting.",
     },
   },
   {
@@ -858,16 +828,15 @@ const MONEY_METRICS: readonly Omit<MetricSpec, "section">[] = [
     decimals: 1,
     dictionary: {
       definition:
-        "How old the charcoal standing in the yard was when the month closed, averaged by weight — a big fresh pile pulls it down, a small old one barely moves it.",
+        "How old the charcoal standing in the yard was at month-end, averaged by weight — a big fresh pile pulls it down, a small old one barely moves it.",
       basis:
-        "Each pile takes the average delivery date of everything tipped into it, weighted by weight, and the whole remaining balance carries that one age.",
+        "Each pile takes the weighted average delivery date of everything tipped into it, and its whole remaining balance carries that one age.",
       exclusions:
-        "Closed blocks are kept out. A closed block keeps a small logged remainder forever, which is the weight that evaporated rather than stock anyone can go and use; counting it made the yard read 416 days old with a six-year-old pile in it, against 387 days and a three-year-old pile once it is set aside. Piles carrying a negative balance have no meaningful age and are also left out.",
-      rollup:
-        "A quarter or a year shows the PERIOD-END month's figure — an age is a state, not something you add up.",
+        "Closed blocks and negative balances. A closed block's logged remainder is evaporated weight, not stock; counting it made the yard read 416 days old instead of 387.",
+      rollup: "A quarter or a year shows the month-end figure. An age is a state, not a sum.",
       source: "view_analytics_aging_eom.wtd_age_days",
       caveat:
-        "There is no first-in-first-out accounting and none is possible: the feeding records say which PILE kilos left, never which truckload within it, so a FIFO answer would be a precise-looking guess. Deliveries into one pile land within days of each other, so the error is small against ages measured in hundreds of days.",
+        "No first-in-first-out, and none is possible: the feeding records say which PILE kilos left, never which truckload. Deliveries into one pile land days apart, so the error is small against ages in the hundreds of days.",
     },
   },
   {
@@ -886,16 +855,13 @@ const MONEY_METRICS: readonly Omit<MetricSpec, "section">[] = [
     decimals: 1,
     dictionary: {
       definition:
-        "How much of the yard was sitting in piles older than four months — the share of stock that is quietly losing weight.",
-      basis:
-        "Kilos in open piles aged over 120 days ÷ all kilos in open piles, at month-end. Already a percentage, 0 to 100.",
-      exclusions:
-        "The same exclusions as average stock age — closed-block residue and negative balances are out.",
-      rollup:
-        "A quarter or a year shows the PERIOD-END month's figure. A share of what exists is not additive.",
+        "How much of the yard sat in piles older than four months — the share that is quietly losing weight.",
+      basis: "Kilos in open piles over 120 days ÷ all kilos in open piles, at month-end.",
+      exclusions: "Same as average stock age: closed-block residue and negative balances.",
+      rollup: "A quarter or a year shows the month-end figure. A share is not additive.",
       source: "view_analytics_aging_eom.pct_over_120d",
       caveat:
-        "120 days is a reading threshold, not a policy: nothing on this page turns amber or red because of it. The companion 60-day figure and the oldest pile are in the row's expand.",
+        "120 days is a reading line, not a policy — nothing turns amber because of it. The 60-day figure and the oldest pile are in the expand.",
     },
   },
 ] as const;
@@ -964,8 +930,8 @@ function downtimeAnnotation(
     blocksCallout: true,
     title:
       withDuration === 0
-        ? `EVERY one of the ${shift(reasonOnly)} that filed a downtime record in this period described the repair and left the duration at zero. Not one put a number on it, so this total is a gap in the report — NOT a period in which the plant never stopped. It is shown exactly as recorded, and it is never quoted as a record or a biggest move.`
-        : `${reasonOnly} of the ${shift(records)} that filed a downtime record in this period described the repair but left the duration at zero, so these hours are short by an unknown amount. Shown as recorded, and never quoted as a record or a biggest move.`,
+        ? `All ${shift(reasonOnly)} with a downtime record named the repair and left the duration at zero. This total is a gap in the report, not a period when the plant never stopped. Shown as recorded; never quoted as a record.`
+        : `${reasonOnly} of the ${shift(records)} with a downtime record named the repair and left the duration at zero, so these hours are short by an unknown amount. Shown as recorded; never quoted as a record.`,
   };
 }
 
@@ -993,9 +959,9 @@ function powerAnnotation(
     mark: "⚠",
     blocksCallout: true,
     title:
-      `${count} meter reading${count === 1 ? "" : "s"} in this period can be shown to be mis-keyed — a starting reading left at zero against an end that was still climbing — and ${nfmt(suspect)} kWh of the total shown comes from ${count === 1 ? "it" : "them"}` +
-      (share == null ? "" : `, which is ${nfmt(share, 1)}% of the period`) +
-      `. The total is published EXACTLY AS METERED: nothing here silently corrects the underlying record, and correcting the reading itself is a separate, audited write. The power-intensity row is where the broken reading is taken out. This cell is never quoted as a record or a biggest move.`,
+      `${count} meter reading${count === 1 ? "" : "s"} here ${count === 1 ? "is" : "are"} mis-keyed — a start left at zero against an end still climbing — and ${nfmt(suspect)} kWh of this total comes from ${count === 1 ? "it" : "them"}` +
+      (share == null ? "" : `, ${nfmt(share, 1)}% of the period`) +
+      `. Published exactly as metered: fixing the reading is a separate, audited write. Power intensity is where it is taken out. Never quoted as a record.`,
   };
 }
 
@@ -1022,12 +988,12 @@ function powerIntensityAnnotation(
         ? undefined
         : { value: excl, label: "excl. the mis-keyed reading" },
     title:
-      `Left BLANK rather than wrong: this period contains a meter reading that is provably mis-keyed, and an intensity computed on it would report an efficiency collapse that never happened (2026-03 reads 0.7630 kWh/kg against neighbours reading 0.03). ` +
+      `Blank rather than wrong: this period holds a mis-keyed meter reading, and an intensity built on it reports an efficiency collapse that never happened (March 2026 would read 0.7630 against neighbours at 0.03). ` +
       (excl != null
-        ? `The figure shown beside the ⚠ is the SAME arithmetic with the broken reading removed — the honest estimate — and it is labelled as such rather than presented as the measurement.`
+        ? `The figure beside the ⚠ is the same sum with the bad reading removed — an estimate, labelled as one.`
         : clean > 0
-          ? `The period figure above is measured over its ${clean} unaffected month${clean === 1 ? "" : "s"} only.`
-          : `Every month in this period is affected, so there is no honest figure to show.`),
+          ? `The figure above is measured over the ${clean} unaffected month${clean === 1 ? "" : "s"} only.`
+          : `Every month here is affected, so there is no honest figure to show.`),
   };
 }
 
@@ -1049,13 +1015,13 @@ function sacksAnnotation(
     return {
       mark: "",
       blocksCallout: true,
-      title: `Not one of the ${runs} production entries in this period recorded a bag count — bags were only counted from May 2026 on. Blank, never zero: "we did not count bags" and "we produced no bags" are different answers, and a zero would assert the second.`,
+      title: `None of the ${runs} production entries here recorded a bag count — bags were only counted from May 2026. Blank, never zero: "we did not count" and "we made none" are different answers.`,
     };
   }
   return {
     mark: "~",
     blocksCallout: true,
-    title: `This count speaks for ${withSacks} of the period's ${runs} production entries — ${nfmt((100 * withSacks) / runs, 1)}% coverage — so it is a floor rather than the period's bags. It is never quoted as a record or a biggest move.`,
+    title: `This speaks for ${withSacks} of the period's ${runs} production entries — ${nfmt((100 * withSacks) / runs, 1)}% coverage — so it is a floor, not the period's bags. Never quoted as a record.`,
   };
 }
 
@@ -1106,15 +1072,14 @@ const PRODUCTION_METRICS: readonly Omit<MetricSpec, "section">[] = [
     decimals: 1,
     dependsOn: ["production"],
     dictionary: {
-      definition: "How much finished charcoal the plant actually made that month.",
+      definition: "How much finished charcoal the plant made that month.",
       basis:
-        "The month's production entries added up, taken straight from the RC Movement production view rather than counted again — so this row and the RC Movement screen can never disagree, and the grade mix below is literally the same arithmetic split by product.",
-      exclusions:
-        "Nothing. Every grade and every shift is in here. What went IN is the RC OUT row; what came out is this.",
+        "The month's production entries, taken straight from the RC Movement production view rather than counted again — so this row and that screen cannot disagree.",
+      exclusions: "Nothing. Every grade and every shift. What went IN is the RC OUT row.",
       rollup: "Quarters and years are plain sums of their months.",
       source: "view_analytics_production_monthly.produced_kg",
       caveat:
-        "Daily production reporting only began on 27 November 2025, so this row is BLANK — never zero — before then. November 2025 itself is a three-day month inside a full calendar month, so it is excluded from every headline on this page and should not be compared with anything.",
+        "Daily reporting began 27 November 2025, so earlier months are blank, never zero. November itself is three days inside a full month and is kept out of every headline.",
     },
   },
   {
@@ -1137,15 +1102,14 @@ const PRODUCTION_METRICS: readonly Omit<MetricSpec, "section">[] = [
     dictionary: {
       definition:
         "How much the plant made on a day it was actually running — the fair way to compare a short month with a long one.",
-      basis:
-        "Tonnes produced ÷ the number of days production reported that month.",
+      basis: "Tonnes produced ÷ the days production reported that month.",
       exclusions:
-        "Days production did not report are not in the denominator, so a rest day or a shutdown cannot dilute the figure.",
+        "Days production did not report are out of the denominator, so a rest day cannot dilute the figure.",
       rollup:
-        "A quarter or a year is total tonnes ÷ total reported days across its months — never the mean of the monthly rates.",
+        "A quarter or a year is total tonnes ÷ total reported days, not the mean of the months.",
       source: "view_analytics_production_monthly.produced_per_reported_day",
       caveat:
-        "The denominator is PRODUCTION'S OWN reported days, not the Working days row above, and the two are different questions: the yard can take in charcoal on a day the plant does not run. That is also why the per-working-day toggle deliberately leaves this band alone — dividing the plant's tonnage by the yard's activity would silently change what the number means.",
+        "The denominator is PRODUCTION'S own reported days, not days the yard was busy — the yard can take charcoal in on a day the plant does not run. That is also why the per-working-day toggle leaves this whole band alone.",
     },
   },
   {
@@ -1165,16 +1129,15 @@ const PRODUCTION_METRICS: readonly Omit<MetricSpec, "section">[] = [
     dependsOn: ["production"],
     annotate: downtimeAnnotation,
     dictionary: {
-      definition:
-        "How many hours the plant stood still that month, as the shift reports recorded it.",
+      definition: "How many hours the plant stood still that month, as the shift reports recorded it.",
       basis:
-        "The hours-and-minutes pair on each shift's downtime record, folded exactly the way the Daily production ledger folds it — the same SQL definition, selected rather than written a second time. They are two components of ONE duration, not alternates.",
+        "The hours-and-minutes pair on each shift's downtime record, folded the same way the Daily production ledger folds it. Two halves of one duration, not alternatives.",
       exclusions:
-        "A shift that filed no downtime record at all is not counted as zero downtime — it is simply not in the sum.",
+        "A shift that filed no downtime record is not counted as zero downtime — it is simply not in the sum.",
       rollup: "Quarters and years are plain sums of their months.",
       source: "view_analytics_production_monthly.downtime_hrs",
       caveat:
-        "A ZERO HERE CAN MEAN TWO VERY DIFFERENT THINGS, so read it with the ⚠. In August 2026 all 23 shifts named a repair — cleaned a screen, changed a spring — and every one of them left the duration at zero. The work was recorded; the number stopped being filled in. That month reads 0.00 hours and it was not a flawless month, so the cell is marked and can never be quoted as a record.",
+        "A zero here means two different things, so read it with the ⚠. In August 2026 all 23 shifts named a repair and every one left the duration blank: the work was recorded, the number stopped being. That month reads 0.00 h and was not a flawless month.",
     },
   },
   {
@@ -1198,15 +1161,14 @@ const PRODUCTION_METRICS: readonly Omit<MetricSpec, "section">[] = [
     annotate: powerAnnotation,
     dictionary: {
       definition:
-        "How much electricity the site drew that month, across every meter — the same figure the home dashboard shows day by day.",
-      basis:
-        "Each daily reading's consumption, multiplier applied, added up over the month.",
+        "How much electricity the site drew that month, across every meter — the same figure the home dashboard shows daily.",
+      basis: "Each daily reading's consumption, multiplier applied, added up.",
       exclusions:
-        "Nothing. The raw total is published exactly as metered, including a reading we can prove is wrong — see the note.",
+        "Nothing. The total is published exactly as metered, including a reading we can prove is wrong.",
       rollup: "Quarters and years are plain sums of their months.",
       source: "view_analytics_production_monthly.kwh",
       caveat:
-        "One reading on 1 March 2026 was mis-keyed — a starting reading left at zero against an end that was still climbing — and at a ×120 multiplier that single row publishes 676,944 kWh into a month whose real consumption is about 20,000. It is marked with a ⚠ and NOT corrected here: this row is the metered record, and repairing the reading is Renzo's call and a separate, audited write. Also worth knowing that only the MAIN meter has reported since December 2025 — the bunkhouse and pump meters stopped — so the meter count reads 1 from January 2026 on.",
+        "One reading on 1 March 2026 was mis-keyed, and at a ×120 multiplier it alone publishes 676,944 kWh into a month whose real draw is about 20,000. Marked ⚠ and NOT corrected here — this row is the metered record. Only the MAIN meter has reported since December 2025.",
     },
   },
   {
@@ -1230,15 +1192,15 @@ const PRODUCTION_METRICS: readonly Omit<MetricSpec, "section">[] = [
     annotate: powerIntensityAnnotation,
     dictionary: {
       definition:
-        "Units of electricity per kilo of product — the number that says whether the plant is getting more or less efficient at what it does.",
+        "Units of electricity per kilo of product — whether the plant is getting more or less efficient.",
       basis: "The month's metered kWh ÷ the kilos it produced.",
       exclusions:
-        "A month containing a meter reading we can prove is mis-keyed is left out entirely rather than valued on a broken number, and so is its contribution to any quarter or year it belongs to.",
+        "A month holding a mis-keyed meter reading is left out entirely, here and in any quarter or year it belongs to.",
       rollup:
-        "A quarter or a year is total kWh ÷ total kilos produced across its unaffected months — never the mean of the monthly intensities.",
+        "A quarter or a year is total kWh ÷ total kilos produced across its clean months, not the mean of the monthly rates.",
       source: "view_analytics_production_monthly.kwh_per_produced_kg",
       caveat:
-        "BLANK, never wrong. A bad meter reading here does not look wrong, it looks like a finding: March 2026 would read 0.7630 against neighbours reading 0.03 — a twenty-fold efficiency collapse that never happened — so that month is suppressed and the honest figure with the broken reading removed (0.0219) is printed beside the ⚠ instead. November 2025 is the opposite case and is deliberately NOT suppressed: it divides 24 days of metering by 3 days of output and reads 1.2766, which is factually RIGHT and merely not comparable. Suppressing a correct number is how a page starts lying, so it is published and held out of the headlines instead.",
+        "Blank rather than wrong. March 2026 would read 0.7630 against neighbours at 0.03 — a collapse that never happened — so it is suppressed and the figure without the bad reading (0.0219) prints beside the ⚠. November 2025 reads 1.2766 and is NOT suppressed: it is correct, just not comparable.",
     },
   },
   {
@@ -1261,11 +1223,11 @@ const PRODUCTION_METRICS: readonly Omit<MetricSpec, "section">[] = [
       definition: "How many bags the month's production entries recorded.",
       basis: "The bag counts on the month's production runs, added up.",
       exclusions:
-        "A run that recorded no bag count is not counted as zero bags — it is simply not in the sum, and the coverage note says how many such runs there were.",
+        "A run with no bag count is not counted as zero bags — it is simply not in the sum, and the ~ says how many such runs there were.",
       rollup: "Quarters and years are plain sums of their months.",
       source: "view_analytics_production_monthly.sacks",
       caveat:
-        "BAGS DID NOT EXIST BEFORE MAY 2026 — not one production run recorded a count before then, so those months are BLANK rather than zero. May 2026 itself covers 1 run out of 38, so its 270 bags describe a single entry; June onward is effectively complete. A cell whose coverage is short is marked and can never be quoted as a record.",
+        "Bags were not counted before May 2026, so those months are blank rather than zero. May itself covers 1 run of 38, so its 270 bags describe a single entry; June onward is effectively complete.",
     },
   },
 ] as const;
