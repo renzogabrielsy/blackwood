@@ -41,6 +41,8 @@ export function unitSuffix(unit: MetricUnit): string {
       return "t";
     case "days":
       return "days";
+    case "pct":
+      return "%";
     default:
       return "";
   }
@@ -90,5 +92,23 @@ export const BLANK_TITLE: Record<string, string> = {
     "₱ figures are withheld for your role. Nothing was sent to this browser.",
   no_outflow:
     "Feedings were only recorded from January 2024, so this figure has no denominator before then. Blank, never zero.",
+  no_production:
+    "Production has only been reported since November 2025, so this figure has no numerator before then. Blank, never zero — a 0% yield would roll into a quarter as if the plant had turned charcoal into nothing.",
   no_data: "No records for this period.",
 };
+
+/**
+ * The hover on the `~` an ESTIMATED cell carries.
+ *
+ * Some kilos were fed out of piles with no delivery record at all, so the
+ * published price cannot speak for them; the figure shown is measured over
+ * only the kilos it CAN price. Written once here because the matrix cell,
+ * the row expand and the campaign panel all have to say the same thing.
+ */
+export function estimateTitle(coveragePct: number | null): string {
+  const share =
+    coveragePct == null
+      ? "Some of the kilos behind this figure carry no price at all — they were fed out of piles with no delivery record."
+      : `${nf(coveragePct, 1)}% of the kilos behind this figure carry a price; the rest were fed out of piles with no delivery record at all.`;
+  return `${share} The figure shown is measured over only the kilos it can price, which is the honest answer — the raw published price would be dragged down by exactly the share it cannot see. An estimated figure is never quoted as a record or a biggest move.`;
+}

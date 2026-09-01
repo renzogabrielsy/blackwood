@@ -49,11 +49,12 @@ import * as React from "react";
 import { ChevronRight, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Matrix, MatrixCell, MatrixRow } from "@/lib/analytics/matrix";
-import { DELTA_LABEL } from "@/lib/analytics/matrix";
+import { DELTA_LABEL, groupBySection } from "@/lib/analytics/matrix";
 import type { MetricKey, MetricSpec } from "@/lib/analytics/metrics";
 import {
   BLANK_TITLE,
   directionGlyph,
+  estimateTitle,
   fmtChange,
   fmtCompact,
   fmtMetricValue,
@@ -79,6 +80,7 @@ function exactText(spec: MetricSpec, value: number): string {
   if (spec.unit === "php_per_kg") return `₱${n} / kg`;
   if (spec.unit === "tonnes") return `${n} t`;
   if (spec.unit === "days") return `${n} days`;
+  if (spec.unit === "pct") return `${n}%`;
   return n;
 }
 
@@ -121,15 +123,55 @@ function ChangeLine({
   );
 }
 
+/**
+ * The two marks a figure can carry, both meaning "read the hover before you
+ * quote this". Deliberately glyphs and not colour: the page has no threshold
+ * semantics anywhere, and an amber cell would read as a judgement.
+ *
+ *   `·` the period summed over a hole — a FLOOR, not a total;
+ *   `~` the figure is the coverage-adjusted ESTIMATE, because some of the
+ *       kilos underneath it were fed out of piles with no delivery record.
+ */
+function CellMarks({
+  cell,
+  coveragePct,
+}: {
+  cell: MatrixCell;
+  coveragePct: number | null;
+}) {
+  if (!cell.holed && !cell.estimated) return null;
+  return (
+    <span className="flex shrink-0 items-baseline gap-px text-[10px] leading-none">
+      {cell.estimated && (
+        <span
+          title={estimateTitle(coveragePct)}
+          className="text-muted-foreground"
+          aria-label="estimated"
+        >
+          ~
+        </span>
+      )}
+      {cell.holed && (
+        <span aria-hidden className="text-amber-600 dark:text-amber-400">
+          ·
+        </span>
+      )}
+    </span>
+  );
+}
+
 function ValueCell({
   cell,
   spec,
   deltaWord,
+  coveragePct,
   emphasis,
 }: {
   cell: MatrixCell;
   spec: MetricSpec;
   deltaWord: string;
+  /** Fed-price coverage for the period, for the `~` hover. Null when N/A. */
+  coveragePct?: number | null;
   emphasis?: boolean;
 }) {
   if (cell.value == null) {
@@ -155,11 +197,14 @@ function ValueCell({
     : fmtMetricValue(spec, cell.value);
 
   const titleParts = [exactText(spec, cell.value)];
+  if (cell.estimated) titleParts.push(estimateTitle(coveragePct ?? null));
   if (cell.holed)
     titleParts.push(
       "Some months in this period recorded nothing, so this figure is a floor, not a total.",
     );
   if (cell.isPartial) titleParts.push("This period has not finished yet.");
+
+  const marks = <CellMarks cell={cell} coveragePct={coveragePct ?? null} />;
 
   return (
     <td
@@ -170,16 +215,20 @@ function ValueCell({
       {spec.unit === "php_per_kg" || spec.unit === "php" ? (
         <div className="flex h-[17px] items-baseline justify-between gap-1 font-mono text-xs tabular-nums">
           <span className="shrink-0 text-[10px] text-muted-foreground">₱</span>
-          <span className="truncate font-medium">{shown}</span>
+          <span className="flex min-w-0 items-baseline gap-0.5">
+            <span className="truncate font-medium">{shown}</span>
+            {marks}
+          </span>
         </div>
       ) : (
         <div className="flex h-[17px] items-baseline justify-end gap-1 font-mono text-xs tabular-nums">
-          <span className="truncate font-medium">{shown}</span>
-          {cell.holed && (
-            <span aria-hidden className="text-[10px] text-amber-600 dark:text-amber-400">
-              ·
-            </span>
-          )}
+          <span className="truncate font-medium">
+            {shown}
+            {spec.unit === "pct" && (
+              <span className="ml-px text-[10px] text-muted-foreground">%</span>
+            )}
+          </span>
+          {marks}
         </div>
       )}
       <ChangeLine cell={cell} spec={spec} deltaWord={deltaWord} />
@@ -205,6 +254,43 @@ export function AnalyticsMatrix({
   const deltaWord = DELTA_LABEL[matrix.granularity];
   const minWidth =
     W_NAME + matrix.periods.length * W_PERIOD + W_TOTAL;
+
+  const sections = React.useMemo(() => groupBySection(matrix.rows), [matrix.rows]);
+
+  /**
+   * Fed-price coverage per COLUMN, for the `~` hover only.
+   *
+   * Σ traceable ÷ Σ all over the column's months — the same Σnum ÷ Σden the
+   * weighted rows use, over two columns the SQL layer publishes. It is
+   * hover copy, never a figure the grid prints, and it is computed here
+   * rather than in the fold because it belongs to a PERIOD rather than to
+   * any one row.
+   */
+  const coverageByPeriod = React.useMemo(() => {
+    const out = new Map<string, number | null>();
+    let winTraceable = 0;
+    let winAll = 0;
+    for (const p of matrix.periods) {
+      let traceable = 0;
+      let all = 0;
+      for (const m of p.months) {
+        traceable += m.fedKgPriceTraceable ?? 0;
+        all += (m.fedKgPriceTraceable ?? 0) + (m.fedKgPriceUntraceable ?? 0);
+      }
+      out.set(p.key, all > 0 ? (traceable / all) * 100 : null);
+      winTraceable += traceable;
+      winAll += all;
+    }
+    // The trailing summary column too — its `~` needs a hover that names a
+    // real share rather than falling back to the generic sentence.
+    if (matrix.rows[0]?.total) {
+      out.set(
+        matrix.rows[0].total.periodKey,
+        winAll > 0 ? (winTraceable / winAll) * 100 : null,
+      );
+    }
+    return out;
+  }, [matrix.periods, matrix.rows]);
 
   if (matrix.periods.length === 0) {
     return (
@@ -267,19 +353,66 @@ export function AnalyticsMatrix({
         </thead>
 
         <tbody>
-          {matrix.rows.map((row) => (
-            <MatrixRowView
-              key={row.metric.key}
-              row={row}
-              deltaWord={deltaWord}
-              selected={selected === row.metric.key}
-              onSelect={onSelect}
-              perWorkingDay={perWorkingDay}
-            />
+          {sections.map((section) => (
+            <React.Fragment key={section.key}>
+              <SectionBand
+                label={section.label}
+                hint={section.hint}
+                span={matrix.periods.length + 1}
+              />
+              {section.rows.map((row) => (
+                <MatrixRowView
+                  key={row.metric.key}
+                  row={row}
+                  deltaWord={deltaWord}
+                  selected={selected === row.metric.key}
+                  onSelect={onSelect}
+                  perWorkingDay={perWorkingDay}
+                  coverageByPeriod={coverageByPeriod}
+                />
+              ))}
+            </React.Fragment>
           ))}
         </tbody>
       </table>
     </div>
+  );
+}
+
+/**
+ * A thin band naming the group of rows beneath it. Twenty rows in one
+ * undifferentiated stack is a wall; two named groups is a page.
+ *
+ * The label cell is `.frozen-col` like every other cell in that column, so
+ * it stays put while the periods scroll — a band that scrolled away would
+ * leave the rows under it unlabelled exactly when the reader is furthest
+ * from the header.
+ */
+function SectionBand({
+  label,
+  hint,
+  span,
+}: {
+  label: string;
+  hint: string;
+  span: number;
+}) {
+  return (
+    <tr className="h-6 border-b bg-muted/40">
+      <th
+        scope="colgroup"
+        title={hint}
+        className="frozen-col frozen-edge border-b bg-muted px-2 py-0.5 text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground"
+        style={{ left: 0 }}
+      >
+        {label}
+      </th>
+      <td colSpan={span} className="border-b border-l px-2 py-0.5">
+        <span className="block truncate text-[10px] leading-4 text-muted-foreground/80">
+          {hint}
+        </span>
+      </td>
+    </tr>
   );
 }
 
@@ -289,12 +422,14 @@ function MatrixRowView({
   selected,
   onSelect,
   perWorkingDay,
+  coverageByPeriod,
 }: {
   row: MatrixRow;
   deltaWord: string;
   selected: boolean;
   onSelect(key: MetricKey | null): void;
   perWorkingDay: boolean;
+  coverageByPeriod: ReadonlyMap<string, number | null>;
 }) {
   const spec = row.metric;
   const normalised = perWorkingDay && spec.perWorkingDay;
@@ -358,11 +493,18 @@ function MatrixRowView({
           cell={cell}
           spec={spec}
           deltaWord={deltaWord}
+          coveragePct={coverageByPeriod.get(cell.periodKey) ?? null}
         />
       ))}
 
       {row.total ? (
-        <ValueCell cell={row.total} spec={spec} deltaWord={deltaWord} emphasis />
+        <ValueCell
+          cell={row.total}
+          spec={spec}
+          deltaWord={deltaWord}
+          coveragePct={coverageByPeriod.get(row.total.periodKey) ?? null}
+          emphasis
+        />
       ) : (
         <td className="border-l bg-muted/40 px-2 py-1" />
       )}
