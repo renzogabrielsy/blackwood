@@ -3096,6 +3096,51 @@ export type Database = {
         }
         Relationships: []
       }
+      view_analytics_production_grade_monthly: {
+        Row: {
+          grade: string | null
+          kg: number | null
+          month: number | null
+          month_produced_kg: number | null
+          month_start: string | null
+          run_count: number | null
+          runs_with_sacks: number | null
+          sacks: number | null
+          share_of_month_pct: number | null
+          year: number | null
+        }
+        Relationships: []
+      }
+      view_analytics_production_monthly: {
+        Row: {
+          downtime_hrs: number | null
+          downtime_shift_count: number | null
+          downtime_shifts_reason_only: number | null
+          downtime_shifts_with_duration: number | null
+          first_reported_date: string | null
+          kwh: number | null
+          kwh_per_produced_kg: number | null
+          kwh_per_produced_kg_excl_suspect: number | null
+          kwh_suspect: number | null
+          kwh_suspect_reading_count: number | null
+          last_reported_date: string | null
+          month: number | null
+          month_start: string | null
+          power_days: number | null
+          power_meter_count: number | null
+          produced_kg: number | null
+          produced_per_reported_day: number | null
+          production_reported: boolean | null
+          reported_days: number | null
+          run_count: number | null
+          runs_with_sacks: number | null
+          sacks: number | null
+          sacks_coverage_pct: number | null
+          shift_count: number | null
+          year: number | null
+        }
+        Relationships: []
+      }
       view_analytics_rcin_monthly: {
         Row: {
           active_suppliers: number | null

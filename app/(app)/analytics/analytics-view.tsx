@@ -42,13 +42,23 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { buildMatrix, type Granularity } from "@/lib/analytics/matrix";
-import type { MetricKey } from "@/lib/analytics/metrics";
+import type { MetricKey, MetricSection } from "@/lib/analytics/metrics";
 import type { AnalyticsData, AnalyticsMonth } from "@/lib/analytics/types";
 import { AnalyticsMatrix } from "./analytics-matrix";
+import { AnalyticsNav } from "./analytics-nav";
 import { MetricExpand } from "./metric-expand";
 import { BatchCostPanel } from "./batch-cost-panel";
 import { SupplierRoom } from "./supplier-room";
+import { ProductionRoom } from "./production-room";
 import { AgingWatchlist } from "./aging-watchlist";
+
+/**
+ * The bands the TOP matrix renders. The production band is deliberately not
+ * one of them — it is the same fold, rendered by the same component, down in
+ * its own section after the supplier room, because the page's reading order is
+ * PERIOD → CAMPAIGN → SUPPLIER → PRODUCTION → PILE.
+ */
+const TOP_BANDS: readonly MetricSection[] = ["flow", "money"];
 
 const GRANULARITIES: { key: Granularity; label: string; title: string }[] = [
   { key: "Y", label: "Y", title: "One column per year, all years" },
@@ -110,9 +120,16 @@ export function AnalyticsView({
     [data.months, data.canViewPrices, granularity, year, perWorkingDay],
   );
 
-  const expandedRow = metric
-    ? (matrix.rows.find((r) => r.metric.key === metric) ?? null)
-    : null;
+  /**
+   * The expanded row, but ONLY when it belongs to a band this matrix renders.
+   * A production row's expand opens inside the production section instead, so
+   * the panel always sits directly under the table that named it.
+   */
+  const expandedRow = React.useMemo(() => {
+    if (!metric) return null;
+    const row = matrix.rows.find((r) => r.metric.key === metric) ?? null;
+    return row && row.metric.section !== "production" ? row : null;
+  }, [matrix.rows, metric]);
 
   /** The newest month inside the displayed window — what the split panel describes. */
   const anchorMonth: AnalyticsMonth | null = React.useMemo(() => {
@@ -127,6 +144,13 @@ export function AnalyticsView({
 
   return (
     <div className="flex flex-col gap-4">
+      {/* ── In-page anchors ──────────────────────────────────────────────
+          P4 completes the page, and completion is what makes it long: two
+          matrix bands, the campaign panel, the supplier room, the production
+          room and the watchlist. Sticky, so it never leaves; a flow element,
+          so pinning it shifts nothing. */}
+      <AnalyticsNav />
+
       {/* ── Controls ─────────────────────────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <div className="flex items-center gap-2">
@@ -250,6 +274,7 @@ export function AnalyticsView({
         selected={metric}
         onSelect={setMetric}
         perWorkingDay={perWorkingDay}
+        sections={TOP_BANDS}
       />
 
       {/* ── The expanded row ─────────────────────────────────────────────── */}
@@ -272,25 +297,50 @@ export function AnalyticsView({
           one row per named pile, today, not one column per period. Folding
           either into the matrix would have meant a column that is neither a
           month nor a quarter sitting beside columns that are. */}
-      <BatchCostPanel campaigns={data.campaigns} canViewPrices={data.canViewPrices} />
+      <div id="section-campaigns" className="scroll-mt-24">
+        <BatchCostPanel campaigns={data.campaigns} canViewPrices={data.canViewPrices} />
+      </div>
 
       {/* ── The SUPPLIER axis ──────────────────────────────────────────
-          Third of the four cuts this page makes through the same yard:
-          period → campaign → supplier → pile. It follows the year picker
-          above (a supplier year is a calendar year, always) but not the
-          Y/Q/M toggle: a quarter column of suppliers would be a different
-          question, and the room's own axis is already twelve months wide. */}
-      <SupplierRoom
-        suppliers={data.suppliers}
+          Third of the five cuts this page makes through the same yard:
+          period → campaign → supplier → production → pile. It follows the
+          year picker above (a supplier year is a calendar year, always) but
+          not the Y/Q/M toggle: a quarter column of suppliers would be a
+          different question, and the room's own axis is already twelve
+          months wide. */}
+      <div id="section-suppliers" className="scroll-mt-24">
+        <SupplierRoom
+          suppliers={data.suppliers}
+          months={data.months}
+          year={year}
+          canViewPrices={data.canViewPrices}
+        />
+      </div>
+
+      {/* ── The PRODUCTION axis ────────────────────────────────────────
+          Where the yard's kilos stop being charcoal and start being
+          product. Its six rows are the SAME `buildMatrix` fold as the table
+          at the top — same rollups, same expand, same callout strip — the
+          band is simply rendered here, after the three blocks that are
+          about buying and holding. No ₱ exists anywhere in it, so it is
+          live for every role including Production. */}
+      <ProductionRoom
+        matrix={matrix}
         months={data.months}
+        grades={data.productionGrades}
         year={year}
-        canViewPrices={data.canViewPrices}
+        granularity={granularity}
+        selected={metric}
+        onSelect={setMetric}
+        perWorkingDay={perWorkingDay}
       />
 
-      <AgingWatchlist
-        watchlist={data.watchlist}
-        canViewPrices={data.canViewPrices}
-      />
+      <div id="section-watchlist" className="scroll-mt-24">
+        <AgingWatchlist
+          watchlist={data.watchlist}
+          canViewPrices={data.canViewPrices}
+        />
+      </div>
 
       {/* ── Footer: the restatement policy, printed once, on the page ─────
           The analyst audit's gap #4. Every figure here is rebuilt from the

@@ -43,6 +43,12 @@ export function unitSuffix(unit: MetricUnit): string {
       return "days";
     case "pct":
       return "%";
+    case "hours":
+      return "h";
+    case "kwh":
+      return "kWh";
+    case "kwh_per_kg":
+      return "kWh/kg";
     default:
       return "";
   }

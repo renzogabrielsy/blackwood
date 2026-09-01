@@ -50,7 +50,11 @@ import { ChevronRight, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Matrix, MatrixCell, MatrixRow } from "@/lib/analytics/matrix";
 import { DELTA_LABEL, groupBySection } from "@/lib/analytics/matrix";
-import type { MetricKey, MetricSpec } from "@/lib/analytics/metrics";
+import type {
+  MetricKey,
+  MetricSection,
+  MetricSpec,
+} from "@/lib/analytics/metrics";
 import {
   BLANK_TITLE,
   directionGlyph,
@@ -66,9 +70,14 @@ const W_NAME = 208;
 const W_PERIOD = 100;
 const W_TOTAL = 112;
 
-/** Big pesos are printed COMPACT in a 100px cell and exactly in the hover. */
-function isCompactPhp(spec: MetricSpec): boolean {
-  return spec.unit === "php";
+/**
+ * Big magnitudes are printed COMPACT in a 100px cell and exactly in the hover.
+ * Pesos qualify, and so does kWh: a full year of metering runs to seven
+ * figures, and 2026-03 alone reads 696,924 because of the mis-keyed reading
+ * this page exists to flag.
+ */
+function isCompactUnit(spec: MetricSpec): boolean {
+  return spec.unit === "php" || spec.unit === "kwh";
 }
 
 function exactText(spec: MetricSpec, value: number): string {
@@ -81,6 +90,9 @@ function exactText(spec: MetricSpec, value: number): string {
   if (spec.unit === "tonnes") return `${n} t`;
   if (spec.unit === "days") return `${n} days`;
   if (spec.unit === "pct") return `${n}%`;
+  if (spec.unit === "hours") return `${n} hours`;
+  if (spec.unit === "kwh") return `${n} kWh`;
+  if (spec.unit === "kwh_per_kg") return `${n} kWh / kg`;
   return n;
 }
 
@@ -124,13 +136,23 @@ function ChangeLine({
 }
 
 /**
- * The two marks a figure can carry, both meaning "read the hover before you
- * quote this". Deliberately glyphs and not colour: the page has no threshold
+ * The marks a figure can carry, all meaning "read the hover before you quote
+ * this". Deliberately glyphs and not colour: the page has no threshold
  * semantics anywhere, and an amber cell would read as a judgement.
  *
  *   `·` the period summed over a hole — a FLOOR, not a total;
  *   `~` the figure is the coverage-adjusted ESTIMATE, because some of the
- *       kilos underneath it were fed out of piles with no delivery record.
+ *       kilos underneath it were fed out of piles with no delivery record;
+ *   the ROW'S OWN mark (P4) — a `⚠` for a mis-keyed meter reading or a
+ *       downtime duration that stopped being filled in, a `~` for a bag count
+ *       that speaks for a fraction of its month. Its sentence comes from the
+ *       registry rather than from here, because the three reasons are
+ *       genuinely different and one shared sentence would be wrong on two of
+ *       them.
+ *
+ * The ⚠ is the one mark that carries colour, and it is not a threshold: it
+ * says a figure is known to rest on a broken or missing input, which is a
+ * fact about the record rather than a judgement about the business.
  */
 function CellMarks({
   cell,
@@ -139,7 +161,8 @@ function CellMarks({
   cell: MatrixCell;
   coveragePct: number | null;
 }) {
-  if (!cell.holed && !cell.estimated) return null;
+  const ownMark = cell.annotation?.mark;
+  if (!cell.holed && !cell.estimated && !ownMark) return null;
   return (
     <span className="flex shrink-0 items-baseline gap-px text-[10px] leading-none">
       {cell.estimated && (
@@ -149,6 +172,19 @@ function CellMarks({
           aria-label="estimated"
         >
           ~
+        </span>
+      )}
+      {ownMark && (
+        <span
+          title={cell.annotation?.title}
+          aria-label="read the note on this figure"
+          className={cn(
+            ownMark === "⚠"
+              ? "text-amber-600 dark:text-amber-400"
+              : "text-muted-foreground",
+          )}
+        >
+          {ownMark}
         </span>
       )}
       {cell.holed && (
@@ -176,28 +212,60 @@ function ValueCell({
 }) {
   if (cell.value == null) {
     const reason = cell.blankReason ?? "no_data";
+    const ann = cell.annotation;
+    // A blank still carries the row's own sentence, and — where the data
+    // layer publishes an honest estimate beside a suppressed measurement —
+    // prints THAT rather than nothing. Withholding a number the page knows
+    // is not caution, it is silence. It is labelled so it can never be read
+    // as the row's own figure, and it is never a callout.
+    const alt = ann?.alt ?? null;
     return (
       <td
         className={cn(
           "border-l px-2 py-1 align-top",
           emphasis && "bg-muted/40",
         )}
-        title={BLANK_TITLE[reason]}
+        // The row's OWN sentence REPLACES the generic one rather than
+        // following it. "No records for this period" is simply false on a
+        // power-intensity cell that is blank because the month's meter
+        // reading is broken — the records exist, one of them is wrong — and
+        // reading the two sentences in sequence contradicts the reader.
+        // `restricted` is the exception and always wins: whether a ₱ crossed
+        // the wire is never overridden by a display note.
+        title={
+          reason === "restricted"
+            ? BLANK_TITLE.restricted
+            : (ann?.title ?? BLANK_TITLE[reason])
+        }
       >
         <div className="flex h-[17px] items-center justify-end gap-1 font-mono text-xs text-muted-foreground/60">
           {reason === "restricted" && <Lock className="size-2.5" aria-hidden />}
-          <span>—</span>
+          {ann?.mark && (
+            <span
+              aria-hidden
+              className="text-[10px] leading-none text-amber-600 dark:text-amber-400"
+            >
+              {ann.mark}
+            </span>
+          )}
+          <span>{alt ? fmtMetricValue(spec, alt.value) : "—"}</span>
         </div>
+        {alt && (
+          <div className="mt-0.5 h-3 truncate text-right text-[9px] leading-3 text-muted-foreground">
+            {alt.label}
+          </div>
+        )}
       </td>
     );
   }
 
-  const shown = isCompactPhp(spec)
+  const shown = isCompactUnit(spec)
     ? fmtCompact(cell.value)
     : fmtMetricValue(spec, cell.value);
 
   const titleParts = [exactText(spec, cell.value)];
   if (cell.estimated) titleParts.push(estimateTitle(coveragePct ?? null));
+  if (cell.annotation) titleParts.push(cell.annotation.title);
   if (cell.holed)
     titleParts.push(
       "Some months in this period recorded nothing, so this figure is a floor, not a total.",
@@ -243,6 +311,17 @@ export interface AnalyticsMatrixProps {
   onSelect(key: MetricKey | null): void;
   /** The working-day toggle is on — the affected rows say so in their label. */
   perWorkingDay: boolean;
+  /**
+   * Which bands this instance renders. Omitted = all of them.
+   *
+   * The page mounts this component TWICE — flow + money at the top, and the
+   * production band down in its own section after the supplier room — because
+   * the reading order is PERIOD → CAMPAIGN → SUPPLIER → PRODUCTION → PILE and
+   * production belongs where the plant does, not where the yard does. It is
+   * still ONE `buildMatrix` fold behind both, so the two tables and the
+   * callout strip are the same numbers by construction.
+   */
+  sections?: readonly MetricSection[];
 }
 
 export function AnalyticsMatrix({
@@ -250,12 +329,16 @@ export function AnalyticsMatrix({
   selected,
   onSelect,
   perWorkingDay,
+  sections: only,
 }: AnalyticsMatrixProps) {
   const deltaWord = DELTA_LABEL[matrix.granularity];
   const minWidth =
     W_NAME + matrix.periods.length * W_PERIOD + W_TOTAL;
 
-  const sections = React.useMemo(() => groupBySection(matrix.rows), [matrix.rows]);
+  const sections = React.useMemo(
+    () => groupBySection(matrix.rows, only),
+    [matrix.rows, only],
+  );
 
   /**
    * Fed-price coverage per COLUMN, for the `~` hover only.
@@ -356,6 +439,7 @@ export function AnalyticsMatrix({
           {sections.map((section) => (
             <React.Fragment key={section.key}>
               <SectionBand
+                id={`band-${section.key}`}
                 label={section.label}
                 hint={section.hint}
                 span={matrix.periods.length + 1}
@@ -389,16 +473,19 @@ export function AnalyticsMatrix({
  * from the header.
  */
 function SectionBand({
+  id,
   label,
   hint,
   span,
 }: {
+  /** Anchor target for the in-page nav. `scroll-mt-*` clears the sticky bar. */
+  id?: string;
   label: string;
   hint: string;
   span: number;
 }) {
   return (
-    <tr className="h-6 border-b bg-muted/40">
+    <tr id={id} className="h-6 scroll-mt-24 border-b bg-muted/40">
       <th
         scope="colgroup"
         title={hint}

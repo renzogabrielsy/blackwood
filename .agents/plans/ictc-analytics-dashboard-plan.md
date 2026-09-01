@@ -544,6 +544,201 @@ all history within row budgets). No new tables. No snapshot jobs.
 - **P4 — the pattern rollout**: same matrix chassis for Production (grades, yield, downtime)
   and later PC inventory (once the stocktake feature exists).
 
+  > ### ✅ P4 DATA LAYER BUILT — 2026-09-01, applied
+  >
+  > Migration `20260901142417_analytics_phase4_production_layer`. TWO views, posture identical
+  > to P1/P2/P3 (`security_invoker` / `authenticated`-only / `anon` REVOKEd / no
+  > `service_role`); row counts **18 / 20**. Gates green: `tsc --noEmit` clean,
+  > `verify-worker-view-grants` 4 views / 0 findings. Types regenerated (+45 lines, **zero
+  > removals**). **The page + server action are NOT built** — that is the frontend's half.
+  > Full column detail: CLAUDE.md → Views → "Owner analytics — THE PRODUCTION MATRIX".
+  >
+  > - **`view_analytics_production_monthly`** · **`view_analytics_production_grade_monthly`**
+  >
+  > **NO ₱ COLUMN EXISTS IN EITHER VIEW AND NONE IS DERIVABLE** — asserted, 0 of 35 columns
+  > match `php|peso|cost|price|value|amount`. So unlike every prior phase there is **nothing
+  > for the server action to null**: the whole production matrix is visible to Production.
+  > That is structural, not an oversight — production is the one module of the platform with
+  > no money in it, and the money that *meets* production (₱/kg fed, ₱ per produced kg)
+  > already lives in P2's `view_analytics_cost_monthly` and is gated there.
+  >
+  > **The governing rule, same as P2/P3: nothing that already has a definition was
+  > re-derived.** `produced_kg` = `SUM(view_rc_movement_production_monthly)`; the downtime
+  > fold is `view_production_daily.dt_total_hrs` SELECTed, not restated (the same fold
+  > `daily/ledger-derive.ts` mirrors client-side); `reported_days` comes from
+  > `view_digest_stream_reported_days` filtered to `stream='production'`, which OWNS the
+  > "a production day is a day with a `production_runs` child" rule. That last reuse was
+  > checked rather than assumed to be cheap: the view is a `UNION ALL` over a constant
+  > `stream` literal, so the planner prunes the other four branches to
+  > `One-Time Filter: false` — **12 shared buffers, 0.9 ms.**
+  >
+  > **PROOFS.**
+  >
+  > | Check | Result |
+  > |---|---|
+  > | `produced_kg` = `view_rc_movement_production_monthly` | **0 mismatches / 10 of 10 months**, max gap **0.0 kg** |
+  > | `produced_kg` = `view_rc_movement_yield_monthly.total_produced` | **0 mismatches / 10 of 10**, max gap **0.0 kg** |
+  > | Σ grade `kg` = parent `produced_kg` | **0 mismatches / 10 of 10**, max gap **0.0 kg** |
+  > | Σ `share_of_month_pct` = 100 | **10 / 10 months**, max deviation **1.0e-16** |
+  > | `kwh` = `view_digest_daily_power` summed | **0.00 gap** on all 4 months fully inside its 120-day window |
+  > | ₱ columns | **0 of 35** |
+  >
+  > **DOWNTIME — the real column semantics, measured.** `dt_hrs` and `dt_mins` are two
+  > COMPONENTS of one duration, not alternates: `dt_mins` never reaches 60 (max **57**),
+  > `dt_hrs` maxes at 8.0, 32 of 235 rows carry both non-zero, and **not one row** has
+  > `dt_mins = dt_hrs × 60`. So the fold is `dt_hrs + dt_mins/60` — which is exactly what
+  > `view_production_daily.dt_total_hrs` already computes, so it is SELECTed rather than
+  > written a third time. (`shift_hrs` is a separate field with only two distinct values,
+  > 9.0 and 12, and is not used here.) Sample month sanity-checked: **2026-02 = 20.82 h over
+  > 24 shifts**, ~0.87 h lost per shift, consistent with its neighbours (Jan 18.45, Mar 18.91).
+  >
+  > **THE SPINE IS PRODUCTION MONTHS ∪ ELECTRICITY MONTHS — 18 rows, not 10.** Production
+  > reporting starts 2025-11; the meters start 2025-03, so eight months carry power and no
+  > output. A production-only spine would have dropped **577,438 kWh** out of a view that has
+  > a kWh column — the silent hole this codebase keeps re-learning. They are included flagged
+  > `production_reported = false` with every production figure NULL, never 0. A page that
+  > wants the ten production months filters one boolean.
+  >
+  > **FOUR MEASURED HAZARDS, each given a companion column rather than a silent correction.**
+  >
+  > 1. **ONE MIS-KEYED METER READING IS 97% OF ITS MONTH, AND IT LOOKS LIKE A FINDING.**
+  >    2026-03-01 / MAIN reads `start_kwh = 0.0` against `end_kwh = 5641.2` — a start never
+  >    filled in, against an end that belongs to 03-03 (03-02 and 03-03 correctly re-walk
+  >    5629.9 → 5641.2). At ×120 that single row publishes **676,944 kWh** into a month whose
+  >    real consumption is ~20,000, taking 2026-03 to **696,924 kWh** against 30,996 in
+  >    February and 16,572 in April, and reporting an intensity of **0.7630 kWh/kg where the
+  >    neighbours read 0.03** — a twenty-fold efficiency collapse that never happened. The
+  >    detector is **structural, not a hardcoded date**: a `start_kwh = 0` is a genuine meter
+  >    reset only if the counter WRAPPED, i.e. this row's end is BELOW the meter's previous
+  >    end. Over all **818 readings the rule fires on exactly ONE row** — this one — and
+  >    correctly clears 2026-03-04 (start 0.0, end 2.7 after 5641.2), which is a real
+  >    rollover. `kwh` still publishes the plain sum so it can never disagree with the digest
+  >    tile; `kwh_per_produced_kg` reads **NULL rather than wrong**, and
+  >    `kwh_per_produced_kg_excl_suspect` gives the honest estimate: **0.0219**.
+  >    **⚠️ NOTHING IS REPAIRED. The underlying row is untouched** — correcting it is Renzo's
+  >    call and a separate, audited write. Flagged for him.
+  > 2. **AUGUST 2026 READS 0.00 DOWNTIME HOURS AND IT IS NOT A PERFECT MONTH.** All 23 of its
+  >    shifts filed a REPAIR reason — "CLEANED SCREEN RS 2A AND RS 2B", "CHANGED SPRING RS 1B"
+  >    — and all 23 left `dt_hrs = dt_mins = 0`. The work was recorded; the duration stopped
+  >    being filled in. On the matrix that renders as the best month ever. The two halves of
+  >    the report drifted apart in **both** directions and the history says so exactly:
+  >    Nov 2025 – Apr 2026 recorded durations and **not one reason**; reasons begin May 2026
+  >    (5 of 22); Jun/Jul record both (1 and 2 reason-only); **Aug is reason-only 23 of 23**.
+  >    `downtime_shift_count` / `downtime_shifts_with_duration` /
+  >    `downtime_shifts_reason_only` is what keeps that zero honest — a count of a real
+  >    pattern, not an invented threshold. **The page must not print August's 0.00 h without
+  >    the reason-only count beside it.**
+  > 3. **SACKS DID NOT EXIST BEFORE MAY 2026.** Zero of the 179 runs from Nov 2025 through
+  >    Apr 2026 carry `sacks_bags`; May 2026 carries **1 of 38 (2.63%)**, June 36/38, July
+  >    44/44, August 33/33. `sacks` is therefore **NULL, never 0**, on a month where no run
+  >    recorded any — "we did not count bags" and "we produced no bags" are different answers
+  >    and 0 asserts the second. `sacks_coverage_pct` is a real number even at 0.00, and
+  >    May's 2.63% is what tells a reader its 270 bags describe one run out of thirty-eight.
+  > 4. **NOVEMBER 2025 IS A THREE-DAY PRODUCTION MONTH INSIDE A FULL MONTH OF METERING.**
+  >    Reporting began 2025-11-27; the meters ran all month. So it divides 24 power-days by 3
+  >    output-days and reads **1.2766 kWh/kg against ~0.05 everywhere else** — a 25× artefact
+  >    that would be the biggest mover on any board. It is deliberately **NOT nulled**, and
+  >    the contrast with hazard 1 is the whole rule: **March's kWh is factually WRONG so its
+  >    ratio is suppressed; November's is factually RIGHT and merely NOT COMPARABLE, so it is
+  >    published beside `power_days` (24), `reported_days` (3) and `first_reported_date`
+  >    (2025-11-27), which say why.** Suppressing a correct number is how a data layer starts
+  >    lying; P2's existing first-period callout guard is the right place for the rest.
+  >
+  > Also worth carrying: **only the MAIN meter has reported since 2025-12-12** (bunkhouse and
+  > pump stopped), so `power_meter_count` reads 1 from January 2026 on and a per-meter rail
+  > would print one bar. And **`reported_days` is PRODUCTION'S OWN denominator, not the flow
+  > view's working days** — the two answer different questions and substituting one silently
+  > changes what a per-day figure means.
+  >
+  > **2026 spot table** (t = tonnes; DT rows shown as *records / with-duration / reason-only*):
+  >
+  > | 2026 | Produced t | Rep. days | t/day | Downtime h | DT rows | kWh | kWh/kg | Sacks (cov.) | Top grade |
+  > |---|---:|---:|---:|---:|:--:|---:|---:|---:|---|
+  > | Jan | 674.9 | 26 | 26.0 | 18.45 | 26/26/0 | 35,376 | 0.0524 | — (0%) | 3X50 100.00% |
+  > | Feb | 554.5 | 23 | 24.1 | 20.82 | 24/24/0 | 30,996 | 0.0559 | — (0%) | 3X50 71.53% |
+  > | Mar | 913.4 | 24 | 38.1 | 18.91 | 34/26/0 | 696,924 ⚠ | **NULL** (0.0219) | — (0%) | 3X50 100.00% |
+  > | Apr | 566.9 | 22 | 25.8 | 11.70 | 23/22/0 | 16,572 | 0.0292 | — (0%) | 3X50 100.00% |
+  > | May | 639.5 | 22 | 29.1 | 10.08 | 22/22/0 | 30,528 | 0.0477 | 270 (2.63%) | 3X50 88.30% |
+  > | Jun | 703.6 | 24 | 29.3 | 19.63 | 23/22/1 | 18,468 | 0.0262 | 23,540 (94.74%) | 3X50 93.22% |
+  > | Jul | 611.0 | 25 | 24.4 | 9.47 | 26/24/2 | 20,256 | 0.0332 | 16,799 (100%) | 3X50 70.13% |
+  > | Aug | 563.3 | 23 | 24.5 | **0.00 ⚠** | 23/**0**/23 | 15,552 | 0.0276 | 19,554 (100%) | 3X50 89.78% |
+  >
+  > March is the plant's biggest month (913 t, 38.1 t/day) and the only 100%-3X50 month
+  > besides January; July is the most mixed book on record (3X50 70.13% · 2X6 17.35% ·
+  > 4X8 12.52%). Excluding March's broken reading, power intensity trends **down** across
+  > 2026 — 0.0524 in January to 0.0276 in August — which is the owner read this view exists
+  > to make possible.
+  > ### ✅ P4 PAGE BUILT — PHASE 4 COMPLETE — 2026-09-01
+  >
+  > A **Production section** on `/analytics`, below the supplier room and above the
+  > watchlist, plus a sticky in-page anchor row that makes the now five-screen page
+  > navigable. Gates green: `tsc --noEmit` clean · `npm run lint` **146/16** (baseline, no
+  > new findings) · `npm run build` clean · `verify-table-core` **84** · `test:e2e` **57
+  > passed**. Browser-verified through a throwaway harness under `app/dev/table-playground/`
+  > (since deleted). Files: `lib/analytics/production.ts`,
+  > `app/(app)/analytics/{production-room,production-grades,analytics-nav}.tsx` (new);
+  > `lib/analytics/{types,queries,metrics,matrix,format}.ts`,
+  > `app/(app)/analytics/{analytics-view,analytics-matrix,metric-expand}.tsx`. Full detail:
+  > `app/(app)/analytics/CONTEXT.md` → "The production room (P4)".
+  >
+  > **A FIFTH CUT, NOT A SIXTH BAND.** The page now reads PERIOD → CAMPAIGN → SUPPLIER →
+  > PRODUCTION → PILE. The six rows live in the SAME `METRICS` registry and the SAME
+  > `buildMatrix` fold as the twenty above — same rollups, same expand, same callout strip —
+  > and `AnalyticsMatrix` simply gained a `sections` filter so it can be mounted twice.
+  > Production sits after the three blocks about buying and holding charcoal because that is
+  > where the kilos stop being charcoal and start being product.
+  >
+  > **`MetricSpec.annotate` is the new mechanism, and `blocksCallout` is the load-bearing
+  > field.** P2's `estimated()` means exactly one thing and its `~` copy says so; P4 has
+  > three different reasons a figure needs a caveat, so a row now carries its own mark, its
+  > own sentence and its own callout veto — evaluated over a period's MONTHS, so a quarter
+  > carries the caveat exactly as the month inside it does.
+  >
+  > **The four hazards, as shipped.**
+  >
+  > | Hazard | Treatment |
+  > |---|---|
+  > | March's mis-keyed reading | Power prints **696.9k ⚠** exactly as metered (it must agree with the digest tile); Power intensity is **blank** and prints **0.0219** beside the ⚠, labelled *"excl. the mis-keyed reading"*; the expand's line **gaps** at March (verified: the SVG path is two segments). Nothing repaired. |
+  > | August's 0.00 downtime | **⚠** + its own sentence; the expand's rail splits records into duration-recorded / repair-named-with-no-duration / neither. Verified the expand's "Lowest" reads **May 10.08 h**, not August. |
+  > | Sacks before May 2026 | **Dashes**, never zeros, with the blank's hover naming the run count; a short-coverage cell carries **~** (May: *"speaks for 1 of the period's 38 production entries — 2.6% coverage"*). |
+  > | November 2025 | Deliberately **NOT** suppressed — factually right, merely not comparable — and held out of headlines by the existing first-period guard, which was verified to still cover it. |
+  >
+  > **TWO REAL BUGS THE BUILD FOUND AND FIXED, both measured on the first render.**
+  >
+  > 1. **A weighted rollup sums its two halves INDEPENDENTLY, and the P4 spine has eight
+  >    power-only months.** The 2025 column added **577,438 kWh** to a numerator whose months
+  >    contribute nothing to the denominator and read **0.9190 kWh/kg against a true
+  >    0.1527** — six times too high, the silent-hole shape again. Both halves now gate on
+  >    one predicate (`intensityUsable`). Every other weighted row on the page is co-null by
+  >    construction; this one was not.
+  > 2. **A CHANGE needs BOTH ENDS, and `calloutable` only ever gated one.** The strip's top
+  >    line was *"Power fell 97.6% MoM in April 2026, to 16,572 kWh — the biggest
+  >    month-on-month move on the board."* April's own cell is sound and passed every
+  >    existing gate; the 97.6% is entirely the mis-keyed March it was divided by.
+  >    `MatrixCell.deltaQuotable` / `yoyQuotable` now require the base period to pass the
+  >    same gate — **a latent P1 bug**, since the period right after a metric's first was
+  >    always measuring a fall from a reporting boundary. After the fix the top line is
+  >    *"Power rose 84.2% MoM in May 2026"* — two sound months.
+  >
+  > **The grade mix CHECKS its tie rather than asserting it.** `Σ made` prints the
+  > Production output row's own `producedKg` (not a sum of the grade rows), the way `Σ
+  > market` prints P1's figure — but it also keeps the grade sum beside it and prints both,
+  > out loud, if they ever differ by more than a kilo. Verified tying exactly on every
+  > month, with every month's shares summing to 100.
+  >
+  > **NOTHING IS GATED IN THIS SECTION AND NOTHING IS NULLED.** The adapter still nulls 26
+  > ₱ fields, unchanged — the two P4 views have none to null. The whole production matrix
+  > is live for the Production role.
+  >
+  > **The anchor row** (Overview · Money · Campaigns · Suppliers · Production · Watchlist) is
+  > `sticky top-0 z-40` glass — z-40 because `.frozen-corner` is z-30 and shares the root
+  > stacking context. Two anchors are the matrix's own band `<tr>`s, because Overview and
+  > Money are bands of one table rather than blocks of their own. Verified: pinned at top 0
+  > under an AppShell-shaped container, targets landing at 96px clear of the bar, and
+  > **document height identical pinned and unpinned — no layout shift**. At 375px the page
+  > has **zero horizontal document overflow**; all four tables scroll inside their own
+  > wrappers and every frozen column is fully opaque in both themes.
+
 ## 5. Open questions for Renzo (plan finalizes on these)
 
 1. WHERE: new /analytics page (recommended) vs growing the dashboard?

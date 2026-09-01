@@ -2,20 +2,27 @@
 
 ## Purpose
 The **month-on-month room**. `/` (the Home Digest) answers *"what happened today"*; this
-answers *"what has been happening"* — twenty KPI rows × period columns, with a Y/Q/M
+answers *"what has been happening"* — twenty-six KPI rows × period columns, with a Y/Q/M
 toggle, a per-working-day normalisation, a metric dictionary at the point of use, an
 auto-generated callout strip and a per-row trend expand — plus, below the matrix, the
-**campaign-basis money panel**, the **supplier room** and the **live aging watchlist**.
+**campaign-basis money panel**, the **supplier room**, the **production room** and the
+**live aging watchlist**.
 
-The page makes **four cuts through the same yard, in this order: PERIOD → CAMPAIGN →
-SUPPLIER → PILE.** Each block re-keys the same kilos, and the order is the reason none of
-them is a tab: a reader who has just watched the Purchase volume row move wants to know
-WHO moved it, and a tab would hide exactly that.
+The page makes **five cuts through the same yard, in this order: PERIOD → CAMPAIGN →
+SUPPLIER → PRODUCTION → PILE.** Each block re-keys the same kilos, and the order is the
+reason none of them is a tab: a reader who has just watched the Purchase volume row move
+wants to know WHO moved it, and a tab would hide exactly that. Production comes fourth
+because it is where the yard's kilos stop being charcoal and start being product — after
+the three blocks that are about buying and holding it.
+
+**A slim sticky anchor row** (`analytics-nav.tsx`) sits above the controls: Overview ·
+Money · Campaigns · Suppliers · Production · Watchlist. The page runs to about five
+screens now, and P4 is what made it long.
 
 Renzo, 2026-09-01: *"a tool where I can monitor daily the KPIs we want to observe month on
 month… This is a custom Dashboard FOR ME. For MY brain."* Plan:
 `.agents/plans/ictc-analytics-dashboard-plan.md` (§4 — **P1, the matrix**; **P2, the money
-layer**; **P3, the supplier room**).
+layer**; **P3, the supplier room**; **P4, the production matrix — the page is complete**).
 
 > **Domain module (charcoal tenant).** It reads seven charcoal-shaped SQL views. Nothing
 > in `components/shared/` or `components/ui/` learns anything from it. The ONE platform
@@ -28,8 +35,9 @@ layer**; **P3, the supplier room**).
 | File | Role |
 |------|------|
 | `page.tsx` | **Server Component.** Awaits `getAnalyticsData()`, resolves the OPENING view from `searchParams` (`year` · `g` · `wd` · `metric`) and hands both to the client shell. Owns nothing else — no heading (the navbar owns the title), no aggregation, no gate of its own beyond the adapter's. Fetch inside `try/catch`, render outside it. |
-| `analytics-view.tsx` | **Client shell.** Owns the three view controls (year `Select`, Y/Q/M toggle, per-working-day `Switch`), the live block-utilization chip, the callout strip, the matrix, the expanded row, **the campaign panel, the watchlist** and the restatement footer. Calls `buildMatrix()` in a `useMemo`. |
-| `analytics-matrix.tsx` | **The matrix table** — a bespoke dense table (see "Why not the Blackwood Table"). Frozen KPI-name column, explicit `<colgroup>` widths, `width: max-content` inside `overflow-x-auto`, a trailing summary column, **section bands** and the `~` / `·` cell marks. |
+| `analytics-view.tsx` | **Client shell.** Owns the three view controls (year `Select`, Y/Q/M toggle, per-working-day `Switch`), the anchor row, the live block-utilization chip, the callout strip, the matrix, the expanded row, **the campaign panel, the supplier room, the production room, the watchlist** and the restatement footer. Calls `buildMatrix()` in a `useMemo`. It renders `AnalyticsMatrix` for the `flow` + `money` bands only; the `production` band is rendered by `production-room.tsx` from the SAME fold. |
+| `analytics-matrix.tsx` | **The matrix table** — a bespoke dense table (see "Why not the Blackwood Table"). Frozen KPI-name column, explicit `<colgroup>` widths, `width: max-content` inside `overflow-x-auto`, a trailing summary column, **section bands** (anchor targets, `id="band-<key>"`), an optional `sections` filter so the component can be mounted twice, and the `~` / `·` / `⚠` cell marks. |
+| `analytics-nav.tsx` | **P4 — the in-page anchor row.** Sticky (`top-0 z-40`), glass, six links, active section observed with an `IntersectionObserver` and claimed instantly on click. A flow element, so pinning it shifts nothing. |
 | `metric-expand.tsx` | **The row expand**, rendered BELOW the table. Stat strip + full-history chart (bar or line, **plus the dashed comparison line where a row declares a pair**) + one of four side rails (inventory split · price coverage · closed blocks · aging bands) + the dictionary spelled out. Reuses `DrilldownSection` / `DrilldownStat` / `BreakdownRail` / `DRILLDOWN_AXIS_TICK` / `drilldownTooltipChrome` from the drill-down chassis. |
 | `metric-info.tsx` | **The dictionary** at the point of use — an `Info` button with the whole entry as a native `title` (hover) and a `Popover` card (click). `DictionaryPopover` is the ONE card and takes any `MetricDictionaryEntry`; `MetricInfo` is the matrix row's wrapper over it (`METRICS[].dictionary`) and the supplier room passes `SUPPLIER_DICTIONARY` entries into the same component, so a metric and a supplier figure can never explain themselves in two layouts. |
 | `batch-cost-panel.tsx` | **P2 — the BATCH basis.** One column per production campaign, nine rows (fed · delivered ₱/kg · true ₱/kg · **cost of storage time** · weight lost · produced · yield · ₱/produced kg on both bases) plus a `blocks closed / priced` coverage line. Frozen row-label column, opens scrolled to the newest campaign. |
@@ -39,27 +47,31 @@ layer**; **P3, the supplier room**).
 | `supplier-premium.tsx` | **P3 — the ₱ read (gated).** Weighted ₱/kg paid, weighted premium vs market, priced kg, and a diverging bar per supplier. Footer prints the WEIGHTED rollup (₱0.00 by construction). |
 | `supplier-explorer.tsx` | **P3 — the three-line story.** Price × volume × active-supplier count for the year, from `AnalyticsMonth` (P1's own view) — no new read. |
 | `supplier-expand.tsx` | **P3 — one supplier's year.** Five stats, a bars + premium-line chart, a month-by-month share rail, and the returns note. |
+| `production-room.tsx` | **P4 — the PRODUCTION axis.** The section shell: the year chips (made · top grade · reported days · power), the dictionary strip, the production band of the shared matrix, its expand, and the grade mix. No ₱ anywhere, so nothing in it is gated. |
+| `production-grades.tsx` | **P4 — grade × month tonnage.** Frozen grade column, tonnes + share-of-month per cell, a YTD column, and a `Σ made` footer row that prints the Production output row's own figure — with the tie CHECKED, not assumed. |
 | `analytics-error.tsx` | Persistent, copyable load-failure banner (the project's HARD RULE applies to every error surface, not only toasts). |
 
 ### The shared library (`lib/analytics/`)
 
 | File | Role |
 |------|------|
-| `types.ts` | The contract — `AnalyticsMonth`, `CampaignCost`, `AgingWatchItem`, `AgingWatchlist`, `BlockUtilization`, `SupplierMonth`, `SupplierData`, `AnalyticsData`. Portable (no React, no Supabase, no `server-only`). **`null` is never 0 in this shape**, and the two unit conventions (fractions vs percents) are stated at the top. |
-| `metrics.ts` | **THE metric registry + dictionary.** One entry per row: label, unit, `read`, `rollup`, `deltaMode`, `perWorkingDay`, `price`, `section`, `dependsOn`, `estimated`, an optional comparison `pair`, chart shape/colours, decimals, and the plain-language definition (derived from the view COMMENTs in the P1 and P2 migrations). Pure, client-safe. |
-| `matrix.ts` | **The pure fold** — period axis, cells, deltas, YoY, the trailing summary column, the full history series, the pair history, the section grouping and the callouts, all in ONE pass over the same numbers. Pure, client-safe. |
+| `types.ts` | The contract — `AnalyticsMonth`, `CampaignCost`, `AgingWatchItem`, `AgingWatchlist`, `BlockUtilization`, `SupplierMonth`, `SupplierData`, `ProductionGradeMonth`, `ProductionGradeData`, `AnalyticsData`. Portable (no React, no Supabase, no `server-only`). **`null` is never 0 in this shape**, and the two unit conventions (fractions vs percents) are stated at the top. |
+| `metrics.ts` | **THE metric registry + dictionary.** One entry per row: label, unit, `read`, `rollup`, `deltaMode`, `perWorkingDay`, `price`, `section`, `dependsOn`, `estimated`, **`annotate`**, an optional comparison `pair`, chart shape/colours, decimals, and the plain-language definition (derived from the view COMMENTs in the P1, P2 and P4 migrations). Pure, client-safe. |
+| `matrix.ts` | **The pure fold** — period axis, cells, deltas, YoY, the trailing summary column, the full history series, the pair history, the per-period annotations, the section grouping and the callouts, all in ONE pass over the same numbers. Pure, client-safe. |
 | `supplier.ts` | **P3 — the supplier fold + its dictionary.** `buildSupplierYear` (columns, rows, YTD, concentration), `buildExplorer`, `SUPPLIER_DICTIONARY`, and **`weightedPremiumPhpKg` — the ONE function that aggregates `premium_php_kg` anywhere in the codebase.** Pure, client-safe. |
+| `production.ts` | **P4 — the grade fold + its dictionary.** `buildGradeYear` (columns, grade rows, YTD, the checked Σ tie, the top-grade read) and `PRODUCTION_DICTIONARY`. Pure, client-safe. |
 | `format.ts` | Display formatters, the blank-reason hover copy and the estimate hover. Presentation only. |
-| `queries.ts` | **The server-only ADAPTER.** Reads the eight views + the live blocking grid, applies the ₱ gate and the two honest nullings, returns `AnalyticsData`. |
+| `queries.ts` | **The server-only ADAPTER.** Reads the ten views + the live blocking grid, applies the ₱ gate and the two honest nullings, returns `AnalyticsData`. |
 
 ## Data
 
-**Eight views + one live read.** All eight analytics views are `security_invoker`,
+**Ten views + one live read.** All ten analytics views are `security_invoker`,
 `authenticated`-only, **not** granted to `service_role` (the sync worker reads none of
 them — L-044's arrow direction). Migrations
 `20260901115129_analytics_phase1_data_layer` (+ the scalar fix `20260901115314`),
-`20260901124822_analytics_phase2_money_layer` and
-`20260901133909_analytics_phase3_supplier_layer`.
+`20260901124822_analytics_phase2_money_layer`,
+`20260901133909_analytics_phase3_supplier_layer` and
+`20260901142417_analytics_phase4_production_layer`.
 
 | View | Grain | Rows | Feeds |
 |------|-------|------|-------|
@@ -71,6 +83,8 @@ them — L-044's arrow direction). Migrations
 | `view_analytics_batch_cost` | one row per campaign per year | 32 | the whole batch-cost panel |
 | `view_analytics_aging_watchlist` | one row per open pile > 1 t (**LIVE**) | 170 | the watchlist rows |
 | `view_analytics_supplier_monthly` | month × canonical supplier, MARKET only | 275 | the whole supplier room |
+| `view_analytics_production_monthly` | production months **∪ electricity months** | 18 | the six production rows |
+| `view_analytics_production_grade_monthly` | month × grade | 39 | the grade mix |
 | `view_blocking_grid` | one row per active batch (**LIVE**) | ~500 | the "148/220 blocks occupied · TODAY" chip |
 
 **Unwindowed on purpose.** CLAUDE.md's trailing-400-day idiom governs DAILY views, where
@@ -111,6 +125,42 @@ the two ₱-per-produced rows are also blank before 2025-11 (`dependsOn: product
 | 19 | Avg stock age | days | **period-end** | abs | no |
 | 20 | Stock over 120 days | % | **period-end** | abs | no |
 
+**Section `production` — P4.** Rendered by `production-room.tsx`, after the supplier room,
+from the SAME `buildMatrix` fold. **Not one row is ₱-gated and none can be** — no ₱ column
+exists in either P4 view and none is derivable (the migration asserts 0 of 35 columns match
+`php|peso|cost|price|value|amount`), so the whole band is live for the Production role and
+the adapter has nothing to null.
+
+| # | Row | Unit | Rollup (Q / Y / summary column) | Δ mode | Blank before |
+|---|-----|------|--------------------------------|--------|--------------|
+| 21 | Production output | t | sum | % | 2025-11 (`production`) |
+| 22 | Output per reported day | t | **weighted** — Σ tonnes ÷ Σ **reported days** | % | 2025-11 |
+| 23 | Downtime | hours | sum | abs | 2025-11 |
+| 24 | Power | kWh | sum | % | — (**no `dependsOn`**; the meters start 2025-03) |
+| 25 | Power intensity | kWh/kg | **weighted** — Σ kWh ÷ Σ produced kg, **paired and null-strict** | % | 2025-11 |
+| 26 | Bags counted | count | sum | % | 2026-05 in practice (NULL, never 0) |
+
+**Row 21 reads the SAME `producedKg` as the money band** — both are
+`view_rc_movement_yield_monthly.total_produced` (measured equal on 10 of 10 production
+months, max gap 0.0 kg). One field, one definition; a second would be a second definition
+waiting to drift, which is also what makes the grade mix's `Σ made` footer a tie rather
+than a coincidence.
+
+**Row 22's denominator is PRODUCTION'S OWN reported days, not the flow view's working
+days** — the yard can take in charcoal on a day the plant does not run. That is why **no
+production row is `perWorkingDay`**: the toggle would divide the plant's tonnage by the
+yard's activity and silently change what the figure means. The honest normalisation is its
+own row and says so in its dictionary.
+
+**Row 25 is PAIRED, and that was a measured bug, not a precaution.** A weighted rollup sums
+numerator and denominator INDEPENDENTLY, and the P4 spine carries **eight months with
+metered power and no production at all** (meters from 2025-03, production from 2025-11). On
+the first render the 2025 column added 577,438 kWh to a numerator whose months contribute
+nothing to the denominator and read **0.9190 kWh/kg against a true 0.1527** — six times too
+high. Both halves now gate on one predicate (`intensityUsable`): a month counts only if it
+has a sound kWh reading AND a produced figure. Every other weighted row on the page is safe
+from this by construction; this one was not.
+
 **Rows 13 and 14 READ the `_covered` figure, always.** At 100% coverage
 `delivered_php_kg_fed_covered` is byte-identical to the published `delivered_php_kg_fed`
 (checked on all 75 months), so this is not a second definition — it is the same one, made
@@ -140,7 +190,7 @@ A future `view_analytics_rcin_quarterly` would fix it properly.
 ### The ₱ gate (security boundary)
 `getAnalyticsData()` resolves `canViewPrices()` (the ONE helper, `lib/auth.ts`, which
 respects the impersonation cookie) and NULLS **26** fields before the payload leaves the
-server — the four P1 ones (`market_avg_price`, `market_php_total`, `ending_value_php`,
+server — **still 26 after P4, because the two production views have nothing to null** — — the four P1 ones (`market_avg_price`, `market_php_total`, `ending_value_php`,
 `avg_unit_cost_php_kg`) plus the eight on `view_analytics_cost_monthly`, the eight on
 `view_analytics_batch_cost`, the two on `view_analytics_aging_watchlist` and the four on
 `view_analytics_supplier_monthly` (`avg_price_php_kg`, `php_total`, `premium_php_kg`,
@@ -194,6 +244,35 @@ so no sentence about a peso can be composed for a role that may not see one.
    is misfiled paperwork, not a measurement error. It prints **−0.10%** and is never
    clamped. Same for `closed_blocks_uplift_php_kg`.
 
+### The four P4 honesty behaviours — `MetricSpec.annotate`
+P2's `estimated()` means exactly one thing (some fed kilos carry no price) and its `~`
+hover says so. P4 has THREE different reasons a figure needs a caveat, so a row may declare
+its own — a mark, its own sentence, and `blocksCallout`. The annotation is computed over a
+period's MONTHS, so a quarter carries a caveat exactly as the month inside it does.
+
+7. **One mis-keyed meter reading is 97% of its month, and it looks like a finding.**
+   2026-03-01 / MAIN reads `start_kwh = 0` against an end that was still climbing; at ×120
+   that single row publishes **676,944 kWh** into a month whose real consumption is about
+   20,000. The **Power row publishes the total exactly as metered** (it must agree with the
+   home dashboard's daily tile) with a `⚠` quantifying the bad reading. The **Power
+   intensity row is NULL-strict** — blank rather than 0.7630 against neighbours reading
+   0.03 — and prints the honest excl-suspect figure (**0.0219**) beside the ⚠, *labelled*,
+   because withholding a number the page knows is silence rather than caution. **Nothing is
+   repaired**: correcting the reading is Renzo's call and a separate, audited write.
+8. **August 2026 reads 0.00 downtime hours and it is not a perfect month.** All 23 shifts
+   named a repair and every one left the duration at zero. The cell carries a `⚠` and its
+   own sentence, and the row expand's rail splits the month's records three ways
+   (duration recorded / repair named with no duration / neither). Verified: August is
+   **not** the "Lowest" in the expand's stat strip — May's 10.08 h is.
+9. **Bags did not exist before May 2026.** `sacks` is NULL, never 0, on a month where no
+   run recorded any, and a short-coverage cell carries a `~` naming the share (May 2026:
+   *"speaks for 1 of the period's 38 production entries — 2.6% coverage"*).
+10. **November 2025 is deliberately NOT suppressed.** It divides 24 days of metering by 3
+    days of output and reads 1.2766 kWh/kg. March's kWh is factually WRONG so its ratio is
+    suppressed; November's is factually RIGHT and merely not comparable, so it is published
+    and held out of the headlines by the existing first-period guard instead. Suppressing a
+    correct number is how a page starts lying.
+
 ### Callouts (magnitude only — no thresholds)
 `buildMatrix` returns the cells AND the callouts from ONE pass, so a headline can never
 disagree with the grid beneath it. Three shapes, capped at 5, never two lines about the
@@ -222,9 +301,21 @@ the metric's first period on record:
   breaks it immediately: on the first day of a month the money rows carry one day of
   feeding against one day of production, and the strip's top line became *"₱ per produced
   kg rose 177.7% MoM in September 2026 — the biggest month-on-month move on the board."*
-  The rule is now applied once, to all three kinds.
+  The rule is now applied once, to all three kinds;
+- **nor an ANNOTATED cell (P4)** — a figure the page is itself warning about can never be
+  the thing the page leads with. Both P4 hazards would have topped the strip: August 2026's
+  0.00 downtime hours is the lowest "record" on the board, and March 2026's 696,924 kWh is
+  both the highest Power value ever and the biggest mover;
+- **and a CHANGE needs BOTH ENDS (P4, `MatrixCell.deltaQuotable` / `yoyQuotable`).**
+  `calloutable` gates the period a sentence is ABOUT; a mover is a statement about two
+  periods, so the one measured FROM has to pass the same gate. Measured on the first P4
+  render, this was the strip's top line: *"Power fell 97.6% MoM in April 2026, to 16,572
+  kWh — the biggest month-on-month move on the board."* April's own cell is sound and
+  passed every gate above; the 97.6% is entirely the mis-keyed March reading it was divided
+  by. The same shape had been latent since P1 for the period immediately after a metric's
+  first — a fall from a reporting boundary is a fact about when reporting started.
 
-All three gates are **callout-only**: every one of those cells still renders, still
+All five gates are **callout-only**: every one of those cells still renders, still
 carries its delta, and still explains itself in its hover. The row expand's
 Highest / Lowest stats read the SAME gate (`comparable`), so the strip and the drill-down
 can never name different periods; the chart still draws everything, and the stat's hover
@@ -254,7 +345,7 @@ inverts that, and breaks three of its assumptions:
    `renderChromeRow` lives INSIDE a `table-fixed` row and would be as wide as the whole
    scrolling table (~1,500px).
 
-Twelve rows also means virtualisation buys nothing. The bespoke table still obeys both
+Twenty-six rows across two mounted instances also means virtualisation buys nothing. The bespoke table still obeys both
 platform layout rules: **"never crush, always scroll"** (`table-fixed` + `width:
 max-content` + a full `<colgroup>` of explicit widths + `overflow-x-auto`, no flexible
 column) and **frozen panes are OPAQUE** (the KPI-name column is `.frozen-col` + `.frozen-edge`
@@ -268,12 +359,14 @@ is their sum. The campaign panel is the same discipline: label **208px**, each c
 `scope="focus"` hover-revealed sort/filter siblings, which a bespoke `<th>` does not have.
 
 **Section bands.** Twenty rows in one undifferentiated stack is a wall, so `groupBySection`
-splits them into `Volume & stock` and `Money` (declared on `MetricSpec.section`, ordered by
-`SECTIONS`). The band's label cell is `.frozen-col` like every other cell in that column —
-a band that scrolled away would leave the rows under it unlabelled exactly when the reader
-is furthest from the header.
+splits them into `Volume & stock`, `Money` and `Production` (declared on
+`MetricSpec.section`, ordered by `SECTIONS`), and takes an optional `only` list so the same
+component can render the first two bands at the top and the third in the production room.
+The band's label cell is `.frozen-col` like every other cell in that column — a band that
+scrolled away would leave the rows under it unlabelled exactly when the reader is furthest
+from the header — and it carries the anchor `id`.
 
-### The two panels below the matrix, and why they are not matrix rows
+### The panels below the matrix, and why they are not matrix rows
 - **The campaign panel is a different AXIS.** A campaign crosses month boundaries (AUGUST
   closed and SEPTEMBER opened on 2026-08-29), so folding it in would mean a column that is
   neither a month nor a quarter sitting beside columns that are. It also has a genuinely
@@ -361,6 +454,56 @@ own box, so there is nothing to pin against (the same reason the KPI matrix's he
 not sticky-top) — but its label cell is still `.frozen-col` + `.frozen-edge`, because the
 table does scroll sideways.
 
+### The production room (P4) — and the tie it CHECKS rather than asserts
+
+The fourth cut: **what the plant made.** A section after the supplier room, not a band at
+the top — see Purpose. Its six rows are the SAME `buildMatrix` fold as the twenty above:
+`AnalyticsMatrix` takes a `sections` filter and is mounted twice, so the two tables, the
+row expands and the callout strip are the same numbers by construction and a production
+record is judged by identical machinery. The **grade mix** follows the page's YEAR picker
+and deliberately not the Y/Q/M toggle (a quarter column of grades is a different question);
+the six matrix rows follow the toggle like everything else.
+
+**The `Σ made` footer is not a sum of the grade rows.** It prints the monthly series' own
+`producedKg` — the very field the Production output row reads — so the grade mix and that
+row cannot drift apart. The two ARE equal (Σ grade `kg` = the parent view's `produced_kg`,
+0 mismatches / 10 of 10 months, max gap 0.0 kg), and unlike the supplier room's `Σ market`
+this one **checks the tie every render**: `GradeYear.totalGradeKg` is kept beside
+`totalKg`, and when they differ by more than a kilo the footnote says so out loud with both
+figures rather than quietly showing one of them. A tie that is asserted and never checked
+is not a tie.
+
+**Every monthly share is SQL's own** (`share_of_month_pct`, whose denominator is JOINED
+from the monthly production view), so nothing here recomputes one. The YEAR share IS
+computed here, as Σ kilos ÷ Σ kilos — weighted by construction, never the mean of twelve
+monthly percentages.
+
+**Nothing in this section is gated and nothing is nulled**, because there is no ₱ in it and
+none is derivable. That is the P2 aging split taken to its limit: production is the one
+module of the platform with no money in it, and the money that MEETS production already
+lives in the money band and is gated there.
+
+Widths: grade **168px**, each month **84px**, the YTD column **112px**; `minWidth` is their
+sum. Same frozen-column discipline as the two matrices above (measured: `position: sticky`,
+`left: 0`, `z-index: 10`, a fully OPAQUE background in both themes, no backdrop-filter).
+
+### The anchor row (P4)
+`analytics-nav.tsx` — six links, `sticky top-0 z-40`, the canonical glass pattern
+(`bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60`), legal here
+because it floats over empty page background rather than over scrolling table cells (which
+are opaque, above). **z-40 and not 30**: the frozen-pane scale tops out at 30
+(`.frozen-corner`) and a sticky table corner shares the root stacking context with this bar,
+so at equal z the later element in the DOM would win.
+
+Two of the six anchors are the matrix's own **band rows** (`id="band-flow"`,
+`id="band-money"`), which is deliberate: Overview and Money are bands of one table, not
+blocks of their own, and pointing at the same table twice would be a lie about its shape.
+Every target carries `scroll-mt-24` to clear the bar. **No layout shift** — sticky never
+removes an element from flow (measured: document height identical pinned and unpinned), and
+the active state is a background change only, never a weight change or an added glyph. The
+active section is OBSERVED with an `IntersectionObserver` over the real anchors and claimed
+instantly on click, so the bar answers before the scroll finishes.
+
 ### The summary column
 The trailing column folds the whole displayed window through **the row's own rollup rule**
 (built as a synthetic `Period` so it goes down the same code path) — `2026` in M/Q view,
@@ -387,7 +530,11 @@ zero-height bars would assert the plant fed nothing), and its rolling-mean legen
 hardcoded to day/month while these buckets are months, quarters or years.
 
 ## See Also
-- `.agents/plans/ictc-analytics-dashboard-plan.md` — the plan, the analyst audit, phases P3–P4
+- `.agents/plans/ictc-analytics-dashboard-plan.md` — the plan, the analyst audit, P1–P4 (complete)
+- `supabase/migrations/20260901142417_analytics_phase4_production_layer.sql` — the P4
+  dictionary's source, and the four measured hazards each companion column exists for
+- `app/(app)/production/CONTEXT.md` — the module the production band reads, and the reason
+  there is no ₱ in it
 - `supabase/migrations/20260901115129_analytics_phase1_data_layer.sql` — the P1 metric dictionary's source
 - `supabase/migrations/20260901124822_analytics_phase2_money_layer.sql` — the P2 dictionary's source,
   and the full column-by-column reasoning behind the money layer
