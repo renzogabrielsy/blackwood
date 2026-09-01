@@ -8,7 +8,37 @@
  * --since is ROW-level and EXCLUSIVE (`txn_date <= since -> skip`), unlike MC's
  * sheet-level filter, because waste sheets are MONTHLY and individual rows can be
  * carryovers from an adjacent month (L-028). A carryover row (date's month != sheet
- * month) is still emitted with its TRUE date, plus a warning.
+ * month) is still emitted with its TRUE date, plus a note.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * THE TAB IS THE BATCH (L-046, 2026-09-01) — not the date's calendar month.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * `production_batch` used to be `NUM_TO_MONTH_NAME[row date's month]`. That is the
+ * SAME defect `productionBatch.ts` fixed on the MC side on 2026-08-03, one file
+ * over: the calendar is not the batch.
+ *
+ * Ivy files each BATCH's waste in that batch's own tab, so on a CHANGEOVER DAY the
+ * same date legitimately appears TWICE — once as the outgoing tab's last row and
+ * once as the new tab's first row, with DIFFERENT figures. A carryover date in the
+ * next tab IS the changeover signal, exactly as MC's `ENDING`/`STARTING` markers
+ * are on the runs side. Deriving the batch from the date collapsed both rows onto
+ * ONE `(transaction_date, production_batch, shift)` triplet, hence ONE shift_id,
+ * and `production_waste`'s UNIQUE(shift_id) then let only the first one through:
+ *
+ *   MEASURED (run 6649d16f, 2026-09-01). Renzo closed AUGUST and opened SEPTEMBER
+ *   both on 2026-08-29. The AUGUST tab's last row (550/550/50/196/97/50/0.5/16,
+ *   1,509.5 kg) wrote; the SEPTEMBER tab's first row, same date, DIFFERENT figures
+ *   (550/550/100/179/74/55/0.5/20, 1,528.5 kg), was HELD `already_exists`, and the
+ *   watermark had already passed 08-29 so the row-level `txnIso <= since` skip
+ *   means no future run can ever retry it.
+ *
+ *   And the fixture corpus shows the worse variant. In `production_real_latest`
+ *   the 2026-06-30 row on the `JULY 2026` tab classified VALUE_CHANGED against the
+ *   JUNE tab's own already-stored 06-30 waste row — one batch's waste proposed as
+ *   an OVERWRITE of another's, silently.
+ *
+ * The row's `transaction_date` is untouched: it is still the TRUE date the operator
+ * wrote. Only the batch it is filed under follows the tab.
  *
  * normalize_shift here is a SUBSTRING match ("MORNING"/"EVENING"/"NIGHT" in up) —
  * deliberately NOT the same function as extractMc's exact-dict-match. Kept separate.
@@ -189,11 +219,17 @@ function extractWasteSheet(ws: LoadedSheet, since: string | null): WasteRow[] {
     const txnIso = isoDate(ymd);
     if (since !== null && txnIso <= since) continue; // exclusive, silent
 
+    // The TAB names the batch (L-046). A carryover row is the changeover signal,
+    // not an error — so the note says where the row was FILED, and never implies
+    // the operator got it wrong.
+    const productionBatch = NUM_TO_MONTH_NAME[sheetMonth];
+
     const rowWarnings: string[] = [];
     if (ymd.m !== sheetMonth) {
       rowWarnings.push(
         `Carryover date ${txnIso} in sheet '${ws.name}' ` +
-          `(sheet month=${String(sheetMonth).padStart(2, "0")}) — extracted with true date`,
+          `(sheet month=${String(sheetMonth).padStart(2, "0")}) — kept its true date and ` +
+          `filed under the ${productionBatch} batch (the tab names the batch)`,
       );
     }
 
@@ -208,7 +244,6 @@ function extractWasteSheet(ws: LoadedSheet, since: string | null): WasteRow[] {
     }
 
     const shift = normalizeShift(ws.cell(r, COL_SHIFT));
-    const productionBatch = NUM_TO_MONTH_NAME[ymd.m];
     const ttlReported = coerceFloat(ws.cell(r, COL_TTL));
     const remarks = coerceStr(ws.cell(r, COL_BUYER));
 
