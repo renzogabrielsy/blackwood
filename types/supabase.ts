@@ -257,6 +257,13 @@ export type Database = {
             foreignKeyName: "fk_batch_code"
             columns: ["batch_code"]
             isOneToOne: false
+            referencedRelation: "view_analytics_aging_watchlist"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
             referencedRelation: "view_blocking_grid"
             referencedColumns: ["batch_code"]
           },
@@ -1307,6 +1314,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "batches"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_analytics_aging_watchlist"
+            referencedColumns: ["batch_id"]
           },
           {
             foreignKeyName: "usage_batch_id_fkey"
@@ -2922,6 +2936,122 @@ export type Database = {
         }
         Relationships: []
       }
+      view_analytics_aging_eom: {
+        Row: {
+          as_of_date: string | null
+          batches_over_120d: number | null
+          closed_residue_batches: number | null
+          closed_residue_kg: number | null
+          is_partial_month: boolean | null
+          kg_over_120d: number | null
+          kg_over_60d: number | null
+          month: number | null
+          month_start: string | null
+          oldest_age_days: number | null
+          open_batches: number | null
+          open_kg: number | null
+          pct_over_120d: number | null
+          pct_over_60d: number | null
+          wtd_age_days: number | null
+          year: number | null
+        }
+        Relationships: []
+      }
+      view_analytics_aging_watchlist: {
+        Row: {
+          age_days: number | null
+          as_of_date: string | null
+          balance_kg: number | null
+          batch_code: string | null
+          batch_id: string | null
+          block_loc: string | null
+          days_since_last_delivery: number | null
+          delivered_kg: number | null
+          delivered_php_kg: number | null
+          delivery_count: number | null
+          fed_kg_to_date: number | null
+          first_delivery_date: string | null
+          has_been_fed: boolean | null
+          has_unpriced_delivery: boolean | null
+          last_delivery_date: string | null
+          last_fed_date: string | null
+          status: Database["public"]["Enums"]["batch_status"] | null
+          unpriced_delivery_count: number | null
+          value_php: number | null
+        }
+        Relationships: []
+      }
+      view_analytics_batch_cost: {
+        Row: {
+          actual_fed_php_kg: number | null
+          blocks_closed: number | null
+          blocks_closed_unpriced: number | null
+          blocks_fed: number | null
+          blocks_in_price: number | null
+          blocks_open: number | null
+          campaign_fed_kg_excluded: number | null
+          campaign_fed_kg_included: number | null
+          campaign_fed_kg_included_pct: number | null
+          campaign_label: string | null
+          campaign_weighted_actual_fed_php_kg: number | null
+          campaign_year: number | null
+          delivered_php_kg: number | null
+          delivered_php_kg_fed: number | null
+          fed_kg: number | null
+          fed_kg_price_traceable: number | null
+          fed_kg_price_untraceable: number | null
+          fed_price_coverage_pct: number | null
+          fed_value_php: number | null
+          feed_days: number | null
+          first_fed_date: string | null
+          is_fully_covered: boolean | null
+          last_fed_date: string | null
+          loss_pct: number | null
+          php_per_produced_kg_delivered: number | null
+          php_per_produced_kg_true: number | null
+          process_loss_kg: number | null
+          produced_kg: number | null
+          production_batch: string | null
+          uplift_php_kg: number | null
+          weight_lost_kg: number | null
+          yield_pct: number | null
+        }
+        Relationships: []
+      }
+      view_analytics_cost_monthly: {
+        Row: {
+          as_of_date: string | null
+          closed_blocks_count: number | null
+          closed_blocks_delivered_kg: number | null
+          closed_blocks_delivered_php_kg: number | null
+          closed_blocks_fed_kg: number | null
+          closed_blocks_in_price: number | null
+          closed_blocks_loss_pct: number | null
+          closed_blocks_lost_kg: number | null
+          closed_blocks_no_delivery: number | null
+          closed_blocks_priced_fed_kg: number | null
+          closed_blocks_true_php_kg: number | null
+          closed_blocks_unpriced: number | null
+          closed_blocks_uplift_php_kg: number | null
+          delivered_php_kg_fed: number | null
+          delivered_php_kg_fed_covered: number | null
+          fed_kg: number | null
+          fed_kg_price_traceable: number | null
+          fed_kg_price_untraceable: number | null
+          fed_price_coverage_pct: number | null
+          fed_value_php: number | null
+          is_partial_month: boolean | null
+          month: number | null
+          month_start: string | null
+          php_per_produced_kg: number | null
+          php_per_produced_kg_covered: number | null
+          process_loss_kg: number | null
+          produced_kg: number | null
+          year: number | null
+          yield_pct: number | null
+        }
+        Relationships: []
+      }
       view_analytics_flow_monthly: {
         Row: {
           as_of_date: string | null
@@ -3035,6 +3165,13 @@ export type Database = {
             columns: ["batch_code"]
             isOneToOne: false
             referencedRelation: "batches"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_analytics_aging_watchlist"
             referencedColumns: ["batch_code"]
           },
           {
@@ -3416,6 +3553,13 @@ export type Database = {
             foreignKeyName: "fk_batch_code"
             columns: ["batch_code"]
             isOneToOne: false
+            referencedRelation: "view_analytics_aging_watchlist"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
             referencedRelation: "view_blocking_grid"
             referencedColumns: ["batch_code"]
           },
@@ -3559,6 +3703,13 @@ export type Database = {
             foreignKeyName: "fk_batch_code"
             columns: ["batch_code"]
             isOneToOne: false
+            referencedRelation: "view_analytics_aging_watchlist"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
             referencedRelation: "view_blocking_grid"
             referencedColumns: ["batch_code"]
           },
@@ -3632,6 +3783,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "batches"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_analytics_aging_watchlist"
+            referencedColumns: ["batch_id"]
           },
           {
             foreignKeyName: "usage_batch_id_fkey"
@@ -3752,6 +3910,13 @@ export type Database = {
             foreignKeyName: "usage_batch_id_fkey"
             columns: ["batch_id"]
             isOneToOne: false
+            referencedRelation: "view_analytics_aging_watchlist"
+            referencedColumns: ["batch_id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
             referencedRelation: "view_blocking_grid"
             referencedColumns: ["batch_id"]
           },
@@ -3822,6 +3987,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "batches"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_analytics_aging_watchlist"
+            referencedColumns: ["batch_id"]
           },
           {
             foreignKeyName: "usage_batch_id_fkey"
@@ -4024,6 +4196,13 @@ export type Database = {
             columns: ["batch_code"]
             isOneToOne: false
             referencedRelation: "batches"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_analytics_aging_watchlist"
             referencedColumns: ["batch_code"]
           },
           {

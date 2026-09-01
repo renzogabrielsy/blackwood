@@ -235,6 +235,136 @@ all history within row budgets). No new tables. No snapshot jobs.
 
 - **P2 — the money layer**: inventory value ₱, true fed ₱/kg monthly, loss % of closed
   blocks, aging profile + watchlist, ₱-per-produced-kg.
+
+  > ### ✅ P2 DATA LAYER BUILT — 2026-09-01, applied
+  >
+  > Migration `20260901124822_analytics_phase2_money_layer`. Four views, posture identical
+  > to P1 (`security_invoker` / `authenticated`-only / `anon` REVOKEd / no `service_role`);
+  > row counts **75 / 32 / 75 / 170**. Gates green: `tsc --noEmit` clean,
+  > `verify-worker-view-grants` 4 views / 0 findings. Types regenerated.
+  > **The page + server action are NOT built** — that is the frontend's half.
+  > Full column-by-column detail: CLAUDE.md → Views → "Owner analytics — THE MONEY LAYER".
+  >
+  > - **`view_analytics_cost_monthly`** (calendar basis) · **`view_analytics_batch_cost`**
+  >   (production-batch basis, decision 2) · **`view_analytics_aging_eom`** ·
+  >   **`view_analytics_aging_watchlist`**.
+  >
+  > **The governing rule: nothing that already has a definition was re-derived.** Delivered
+  > ₱/kg, actual (shrinkage-adjusted) fed ₱/kg, yield and per-block loss all come out of the
+  > existing `view_rc_movement_*` family by SELECT. Proven column-for-column: **0 mismatches
+  > on 75/75 months and 32/32 campaigns.**
+  >
+  > **THE FORMULAS, stated once.**
+  > `php_per_produced_kg` (calendar, delivered basis) = `(month_price.wtd_fed_price ×
+  > month_price.total_fed) ÷ yield_monthly.total_produced`, identically
+  > `delivered_php_kg_fed ÷ yield_pct`. `php_per_produced_kg_true` (batch basis) =
+  > `campaign_actual_price.campaign_weighted_actual_fed_php_kg ÷ campaign_yield.yield_pct` —
+  > the campaign-WEIGHTED variant, because it is the one attributed to that campaign's own
+  > fed kilos and is therefore shape-comparable to the delivered figure.
+  >
+  > **What the measurement changed about the plan.**
+  >
+  > 1. **The published monthly fed price is silently UNDERSTATED on 7 months, and P2 makes it
+  >    visible.** `view_rc_movement_month_price` prices fed kilos through each fed batch's
+  >    deliveries, so a batch with no delivery rows contributes kilos to the denominator and
+  >    nothing to the numerator. 2024-03 is **98.4% untraceable** (its price is ~1/63rd of
+  >    the truth), 2024-04 75.2%, 2024-05 52.0%, 2024-06 59.4%, 2024-09/-10 ~0.2%, and
+  >    **2026-08 2.675%** — that last one is the L-042 `FEEDING # 2` phantom, 18,650 kg,
+  >    CLAUDE.md's own KNOWN-NOT-FIXED item. `fed_price_coverage_pct` now says so, and
+  >    `php_per_produced_kg` reads NULL rather than wrong when coverage is short
+  >    (`php_per_produced_kg_covered` gives the honest estimate: 2026-08 is **₱53.07**, not
+  >    the naive ₱51.65). Nothing about the published price was changed.
+  > 2. **§2.1's aging watchlist must NOT be IN-USE only.** Measured: IN-USE holds 91,825 kg
+  >    across 3 piles over a tonne; **STORED holds 10,401,479 kg across 167**. An IN-USE-only
+  >    list would show three names and miss ten and a half million kilos of stock doing
+  >    nothing but ageing. The watchlist is `status <> 'CLOSED'`, with `status` as a column.
+  >    CLOSED is excluded for the opposite reason — its 1.17M kg is resiko, loss not stock.
+  > 3. **The same split has to happen in the month-end aging series, or the number lies.**
+  >    Counting closed-block residue makes the yard read **415.7 days weighted age with a
+  >    2,253-day-old pile**; excluding it gives **386.5 days, oldest 1,158**. Both figures are
+  >    published (`open_kg` vs `closed_residue_kg`) and their sum equals
+  >    `view_analytics_inventory_eom.positive_balance_kg` exactly on 75/75 months.
+  > 4. **Limit #2 (undated batch closes) is honoured by REUSING the existing approximation**,
+  >    not by inventing a second one: `view_rc_movement_block_actual_price.close_date` (last
+  >    feeding, or the feeding remarked CLOSED) decides both "closed in month M" and "still
+  >    open at that month-end", so the analytics layer and the RC Movement screen can never
+  >    disagree about when a block closed.
+  > 5. **Aging is balance-weighted, never FIFO, and says so.** A pile carries the kg-weighted
+  >    mean date of everything tipped into it; `rc_out` records which BATCH kilos left, never
+  >    which delivery within it, so FIFO would be fiction dressed as precision. Validated:
+  >    **SEPT-25-BLK4 = 344.81 days**, the ~345 days §2.1 quotes.
+  > 6. **§2.1's JULY 2026 figures have moved, legitimately.** CLAUDE.md records ₱47.2747 /
+  >    ₱46.2492 from 2026-08-07 when the campaign read "18 of 19 blocks closed"; the 19th has
+  >    since closed and the live campaign view now reads **₱48.2579 / ₱47.5780**. P2 matches
+  >    the live view exactly — the doc figure is a stale snapshot, not a defect.
+  > 7. **A campaign that has produced but not yet been fed still gets a row.** SEPTEMBER 2026
+  >    is exactly that today (7,506 kg produced, 0 fed, opened 2026-08-29 under L-046), which
+  >    is why the batch spine is `campaign_options UNION campaign_yield`.
+  >
+  > **UI copy the page owes.** Both `php_per_produced_kg` blanks need the coverage sentence;
+  > `closed_blocks_loss_pct` can be slightly NEGATIVE (2026-02 = −0.001022, misfiled
+  > paperwork, deliberately not clamped); `loss_pct`/`yield_pct` are FRACTIONS while
+  > `pct_over_60d`/`pct_over_120d` are PERCENTS.
+
+  > ### ✅ P2 PAGE BUILT — 2026-09-01
+  >
+  > Eight money rows in the matrix (a new **Money** section band), the **batch-basis
+  > panel** and the **live aging watchlist**. Gates green: `tsc --noEmit` clean ·
+  > `npm run lint` 146/16 (baseline, no new findings) · `npm run build` clean ·
+  > `verify-table-core` 84 · `test:e2e` 57 passed. Browser-verified through a throwaway
+  > harness under `app/dev/table-playground/` (since deleted). Files:
+  > `lib/analytics/{types,metrics,matrix,format,queries}.ts`,
+  > `app/(app)/analytics/{analytics-matrix,analytics-view,metric-expand}.tsx`, and the two
+  > new `app/(app)/analytics/{batch-cost-panel,aging-watchlist}.tsx`. Full detail:
+  > `app/(app)/analytics/CONTEXT.md`.
+  >
+  > **The rows, and the rollup each ships with.** Delivered ₱/kg fed · ₱ per produced kg
+  > (both **weighted**, Σ covered-basis fed value ÷ Σ fed kg / Σ produced kg) · Yield
+  > (**weighted**, Σproduced ÷ Σfed, ×100 on the numerator so there is no second scaling
+  > step) · Blocks closed (**sum**) · Closed-block loss (**weighted**, Σ lost ÷ Σ delivered)
+  > · True ₱/kg closed (**weighted**, Σ (true × priced fed kg) ÷ Σ priced fed kg,
+  > NULL-strict) · Avg stock age · Stock over 120 days (both **period-end**).
+  >
+  > **Three decisions the build made, and why.**
+  >
+  > 1. **Every money row READS the `_covered` figure, always** — not the published one with
+  >    a fallback. At 100% coverage the two are byte-identical on all 75 months, so this is
+  >    the same definition made honest on the seven where the published figure is silently
+  >    understated. It also defuses the movers: nothing ever compares against ₱0.30.
+  >    Coverage-short cells print `~`, and the hover names the percentage.
+  > 2. **`produced_kg = 0` is a structural zero and is NULLED** — the same argument as
+  >    `out_kg` before 2024, one stream later. 24 months publish `yield_pct = 0` because
+  >    production was not reported, not because 8,000 t of charcoal became nothing. The
+  >    adapter derives `productionRecorded` from the data (`produced_kg > 0`), never from a
+  >    date; new blank reason `no_production`.
+  > 3. **The callout guard was widened three ways, and one of them was a latent P1 bug.**
+  >    An ESTIMATE and a metric's FIRST period are now excluded (Nov 2025 reads an 11.9%
+  >    yield and ₱337/produced kg — measured to be the largest record AND largest mover on
+  >    the whole board). And **in-progress periods were excluded from RECORDS but never
+  >    from MOVERS**, which nobody noticed while every row was a volume; a ratio broke it
+  >    on the first render — *"₱ per produced kg rose 177.7% MoM in September 2026 — the
+  >    biggest month-on-month move on the board"*, off one day of data. The rule is now
+  >    applied once, to all three kinds, and the row expand's Highest/Lowest reads the same
+  >    gate so the strip and the drill-down can never name different periods.
+  >
+  > **The batch panel** is nine rows × one column per campaign (newest last, opens scrolled
+  > to it), frozen row-label column, with `cost of storage time` (`uplift_php_kg`) and
+  > `₱ per produced kg — TRUE basis` as the two starred rows and a `blocks closed / priced`
+  > coverage line in the table itself rather than only in a hover. Its spine is the UNION,
+  > so SEPTEMBER 2026 (produced, not yet fed) gets a column; columns sort by (year, month
+  > index of the batch NAME), never `first_fed_date`, which is NULL for exactly that case.
+  >
+  > **The watchlist** takes its headline from the newest `aging_eom` row rather than summing
+  > the visible rows — same population, measured equal to the kilo, and a TS sum would be a
+  > second definition of the yard's weight. Ten oldest with `Show all N`, each row
+  > deep-linking to `/inventory/blocking?block=<block_loc>` (links only for real A–D/PCA/PCB
+  > slots), and the 1,214 t / 346-block closed residue disclosed beside the headline, never
+  > inside it.
+  >
+  > **Restricted role:** 22 ₱ fields nulled server-side across the three P2 views; the
+  > money rows, the panel's four ₱ rows and the watchlist's two ₱ columns render locked,
+  > while **the entire aging story stays visible** — which is the whole reason
+  > `view_analytics_aging_eom` was built ₱-free.
 - **P3 — supplier room**: per-supplier monthly matrix (kg, share, premium/discount,
   active-months), price↔volume↔participation explorer.
 - **P4 — the pattern rollout**: same matrix chassis for Production (grades, yield, downtime)

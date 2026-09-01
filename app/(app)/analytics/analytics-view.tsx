@@ -46,6 +46,8 @@ import type { MetricKey } from "@/lib/analytics/metrics";
 import type { AnalyticsData, AnalyticsMonth } from "@/lib/analytics/types";
 import { AnalyticsMatrix } from "./analytics-matrix";
 import { MetricExpand } from "./metric-expand";
+import { BatchCostPanel } from "./batch-cost-panel";
+import { AgingWatchlist } from "./aging-watchlist";
 
 const GRANULARITIES: { key: Granularity; label: string; title: string }[] = [
   { key: "Y", label: "Y", title: "One column per year, all years" },
@@ -261,6 +263,20 @@ export function AnalyticsView({
           onClose={() => setMetric(null)}
         />
       )}
+
+      {/* ── The BATCH basis, and the live watchlist ───────────────────────
+          Both are OUTSIDE the matrix on purpose. The campaign panel is a
+          different AXIS (campaigns cross month boundaries, so a campaign is
+          not a period), and the watchlist is a different GRAIN entirely —
+          one row per named pile, today, not one column per period. Folding
+          either into the matrix would have meant a column that is neither a
+          month nor a quarter sitting beside columns that are. */}
+      <BatchCostPanel campaigns={data.campaigns} canViewPrices={data.canViewPrices} />
+
+      <AgingWatchlist
+        watchlist={data.watchlist}
+        canViewPrices={data.canViewPrices}
+      />
 
       {/* ── Footer: the restatement policy, printed once, on the page ─────
           The analyst audit's gap #4. Every figure here is rebuilt from the

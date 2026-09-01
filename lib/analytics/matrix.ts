@@ -27,8 +27,10 @@
 import type { AnalyticsMonth } from "./types";
 import {
   METRICS,
+  SECTIONS,
   type DeltaMode,
   type MetricKey,
+  type MetricSection,
   type MetricSpec,
 } from "./metrics";
 
@@ -161,6 +163,8 @@ export type BlankReason =
   | "restricted"
   /** Feedings were not being recorded yet, so half the arithmetic did not exist. */
   | "no_outflow"
+  /** Production was not being reported yet — the same shape, one stream later. */
+  | "no_production"
   /** Nothing happened, or nothing was recorded. */
   | "no_data";
 
@@ -183,6 +187,21 @@ export interface MatrixCell {
   holed: boolean;
   /** The period has not finished. */
   isPartial: boolean;
+  /**
+   * The figure is the coverage-adjusted ESTIMATE, not the strict published
+   * one — some of the kilos underneath it carry no price at all. The cell
+   * prints a `~`, and no callout may be built from it.
+   */
+  estimated: boolean;
+  /**
+   * May a headline quote this cell? False when the figure is an estimate, or
+   * when the period is the metric's FIRST on record — a stream that started
+   * part-way through a month makes that month a reporting boundary rather
+   * than a business fact (production reporting opened mid-November 2025 at a
+   * yield of 11.9% and ₱337 per produced kilo, which is not a record anyone
+   * should act on). Purely a callout gate: the cell still renders.
+   */
+  calloutable: boolean;
   /** Change against the immediately preceding period at this granularity. */
   delta: Change | null;
   /** Change against the same period one year earlier. Null in the YEAR view — it would repeat `delta`. */
@@ -203,6 +222,12 @@ export interface MatrixRow {
   total: MatrixCell | null;
   /** One per period of the FULL axis — what the row expand charts and what a record is judged against. */
   history: HistoryPoint[];
+  /**
+   * The COMPARISON series (`MetricSpec.pair`), folded through the same
+   * rollup machinery over the same periods, or null when the row has none.
+   * Same aggregation on both sides is what makes it a comparison.
+   */
+  pairHistory: HistoryPoint[] | null;
   /** The row is ₱-bearing and this viewer may not see ₱. */
   restricted: boolean;
 }
@@ -218,12 +243,20 @@ export interface HistoryPoint {
   avg: number | null;
   /** Is this period inside the currently displayed window? Drives the chart's emphasis. */
   displayed: boolean;
+  /**
+   * May a headline quote this period? Records are judged against the WHOLE
+   * history, not only the displayed window, so the gate has to live here as
+   * well as on the cell. Same rule, one computation — see the callout block
+   * comment below.
+   */
+  calloutable: boolean;
 }
 
 /** What one period contributes for one metric, before deltas are attached. */
 interface RawValue {
   value: number | null;
   holed: boolean;
+  estimated: boolean;
   blankReason: BlankReason | null;
 }
 
@@ -246,6 +279,24 @@ function sumNonNull(
 }
 
 /**
+ * Exactly what `rawValue` needs — no more. `MetricSpec` satisfies it, and so
+ * does the synthetic spec a `MetricPair` is folded through, which is what
+ * guarantees a comparison line aggregates by the SAME rules as the line it
+ * is compared against.
+ */
+type RollupSpec = Pick<
+  MetricSpec,
+  | "rollup"
+  | "read"
+  | "numerator"
+  | "denominator"
+  | "price"
+  | "perWorkingDay"
+  | "estimated"
+  | "dependsOn"
+>;
+
+/**
  * ONE period's figure for ONE metric — the whole of the rollup contract.
  *
  * `perWorkingDay` divides an additive row by the period's OWN working days
@@ -253,29 +304,56 @@ function sumNonNull(
  * arithmetically safe on a quarter and a year and not only on a month.
  */
 function rawValue(
-  spec: MetricSpec,
+  spec: RollupSpec,
   period: Period,
   opts: { canViewPrices: boolean; perWorkingDay: boolean },
 ): RawValue {
   if (spec.price && !opts.canViewPrices) {
-    return { value: null, holed: false, blankReason: "restricted" };
+    return { value: null, holed: false, estimated: false, blankReason: "restricted" };
   }
 
-  const noOutflowEverywhere = period.months.every((m) => !m.outflowRecorded);
+  // A period is an ESTIMATE if ANY month contributing to it is — a quarter
+  // that folds in August 2026's untraceable kilos is no more exact than
+  // August itself, and hiding that behind two clean months would be the
+  // silent understatement this whole layer exists to expose.
+  const estimated =
+    spec.estimated != null && period.months.some((m) => spec.estimated!(m));
 
-  const blankFor = (): BlankReason =>
-    noOutflowEverywhere &&
-    (spec.key === "rc_out" || spec.key === "net_flow" || spec.key === "runway")
-      ? "no_outflow"
-      : "no_data";
+  /**
+   * Why the blank is blank. A structural blank ("the stream did not exist
+   * yet") is a completely different statement from "nothing happened", and
+   * the row declares which streams it needs rather than this function
+   * carrying a list of metric keys that would drift.
+   */
+  const blankFor = (): BlankReason => {
+    const deps = spec.dependsOn ?? [];
+    if (deps.includes("outflow") && period.months.every((m) => !m.outflowRecorded)) {
+      return "no_outflow";
+    }
+    if (
+      deps.includes("production") &&
+      period.months.every((m) => !m.productionRecorded)
+    ) {
+      return "no_production";
+    }
+    return "no_data";
+  };
 
   if (spec.rollup === "weighted") {
     const num = sumNonNull(period.months, spec.numerator!);
     const den = sumNonNull(period.months, spec.denominator!);
+    // `<= 0` guards a zero denominator; a NEGATIVE weighted result is legal
+    // and deliberately not clamped (closed-block loss reads −0.10% in
+    // February 2026 — misfiled paperwork, shown as measured).
     if (den.total <= 0 || num.had === 0) {
-      return { value: null, holed: false, blankReason: blankFor() };
+      return { value: null, holed: false, estimated, blankReason: blankFor() };
     }
-    return { value: num.total / den.total, holed: false, blankReason: null };
+    return {
+      value: num.total / den.total,
+      holed: false,
+      estimated,
+      blankReason: null,
+    };
   }
 
   if (spec.rollup === "periodEnd") {
@@ -285,9 +363,9 @@ function rawValue(
     const last = period.months[period.months.length - 1];
     const v = spec.read(last);
     if (v == null || !Number.isFinite(v)) {
-      return { value: null, holed: false, blankReason: blankFor() };
+      return { value: null, holed: false, estimated, blankReason: blankFor() };
     }
-    return { value: v, holed: false, blankReason: null };
+    return { value: v, holed: false, estimated, blankReason: null };
   }
 
   if (spec.rollup === "peak") {
@@ -295,26 +373,31 @@ function rawValue(
       .map((m) => spec.read(m))
       .filter((v): v is number => v != null && Number.isFinite(v));
     if (vals.length === 0) {
-      return { value: null, holed: false, blankReason: blankFor() };
+      return { value: null, holed: false, estimated, blankReason: blankFor() };
     }
     return {
       value: Math.max(...vals),
       holed: vals.length < period.months.length,
+      estimated,
       blankReason: null,
     };
   }
 
   // sum
   const { total, had, missing } = sumNonNull(period.months, spec.read);
-  if (had === 0) return { value: null, holed: false, blankReason: blankFor() };
+  if (had === 0) {
+    return { value: null, holed: false, estimated, blankReason: blankFor() };
+  }
 
   if (opts.perWorkingDay && spec.perWorkingDay) {
     const days = period.months.reduce((acc, m) => acc + (m.workingDays ?? 0), 0);
-    if (days <= 0) return { value: null, holed: missing > 0, blankReason: "no_data" };
-    return { value: total / days, holed: missing > 0, blankReason: null };
+    if (days <= 0) {
+      return { value: null, holed: missing > 0, estimated, blankReason: "no_data" };
+    }
+    return { value: total / days, holed: missing > 0, estimated, blankReason: null };
   }
 
-  return { value: total, holed: missing > 0, blankReason: null };
+  return { value: total, holed: missing > 0, estimated, blankReason: null };
 }
 
 function change(
@@ -385,6 +468,28 @@ function foldPeriod(
   };
 }
 
+/** One visual band of the matrix, with the rows that belong to it. */
+export interface MatrixSection {
+  key: MetricSection;
+  label: string;
+  hint: string;
+  rows: MatrixRow[];
+}
+
+/**
+ * Rows grouped into their declared bands, in `SECTIONS` order, empty bands
+ * dropped. Presentation only — the grouping cannot change a single number,
+ * which is why it lives beside the fold rather than inside it.
+ */
+export function groupBySection(rows: readonly MatrixRow[]): MatrixSection[] {
+  return SECTIONS.map((s) => ({
+    key: s.key,
+    label: s.label,
+    hint: s.hint,
+    rows: rows.filter((r) => r.metric.section === s.key),
+  })).filter((s) => s.rows.length > 0);
+}
+
 /** THE fold. One pass, one set of numbers, shared by the grid, the charts and the callouts. */
 export function buildMatrix(
   months: readonly AnalyticsMonth[],
@@ -426,14 +531,25 @@ export function buildMatrix(
     );
     const values = raws.map((r) => r.value);
 
+    const pointLabel = (p: Period) =>
+      p.label === String(p.year) ? p.label : `${p.label} ${String(p.year).slice(2)}`;
+
+    // The metric's FIRST period on record. A stream that opened part-way
+    // through a period makes that period a reporting boundary, not a
+    // business fact — so it is the ONE period no headline may quote.
+    const firstIdx = values.findIndex((v) => v != null);
+    const quotable = (i: number) =>
+      !all[i].isPartial && !raws[i].estimated && firstIdx >= 0 && i > firstIdx;
+
     const history: HistoryPoint[] = all.map((p, i) => ({
       periodKey: p.key,
-      label: p.label === String(p.year) ? p.label : `${p.label} ${String(p.year).slice(2)}`,
+      label: pointLabel(p),
       fullLabel: p.fullLabel,
       value: values[i],
       isPartial: p.isPartial,
       avg: rollingWindow > 0 ? rollingMean(values, i, rollingWindow) : null,
       displayed: shownKeys.has(p.key),
+      calloutable: quotable(i),
     }));
 
     const cells: MatrixCell[] = shown.map((p) => {
@@ -447,6 +563,8 @@ export function buildMatrix(
         blankReason: raw.blankReason,
         holed: raw.holed,
         isPartial: p.isPartial,
+        estimated: raw.estimated,
+        calloutable: quotable(i),
         delta: change(raw.value, prev, spec.deltaMode),
         yoy:
           yoyIdx === undefined
@@ -454,6 +572,43 @@ export function buildMatrix(
             : change(raw.value, values[yoyIdx], spec.deltaMode),
       };
     });
+
+    // The comparison series, folded through the SAME rollup rules over the
+    // SAME periods. No rolling mean: two trend lines plus two smoothed ones
+    // is four series in a 260px chart, which reads as noise.
+    const pairHistory: HistoryPoint[] | null = spec.pair
+      ? all.map((p) => {
+          const raw = rawValue(
+            {
+              rollup: spec.rollup,
+              read: spec.pair!.read,
+              numerator: spec.pair!.numerator,
+              denominator: spec.pair!.denominator,
+              price: spec.price,
+              perWorkingDay: spec.perWorkingDay,
+              estimated: spec.estimated,
+              dependsOn: spec.dependsOn,
+            },
+            p,
+            {
+              canViewPrices: opts.canViewPrices,
+              perWorkingDay: opts.perWorkingDay,
+            },
+          );
+          return {
+            periodKey: p.key,
+            label: pointLabel(p),
+            fullLabel: p.fullLabel,
+            value: raw.value,
+            isPartial: p.isPartial,
+            avg: null,
+            displayed: shownKeys.has(p.key),
+            // A comparison line is context for the row's own series; it is
+            // never itself the subject of a headline.
+            calloutable: false,
+          };
+        })
+      : null;
 
     const rollOpts = {
       canViewPrices: opts.canViewPrices,
@@ -472,6 +627,10 @@ export function buildMatrix(
             blankReason: totalRaw.blankReason,
             holed: totalRaw.holed,
             isPartial: totalPeriod.isPartial,
+            estimated: totalRaw.estimated,
+            // The summary column is never a callout subject: it is a fold of
+            // the window, not a period anyone can point at.
+            calloutable: false,
             // A summary column has no "previous column" in view; the honest
             // comparison for a full year IS the year before it.
             delta: null,
@@ -484,6 +643,7 @@ export function buildMatrix(
       cells,
       total,
       history,
+      pairHistory,
       restricted: spec.price && !opts.canViewPrices,
     };
   });
@@ -518,6 +678,39 @@ export function buildMatrix(
 // A restricted (₱-withheld) row contributes nothing: its values are null,
 // so no sentence about it can be composed, and no peso reaches a role that
 // may not see one.
+//
+// ── THE P2 GUARD: AN ESTIMATE OR A FIRST PERIOD MAY NOT BE A HEADLINE ──
+// P1's population filter was "settled and non-null", which was enough while
+// every row was a plain count of things that happened. The money rows break
+// it in two measurable ways, so `MatrixCell.calloutable` (built in
+// `buildMatrix`, where the indices are known) gates every candidate here:
+//
+//   • **An ESTIMATE cannot be a record or the biggest move.** Seven months
+//     cannot price all the kilos they fed, so their money figures are
+//     extrapolations from the kilos they can trace. Quoting March 2024 —
+//     which prices 1.6% of what it fed — as the cheapest month on record
+//     would be a sentence about a hole in the data dressed as a sentence
+//     about the business.
+//   • **Nor can a metric's FIRST period.** A stream that opened part-way
+//     through a month makes that month a reporting boundary. Production
+//     reporting opened in mid-November 2025, so November reads an 11.9%
+//     yield and ₱337 per produced kilo against a real ~₱50 — the single
+//     largest "record" and "biggest move" on the whole board, and a lie
+//     about the plant. Derived from the data (the first non-null period),
+//     never from a hardcoded date, so it retires itself as history fills in.
+//
+//   • **Nor an IN-PROGRESS period, for a MOVER either.** P1 already refused
+//     to let an unfinished period set or depress a record, and stated the
+//     reason as "it is not finished" — but the mover and year-ago branches
+//     never applied it, which nobody noticed while every row was a volume.
+//     A ratio breaks it immediately: on the first day of a month the money
+//     rows carry one day of feeding against one day of production, and the
+//     strip's top line became "₱ per produced kg rose 177.7% MoM in
+//     September 2026 — the biggest month-on-month move on the board." The
+//     rule is now applied once, to all three kinds.
+//
+// All three gates are CALLOUT-ONLY. Every one of those cells still renders,
+// still carries its delta, and still says in its hover exactly what it is.
 
 export type CalloutKind = "mover" | "yoy" | "high" | "low";
 
@@ -563,6 +756,8 @@ function plainValue(spec: MetricSpec, v: number): string {
       return `${n} t`;
     case "days":
       return `${n} days`;
+    case "pct":
+      return `${n}%`;
     default:
       return n;
   }
@@ -605,6 +800,7 @@ export function buildCallouts(
     // as a finding, "suppliers fell by 2" reads as a fact.
     for (const cell of row.cells) {
       if (cell.value == null) continue;
+      if (!cell.calloutable) continue;
       if (cell.delta) {
         const moveWords =
           spec.deltaMode === "pct"
@@ -643,9 +839,13 @@ export function buildCallouts(
     }
 
     // ── 3. Records, over the metric's OWN complete history ─────────────
+    // The population is BOTH sides of the test, so an estimate or a
+    // first-period boundary is excluded from the runner-up comparison too —
+    // otherwise ₱337 in November 2025 would still be the thing every other
+    // month is measured against.
     const settled = row.history.filter(
       (h): h is HistoryPoint & { value: number } =>
-        !h.isPartial && h.value != null,
+        !h.isPartial && h.value != null && h.calloutable,
     );
     if (settled.length < MIN_HISTORY_FOR_RECORD) continue;
 

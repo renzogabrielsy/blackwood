@@ -72,6 +72,8 @@ function fmtExact(spec: MetricSpec, v: number): string {
       return `₱${n}`;
     case "php_per_kg":
       return `₱${n}`;
+    case "pct":
+      return `${n}%`;
     default:
       return n;
   }
@@ -106,23 +108,38 @@ function paddedDomain(values: number[]): [number, number] | undefined {
 function MetricTrendChart({
   spec,
   history,
+  pairHistory,
   granularity,
 }: {
   spec: MetricSpec;
   history: readonly HistoryPoint[];
+  /** The comparison series, folded by the SAME rollup rules. Null when none. */
+  pairHistory: readonly HistoryPoint[] | null;
   granularity: Granularity;
 }) {
   const tip = drilldownTooltipChrome();
   const noun = bucketNounFor(granularity);
   const avgLabel = `3-${noun} avg`;
   const unit = unitSuffix(spec.unit);
+  const pair = spec.pair ?? null;
 
   const shown = history.filter((h) => h.displayed);
   const first = shown[0]?.label;
   const last = shown[shown.length - 1]?.label;
 
-  const values = history
-    .map((h) => h.value)
+  // The pair rides on the SAME point objects, keyed by period, so recharts
+  // draws two lines over one axis rather than two charts side by side — the
+  // gap between them IS the fact, and two charts would hide it.
+  const pairByKey = new Map(
+    (pairHistory ?? []).map((p) => [p.periodKey, p.value] as const),
+  );
+  const data = history.map((h) => ({
+    ...h,
+    pair: pair ? (pairByKey.get(h.periodKey) ?? null) : null,
+  }));
+
+  const values = data
+    .flatMap((h) => [h.value, h.pair])
     .filter((v): v is number => v != null);
   const crossesZero = values.some((v) => v < 0);
   // A BAR is read as a length from the baseline, so its axis MUST include zero —
@@ -146,7 +163,7 @@ function MetricTrendChart({
   return (
     <div className="w-full" style={{ height: CHART_HEIGHT }}>
       <ResponsiveContainer width="100%" height="100%">
-        <ComposedChart data={history as HistoryPoint[]} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
+        <ComposedChart data={data} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid stroke="var(--border)" strokeOpacity={0.4} vertical={false} />
           <XAxis
             dataKey="label"
@@ -167,7 +184,7 @@ function MetricTrendChart({
             {...tip}
             formatter={(value, name) => [
               value == null ? "—" : `${fmtExact(spec, Number(value))} ${unit}`,
-              name === "avg" ? avgLabel : spec.label,
+              name === "avg" ? avgLabel : name === "pair" ? (pair?.label ?? "") : spec.label,
             ]}
             labelFormatter={(label, payload) =>
               payload?.[0]?.payload?.fullLabel ?? label
@@ -175,7 +192,9 @@ function MetricTrendChart({
           />
           <Legend
             wrapperStyle={{ fontSize: "11px", paddingTop: 4 }}
-            formatter={(v) => (v === "avg" ? avgLabel : spec.label)}
+            formatter={(v) =>
+              v === "avg" ? avgLabel : v === "pair" ? (pair?.label ?? "") : spec.label
+            }
           />
           {/* The displayed window, shaded — so the columns above and the whole
               history below are visibly the same numbers. */}
@@ -210,10 +229,27 @@ function MetricTrendChart({
               connectNulls={false}
             />
           )}
+          {/* The COMPARISON line. Dashed, so which series is the row's own is
+              never in doubt, and drawn after it so the gap reads as depth
+              below the headline figure rather than as two rival series. */}
+          {pair && (
+            <Line
+              type="monotone"
+              dataKey="pair"
+              name="pair"
+              stroke={pair.color}
+              strokeWidth={1.75}
+              strokeDasharray="4 3"
+              dot={false}
+              isAnimationActive={false}
+              connectNulls={false}
+            />
+          )}
           {/* No rolling mean at YEAR granularity — a 3-year trailing average
               over 7 points smooths away the only signal there is, and an
-              always-empty series would still claim a legend entry. */}
-          {granularity !== "Y" && (
+              always-empty series would still claim a legend entry. A pair
+              chart drops it too: four lines in 260px reads as noise. */}
+          {granularity !== "Y" && !pair && (
             <Line
               type="monotone"
               dataKey="avg"
@@ -274,6 +310,188 @@ function InventorySplit({ month }: { month: AnalyticsMonth }) {
   );
 }
 
+/**
+ * WHY A MONEY ROW'S BLANK IS BLANK, as numbers rather than as a sentence.
+ *
+ * `view_rc_movement_month_price` prices a month's fed kilos through each fed
+ * batch's own deliveries, so a batch with no delivery rows at all — old
+ * pre-system stock, and the L-042 `FEEDING # 2` phantom — puts KILOS in the
+ * denominator and NOTHING in the numerator. The published price is therefore
+ * understated by exactly the share of untraceable kilos, which is the thing
+ * this rail makes visible.
+ */
+function CoverageSplit({ month }: { month: AnalyticsMonth }) {
+  const traceable = month.fedKgPriceTraceable ?? 0;
+  const untraceable = month.fedKgPriceUntraceable ?? 0;
+  const total = traceable + untraceable;
+  // Three zero bars say less than one sentence. When there is nothing to
+  // split, the rail's own empty state is the honest render.
+  const items: RailItem[] = total <= 0 ? [] : [
+    {
+      key: "traceable",
+      label: "Kilos the price can see",
+      value: (traceable / 1000).toLocaleString("en-US", { maximumFractionDigits: 1 }),
+      unit: "t",
+      sharePct: total > 0 ? (traceable / total) * 100 : 0,
+      title: "Fed out of piles that have delivery records, so every kilo carries a price.",
+    },
+    {
+      key: "untraceable",
+      label: "Kilos with no delivery record",
+      value: (untraceable / 1000).toLocaleString("en-US", { maximumFractionDigits: 1 }),
+      unit: "t",
+      sharePct: total > 0 ? (untraceable / total) * 100 : 0,
+      title:
+        "Old pre-system stock, and the misfiled pile the sync could never place. Real charcoal, no price.",
+    },
+  ];
+  return (
+    <div className="flex flex-col gap-2">
+      <BreakdownRail items={items} emptyText="Nothing fed this month." maxHeight={120} />
+      <p className="px-3 pb-1 text-[11px] leading-relaxed text-muted-foreground">
+        Untraceable kilos drag the raw published price DOWN, because they add
+        weight to the sum and no money.{" "}
+        <strong className="font-semibold">
+          What this page shows is the price of the kilos it CAN trace
+        </strong>{" "}
+        — the honest answer — and any figure resting on less than full coverage
+        is marked <span className="font-mono">~</span> and is never quoted as a
+        record or a biggest move.
+      </p>
+    </div>
+  );
+}
+
+/** What the closed-block ₱ figures do and do not cover, that month. */
+function ClosedBlocksSplit({ month }: { month: AnalyticsMonth }) {
+  const priced = month.closedBlocksInPrice ?? 0;
+  const unpriced = month.closedBlocksUnpriced ?? 0;
+  const noDelivery = month.closedBlocksNoDelivery ?? 0;
+  const total = priced + unpriced + noDelivery;
+  const items: RailItem[] = total <= 0 ? [] : [
+    {
+      key: "priced",
+      label: "Closed and fully priced",
+      value: String(priced),
+      unit: "blocks",
+      sharePct: total > 0 ? (priced / total) * 100 : 0,
+      title: "The only blocks the peso figures are measured over.",
+    },
+    {
+      key: "unpriced",
+      label: "Awaiting a price",
+      value: String(unpriced),
+      unit: "blocks",
+      sharePct: total > 0 ? (unpriced / total) * 100 : 0,
+      title:
+        "Closed, but at least one truckload has no price yet — left out entirely rather than valued at part of its money.",
+    },
+    {
+      key: "no_delivery",
+      label: "No delivery record",
+      value: String(noDelivery),
+      unit: "blocks",
+      sharePct: total > 0 ? (noDelivery / total) * 100 : 0,
+      title: "Nothing to value at all.",
+    },
+  ];
+  return (
+    <div className="flex flex-col gap-2">
+      <BreakdownRail items={items} emptyText="No block closed this month." maxHeight={130} />
+      <p className="px-3 pb-1 text-[11px] leading-relaxed text-muted-foreground">
+        A block with one truckload still awaiting its price is left out{" "}
+        <strong className="font-semibold">entirely</strong>, never valued at part
+        of its money — a numerator missing pesos against a full denominator would
+        understate the cost and point the exact opposite way from what this row
+        exists to show. The loss percentage has no such restriction: weight is
+        physical, so it uses every closed block.
+      </p>
+    </div>
+  );
+}
+
+/** The 60/120-day bands, plus the resiko kept deliberately outside them. */
+function AgingSplit({ month }: { month: AnalyticsMonth }) {
+  const open = month.openKg ?? 0;
+  const over120 = month.kgOver120d ?? 0;
+  const over60 = Math.max((month.kgOver60d ?? 0) - over120, 0);
+  const fresh = Math.max(open - (month.kgOver60d ?? 0), 0);
+  const items: RailItem[] = open <= 0 ? [] : [
+    {
+      key: "fresh",
+      label: "Under 60 days",
+      value: (fresh / 1000).toLocaleString("en-US", { maximumFractionDigits: 1 }),
+      unit: "t",
+      sharePct: open > 0 ? (fresh / open) * 100 : 0,
+    },
+    {
+      key: "mid",
+      label: "60 to 120 days",
+      value: (over60 / 1000).toLocaleString("en-US", { maximumFractionDigits: 1 }),
+      unit: "t",
+      sharePct: open > 0 ? (over60 / open) * 100 : 0,
+    },
+    {
+      key: "old",
+      label: "Over 120 days",
+      meta: `${month.batchesOver120d ?? 0} piles`,
+      value: (over120 / 1000).toLocaleString("en-US", { maximumFractionDigits: 1 }),
+      unit: "t",
+      sharePct: open > 0 ? (over120 / open) * 100 : 0,
+      title: "The share that is quietly losing weight while the money stays spent.",
+    },
+  ];
+  return (
+    <div className="flex flex-col gap-2">
+      <BreakdownRail items={items} emptyText="No open stock." maxHeight={130} />
+      <p className="px-3 pb-1 text-[11px] leading-relaxed text-muted-foreground">
+        Closed blocks are kept OUT of all of this. Their{" "}
+        <span className="font-mono">
+          {((month.closedResidueKg ?? 0) / 1000).toLocaleString("en-US", {
+            maximumFractionDigits: 1,
+          })}{" "}
+          t
+        </span>{" "}
+        of leftover weight across {month.closedResidueBatches ?? 0} blocks is the
+        charcoal that evaporated —{" "}
+        <strong className="font-semibold">loss, not stock anyone can use</strong>{" "}
+        — and counting it made the yard read 416 days old with a six-year-old pile
+        in it, against 387 days once it is set aside. The oldest OPEN pile is{" "}
+        <span className="font-mono">
+          {month.oldestAgeDays == null
+            ? "—"
+            : Math.round(month.oldestAgeDays).toLocaleString("en-US")}
+        </span>{" "}
+        days.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Which side panel a row earns, if any. Declared here rather than on the
+ * registry because it is a LAYOUT fact about this component — the registry
+ * describes numbers, not which pane they sit beside.
+ */
+type SidePanel = "coverage" | "closed" | "aging" | null;
+
+function sidePanelFor(key: MetricSpec["key"]): SidePanel {
+  switch (key) {
+    case "delivered_fed_price":
+    case "php_per_produced":
+      return "coverage";
+    case "closed_true_price":
+    case "closed_loss":
+    case "closed_blocks":
+      return "closed";
+    case "stock_age":
+    case "over_120d":
+      return "aging";
+    default:
+      return null;
+  }
+}
+
 export interface MetricExpandProps {
   row: MatrixRow;
   granularity: Granularity;
@@ -299,6 +517,7 @@ export function MetricExpand({
   const noun = bucketNounFor(granularity);
   const unit = unitSuffix(spec.unit);
   const normalised = perWorkingDay && spec.perWorkingDay;
+  const sidePanel = sidePanelFor(spec.key);
 
   const settled = React.useMemo(
     () =>
@@ -307,16 +526,35 @@ export function MetricExpand({
       ),
     [row.history],
   );
+  /**
+   * The COMPARABLE subset — the same gate the callout strip uses, so the
+   * expand's "highest" and the strip's "on record" can never name different
+   * periods. It drops an unfinished period, a coverage-adjusted ESTIMATE,
+   * and the metric's very first period (a stream that opened mid-month is a
+   * reporting boundary, not a business fact). `settled` still describes what
+   * the chart DRAWS, which is everything.
+   */
+  const comparable = React.useMemo(
+    () => settled.filter((h) => h.calloutable),
+    [settled],
+  );
   const latest = React.useMemo(
     () => [...row.history].reverse().find((h) => h.value != null) ?? null,
     [row.history],
   );
-  const high = settled.length
-    ? settled.reduce((a, b) => (b.value > a.value ? b : a))
+  const high = comparable.length
+    ? comparable.reduce((a, b) => (b.value > a.value ? b : a))
     : null;
-  const low = settled.length
-    ? settled.reduce((a, b) => (b.value < a.value ? b : a))
+  const low = comparable.length
+    ? comparable.reduce((a, b) => (b.value < a.value ? b : a))
     : null;
+  const excluded = settled.length - comparable.length;
+  const recordScope =
+    `Across ${comparable.length} comparable ${noun}s.` +
+    ` An in-progress ${noun} cannot set a record, and neither can an estimate or the first ${noun} a figure was ever recorded.` +
+    (excluded > 0
+      ? ` ${excluded} settled ${noun}${excluded === 1 ? " is" : "s are"} held out on those grounds.`
+      : "");
 
   return (
     <section className="animate-fade-up rounded-lg border bg-card/60">
@@ -376,21 +614,22 @@ export function MetricExpand({
               value={high ? fmtExact(spec, high.value) : "—"}
               unit={high ? unit : undefined}
               sub={high?.fullLabel}
-              title={`Across ${settled.length} settled ${noun}s. An in-progress ${noun} cannot set a record.`}
+              title={recordScope}
             />
             <DrilldownStat
               label="Lowest"
               value={low ? fmtExact(spec, low.value) : "—"}
               unit={low ? unit : undefined}
               sub={low?.fullLabel}
-              title={`Across ${settled.length} settled ${noun}s. An in-progress ${noun} cannot set a record.`}
+              title={recordScope}
             />
           </div>
 
           <div
             className={cn(
               "grid grid-cols-1 gap-3",
-              spec.key === "ending_inventory" && "lg:grid-cols-[1fr_320px]",
+              (spec.key === "ending_inventory" || sidePanel) &&
+                "lg:grid-cols-[1fr_320px]",
             )}
           >
             <DrilldownSection
@@ -405,8 +644,14 @@ export function MetricExpand({
               <MetricTrendChart
                 spec={spec}
                 history={row.history}
+                pairHistory={row.pairHistory}
                 granularity={granularity}
               />
+              {spec.pair && (
+                <p className="px-1 pb-1 pt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+                  {spec.pair.note}
+                </p>
+              )}
             </DrilldownSection>
 
             {spec.key === "ending_inventory" && anchorMonth && (
@@ -416,6 +661,36 @@ export function MetricExpand({
                 bodyClassName="p-0"
               >
                 <InventorySplit month={anchorMonth} />
+              </DrilldownSection>
+            )}
+
+            {sidePanel === "coverage" && anchorMonth && (
+              <DrilldownSection
+                title="What the price can speak for"
+                subtitle={anchorMonth.monthStart.slice(0, 7)}
+                bodyClassName="p-0"
+              >
+                <CoverageSplit month={anchorMonth} />
+              </DrilldownSection>
+            )}
+
+            {sidePanel === "closed" && anchorMonth && (
+              <DrilldownSection
+                title="Blocks that closed"
+                subtitle={anchorMonth.monthStart.slice(0, 7)}
+                bodyClassName="p-0"
+              >
+                <ClosedBlocksSplit month={anchorMonth} />
+              </DrilldownSection>
+            )}
+
+            {sidePanel === "aging" && anchorMonth && (
+              <DrilldownSection
+                title="How the yard is aged"
+                subtitle={anchorMonth.monthStart.slice(0, 7)}
+                bodyClassName="p-0"
+              >
+                <AgingSplit month={anchorMonth} />
               </DrilldownSection>
             )}
           </div>
