@@ -825,3 +825,58 @@ round 1". The short version, and the two things the round deliberately refused:
 
 **What this round refused.** Nothing was dropped from the database to tidy a page, and
 "colour" was not allowed to become threshold semantics by the back door.
+
+## 7. OWNER FEEDBACK ROUND 2 APPLIED — 2026-09-02
+
+One feature: **the period filter.** Renzo, on the row expands drawing *"every month on
+record"* back to 2020 while several metrics are honestly blank for most of that stretch:
+
+> *"I would also like the option to click which years to display, which months, quarters
+> etc. We must always default this filter checklist to checking all. We should have the
+> option to select/deselect all as well."*
+
+**One checklist component (`app/(app)/analytics/period-filter.tsx`), two surfaces:** the
+matrix's period COLUMNS (beside the Y/Q/M toggle) and each row expand's chart YEARS (in the
+chart card header). Same trigger, same `All` / `None`, same Esc-and-focus-return, both
+themes, 375px clean.
+
+**The structural decision.** The state is the set of **hidden** keys, never the selected
+ones. *"Always default to checking all"* then stops being a default someone has to remember
+and becomes a property of the shape — an absent param and an empty set cannot mean "nothing
+is selected". It also gives the URL param its spelling: `?hide=` is dropped entirely when
+nothing is hidden.
+
+**Only the COLUMN filter is in the URL** (`?hide=<comma-joined period keys>`, resolved
+server-side so a shared link paints correctly first time). The expand's year selection is
+session state scoped to one card: a param carrying it would mean something different the
+moment `metric=` changed, and a shared link would arrive with a filter belonging to a row
+the recipient is not looking at.
+
+**The rule the whole feature is built around: filtering HIDES, it never RESTATES.**
+
+- The summary column re-folds over the selection through `buildMatrix`'s own machinery, so a
+  filtered price is still Σ pesos ÷ Σ priced kilos. Measured: Apr–Sep prints **₱47.93**, the
+  weighted fold, not the ₱47.85 mean of the six visible cells.
+- It is headed **`Selected`**, never a year, and its comparison chip narrows the prior year
+  to the same positions rather than comparing four months to twelve.
+- A change still reads the real neighbouring period. Measured at YEAR granularity: with 2025
+  hidden, 2026 still prints **−48.9%** (against 2025's actual value) and is *not* re-based
+  onto the visible 2024, which would read −40.9%.
+- Callouts cannot quote a hidden period, and it cost no new code: `displayed` is derived
+  from the filtered set, which the record branch already required and the mover/year-ago
+  branches get for free by walking `cells`. Measured: hiding the three months the strip was
+  naming re-ranked it with zero references to any of them.
+- The rolling average **breaks at the gap**. Hidden periods are nulled first, `rollingMean`
+  runs over that sequence, and only then are they dropped. Measured on RC OUT with 2025
+  hidden: two segments of **10 and 7** points (`12−2`, `9−2`); a bridging implementation
+  would have drawn one run of 19 straight across the hole.
+- The stat strip recomputes and **says so** — `Latest · selected`, `Highest · selected`,
+  `Lowest · selected`, and a `Selected` window figure folded by `foldSelection`. Measured:
+  `Highest` moved from Aug 2025 to Feb 2024 when 2025 was switched off.
+- Print prints the selection and names what it left out, in the paper-only title line.
+
+**What this round refused.** No number is recomputed by a second route — `foldSelection` is
+a thin wrapper over the same `foldPeriod` + `rawValue` pair every column already uses, so a
+mean of the surviving cells stays inexpressible in `matrix.ts`. And no filter is allowed to
+change an arithmetic comparison: hiding a period removes it from view and from the fold,
+never from the record a neighbouring figure is measured against.

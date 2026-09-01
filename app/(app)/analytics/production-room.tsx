@@ -278,8 +278,13 @@ export function ProductionRoom({
         expand={
           expandedRow ? (
             <MetricExpand
+              // Keyed by metric — a fresh, all-years-checked year filter per
+              // card. Same reason as the matrix at the top of the page.
+              key={expandedRow.metric.key}
               row={expandedRow}
               granularity={granularity}
+              allPeriods={matrix.allPeriods}
+              foldOptions={matrix.foldOptions}
               totalLabel={matrix.totalLabel}
               totalFullLabel={matrix.totalFullLabel}
               anchorMonth={anchorMonth}

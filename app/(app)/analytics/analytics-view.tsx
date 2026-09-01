@@ -37,6 +37,31 @@
 // INSIDE the table so it opens under the row that was clicked, and a new
 // page-level Compare control that switches the second chip under every value
 // between the year-ago percentage and the change as a real amount.
+//
+// ── OWNER FEEDBACK ROUND 2 (2026-09-02) — THE PERIOD FILTER ──────────────────
+// Renzo: *"I would also like the option to click which years to display, which
+// months, quarters etc. We must always default this filter checklist to
+// checking all. We should have the option to select/deselect all as well."*
+//
+// ONE checklist component (`period-filter.tsx`), two surfaces. Here it filters
+// the matrix's period COLUMNS — the twelve months, the four quarters, or every
+// year on record, whichever the Y/Q/M toggle is on. The row expand mounts the
+// same control over its own chart's years.
+//
+// **THIS one lives in the URL, as `?hide=`, and the expand's does not.** The
+// distinction is what the filter is ABOUT: a column selection describes the
+// page's own window, so it is shareable and must survive a refresh; the
+// expand's year selection is scoped to one metric's chart, and a param carrying
+// it would mean something different the moment `metric=` changed. Absent = all
+// columns, which is both the default and the clean address.
+//
+// **A hidden period is hidden, never restated.** `buildMatrix` drops it from
+// the columns AND from the trailing summary fold — through the same rollup
+// machinery, so a filtered price is still Σ pesos ÷ Σ priced kilos — and the
+// summary header becomes `Selected` rather than claiming a year. It does NOT
+// leave the arithmetic: a visible cell's move is still measured against the
+// period that really precedes it. Comparison uses data; display uses the
+// filter. The footer says so.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as React from "react";
@@ -69,6 +94,8 @@ import { MetricExpand } from "./metric-expand";
 import { BatchCostPanel } from "./batch-cost-panel";
 import { SupplierRoom } from "./supplier-room";
 import { ProductionRoom } from "./production-room";
+import { PeriodFilter, type PeriodFilterOption } from "./period-filter";
+import { NO_HIDDEN, serializeHidden } from "@/lib/analytics/period-selection";
 
 /**
  * The bands the TOP matrix renders. The production band is deliberately not
@@ -91,6 +118,7 @@ function syncUrl(next: {
   perWorkingDay: boolean;
   comparison: ComparisonMode;
   metric: MetricKey | null;
+  hidden: ReadonlySet<string>;
 }) {
   if (typeof window === "undefined") return;
   const url = new URL(window.location.href);
@@ -102,8 +130,20 @@ function syncUrl(next: {
   else url.searchParams.delete("cmp");
   if (next.metric) url.searchParams.set("metric", next.metric);
   else url.searchParams.delete("metric");
+  // `hide` carries the switched-OFF period keys, comma-joined, and is DROPPED
+  // when nothing is hidden — so the default view has a clean address and the
+  // param's absence is unambiguously "everything is on".
+  const hide = serializeHidden(next.hidden);
+  if (hide) url.searchParams.set("hide", hide);
+  else url.searchParams.delete("hide");
   window.history.replaceState(null, "", url.toString());
 }
+
+const PERIOD_NOUN: Record<Granularity, { one: string; many: string }> = {
+  M: { one: "month", many: "months" },
+  Q: { one: "quarter", many: "quarters" },
+  Y: { one: "year", many: "years" },
+};
 
 export interface AnalyticsViewProps {
   data: AnalyticsData;
@@ -112,6 +152,8 @@ export interface AnalyticsViewProps {
   initialPerWorkingDay: boolean;
   initialComparison: ComparisonMode;
   initialMetric: MetricKey | null;
+  /** The switched-off period keys from `?hide=`. Empty = every column. */
+  initialHidden: ReadonlySet<string>;
 }
 
 export function AnalyticsView({
@@ -121,6 +163,7 @@ export function AnalyticsView({
   initialPerWorkingDay,
   initialComparison,
   initialMetric,
+  initialHidden,
 }: AnalyticsViewProps) {
   const [year, setYear] = React.useState(initialYear);
   const [granularity, setGranularity] =
@@ -129,10 +172,21 @@ export function AnalyticsView({
   const [comparison, setComparison] =
     React.useState<ComparisonMode>(initialComparison);
   const [metric, setMetric] = React.useState<MetricKey | null>(initialMetric);
+  /**
+   * The switched-OFF period keys, across every granularity and year at once.
+   *
+   * ONE set rather than one per view, because a period key is already
+   * self-describing — `2026-03`, `2026-Q1`, `2025` — so a key belonging to a
+   * view the reader is not currently on simply matches nothing and is inert. It
+   * comes back untouched the moment they switch to that grain, and hiding March
+   * 2026 correctly does not hide March 2025.
+   */
+  const [hidden, setHidden] =
+    React.useState<ReadonlySet<string>>(initialHidden ?? NO_HIDDEN);
 
   React.useEffect(() => {
-    syncUrl({ year, granularity, perWorkingDay, comparison, metric });
-  }, [year, granularity, perWorkingDay, comparison, metric]);
+    syncUrl({ year, granularity, perWorkingDay, comparison, metric, hidden });
+  }, [year, granularity, perWorkingDay, comparison, metric, hidden]);
 
   const matrix = React.useMemo(
     () =>
@@ -141,8 +195,25 @@ export function AnalyticsView({
         year,
         canViewPrices: data.canViewPrices,
         perWorkingDay,
+        hiddenPeriods: hidden,
       }),
-    [data.months, data.canViewPrices, granularity, year, perWorkingDay],
+    [data.months, data.canViewPrices, granularity, year, perWorkingDay, hidden],
+  );
+
+  /**
+   * The checklist's option list — the window BEFORE the filter, so a hidden
+   * column can still be offered back. Each line carries the period's full name
+   * on hover, and the columns that are still in progress say so.
+   */
+  const columnOptions = React.useMemo<PeriodFilterOption[]>(
+    () =>
+      matrix.windowPeriods.map((p) => ({
+        key: p.key,
+        label: p.label,
+        meta: p.isPartial ? "in progress" : undefined,
+        title: p.fullLabel + (p.isPartial ? " — has not finished yet" : ""),
+      })),
+    [matrix.windowPeriods],
   );
 
   /**
@@ -162,13 +233,20 @@ export function AnalyticsView({
     return inWindow[inWindow.length - 1] ?? data.months[data.months.length - 1] ?? null;
   }, [matrix.periods, data.months]);
 
-  const scopeNote =
-    granularity === "Y"
+  const noun = PERIOD_NOUN[granularity];
+
+  const scopeNote = matrix.filtered
+    ? `${matrix.periods.length} of ${matrix.windowPeriods.length} ${noun.many}${granularity === "Y" ? "" : ` in ${year}`}`
+    : granularity === "Y"
       ? "every year on record"
       : `${year}${matrix.periods.some((p) => p.isPartial) ? " · the marked column is still in progress" : ""}`;
 
   /** What a printed metric card says the reader was looking at. */
-  const printScope = granularity === "Y" ? "All years" : String(year);
+  const printScope = matrix.filtered
+    ? `${granularity === "Y" ? "All years" : String(year)} · ${matrix.periods.length} of ${matrix.windowPeriods.length} ${noun.many} selected`
+    : granularity === "Y"
+      ? "All years"
+      : String(year);
 
   return (
     <div className="flex flex-col gap-4">
@@ -232,6 +310,20 @@ export function AnalyticsView({
             );
           })}
         </div>
+
+        {/* ── The column checklist (owner feedback R2) ────────────────────
+            Beside the grain toggle, because it filters exactly what that
+            toggle produced. Everything on by default; the trailing summary
+            column re-folds over whatever is left and renames itself
+            `Selected`, so a filtered total can never be read as a year. */}
+        <PeriodFilter
+          label="Columns"
+          noun={noun.one}
+          options={columnOptions}
+          hidden={hidden}
+          onChange={setHidden}
+          title={`Choose which ${noun.many} to show as columns. Everything is on by default. A hidden ${noun.one} leaves the grid and the summary column — which re-folds over the ones you kept and says "Selected" — but it never changes what a remaining column reads: a change is still measured against the ${noun.one} that really precedes it.`}
+        />
 
         {/* ── The comparison chip ────────────────────────────────────────
             OWNER FEEDBACK R1. The FIRST indicator under a value is always
@@ -358,8 +450,15 @@ export function AnalyticsView({
         expand={
           expandedRow ? (
             <MetricExpand
+              // KEYED BY METRIC — so opening a different row starts with every
+              // year checked again. The expand's own filter is session state
+              // scoped to one card; carrying it across metrics would silently
+              // apply a selection made about one figure to a different one.
+              key={expandedRow.metric.key}
               row={expandedRow}
               granularity={granularity}
+              allPeriods={matrix.allPeriods}
+              foldOptions={matrix.foldOptions}
               totalLabel={matrix.totalLabel}
               totalFullLabel={matrix.totalFullLabel}
               anchorMonth={anchorMonth}
@@ -440,6 +539,35 @@ export function AnalyticsView({
               {" "}
               Records run through{" "}
               <span className="font-mono text-foreground">{data.asOfDate}</span>.
+            </>
+          )}
+        </p>
+        {/* ── What the filters do and do not do (owner feedback R2) ──────
+            Stated on the page rather than only in the controls' hovers,
+            because the rule it describes is the one a reader would otherwise
+            have to guess at: a hidden period is invisible, not absent. */}
+        <p>
+          The <span className="font-medium text-foreground">Columns</span>{" "}
+          filter chooses which {noun.many} appear; a row expand&rsquo;s{" "}
+          <span className="font-medium text-foreground">Years</span> filter
+          chooses which years its chart draws. Both start with everything
+          checked, and both{" "}
+          <strong className="font-semibold">hide without restating</strong>: a
+          hidden period stays in the record, every change is still measured
+          against the period that really precedes it, and a year-ago chip still
+          computes when its comparison year is switched off — comparison reads
+          the data, the filter only decides what is drawn. The summary column
+          re-folds by each row&rsquo;s own rule over the {noun.many} you kept
+          and is headed{" "}
+          <span className="font-mono text-foreground">Selected</span> whenever
+          it is not the whole window.
+          {matrix.filtered && (
+            <>
+              {" "}
+              <span className="font-medium text-foreground">
+                {matrix.periods.length} of {matrix.windowPeriods.length}{" "}
+                {noun.many} shown.
+              </span>
             </>
           )}
         </p>

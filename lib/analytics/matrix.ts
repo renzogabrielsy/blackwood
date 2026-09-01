@@ -21,6 +21,21 @@
 //   • a stock level rolls up as its PERIOD-END month, never as a sum, and
 //     that too is the registry's declaration, not this module's opinion.
 //
+// ── OWNER FEEDBACK R2 (2026-09-02) — THE PERIOD FILTER ────────────────
+// `MatrixOptions.hiddenPeriods` lets the reader switch columns off, and
+// `foldSelection` lets the row expand fold an arbitrary set of periods.
+// Both go through the SAME `foldPeriod` + `rawValue` pair every column
+// already uses, so a filtered summary is Σ pesos ÷ Σ priced kilos exactly
+// as an unfiltered one is — a mean of the surviving cells is still not
+// expressible anywhere in this module.
+//
+// **Filtering HIDES, it never RESTATES.** Three consequences, all
+// deliberate: a hidden period stays in `history` (a record is still judged
+// against the metric's whole life); a visible cell's month-on-month move is
+// still measured against the period that really precedes it, on screen or
+// not; and the summary column's year-ago chip narrows the PRIOR year to the
+// same positions rather than comparing four months to twelve.
+//
 // Pure and client-safe: no React, no Supabase, no `server-only`.
 // =====================================================================
 
@@ -276,6 +291,14 @@ export interface HistoryPoint {
   /** Chart axis label — short at month granularity, so 75 bars still tick. */
   label: string;
   fullLabel: string;
+  /**
+   * The calendar year this point belongs to. Carried explicitly rather than
+   * parsed back out of `periodKey` at the point of use: the expand's own year
+   * checklist (owner feedback R2) groups by it, and a second definition of
+   * "which year is this" living in a string slice is exactly the kind of thing
+   * that drifts the day a key format changes.
+   */
+  year: number;
   value: number | null;
   isPartial: boolean;
   /** Trailing 3-period mean. Presentation smoothing only; null at YEAR granularity. */
@@ -454,8 +477,22 @@ function change(
   return { mode, value: ((current - previous) / Math.abs(previous)) * 100 };
 }
 
-/** Trailing mean over `window` periods, INCLUDING blanks as gaps (they break it). */
-function rollingMean(values: (number | null)[], i: number, window: number): number | null {
+/**
+ * Trailing mean over `window` periods, INCLUDING blanks as gaps (they break it).
+ *
+ * EXPORTED for the row expand's year checklist (owner feedback R2). When the
+ * reader switches a year off, the average must be recomputed over what is left
+ * and must NOT bridge the hole — so the expand nulls the hidden periods, calls
+ * THIS function over that sequence, and only then drops them. Any window
+ * overlapping a hidden period therefore yields null and the line breaks exactly
+ * as it already breaks at a month nothing was recorded in. Reusing this rather
+ * than re-implementing it is what keeps one definition of the smoothing.
+ */
+export function rollingMean(
+  values: readonly (number | null)[],
+  i: number,
+  window: number,
+): number | null {
   if (i + 1 < window) return null;
   let total = 0;
   for (let k = i - window + 1; k <= i; k += 1) {
@@ -466,21 +503,107 @@ function rollingMean(values: (number | null)[], i: number, window: number): numb
   return total / window;
 }
 
+/**
+ * How many periods the trailing mean spans, per granularity — and 0 at YEAR,
+ * where a 3-year average over 7 points smooths away the only signal there is.
+ * The ONE place that number is decided.
+ */
+export function rollingWindowFor(granularity: Granularity): number {
+  return granularity === "Y" ? 0 : 3;
+}
+
 export interface MatrixOptions {
   granularity: Granularity;
   year: number;
   canViewPrices: boolean;
   perWorkingDay: boolean;
+  /**
+   * OWNER FEEDBACK R2 — period keys the reader has switched OFF in the column
+   * checklist. Absent or empty means every column, which is the default and is
+   * structural: the state is what is HIDDEN, so an empty set cannot mean
+   * "nothing selected".
+   *
+   * A hidden period is removed from the columns AND from the trailing summary
+   * fold, so the summary is genuinely the selection rather than the window with
+   * a couple of columns painted out. It is NOT removed from `history`, and it
+   * is NOT removed from the arithmetic behind a neighbouring cell: a March cell
+   * still reads its move against February whether or not February is on screen.
+   * Hiding a period may never restate one.
+   */
+  hiddenPeriods?: ReadonlySet<string>;
 }
 
 export interface Matrix {
   granularity: Granularity;
+  /** The columns actually rendered — the window, minus anything switched off. */
   periods: Period[];
+  /**
+   * The window BEFORE the column filter — what the checklist lists, so the
+   * control can still offer a period back after it has been hidden.
+   */
+  windowPeriods: Period[];
+  /**
+   * The COMPLETE axis at this granularity, all history. What a row expand folds
+   * an arbitrary year selection over (`foldSelection`), so the expand's own
+   * "Selected" figure comes out of the same rollup machinery as every column.
+   */
+  allPeriods: Period[];
+  /** Some column is switched off, so the summary column is a SELECTION. */
+  filtered: boolean;
+  /**
+   * The options this matrix was folded with. Carried so a consumer re-folding a
+   * subset (the expand) cannot fold it under different rules than the grid did.
+   */
+  foldOptions: { canViewPrices: boolean; perWorkingDay: boolean };
   rows: MatrixRow[];
   callouts: Callout[];
-  /** Header for the trailing summary column — `2026` in M/Q, `All time` in Y. */
+  /**
+   * Header for the trailing summary column — `2026` in M/Q, `All time` in Y,
+   * and **`Selected` whenever a column is switched off**, because a fold over
+   * four chosen months is not the year to date and must never be labelled as
+   * one.
+   */
   totalLabel: string;
   totalFullLabel: string;
+}
+
+/** What `foldSelection` answers: one figure over an arbitrary set of periods. */
+export interface SelectionFold {
+  value: number | null;
+  blankReason: BlankReason | null;
+  holed: boolean;
+  estimated: boolean;
+  isPartial: boolean;
+  /** How many periods went into it. */
+  periodCount: number;
+}
+
+/**
+ * Fold an ARBITRARY set of periods through a row's OWN rollup rule.
+ *
+ * The row expand's year checklist needs a headline figure over whatever the
+ * reader left switched on, and the one thing it must not do is average the
+ * cells: a price is Σ pesos ÷ Σ priced kilos, a stock level is its period-end
+ * month, and a mean of twelve monthly prices is a different — wrong — number.
+ * So this is a thin wrapper over the SAME `foldPeriod` + `rawValue` pair the
+ * summary column already goes through. No new arithmetic exists here at all.
+ */
+export function foldSelection(
+  spec: MetricSpec,
+  periods: readonly Period[],
+  opts: { canViewPrices: boolean; perWorkingDay: boolean },
+): SelectionFold | null {
+  const folded = foldPeriod(periods, "__selection", "Selected", "Selected periods");
+  if (!folded) return null;
+  const raw = rawValue(spec, folded, opts);
+  return {
+    value: raw.value,
+    blankReason: raw.blankReason,
+    holed: raw.holed,
+    estimated: raw.estimated,
+    isPartial: folded.isPartial,
+    periodCount: periods.length,
+  };
 }
 
 /**
@@ -581,30 +704,64 @@ export function buildMatrix(
   opts: MatrixOptions,
 ): Matrix {
   const all = buildPeriods(months, opts.granularity);
-  const shown = displayedPeriods(all, opts.granularity, opts.year);
+  const windowPeriods = displayedPeriods(all, opts.granularity, opts.year);
+
+  // ── OWNER FEEDBACK R2 — the column checklist ──────────────────────────
+  // Hidden periods leave the COLUMNS and leave the SUMMARY fold. They do not
+  // leave `all`, so every delta and every year-ago chip is still measured
+  // against the period that really precedes it.
+  const hidden = opts.hiddenPeriods;
+  const shown =
+    hidden && hidden.size > 0
+      ? windowPeriods.filter((p) => !hidden.has(p.key))
+      : windowPeriods;
+  const filtered = shown.length < windowPeriods.length;
+  // `displayed` is what makes a hidden period unquotable by the callout strip:
+  // the record branch requires the extreme period to be displayed, and the
+  // mover / year-ago branches only ever walk `cells`, which are built from
+  // `shown`. One set, both guarantees.
   const shownKeys = new Set(shown.map((p) => p.key));
 
   const indexByKey = new Map(all.map((p, i) => [p.key, i]));
   const yoyIndex = new Map<string, number>();
   for (const p of all) yoyIndex.set(`${p.year}:${p.seq}`, indexByKey.get(p.key)!);
 
-  const rollingWindow = opts.granularity === "Y" ? 0 : 3;
+  const rollingWindow = rollingWindowFor(opts.granularity);
 
   // The trailing summary column, and — for a year-scoped view — the SAME fold
   // over the year before, so the summary carries an honest year-ago chip
   // instead of a delta against nothing.
-  const totalLabel = opts.granularity === "Y" ? "All time" : String(opts.year);
-  const totalFullLabel =
-    opts.granularity === "Y" ? "All years" : `${opts.year} · full year`;
+  const periodPlural =
+    opts.granularity === "M" ? "months" : opts.granularity === "Q" ? "quarters" : "years";
+  const windowLabel = opts.granularity === "Y" ? "All time" : String(opts.year);
+  // A fold over four chosen months is NOT the year to date. When anything is
+  // switched off the column says so in its own header rather than carrying a
+  // year label over a number that is not the year.
+  const totalLabel = filtered ? "Selected" : windowLabel;
+  const totalFullLabel = filtered
+    ? `${shown.length} of ${windowPeriods.length} ${periodPlural} selected` +
+      (opts.granularity === "Y" ? "" : ` · ${opts.year}`)
+    : opts.granularity === "Y"
+      ? "All years"
+      : `${opts.year} · full year`;
   const totalPeriod = foldPeriod(shown, "__total", totalLabel, totalFullLabel);
+  // The summary's comparison chip must compare LIKE WITH LIKE. Folding four
+  // selected months against the previous year's full twelve would not be a
+  // year-ago comparison, it would be a restatement wearing one — so the prior
+  // year is narrowed to the same positions within it.
+  const selectedSeq = new Set(shown.map((p) => p.seq));
   const priorTotalPeriod =
     opts.granularity === "Y"
       ? null
       : foldPeriod(
-          displayedPeriods(all, opts.granularity, opts.year - 1),
+          displayedPeriods(all, opts.granularity, opts.year - 1).filter(
+            (p) => !filtered || selectedSeq.has(p.seq),
+          ),
           "__total_prior",
           String(opts.year - 1),
-          `${opts.year - 1} · full year`,
+          filtered
+            ? `${opts.year - 1} · the same ${periodPlural}`
+            : `${opts.year - 1} · full year`,
         );
 
   const rows: MatrixRow[] = METRICS.map((spec) => {
@@ -642,6 +799,7 @@ export function buildMatrix(
       periodKey: p.key,
       label: pointLabel(p),
       fullLabel: p.fullLabel,
+      year: p.year,
       value: values[i],
       isPartial: p.isPartial,
       avg: rollingWindow > 0 ? rollingMean(values, i, rollingWindow) : null,
@@ -702,6 +860,7 @@ export function buildMatrix(
             periodKey: p.key,
             label: pointLabel(p),
             fullLabel: p.fullLabel,
+            year: p.year,
             value: raw.value,
             isPartial: p.isPartial,
             avg: null,
@@ -765,6 +924,13 @@ export function buildMatrix(
   return {
     granularity: opts.granularity,
     periods: shown,
+    windowPeriods,
+    allPeriods: all,
+    filtered,
+    foldOptions: {
+      canViewPrices: opts.canViewPrices,
+      perWorkingDay: opts.perWorkingDay,
+    },
     rows,
     callouts: buildCallouts(rows, opts.granularity),
     totalLabel,

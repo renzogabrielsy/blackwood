@@ -4,6 +4,10 @@
 > ten-item list. Everything below already reflects it; the round's own summary is the
 > section **"Owner feedback round 1"** near the end of this file, which is the place to
 > look for *what changed and why* rather than *what the page is*.
+>
+> **OWNER FEEDBACK ROUND 2 APPLIED — 2026-09-02.** One feature: **the period filter** —
+> a checklist on the matrix columns and a second one on each row expand's history chart.
+> See **"Owner feedback round 2 — the period filter"** near the end of this file.
 
 ## Purpose
 The **month-on-month room**. `/` (the Home Digest) answers *"what happened today"*; this
@@ -53,6 +57,7 @@ layer**; **P3, the supplier room**; **P4, the production matrix — the page is 
 | `supplier-expand.tsx` | **P3 — one supplier's year.** Five stats, a bars + premium-line chart, a month-by-month share rail, and the returns note. |
 | `production-room.tsx` | **P4 — the PRODUCTION axis.** The section shell: the year chips (made · top grade · reported days · power), the dictionary strip, the production band of the shared matrix, its expand, and the grade mix. No ₱ anywhere, so nothing in it is gated. |
 | `production-grades.tsx` | **P4 — grade × month tonnage.** Frozen grade column, tonnes + share-of-month per cell, a YTD column, and a `Σ made` footer row that prints the Production output row's own figure — with the tie CHECKED, not assumed. |
+| `period-filter.tsx` | **R2 — THE checklist popover, written once, mounted twice.** The matrix's period columns and a row expand's chart years. Trigger + `All` / `None` + a dense scrollable list of `role="checkbox"` buttons; Radix Popover gives Esc and focus-return for free. Its state is the set of **hidden** keys, never the selected ones — which is what makes "always default to all checked" a property of the shape. |
 | `analytics-error.tsx` | Persistent, copyable load-failure banner (the project's HARD RULE applies to every error surface, not only toasts). |
 
 ### The shared library (`lib/analytics/`)
@@ -64,6 +69,7 @@ layer**; **P3, the supplier room**; **P4, the production matrix — the page is 
 | `matrix.ts` | **The pure fold** — period axis, cells, deltas (percentage AND `deltaAbs`), YoY, the trailing summary column, the full history series, the pair history, the per-period annotations, the section grouping and the callouts, all in ONE pass over the same numbers. Also owns `ComparisonMode` / `COMPARISON_MODES`. Pure, client-safe. |
 | `supplier.ts` | **P3 — the supplier fold + its dictionary.** `buildSupplierYear` (columns, rows, YTD, concentration), `buildExplorer`, `SUPPLIER_DICTIONARY`, and **`weightedPremiumPhpKg` — the ONE function that aggregates `premium_php_kg` anywhere in the codebase.** Pure, client-safe. |
 | `production.ts` | **P4 — the grade fold + its dictionary.** `buildGradeYear` (columns, grade rows, YTD, the checked Σ tie, the top-grade read) and `PRODUCTION_DICTIONARY`. Pure, client-safe. |
+| `period-selection.ts` | **R2 — the hidden set's URL codec** (`NO_HIDDEN`, `serializeHidden`, `parseHidden`). A separate module from `period-filter.tsx` for one reason: that file is `"use client"`, and a plain function exported from a client module becomes a client REFERENCE, so the Server Component calling it would fail at request time rather than at build time. Pure, importable from both sides. |
 | `format.ts` | Display formatters, the blank-reason hover copy and the estimate hover. Presentation only. |
 | `queries.ts` | **The server-only ADAPTER.** Reads the **nine** views + the live blocking grid, applies the ₱ gate and the two honest nullings, returns `AnalyticsData`. |
 
@@ -425,8 +431,9 @@ from `searchParams` like every other control. Verified across all three granular
 `M` prints `▼−4.6%` + `Y −4.4%` / `Δ −63.8`; `Y` prints `▼−32.0%` + `Δ −6,203.6`.
 
 ### View state
-Year, granularity, the working-day toggle and the expanded metric are **React state that
-writes itself into the URL** with `window.history.replaceState`. The house rule (URL params
+Year, granularity, the working-day toggle, the comparison chip, the expanded metric and
+(R2) **the hidden period columns (`hide`)** are **React state that writes itself into the
+URL** with `window.history.replaceState`. The house rule (URL params
 drive filters) exists because a filter changes what the SERVER reads — here nothing does:
 the adapter returns all history in one payload and every control re-slices what the browser
 already holds. Routing them through `router.replace` would re-run four Supabase reads to
@@ -680,6 +687,129 @@ crosses the wire. And no threshold colouring was introduced: item 6 asked for co
 got identity and direction, which are facts, not the target-based judgement the plan still
 withholds until Renzo states real targets.
 
+## Owner feedback round 2 — the period filter, 2026-09-02
+
+Renzo, on the row expands drawing *"every month on record"* back to 2020 while several
+metrics are honestly blank for most of it: *"I would also like the option to click which
+years to display, which months, quarters etc. We must always default this filter checklist
+to checking all. We should have the option to select/deselect all as well."*
+
+**ONE checklist component, two surfaces** — `period-filter.tsx`, mounted by the controls
+row (matrix COLUMNS) and by each row expand's chart card header (chart YEARS). Same
+trigger, same `All` / `None`, same dense list, same Esc-and-focus-return, both themes.
+
+### The one structural decision: the state is what is HIDDEN
+Never the selected set. *"Always default to checking all"* then stops being a default
+somebody has to remember and becomes a property of the shape: an absent param and an empty
+set **cannot** mean "nothing is selected", they can only mean "everything is". It also
+gives the URL param its spelling — `?hide=` is simply dropped when nothing is hidden, so
+the default view has a clean address and the param's presence always means something.
+
+### The URL param, and why only ONE of the two filters is in it
+`?hide=<comma-joined period keys>`, resolved server-side by `parseHidden` exactly like
+`year` / `g` / `wd` / `cmp` / `metric`, so a filtered link renders correctly on the FIRST
+paint. **The expand's year selection is deliberately NOT in the URL** — it is scoped to one
+metric's chart, so a param carrying it would silently mean something different the moment
+`metric=` changed and a shared link would arrive with a filter belonging to a row the
+recipient is not looking at. Both call sites `key` the expand by metric, so opening a
+different row starts with every year checked.
+
+**ONE hidden set spans every granularity and year**, because a period key is already
+self-describing (`2026-03`, `2026-Q1`, `2025`): a key belonging to a view the reader is not
+on matches nothing and is inert, and comes back intact when they return to that grain.
+Verified: hiding Jan/Feb/Mar in M, switching to Q (all quarters back), hiding Q1/Q3, then
+switching back to M returns Apr/Aug/Sep exactly. `All` clears only the keys the control
+itself owns, so the month view's `All` cannot silently un-hide a quarter.
+
+### The honesty rule: filtering HIDES, it never RESTATES
+Three consequences, all deliberate and all measured in the browser:
+
+1. **The summary column re-folds over the selection, through the same machinery.**
+   `buildMatrix` drops hidden periods from `shown`, and `shown` is what `foldPeriod` builds
+   the total from — so a filtered price is still Σ pesos ÷ Σ priced kilos. **Measured:**
+   over Apr–Sep the Market price summary prints **₱47.93**, which is the kg-weighted fold
+   (47.9312) and **not** the mean of the six visible cells (47.8500). A mean of the
+   surviving cells is not expressible anywhere in `matrix.ts`, filtered or not.
+2. **The header says `Selected`, never a year.** A fold over four chosen months is not the
+   year to date, so `totalLabel` becomes `Selected` and its hover reads *"6 of 9 months
+   selected · 2026"*. Its comparison chip narrows the PRIOR year to the same positions
+   (`selectedSeq`) rather than comparing four months to twelve.
+3. **A comparison still reads the real neighbouring period.** **Measured at YEAR
+   granularity:** with 2025 hidden, 2026 still prints `▼−48.9%` — its change against 2025's
+   actual value — and is *not* silently re-based onto the visible 2024 (which would read
+   −40.9%). Comparison uses the data; the filter only decides what is drawn. The page
+   footer says this in plain language, and so does each control's hover.
+
+### Callouts cannot quote a hidden period, and it costs no new code
+`shownKeys` is built from the FILTERED `shown`, so `HistoryPoint.displayed` is false for a
+hidden period — and the record branch already required `displayed`, while the mover and
+year-ago branches only ever walk `cells`, which are built from `shown`. One set, both
+guarantees. **Measured:** hiding May/June/July — the three months the strip was naming —
+re-ranked it onto April and August with zero references to any hidden month. The record
+POPULATION is deliberately still the metric's whole history: a record is judged against the
+metric's life and merely *reported* when it falls in the window, which filtering must not
+change.
+
+### The rolling average breaks at the gap — the order of operations IS the feature
+In the expand, hidden periods are **nulled first**, `rollingMean` is run over that nulled
+sequence, and only **then** are they dropped. Any window overlapping a hidden year yields
+null, so the smoothed line breaks exactly as it already does at a month nothing was
+recorded in. Filtering first and averaging after would have drawn a line straight across a
+hole the reader made and called it a trend.
+
+**Measured on RC OUT (values 2024-01 … 2026-09) with 2025 hidden:** the average path is
+**two segments of 10 and 7 points** — precisely `12−2` and `9−2`. A bridging implementation
+would have produced one run of 19. `rollingMean` and `rollingWindowFor` are exported from
+`matrix.ts` and reused rather than re-implemented, so there is one definition of the
+smoothing and of the 3-period window.
+
+### The stat strip recomputes, and says so
+`Latest`, `Highest` and `Lowest` all carry **`· selected`** while filtered, because
+"Highest" over three chosen years is a different claim from "Highest" over the record; the
+window stat becomes **`Selected`**, folded by `foldSelection` — a thin wrapper over the same
+`foldPeriod` + `rawValue` pair every column uses, which is why it needed `Matrix.allPeriods`
+(a rollup needs the MONTHS underneath; no amount of averaging the chart's points can
+produce a weighted price). **Measured on RC OUT with 2025 hidden:** `Highest` moved from
+August 2025 (1,685.8 t) to February 2024 (1,679.1 t), and the window stat from
+`2026 · 8,687.9 t` to `Selected · 23,388.0 t · 6 of 7 years · 63 months`. `recordScope`
+gains a sentence naming how many years are switched on.
+
+### Two empty states, because they are two different facts
+`None` on the columns prints *"Every column is switched off… all 9 are still there"* rather
+than "no months recorded" — the window genuinely being empty is a fact about the data,
+every column being off is a state the reader created a second ago, and conflating them
+would send them looking for a bug. Same split in the chart.
+
+### The years list shows COVERAGE, which is the point
+Each year carries `withValue/total` — RC OUT reads `2020 0/6`, `2021 0/12`, `2022 0/12`,
+`2023 0/12`, `2024 12/12`, `2026 9/9`. The whole reason the control exists is that some
+rows are honestly blank for years at a time; a reader deciding what to put away should be
+able to see which years those are **without switching them off first**.
+
+### Print prints the SELECTION, and says what it left out
+The chart renders the filtered series, the Years control is `data-print-hide`, and the
+paper-only title line names both filters. **Measured under the real print rules** (every
+`@media print` block lifted into a live stylesheet, including the nested Tailwind `print:`
+variants): card at `top: 0`, on-screen header hidden, print title shown, Years control
+`display: none`, **21 filtered bars printed rather than 33**, and the title reading
+*"RC OUT · tonnes fed · 2026 · 7 of 9 months selected · month columns · records through
+2026-09-02 / History filtered to 2020, 2021, 2022, 2023, 2024, 2026 (6 of 7 years). Hidden
+years are not restated…"*. A printed chart that silently omits three years is exactly what
+this page's restatement policy exists to prevent.
+
+### One platform-adjacent change
+`DrilldownSection` (`components/digest/drilldown/drilldown-modal.tsx`) gained an optional
+`action` slot in its header, so the expand's checklist can sit beside the subtitle. Purely
+additive — omitted, the header renders as before; the header's cross-axis alignment moved
+from `items-baseline` to `items-center` so a control lines up with the text.
+
+### Verified in the browser (throwaway harness, since deleted)
+Both themes, 1280px and 375px (**zero horizontal document overflow**, both popovers inside
+the viewport at 248px wide), Esc closes and returns focus to the trigger, `?hide=`
+round-trips through a fresh server render (`3 of 9 months`, summary 3,213.9 t = the three
+kept months), `All` / `None` behave, and the grain round-trip preserves each grain's own
+selection.
+
 ### Open backend handoff — an open-piles inventory VALUE
 
 ```
@@ -719,8 +849,9 @@ have been wrong on five of the twelve rows.
 - `lib/analytics/*` (own), `lib/auth.ts` (`canViewPrices`), `lib/supabase/server.ts`
 - `components/ui/{popover,select,switch}`, `lib/utils` (`cn`), `recharts`, `lucide-react`,
   `next/link` (only the unmounted watchlist still imports it)
-- `components/digest/drilldown/drilldown-modal.tsx` — `DrilldownSection`,
-  `DrilldownStat`, `DRILLDOWN_AXIS_TICK`, `drilldownTooltipChrome`
+- `components/digest/drilldown/drilldown-modal.tsx` — `DrilldownSection` (whose optional
+  `action` header slot R2 added), `DrilldownStat`, `DRILLDOWN_AXIS_TICK`,
+  `drilldownTooltipChrome`
 - `components/digest/drilldown/series-parts.tsx` — `BreakdownRail`, `RailItem`
 
 **What imports THIS module:** nothing. The four digest drill-downs link to `/analytics`

@@ -338,12 +338,19 @@ export function DrilldownStat({
 export function DrilldownSection({
   title,
   subtitle,
+  action,
   className,
   bodyClassName,
   children,
 }: {
   title: string;
   subtitle?: string;
+  /**
+   * An optional control in the card header, right of the subtitle — the
+   * analytics row expand's year checklist (owner feedback R2) mounts here.
+   * Purely additive: omitted, the header renders exactly as it always has.
+   */
+  action?: React.ReactNode;
   className?: string;
   bodyClassName?: string;
   children: React.ReactNode;
@@ -352,13 +359,18 @@ export function DrilldownSection({
     <section
       className={cn("flex min-w-0 flex-col rounded-lg border bg-card/60", className)}
     >
-      <header className="flex shrink-0 items-baseline justify-between gap-2 border-b px-3 py-2">
-        <h4 className="text-xs font-semibold tracking-tight">{title}</h4>
-        {subtitle && (
-          <span className="shrink-0 text-[10.5px] text-muted-foreground">
-            {subtitle}
-          </span>
-        )}
+      <header className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2">
+        <h4 className="min-w-0 truncate text-xs font-semibold tracking-tight">
+          {title}
+        </h4>
+        <span className="flex shrink-0 items-center gap-2">
+          {subtitle && (
+            <span className="text-[10.5px] text-muted-foreground">
+              {subtitle}
+            </span>
+          )}
+          {action}
+        </span>
       </header>
       <div className={cn("min-w-0 p-3", bodyClassName)}>{children}</div>
     </section>
