@@ -60,7 +60,10 @@ export function RcOutDrilldownModal({
         modal.range === "ytd" ? "month" : "day"
       }${asOfNote(data?.asOf)}`}
       skeleton={<DrilldownChartSkeleton stats={4} sideRail tableRows={6} />}
-      footerLink={{ href: "/inventory/rc-out", label: "Open RC OUT" }}
+      footerLink={[
+        { href: "/inventory/rc-out", label: "Open RC OUT" },
+        { href: "/analytics?metric=rc_out", label: "Full analytics" },
+      ]}
     >
       {data && <RcOutDrilldownBody data={data} />}
     </DrilldownModal>

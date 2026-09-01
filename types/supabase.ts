@@ -10,7 +10,7 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.17"
+    PostgrestVersion: "14.5"
   }
   graphql_public: {
     Tables: {
@@ -2922,6 +2922,71 @@ export type Database = {
         }
         Relationships: []
       }
+      view_analytics_flow_monthly: {
+        Row: {
+          as_of_date: string | null
+          delivery_count: number | null
+          feeding_count: number | null
+          in_kg: number | null
+          in_per_working_day: number | null
+          is_partial_month: boolean | null
+          month: number | null
+          month_start: string | null
+          net_kg: number | null
+          out_kg: number | null
+          out_per_working_day: number | null
+          working_days: number | null
+          year: number | null
+        }
+        Relationships: []
+      }
+      view_analytics_inventory_eom: {
+        Row: {
+          active_batches: number | null
+          as_of_date: string | null
+          avg_unit_cost_php_kg: number | null
+          batches_with_balance: number | null
+          ending_kg: number | null
+          ending_value_php: number | null
+          is_partial_month: boolean | null
+          month: number | null
+          month_start: string | null
+          negative_balance_kg: number | null
+          negative_batch_count: number | null
+          out_kg: number | null
+          out_per_working_day: number | null
+          outflow_recorded: boolean | null
+          positive_balance_kg: number | null
+          runway_days: number | null
+          unvalued_kg: number | null
+          value_coverage_pct: number | null
+          valued_kg: number | null
+          working_days: number | null
+          year: number | null
+        }
+        Relationships: []
+      }
+      view_analytics_rcin_monthly: {
+        Row: {
+          active_suppliers: number | null
+          all_arrivals_kg: number | null
+          delivery_count: number | null
+          market_avg_price: number | null
+          market_delivery_count: number | null
+          market_kg: number | null
+          market_php_total: number | null
+          market_priced_kg: number | null
+          month: number | null
+          month_start: string | null
+          price_coverage_pct: number | null
+          recook_delivery_count: number | null
+          recook_kg: number | null
+          sundry_reentry_delivery_count: number | null
+          sundry_reentry_kg: number | null
+          year: number | null
+        }
+        Relationships: []
+      }
       view_blocking_grid: {
         Row: {
           avg_ash: number | null
@@ -4344,6 +4409,10 @@ export type Database = {
       fn_bulk_update_deliveries: { Args: { rows: Json }; Returns: undefined }
       fn_bulk_update_usage: { Args: { rows: Json }; Returns: undefined }
       fn_close_batch: { Args: { p_batch_id: string }; Returns: boolean }
+      fn_delivery_class: {
+        Args: { p_batch_code: string; p_remarks?: string; p_supplier?: string }
+        Returns: string
+      }
       fn_flecon_replace_date: {
         Args: { p_date: string; p_rows?: Json }
         Returns: Json

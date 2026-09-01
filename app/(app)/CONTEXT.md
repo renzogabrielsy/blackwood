@@ -449,6 +449,16 @@ human-edit latch on the six production FACT tables (untouched).
   empty (no redundant title). The digest renders its own sub-band header only.
   Since 2026-08-28 NO registry entry consults query params (the `/?view=schedule`
   entry was the only one); the `params` argument is still threaded through.
+- **Gateway to `/analytics` (2026-09-01)** — the digest is the DAILY room; the
+  month-on-month room is the new `/analytics` page. Four drill-down modals now
+  carry a SECOND footer link, `Full analytics →`, deep-linked to the matching KPI
+  row (`?metric=`): RC IN → `purchase_volume`, RC IN price → `market_price`,
+  RC OUT → `rc_out`, Flow → `net_flow` / `rc_in_total` by emphasis. That needed
+  ONE platform change: `DrilldownModal.footerLink` was WIDENED from an object to
+  "object **or** array" (`DrilldownFooterLink`), so every existing single-link
+  caller is byte-identical. Production and Power deliberately get no such link —
+  Phase 1 of `/analytics` carries no production-grade or power row, and a door
+  that leads nowhere is worse than no door.
 
 ## Mobile / responsive (phone ≤375px, iPad Mini 768/1024)
 The digest is a responsive pass over the SAME design system — desktop (`sm`+ /
@@ -501,5 +511,7 @@ condense heavy widgets on phones and offer **tap-to-expand into a shadcn `Sheet`
 - `_archived/dashboard-v1/README.md` — the previous widget dashboard (archived).
 - `_archived/prod-schedule-v1/README.md` — the retired production plan: the `?view=schedule`
   month editor, the week strip, the 10-day preview, the setup library and their DB objects.
+- `app/(app)/analytics/CONTEXT.md` — the month-on-month KPI matrix the drill-down
+  footers link out to.
 - `components/NAVBAR.md` — `/` has no breadcrumb entry (left side empty).
 - `CLAUDE.md` — Motion & Glass, Excel Standard, Error Toasts hard rule.

@@ -109,6 +109,15 @@ export function FlowDrilldownModal({
       // No side rail: the breakdown of a net is its two inputs, and those are a
       // two-cell panel rather than a ranked list.
       skeleton={<DrilldownChartSkeleton stats={4} tableRows={0} />}
+      footerLink={[
+        {
+          href:
+            emphasis === "net"
+              ? "/analytics?metric=net_flow"
+              : "/analytics?metric=rc_in_total",
+          label: "Full analytics",
+        },
+      ]}
       footerNote={DRIFT_NOTE}
     >
       {data && <FlowDrilldownBody data={data} emphasis={emphasis} />}

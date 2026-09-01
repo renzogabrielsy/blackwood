@@ -54,7 +54,10 @@ export function RcInDrilldownModal({
         modal.range === "ytd" ? "month" : "day"
       }`}
       skeleton={<DrilldownChartSkeleton stats={4} sideRail tableRows={6} />}
-      footerLink={{ href: "/inventory/rc-in", label: "Open RC IN" }}
+      footerLink={[
+        { href: "/inventory/rc-in", label: "Open RC IN" },
+        { href: "/analytics?metric=purchase_volume", label: "Full analytics" },
+      ]}
     >
       {data && <RcInDrilldownBody data={data} />}
     </DrilldownModal>
