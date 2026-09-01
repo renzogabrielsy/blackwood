@@ -5,12 +5,17 @@ The **month-on-month room**. `/` (the Home Digest) answers *"what happened today
 answers *"what has been happening"* — twenty KPI rows × period columns, with a Y/Q/M
 toggle, a per-working-day normalisation, a metric dictionary at the point of use, an
 auto-generated callout strip and a per-row trend expand — plus, below the matrix, the
-**campaign-basis money panel** and the **live aging watchlist**.
+**campaign-basis money panel**, the **supplier room** and the **live aging watchlist**.
+
+The page makes **four cuts through the same yard, in this order: PERIOD → CAMPAIGN →
+SUPPLIER → PILE.** Each block re-keys the same kilos, and the order is the reason none of
+them is a tab: a reader who has just watched the Purchase volume row move wants to know
+WHO moved it, and a tab would hide exactly that.
 
 Renzo, 2026-09-01: *"a tool where I can monitor daily the KPIs we want to observe month on
 month… This is a custom Dashboard FOR ME. For MY brain."* Plan:
 `.agents/plans/ictc-analytics-dashboard-plan.md` (§4 — **P1, the matrix**; **P2, the money
-layer**).
+layer**; **P3, the supplier room**).
 
 > **Domain module (charcoal tenant).** It reads seven charcoal-shaped SQL views. Nothing
 > in `components/shared/` or `components/ui/` learns anything from it. The ONE platform
@@ -26,28 +31,35 @@ layer**).
 | `analytics-view.tsx` | **Client shell.** Owns the three view controls (year `Select`, Y/Q/M toggle, per-working-day `Switch`), the live block-utilization chip, the callout strip, the matrix, the expanded row, **the campaign panel, the watchlist** and the restatement footer. Calls `buildMatrix()` in a `useMemo`. |
 | `analytics-matrix.tsx` | **The matrix table** — a bespoke dense table (see "Why not the Blackwood Table"). Frozen KPI-name column, explicit `<colgroup>` widths, `width: max-content` inside `overflow-x-auto`, a trailing summary column, **section bands** and the `~` / `·` cell marks. |
 | `metric-expand.tsx` | **The row expand**, rendered BELOW the table. Stat strip + full-history chart (bar or line, **plus the dashed comparison line where a row declares a pair**) + one of four side rails (inventory split · price coverage · closed blocks · aging bands) + the dictionary spelled out. Reuses `DrilldownSection` / `DrilldownStat` / `BreakdownRail` / `DRILLDOWN_AXIS_TICK` / `drilldownTooltipChrome` from the drill-down chassis. |
-| `metric-info.tsx` | **The metric dictionary** at the point of use — an `Info` button per row with the whole entry as a native `title` (hover) and a `Popover` card (click). Copy comes from `METRICS[].dictionary`. |
+| `metric-info.tsx` | **The dictionary** at the point of use — an `Info` button with the whole entry as a native `title` (hover) and a `Popover` card (click). `DictionaryPopover` is the ONE card and takes any `MetricDictionaryEntry`; `MetricInfo` is the matrix row's wrapper over it (`METRICS[].dictionary`) and the supplier room passes `SUPPLIER_DICTIONARY` entries into the same component, so a metric and a supplier figure can never explain themselves in two layouts. |
 | `batch-cost-panel.tsx` | **P2 — the BATCH basis.** One column per production campaign, nine rows (fed · delivered ₱/kg · true ₱/kg · **cost of storage time** · weight lost · produced · yield · ₱/produced kg on both bases) plus a `blocks closed / priced` coverage line. Frozen row-label column, opens scrolled to the newest campaign. |
 | `aging-watchlist.tsx` | **P2 — the LIVE list.** SQL-owned headline (open stock · weighted age · % over 120d · oldest pile), the ten oldest open piles with a `Show all N` toggle, each row deep-linking to `/inventory/blocking?block=<block_loc>`, and the closed-residue (resiko) disclosure. |
+| `supplier-room.tsx` | **P3 — the SUPPLIER axis.** The section shell: the concentration header (top-1 / top-3 / seller count / suppliers-to-half), the dictionary strip, and the four blocks below. Follows the page's YEAR picker; deliberately NOT the Y/Q/M toggle. |
+| `supplier-matrix.tsx` | **P3 — supplier × month volume.** Frozen supplier column, tonnes + share-of-month per cell, ↩ returns chips, a YTD column, a `Σ market` footer row that prints P1's own figure, and `Show all N` over a top-12 default. |
+| `supplier-premium.tsx` | **P3 — the ₱ read (gated).** Weighted ₱/kg paid, weighted premium vs market, priced kg, and a diverging bar per supplier. Footer prints the WEIGHTED rollup (₱0.00 by construction). |
+| `supplier-explorer.tsx` | **P3 — the three-line story.** Price × volume × active-supplier count for the year, from `AnalyticsMonth` (P1's own view) — no new read. |
+| `supplier-expand.tsx` | **P3 — one supplier's year.** Five stats, a bars + premium-line chart, a month-by-month share rail, and the returns note. |
 | `analytics-error.tsx` | Persistent, copyable load-failure banner (the project's HARD RULE applies to every error surface, not only toasts). |
 
 ### The shared library (`lib/analytics/`)
 
 | File | Role |
 |------|------|
-| `types.ts` | The contract — `AnalyticsMonth`, `CampaignCost`, `AgingWatchItem`, `AgingWatchlist`, `BlockUtilization`, `AnalyticsData`. Portable (no React, no Supabase, no `server-only`). **`null` is never 0 in this shape**, and the two unit conventions (fractions vs percents) are stated at the top. |
+| `types.ts` | The contract — `AnalyticsMonth`, `CampaignCost`, `AgingWatchItem`, `AgingWatchlist`, `BlockUtilization`, `SupplierMonth`, `SupplierData`, `AnalyticsData`. Portable (no React, no Supabase, no `server-only`). **`null` is never 0 in this shape**, and the two unit conventions (fractions vs percents) are stated at the top. |
 | `metrics.ts` | **THE metric registry + dictionary.** One entry per row: label, unit, `read`, `rollup`, `deltaMode`, `perWorkingDay`, `price`, `section`, `dependsOn`, `estimated`, an optional comparison `pair`, chart shape/colours, decimals, and the plain-language definition (derived from the view COMMENTs in the P1 and P2 migrations). Pure, client-safe. |
 | `matrix.ts` | **The pure fold** — period axis, cells, deltas, YoY, the trailing summary column, the full history series, the pair history, the section grouping and the callouts, all in ONE pass over the same numbers. Pure, client-safe. |
+| `supplier.ts` | **P3 — the supplier fold + its dictionary.** `buildSupplierYear` (columns, rows, YTD, concentration), `buildExplorer`, `SUPPLIER_DICTIONARY`, and **`weightedPremiumPhpKg` — the ONE function that aggregates `premium_php_kg` anywhere in the codebase.** Pure, client-safe. |
 | `format.ts` | Display formatters, the blank-reason hover copy and the estimate hover. Presentation only. |
-| `queries.ts` | **The server-only ADAPTER.** Reads the seven views + the live blocking grid, applies the ₱ gate and the two honest nullings, returns `AnalyticsData`. |
+| `queries.ts` | **The server-only ADAPTER.** Reads the eight views + the live blocking grid, applies the ₱ gate and the two honest nullings, returns `AnalyticsData`. |
 
 ## Data
 
-**Seven views + one live read.** All seven analytics views are `security_invoker`,
+**Eight views + one live read.** All eight analytics views are `security_invoker`,
 `authenticated`-only, **not** granted to `service_role` (the sync worker reads none of
 them — L-044's arrow direction). Migrations
-`20260901115129_analytics_phase1_data_layer` (+ the scalar fix `20260901115314`) and
-`20260901124822_analytics_phase2_money_layer`.
+`20260901115129_analytics_phase1_data_layer` (+ the scalar fix `20260901115314`),
+`20260901124822_analytics_phase2_money_layer` and
+`20260901133909_analytics_phase3_supplier_layer`.
 
 | View | Grain | Rows | Feeds |
 |------|-------|------|-------|
@@ -58,6 +70,7 @@ them — L-044's arrow direction). Migrations
 | `view_analytics_aging_eom` | every month of the spine | 75 | Avg stock age · Stock over 120 days · the watchlist HEADLINE |
 | `view_analytics_batch_cost` | one row per campaign per year | 32 | the whole batch-cost panel |
 | `view_analytics_aging_watchlist` | one row per open pile > 1 t (**LIVE**) | 170 | the watchlist rows |
+| `view_analytics_supplier_monthly` | month × canonical supplier, MARKET only | 275 | the whole supplier room |
 | `view_blocking_grid` | one row per active batch (**LIVE**) | ~500 | the "148/220 blocks occupied · TODAY" chip |
 
 **Unwindowed on purpose.** CLAUDE.md's trailing-400-day idiom governs DAILY views, where
@@ -126,10 +139,12 @@ A future `view_analytics_rcin_quarterly` would fix it properly.
 
 ### The ₱ gate (security boundary)
 `getAnalyticsData()` resolves `canViewPrices()` (the ONE helper, `lib/auth.ts`, which
-respects the impersonation cookie) and NULLS **22** fields before the payload leaves the
+respects the impersonation cookie) and NULLS **26** fields before the payload leaves the
 server — the four P1 ones (`market_avg_price`, `market_php_total`, `ending_value_php`,
 `avg_unit_cost_php_kg`) plus the eight on `view_analytics_cost_monthly`, the eight on
-`view_analytics_batch_cost` and the two on `view_analytics_aging_watchlist`. The complete
+`view_analytics_batch_cost`, the two on `view_analytics_aging_watchlist` and the four on
+`view_analytics_supplier_monthly` (`avg_price_php_kg`, `php_total`, `premium_php_kg`,
+`month_avg_price_php_kg`). The complete
 list is in the adapter's header, copied from the migrations' own COMMENTs.
 `view_analytics_flow_monthly` and `view_analytics_aging_eom` carry no ₱ and none is
 derivable from either — which is why **the whole aging story stays visible for the
@@ -284,6 +299,68 @@ is furthest from the header.
     label has no cell in the 220-slot grid, and a link to a block that cannot be selected
     is worse than plain text.
 
+### The supplier room (P3) — and its one hard arithmetic rule
+
+The third cut: **who we bought from.** A section below the campaign panel, not a tab —
+see Purpose. It follows the page's YEAR picker and deliberately NOT the Y/Q/M toggle: a
+supplier year is a calendar year, always, and a quarter column of suppliers would be a
+different question from the one the room answers.
+
+**`premium_php_kg` may only ever be averaged WEIGHTED by priced kilos, and
+`weightedPremiumPhpKg` in `lib/analytics/supplier.ts` is the ONLY function that touches
+the column.** The month's market price IS the priced-kg-weighted mean of the supplier
+prices, so weighted, the premiums come to exactly zero every month by construction
+(measured all 49 months, max |Σ| = 7.1e-17). Unweighted, the same column reads −₱2.52 for
+March 2026 — a number that looks like a finding and is pure artefact of the top two
+sellers being three quarters of the volume. The premium panel therefore **prints the
+weighted rollup in its footer** (`+₱0.00`) rather than asserting the identity in prose,
+and there is no unweighted average anywhere in the UI to offer.
+
+**The `Σ market` footer is not a sum of the rows.** It prints `month_market_kg`, which the
+view carries onto every supplier row by joining `view_analytics_rcin_monthly` — so the
+footer IS the KPI matrix's Purchase volume row rather than a second number that happens to
+agree with it. (The two were measured equal on 49/49 months, max gap 0.00 kg; printing the
+published one means they cannot drift even in principle.) The same figure is the
+denominator of every YTD share, so the concentration header and the matrix cannot disagree
+either.
+
+**Returned sun-dried material is traceability and enters nothing.** `sundryOriginKg` is
+never added to `kg`, never enters share, rank, price or premium. It rides as a ↩ chip on
+the supplier's name, as an inline ↩ mark on a month that had both, and as the cell value
+(in the muted returns treatment) on a month that had only returns. **A returns-only
+supplier is exempt from the top-12 cap and is always on screen** — SEVILLA bought nothing
+in 2026 and had 140.6 t come back, and a purchase-only view would have rendered that as
+absence, which is the one thing the column exists to prevent. Their row expand charts the
+RETURNS series, labelled as such, rather than showing an empty box.
+
+**A supplier's premium is measured against the months THEY sold in**, never against the
+year — so a seller who only appeared while charcoal was dear can show a higher ₱/kg than
+the year figure and still read as a discount. The panel says so under the table, and the
+year price beside the header is labelled `year ₱…` (context) rather than presented as the
+baseline.
+
+**The explorer takes no new read.** Price × volume × active-supplier count come from
+`AnalyticsMonth` — P1's own monthly view, already in the payload — so the chart cannot
+disagree with either matrix. Volume bars force a zero baseline; the price line gets the
+padded domain. The supplier count rides a HIDDEN axis while ₱ is visible (three labelled
+axes do not fit a 375px screen) and takes the right axis when ₱ is restricted.
+
+**Restricted role.** Four ₱ fields are nulled server-side (`avg_price_php_kg`,
+`php_total`, `premium_php_kg`, `month_avg_price_php_kg`). The volume matrix, the
+concentration header, the returns chips and the explorer's volume + supplier lines all
+stay **fully live** — the same split that made `view_analytics_aging_eom` useful to a
+restricted role in P2. The premium panel renders the lock treatment; the expand drops its
+premium line and marks the ₱ stats restricted. **The dictionary copy for the two ₱-bearing
+supplier figures is deliberately ₱-FREE**, because that card renders for every role and a
+worked example with a real peso figure in it is a price leak dressed as documentation.
+
+Widths: supplier **180px**, each month **84px**, the YTD column **112px**; `minWidth` is
+their sum. The premium table is 148 / 78 / 196 / 82 / 92. The `Σ market` row is a plain
+last row rather than a sticky `<tfoot>` — this table never scrolls vertically inside its
+own box, so there is nothing to pin against (the same reason the KPI matrix's header is
+not sticky-top) — but its label cell is still `.frozen-col` + `.frozen-edge`, because the
+table does scroll sideways.
+
 ### The summary column
 The trailing column folds the whole displayed window through **the row's own rollup rule**
 (built as a synthetic `Period` so it goes down the same code path) — `2026` in M/Q view,
@@ -314,6 +391,8 @@ hardcoded to day/month while these buckets are months, quarters or years.
 - `supabase/migrations/20260901115129_analytics_phase1_data_layer.sql` — the P1 metric dictionary's source
 - `supabase/migrations/20260901124822_analytics_phase2_money_layer.sql` — the P2 dictionary's source,
   and the full column-by-column reasoning behind the money layer
+- `supabase/migrations/20260901133909_analytics_phase3_supplier_layer.sql` — the P3 dictionary's
+  source, and the proof that the supplier breakdown and the monthly matrix cannot disagree
 - `app/(app)/inventory/blocking/CONTEXT.md` — the watchlist's link destination (`?block=`)
 - `app/(app)/inventory/rc-movement/CONTEXT.md` — the `view_rc_movement_*` family every P2
   money figure is lifted from, unchanged

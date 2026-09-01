@@ -24,6 +24,8 @@
 //         campaign_weighted_actual_fed_php_kg, uplift_php_kg,
 //         php_per_produced_kg_delivered, php_per_produced_kg_true
 //     view_analytics_aging_watchlist → delivered_php_kg, value_php
+//     view_analytics_supplier_monthly→ avg_price_php_kg, php_total,
+//         premium_php_kg, month_avg_price_php_kg
 // They are nulled HERE, before the payload leaves the server — never
 // hidden client-side, because the network response is the leak.
 // `view_analytics_flow_monthly` and `view_analytics_aging_eom` carry no ₱
@@ -58,6 +60,8 @@ import type {
   AnalyticsMonth,
   BlockUtilization,
   CampaignCost,
+  SupplierData,
+  SupplierMonth,
 } from "./types";
 
 /** The operator's mental baseline — warehouses A/B/C/D only (PCA/PCB are opt-in). */
@@ -218,6 +222,27 @@ interface WatchlistRow {
   as_of_date: string | null;
 }
 
+interface SupplierRow {
+  month_start: string | null;
+  year: number | null;
+  month: number | null;
+  supplier_canonical: string | null;
+  kg: number | null;
+  delivery_count: number | null;
+  priced_kg: number | null;
+  price_coverage_pct: number | null;
+  avg_price_php_kg: number | null;
+  php_total: number | null;
+  share_of_month_pct: number | null;
+  kg_rank_in_month: number | null;
+  cumulative_share_pct: number | null;
+  premium_php_kg: number | null;
+  sundry_origin_kg: number | null;
+  sundry_origin_delivery_count: number | null;
+  month_market_kg: number | null;
+  month_avg_price_php_kg: number | null;
+}
+
 /**
  * PostgREST's default ceiling. The watchlist measures 170 rows today, but a
  * read that silently comes back capped is exactly the failure mode
@@ -249,7 +274,7 @@ function campaignSeq(batch: string): number {
 /**
  * THE adapter. One call, one payload, everything `/analytics` renders.
  *
- * Row budget: the seven views measure 49 / 75 / 75 / 75 / 75 / 32 / 170 rows
+ * Row budget: the eight views measure 49 / 75 / 75 / 75 / 75 / 32 / 170 / 275
  * — an order of magnitude or two under PostgREST's 1000-row cap — so these
  * reads are deliberately UNWINDOWED and span all history. A month-on-month
  * matrix that could not reach 2024 would not be the thing that was asked
@@ -270,6 +295,7 @@ export async function getAnalyticsData(): Promise<AnalyticsData> {
     agingRes,
     batchRes,
     watchRes,
+    supplierRes,
   ] = await Promise.all([
     supabase
       .from("view_analytics_flow_monthly")
@@ -316,6 +342,18 @@ export async function getAnalyticsData(): Promise<AnalyticsData> {
       .select(
         "batch_id, batch_code, status, block_loc, balance_kg, age_days, days_since_last_delivery, first_delivery_date, last_delivery_date, delivered_kg, delivery_count, unpriced_delivery_count, has_unpriced_delivery, delivered_php_kg, value_php, fed_kg_to_date, last_fed_date, has_been_fed, as_of_date",
       ),
+    // P3 — the supplier room. UNWINDOWED, same reasoning as every read above:
+    // 275 rows for ALL of history (113 for the busiest single year), ~4x under
+    // the cap. The YEAR filter is applied in the browser, not here, because
+    // every control on this page re-slices a payload it already holds; the
+    // read still carries a `truncated` flag rather than the caller assuming.
+    supabase
+      .from("view_analytics_supplier_monthly")
+      .select(
+        "month_start, year, month, supplier_canonical, kg, delivery_count, priced_kg, price_coverage_pct, avg_price_php_kg, php_total, share_of_month_pct, kg_rank_in_month, cumulative_share_pct, premium_php_kg, sundry_origin_kg, sundry_origin_delivery_count, month_market_kg, month_avg_price_php_kg",
+      )
+      .order("month_start", { ascending: true })
+      .order("kg", { ascending: false }),
   ]);
 
   if (flowRes.error) throw new Error(`Analytics flow read failed: ${flowRes.error.message}`);
@@ -327,6 +365,8 @@ export async function getAnalyticsData(): Promise<AnalyticsData> {
     throw new Error(`Analytics campaign read failed: ${batchRes.error.message}`);
   if (watchRes.error)
     throw new Error(`Analytics watchlist read failed: ${watchRes.error.message}`);
+  if (supplierRes.error)
+    throw new Error(`Analytics supplier read failed: ${supplierRes.error.message}`);
 
   const rcinByMonth = new Map<string, RcInRow>();
   for (const r of (rcinRes.data ?? []) as RcInRow[]) {
@@ -563,6 +603,48 @@ export async function getAnalyticsData(): Promise<AnalyticsData> {
     truncated: watchRows.length >= POSTGREST_ROW_CAP,
   };
 
+  // ── P3: the supplier room ──────────────────────────────────────────
+  // Four ₱ columns are gated. Everything else — kilos, share, ranks,
+  // counts, sundry origin — is peso-free and none of it is derivable back
+  // into a price, so the volume and participation half of the supplier
+  // room stays fully visible to Production, the same split that made
+  // `view_analytics_aging_eom` useful to a restricted role in P2.
+  const supplierRows = (supplierRes.data ?? []) as SupplierRow[];
+  const suppliers: SupplierData = {
+    rows: supplierRows
+      .filter(
+        (s): s is SupplierRow & { month_start: string; supplier_canonical: string } =>
+          Boolean(s.month_start) && Boolean(s.supplier_canonical),
+      )
+      .map((s) => ({
+        monthStart: s.month_start,
+        year: num0(s.year),
+        month: num0(s.month),
+        supplier: s.supplier_canonical,
+
+        kg: num(s.kg),
+        deliveryCount: num(s.delivery_count),
+        pricedKg: num(s.priced_kg),
+        priceCoveragePct: num(s.price_coverage_pct),
+
+        avgPricePhpKg: showPrices ? num(s.avg_price_php_kg) : null,
+        phpTotal: showPrices ? num(s.php_total) : null,
+
+        shareOfMonthPct: num(s.share_of_month_pct),
+        kgRankInMonth: num(s.kg_rank_in_month),
+        cumulativeSharePct: num(s.cumulative_share_pct),
+
+        premiumPhpKg: showPrices ? num(s.premium_php_kg) : null,
+
+        sundryOriginKg: num(s.sundry_origin_kg),
+        sundryOriginDeliveryCount: num(s.sundry_origin_delivery_count),
+
+        monthMarketKg: num(s.month_market_kg),
+        monthAvgPricePhpKg: showPrices ? num(s.month_avg_price_php_kg) : null,
+      })) satisfies SupplierMonth[],
+    truncated: supplierRows.length >= POSTGREST_ROW_CAP,
+  };
+
   return {
     months,
     years,
@@ -572,6 +654,7 @@ export async function getAnalyticsData(): Promise<AnalyticsData> {
     asOfDate: latest?.asOfDate ?? null,
     campaigns,
     watchlist,
+    suppliers,
   };
 }
 

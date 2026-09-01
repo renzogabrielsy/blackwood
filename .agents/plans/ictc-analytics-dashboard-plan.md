@@ -367,6 +367,180 @@ all history within row budgets). No new tables. No snapshot jobs.
   > `view_analytics_aging_eom` was built ₱-free.
 - **P3 — supplier room**: per-supplier monthly matrix (kg, share, premium/discount,
   active-months), price↔volume↔participation explorer.
+
+  > ### ✅ P3 DATA LAYER BUILT — 2026-09-01, applied
+  >
+  > Migration `20260901133909_analytics_phase3_supplier_layer`. ONE view,
+  > **`view_analytics_supplier_monthly`**, posture identical to P1/P2 (`security_invoker` /
+  > `authenticated`-only / `anon` REVOKEd / no `service_role`). Row count **275** for all of
+  > history. Gates green: `tsc --noEmit` clean, `verify-worker-view-grants` 4 views / 0
+  > findings. Types regenerated (23 lines added, nothing removed). **The page + server action
+  > are NOT built** — that is the frontend's half. Full column detail: CLAUDE.md → Views →
+  > "Owner analytics — THE SUPPLIER ROOM".
+  >
+  > **The governing rule, same as P2: nothing that already has a definition was re-derived.**
+  > Supplier identity is `canonical_supplier()`. Population is `fn_delivery_class(...)` with
+  > the same three arguments P1 passes. And the month's own totals are **JOINED from
+  > `view_analytics_rcin_monthly`, never re-summed** — which is what makes it structurally
+  > impossible for the supplier room and the monthly matrix to disagree about a month.
+  >
+  > **PROOFS (all 49 months, zero mismatches).**
+  >
+  > | Check | Result |
+  > |---|---|
+  > | Σ supplier `kg` = P1 `market_kg` | 0 mismatches / 49 months, max gap **0.00 kg** |
+  > | Σ supplier `php_total` = P1 `market_php_total` | 0 mismatches, max gap **₱0.0000** |
+  > | Σ supplier `priced_kg` = P1 `market_priced_kg` | 0 mismatches |
+  > | Σ `share_of_month_pct` = 100 | 49/49 months, max deviation **1.8e-16** |
+  > | priced-kg-weighted mean `premium_php_kg` = 0 | 49/49 months, max abs **7.1e-17** |
+  > | rows with NULL premium | **7** — exactly the 7 sundry-only rows; **0** market rows |
+  >
+  > The premium identity is not a coincidence to be checked once — the month price **is** the
+  > priced-kg-weighted mean of the supplier prices, so the column must only ever be averaged
+  > weighted. An unweighted average of `premium_php_kg` is meaningless and the UI must not
+  > offer one.
+  >
+  > **Row budget.** 275 rows all-history, **113** for the busiest single year (2025), 58 for
+  > 2026 YTD, 268 market pairs + 7 sundry-only. A whole-history read is ~4× under PostgREST's
+  > 1000-row cap, so no windowing was added (same reasoning as P1/P2) — but the page should
+  > still filter by year and fold this read into its `truncated` test.
+  >
+  > **2026 YTD — the Ornales-concentration read** (weighted rollup, never an average of
+  > averages; market only):
+  >
+  > | Supplier | kg | Share | Cum. | Months | ₱/kg | Premium | Sundry origin kg |
+  > |---|---:|---:|---:|---:|---:|---:|---:|
+  > | ORNALES | 4,205,515 | 45.51% | 45.51% | 8 | 44.9676 | +0.0084 | — |
+  > | PAQUIBOT | 2,577,594 | 27.89% | 73.40% | 8 | 45.7727 | +0.8134 | 19,585 |
+  > | TAG-AT | 1,080,607 | 11.69% | 85.09% | 8 | 44.7585 | −0.2007 | — |
+  > | LLANTO | 616,683 | 6.67% | 91.77% | 8 | 42.8373 | −2.1219 | — |
+  > | LAYUPAN | 201,814 | 2.18% | 93.95% | 3 | 41.7309 | −3.2283 | 197,809 |
+  > | MERCADO | 100,430 | 1.09% | 95.04% | 2 | 46.4929 | +1.5336 | — |
+  > | NAMOC | 90,450 | 0.98% | 96.02% | 1 | 47.0000 | +2.0407 | — |
+  > | LACOTO | 88,818 | 0.96% | 96.98% | 3 | 42.8816 | −2.0777 | 27,201 |
+  > | TANILON | 73,101 | 0.79% | 97.77% | 3 | 44.7818 | −0.1775 | — |
+  > | ECITO | 57,469 | 0.62% | 98.39% | 3 | 44.7229 | −0.2364 | — |
+  > | MARANIO | 55,175 | 0.60% | 98.99% | 3 | 44.7436 | −0.2156 | — |
+  > | BAGUIO/TIPALAN | 33,092 | 0.36% | 99.35% | 2 | 45.0000 | +0.0407 | 556 |
+  > | NAZARENO | 22,326 | 0.24% | 99.59% | 2 | 43.5000 | −1.4593 | 24,102 |
+  > | ESITO | 22,126 | 0.24% | 99.83% | 2 | 43.5519 | −1.4073 | 51,803 |
+  > | BAGUIO | 11,470 | 0.12% | 99.95% | 1 | 44.2500 | −0.7093 | — |
+  > | SULA | 4,453 | 0.05% | 100.00% | 1 | 45.0000 | +0.0407 | — |
+  > | *SEVILLA* | *0* | — | — | *0* | — | — | *140,590* |
+  >
+  > **Ornales is 45.51% YTD, not the ~40% the plan quoted, and the top THREE are 85.09%** —
+  > the dependency risk is materially higher than the plan assumed. SEVILLA is the shape the
+  > `sundry_origin_kg` column exists for: 140,590 kg of returning material and **not one kilo
+  > bought in 2026**, which a purchase-only view would have shown as absence.
+  >
+  > **Renzo's belief that the premium delta is small holds at the top of the book and NOT at
+  > the bottom.** The three largest sellers sit inside ±₱0.82 of market for the year — but
+  > LAYUPAN is −₱3.23 and NAMOC +₱2.04, and the spread widens sharply once you look at a
+  > single month. 2026-03, the 10 market suppliers (month price ₱47.5085):
+  >
+  > | Supplier | kg | Share | Rank | Cum. | ₱/kg | Premium |
+  > |---|---:|---:|---:|---:|---:|---:|
+  > | ORNALES | 905,533 | 50.62% | 1 | 50.62% | 48.2354 | +0.7269 |
+  > | PAQUIBOT | 431,278 | 24.11% | 2 | 74.73% | 48.3250 | +0.8165 |
+  > | TAG-AT | 167,235 | 9.35% | 3 | 84.08% | 47.6265 | +0.1180 |
+  > | LLANTO | 131,004 | 7.32% | 4 | 91.40% | 45.2500 | −2.2585 |
+  > | LAYUPAN | 66,968 | 3.74% | 5 | 95.14% | 41.1891 | **−6.3194** |
+  > | TANILON | 21,272 | 1.19% | 6 | 96.33% | 44.2500 | −3.2585 |
+  > | ECITO | 21,234 | 1.19% | 7 | 97.52% | 44.2500 | −3.2585 |
+  > | MARANIO | 18,860 | 1.05% | 8 | 98.58% | 44.2500 | −3.2585 |
+  > | LACOTO | 14,020 | 0.78% | 9 | 99.36% | 42.2500 | −5.2585 |
+  > | BAGUIO | 11,470 | 0.64% | 10 | 100.00% | 44.2500 | −3.2585 |
+  >
+  > The spread in one month is **₱7.14/kg** (48.33 down to 41.19). The two big sellers are
+  > paid *above* market and the eight small ones below — which is arithmetically forced once
+  > the top two are 75% of the volume, and is exactly why the weighted-zero identity above
+  > matters: the unweighted mean premium for 2026-03 is **−₱2.5209**, a number that looks like
+  > a finding and is pure artefact. NAZARENO and SEVILLA also appear in that month as
+  > `kg = 0` sundry-only rows (24,102 and 44,976 kg returning), matching P1's "10 market
+  > suppliers in 2026-03" exactly.
+  >
+  > **One decision worth carrying to the page.** `sundry_origin_kg` was kept (the brief said
+  > "only if cheap and honest") because two measurements made it both: the batch-suffix strip
+  > resolves all 91 sundry deliveries to 11 origins with **zero orphans**, and it is a
+  > **proven no-op on every market delivery in the table**, so it cannot move a purchase
+  > number even in principle. It is a separate column, excluded from share/rank/premium/price
+  > — the UI must never add it to `kg`.
+  > ### ✅ P3 PAGE BUILT — 2026-09-01
+  >
+  > A **Suppliers section** on `/analytics`, below the campaign panel and above the
+  > watchlist. Gates green: `tsc --noEmit` clean · `npm run lint` 146/16 (baseline, no new
+  > findings) · `npm run build` clean · `verify-table-core` 84 · `test:e2e` 57 passed.
+  > Browser-verified through a throwaway harness under `app/dev/table-playground/`
+  > (since deleted). Files: `lib/analytics/supplier.ts` (new),
+  > `lib/analytics/{types,queries}.ts`, `app/(app)/analytics/{supplier-room,supplier-matrix,
+  > supplier-premium,supplier-explorer,supplier-expand}.tsx` (new),
+  > `app/(app)/analytics/{analytics-view,metric-info}.tsx`. Full detail:
+  > `app/(app)/analytics/CONTEXT.md` → "The supplier room (P3)".
+  >
+  > **A SECTION, NOT A TAB — and the page now reads as one descending axis:** PERIOD (the
+  > KPI matrix) → CAMPAIGN (the batch panel) → SUPPLIER (here) → PILE (the watchlist). Each
+  > block re-keys the same kilos, and that ordering is the argument against the tab: a
+  > reader who has just watched the Purchase volume row move wants to know WHO moved it.
+  > The room follows the page's YEAR picker and deliberately not the Y/Q/M toggle — a
+  > supplier year is a calendar year, always.
+  >
+  > **THE WEIGHTED-PREMIUM RULE IS ENFORCED STRUCTURALLY, NOT BY REVIEW.**
+  > `weightedPremiumPhpKg` in `lib/analytics/supplier.ts` is the ONLY function in the
+  > codebase that aggregates `premium_php_kg`, and it is the only export that touches the
+  > column — so "does anything average this unweighted?" is one grep. It skips a part with
+  > no premium OR no priced kilos on BOTH sides, so an unpriced month cannot drag the
+  > figure toward zero, and it returns `null` rather than 0 when nothing qualifies. The
+  > premium panel then **prints the weighted rollup in its footer** — it reads `+₱0.00` —
+  > rather than asserting the identity in prose, which makes the "unweighted is meaningless"
+  > claim something the reader can watch happen. There is no unweighted average offered
+  > anywhere in the UI.
+  >
+  > **Four decisions the build made, and why.**
+  >
+  > 1. **The `Σ market` footer prints P1's own `month_market_kg`, not a sum of the column.**
+  >    The two are equal by proof (0 mismatches / 49 months, max gap 0.00 kg), but printing
+  >    the *published* figure means the supplier room and the Purchase volume row cannot
+  >    drift even in principle. The same figure is the denominator of every YTD share, so
+  >    the concentration chips and the matrix are the same arithmetic too.
+  > 2. **A returns-only supplier is EXEMPT from the top-12 cap and always on screen.**
+  >    SEVILLA is the whole reason `sundry_origin_kg` exists, and hiding it behind a
+  >    `Show all` nobody clicks would have reproduced exactly the absence the column was
+  >    built to prevent. Their row expand charts the RETURNS series (labelled, muted
+  >    colour) instead of rendering an empty box, and a returns-only MONTH prints the
+  >    returned tonnage in the returns treatment so it can never read as a purchase.
+  > 3. **A premium is measured against the months THAT supplier sold in, and the page had
+  >    to say so.** The first render put a `market ₱45.13/kg` chip in the header beside
+  >    rows where NAMOC showed ₱46.75 paid and −₱0.79 premium — correct (NAMOC sold only
+  >    in a dear January) but readable as a contradiction. The chip is now labelled
+  >    `year ₱…` and explicitly *not* the baseline, and the footnote states the rule.
+  > 4. **The explorer's supplier line rides a HIDDEN axis while ₱ is visible, and takes
+  >    the right axis when ₱ is restricted.** Three labelled axes do not fit 375px; the
+  >    count's SHAPE is the story and its exact value is in the tooltip. Restricted, the
+  >    price line is simply not drawn — nothing was sent to the browser.
+  >
+  > **Restricted role, and one leak found and closed during the build.** Four ₱ fields are
+  > nulled server-side; the volume matrix, concentration header, returns chips and the
+  > explorer's volume + supplier lines stay fully live (the P2 aging split, repeated). The
+  > catch: the first draft's explorer footnote and two dictionary entries carried the
+  > plan's own worked examples — *"April 2026 read ₱44.58 … the market truth was ₱46.84"*
+  > and *"the gap … was ₱7.14 a kilo"* — as static prose, which a Production user would
+  > have read verbatim. The dictionary copy for the ₱-bearing supplier figures is now
+  > ₱-FREE by construction (that card renders for every role) and the footnote branches on
+  > `canViewPrices`; a restricted render was measured to contain no ₱ value at all, in text
+  > or in any `title` attribute.
+  >
+  > **⚠️ PRE-EXISTING, NOT INTRODUCED HERE, NOT FIXED:** the same class of leak already
+  > exists in the P1/P2 metric dictionaries. `METRICS[].dictionary.caveat` renders through
+  > `MetricInfo` for **every** role, including a restricted one, and several entries quote
+  > real peso figures — `closed_true_price` (*"July 2026 reads ₱47.56 against ₱45.33 on
+  > arrival: ₱2.23 a kilo"*) and the P2 coverage copy in `lib/analytics/metrics.ts` are the
+  > clearest. Worth a decision: either strip the peso examples from those caveats the way
+  > P3 now does, or gate the card's caveat field on `canViewPrices`.
+  >
+  > **The measured 2026 read matches the data layer's table exactly** — Ornales 45.5%,
+  > top-3 85.1%, 16 sellers plus SEVILLA returns-only — and the concentration header prints
+  > it as a magnitude with no colour and no threshold, per §0a.5.
+
 - **P4 — the pattern rollout**: same matrix chassis for Production (grades, yield, downtime)
   and later PC inventory (once the stocktake feature exists).
 
