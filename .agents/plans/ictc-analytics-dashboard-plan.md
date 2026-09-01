@@ -17,6 +17,33 @@
 > This is a custom Dashboard FOR ME. For MY brain." Planning/analysis only — nothing built yet.
 > Open questions at the bottom; the plan finalizes after Renzo answers.
 
+## 0a. Professional-analyst audit (2026-09-01, Renzo-requested, decisions folded in)
+
+The plan was stress-tested against "would a professional analyst build it this way for a CEO."
+Already met (house rules force them): one SQL-owned definition per metric; weighted rollups
+only; explicit population rules (sundry/refeed excluded from market KPIs); honesty flags
+(truncation floors, coverage, as-of dates). Five gaps closed:
+
+1. **Metric dictionary IN the UI** — every KPI row carries a plain-language definition on
+   hover/expand: numerator, denominator, exclusions, basis (calendar vs batch). A number the
+   reader can interrogate without asking anyone.
+2. **Comparison context on every cell** — MoM Δ always; **YoY as a compact chip** where data
+   reaches (Renzo's pick — not full side-by-side years, not bare numbers).
+3. **Working-day normalization as a toggle** — volume/consumption per working day (derived
+   from observed activity, the freshness-rework definition), because Feb vs Mar raw tonnage
+   misleads. Toggle, never extra permanent rows.
+4. **Stated restatement policy, printed on the page** — snapshots derive from events, so a
+   corrected past delivery restates history; the page says "figures reflect the underlying
+   records as of today" and the audit trail explains any why.
+5. **Callouts strip above the matrix** (Renzo: yes) — 3-5 auto one-liners. **Because Renzo
+   chose NO threshold coloring yet**, callouts derive purely from MAGNITUDE (biggest movers,
+   new highs/lows vs a KPI's own history) — no invented "breach" rules; cells stay plain
+   numbers + deltas. Target-based coloring is a later layer, added only when Renzo states
+   real targets or asks for history-derived bands.
+
+Also codified: tonnes (one decimal) in the matrix, kg in drilldowns; correlation stories
+(price↔volume↔participation) presented as observational, never causal claims.
+
 ## 0. The architectural gift: RC inventory can already time-travel
 
 Unlike the PC warehouse (no location history → stocktake-forward mindset), the RC side is
