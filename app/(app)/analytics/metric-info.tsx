@@ -24,23 +24,25 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import type { MetricSpec } from "@/lib/analytics/metrics";
+import type { MetricDictionaryEntry, MetricSpec } from "@/lib/analytics/metrics";
 
 /** The whole entry as one flat string — the hover affordance. */
-export function dictionaryTitle(spec: MetricSpec): string {
-  const d = spec.dictionary;
-  const lines = [
-    `${spec.label} (${spec.sublabel})`,
-    "",
-    d.definition,
-    "",
-    `Basis: ${d.basis}`,
-  ];
+export function dictionaryEntryTitle(
+  label: string,
+  sublabel: string,
+  d: MetricDictionaryEntry,
+): string {
+  const lines = [`${label} (${sublabel})`, "", d.definition, "", `Basis: ${d.basis}`];
   if (d.exclusions) lines.push(`Excludes: ${d.exclusions}`);
   lines.push(`Quarter / year: ${d.rollup}`);
   if (d.caveat) lines.push(`Note: ${d.caveat}`);
   lines.push(`Source: ${d.source}`);
   return lines.join("\n");
+}
+
+/** The matrix row's flavour of the same thing. */
+export function dictionaryTitle(spec: MetricSpec): string {
+  return dictionaryEntryTitle(spec.label, spec.sublabel, spec.dictionary);
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -56,21 +58,30 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-export function MetricInfo({
-  spec,
+/**
+ * THE dictionary card, for any figure on the page — a matrix row, a
+ * concentration chip, a premium column. Written once so a metric and a
+ * supplier figure can never explain themselves in two different layouts.
+ */
+export function DictionaryPopover({
+  label,
+  sublabel,
+  entry,
   className,
 }: {
-  spec: MetricSpec;
+  label: string;
+  sublabel: string;
+  entry: MetricDictionaryEntry;
   className?: string;
 }) {
-  const d = spec.dictionary;
+  const d = entry;
   return (
     <Popover>
       <PopoverTrigger asChild>
         <button
           type="button"
-          title={dictionaryTitle(spec)}
-          aria-label={`What "${spec.label}" means`}
+          title={dictionaryEntryTitle(label, sublabel, d)}
+          aria-label={`What "${label}" means`}
           // The click must not also toggle the row expand behind it.
           onClick={(e) => e.stopPropagation()}
           className={cn(
@@ -98,8 +109,8 @@ export function MetricInfo({
         className="max-h-[var(--radix-popover-content-available-height)] w-[min(360px,calc(100vw-2rem))] overflow-y-auto p-0"
       >
         <div className="border-b px-3 py-2">
-          <div className="text-xs font-semibold tracking-tight">{spec.label}</div>
-          <div className="text-[10.5px] text-muted-foreground">{spec.sublabel}</div>
+          <div className="text-xs font-semibold tracking-tight">{label}</div>
+          <div className="text-[10.5px] text-muted-foreground">{sublabel}</div>
         </div>
         <div className="flex flex-col gap-2.5 px-3 py-2.5">
           <Field label="What it is">{d.definition}</Field>
@@ -124,5 +135,23 @@ export function MetricInfo({
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/** The matrix row's Info button — the same card, keyed off the registry. */
+export function MetricInfo({
+  spec,
+  className,
+}: {
+  spec: MetricSpec;
+  className?: string;
+}) {
+  return (
+    <DictionaryPopover
+      label={spec.label}
+      sublabel={spec.sublabel}
+      entry={spec.dictionary}
+      className={className}
+    />
   );
 }

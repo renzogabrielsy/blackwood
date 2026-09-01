@@ -47,6 +47,7 @@ import type { AnalyticsData, AnalyticsMonth } from "@/lib/analytics/types";
 import { AnalyticsMatrix } from "./analytics-matrix";
 import { MetricExpand } from "./metric-expand";
 import { BatchCostPanel } from "./batch-cost-panel";
+import { SupplierRoom } from "./supplier-room";
 import { AgingWatchlist } from "./aging-watchlist";
 
 const GRANULARITIES: { key: Granularity; label: string; title: string }[] = [
@@ -272,6 +273,19 @@ export function AnalyticsView({
           either into the matrix would have meant a column that is neither a
           month nor a quarter sitting beside columns that are. */}
       <BatchCostPanel campaigns={data.campaigns} canViewPrices={data.canViewPrices} />
+
+      {/* ── The SUPPLIER axis ──────────────────────────────────────────
+          Third of the four cuts this page makes through the same yard:
+          period → campaign → supplier → pile. It follows the year picker
+          above (a supplier year is a calendar year, always) but not the
+          Y/Q/M toggle: a quarter column of suppliers would be a different
+          question, and the room's own axis is already twelve months wide. */}
+      <SupplierRoom
+        suppliers={data.suppliers}
+        months={data.months}
+        year={year}
+        canViewPrices={data.canViewPrices}
+      />
 
       <AgingWatchlist
         watchlist={data.watchlist}

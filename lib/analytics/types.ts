@@ -1,5 +1,5 @@
 // =====================================================================
-// ICTC Owner Analytics — the data contract (`/analytics`, Phases 1 + 2)
+// ICTC Owner Analytics — the data contract (`/analytics`, Phases 1–3)
 // =====================================================================
 // Plain shapes only. No React, no Supabase, no `server-only` — this module
 // is imported by the server adapter (`queries.ts`), by the pure fold
@@ -15,6 +15,7 @@
 //   • `view_analytics_aging_eom`      — P2: how old the open stock was
 //   • `view_analytics_batch_cost`     — P2: the PRODUCTION-BATCH basis
 //   • `view_analytics_aging_watchlist`— P2: LIVE "go and look at these"
+//   • `view_analytics_supplier_monthly`— P3: WHO we bought from, per month
 //   • `view_blocking_grid`            — LIVE block occupancy (see below)
 //
 // All aggregation across months (quarters, years, per-working-day) happens
@@ -356,6 +357,91 @@ export interface BlockUtilization {
   total: number;
 }
 
+/**
+ * ONE (month × canonical supplier) row — P3, `view_analytics_supplier_monthly`.
+ *
+ * MARKET deliveries only. Sun-drying returns and re-cooks are never supplier
+ * volume: we already bought those kilos once, so counting them again would
+ * both inflate the tonnage and drag the supplier's average price toward the
+ * recovery price. The month totals this row is measured against
+ * (`monthMarketKg`, `monthAvgPricePhpKg`) are **joined from
+ * `view_analytics_rcin_monthly`, never re-summed** — which is what makes it
+ * structurally impossible for the supplier room and the monthly matrix to
+ * disagree about a month.
+ *
+ * **`premiumPhpKg` may only ever be aggregated WEIGHTED by `pricedKg`.** The
+ * month's market price IS the priced-kg-weighted mean of the supplier prices,
+ * so weighted the premiums come to zero every month by construction (measured
+ * across all 49 months, max |Σ| = 7.1e-17). An UNWEIGHTED mean is meaningless
+ * and looks like a finding: 2026-03's is −₱2.5209, pure artefact of the top
+ * two sellers being 75% of the volume. `lib/analytics/supplier.ts`'s
+ * `weightedPremiumPhpKg` is the ONE place any rollup of this column happens.
+ */
+export interface SupplierMonth {
+  /** yyyy-MM-01. */
+  monthStart: string;
+  year: number;
+  /** 1..12 */
+  month: number;
+  /** `canonical_supplier()` output — the ONE supplier identity. */
+  supplier: string;
+
+  /** Kilos BOUGHT from this supplier that month. 0 on a returns-only row. */
+  kg: number | null;
+  deliveryCount: number | null;
+  /** The share of `kg` carrying a price — the weighted average's denominator. */
+  pricedKg: number | null;
+  /** PERCENT 0-100. What share of their month the price speaks for. */
+  priceCoveragePct: number | null;
+
+  /** ₱ — weighted ₱/kg we paid THEM. GATED. */
+  avgPricePhpKg: number | null;
+  /** ₱ — total pesos on their priced kilos. GATED. A rollup NUMERATOR. */
+  phpTotal: number | null;
+
+  /** Their kilos as a % of everything bought that month. NULL (never 0) at kg 0. */
+  shareOfMonthPct: number | null;
+  /** 1 = biggest seller of the month. NULL on a row with no market kilos. */
+  kgRankInMonth: number | null;
+  /** Running share down the month's ranking — top-3 concentration is a lookup. */
+  cumulativeSharePct: number | null;
+
+  /**
+   * ₱/kg — their weighted price MINUS the month's market price. POSITIVE means
+   * we paid them ABOVE market. NULL, never 0, when either side has no priced
+   * kilos: "we do not know" and "exactly at market" are different answers.
+   * GATED. **Weighted rollups only** — see the interface note above.
+   */
+  premiumPhpKg: number | null;
+
+  /**
+   * TRACEABILITY ONLY, and deliberately kept out of every other figure on the
+   * row: kilos of OUR OWN charcoal that came back from sun-drying that month
+   * carrying this supplier's name. **The UI must never add it to `kg`.**
+   * A supplier can appear with `kg = 0` in a month where only their returning
+   * material moved (SEVILLA, 2026: 140,590 kg returned, not one kilo bought).
+   */
+  sundryOriginKg: number | null;
+  sundryOriginDeliveryCount: number | null;
+
+  /** The month's own published market kilos — JOINED from P1, not re-summed. */
+  monthMarketKg: number | null;
+  /** ₱ — the month's own published market price. GATED. The premium baseline. */
+  monthAvgPricePhpKg: number | null;
+}
+
+/** The supplier room's slice of the payload. */
+export interface SupplierData {
+  /** ALL history, ascending by (month, kg desc). 275 rows today. */
+  rows: SupplierMonth[];
+  /**
+   * The read came back at PostgREST's row cap, so the set may be short of the
+   * truth. Measured 275 rows all-history against a 1000 cap — structural
+   * honesty, not a live alarm, exactly like the watchlist's flag.
+   */
+  truncated: boolean;
+}
+
 /** Everything `/analytics` renders, in one payload. */
 export interface AnalyticsData {
   /** ALL history, ascending by `monthStart`. The complete flow spine. */
@@ -380,4 +466,6 @@ export interface AnalyticsData {
   campaigns: CampaignCost[];
   /** The LIVE aging watchlist + its SQL-owned headline. */
   watchlist: AgingWatchlist;
+  /** P3 — the supplier room's (month × supplier) rows, all history. */
+  suppliers: SupplierData;
 }

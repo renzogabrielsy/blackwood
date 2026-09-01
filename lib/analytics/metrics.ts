@@ -270,7 +270,7 @@ const FLOW_METRICS: readonly Omit<MetricSpec, "section">[] = [
       basis:
         "Total pesos paid ÷ total kilos priced — a weighted average, never the average of the daily prices.",
       exclusions:
-        "Our own charcoal returning from sun-drying and anything re-cooked or re-fed are left out: we already paid for those kilos once, and the peso figure on a re-cook is a ₱1.50–₱1.75 processing fee, not a market price. A truckload still waiting on its price is left out of BOTH halves of the sum rather than counted as free.",
+        "Our own charcoal returning from sun-drying and anything re-cooked or re-fed are left out: we already paid for those kilos once, and the peso figure on a re-cook is a token processing fee, not a market price. A truckload still waiting on its price is left out of BOTH halves of the sum rather than counted as free.",
       rollup:
         "A quarter or a year is total-pesos ÷ total-kilos across its months — never the mean of the monthly prices.",
       source: "view_analytics_rcin_monthly.market_avg_price",
@@ -599,7 +599,7 @@ const MONEY_METRICS: readonly Omit<MetricSpec, "section">[] = [
         "A quarter or a year is total-pesos ÷ total-kilos-fed across its months — never the mean of the monthly prices.",
       source: "view_analytics_cost_monthly.delivered_php_kg_fed_covered",
       caveat:
-        "Seven months are short of full price coverage and are marked with a ~. Early 2024 is the worst — March 2024 can price only 1.6% of what it fed — and August 2026 is 97.3% because of the 18,650 kg phantom pile. On those months this row shows the price of the kilos it CAN trace, which is the honest answer; the raw published figure would read ₱0.30 for March 2024 against a real ~₱19.",
+        "Seven months are short of full price coverage and are marked with a ~. Early 2024 is the worst — March 2024 can price only 1.6% of what it fed — and August 2026 is 97.3% because of the 18,650 kg phantom pile. On those months this row shows the price of the kilos it CAN trace, which is the honest answer; the raw published figure for March 2024 would be a tiny fraction of the real one.",
     },
   },
   {
@@ -631,7 +631,7 @@ const MONEY_METRICS: readonly Omit<MetricSpec, "section">[] = [
         "A quarter or a year is total charcoal bill ÷ total kilos produced across its months — never the mean of the monthly figures.",
       source: "view_analytics_cost_monthly.php_per_produced_kg",
       caveat:
-        "Production has only been reported since November 2025, so this row is blank before then — blank, never zero. November 2025 itself covers only part of the month and reads ₱337, which is a reporting boundary rather than a real cost, so it is excluded from every headline on this page. Months where the fed price cannot cover all the kilos are marked ~ and show the honest estimate: August 2026 reads ₱53.07, not the naive ₱51.65.",
+        "Production has only been reported since November 2025, so this row is blank before then — blank, never zero. November 2025 itself covers only part of the month and reads implausibly high — a reporting boundary rather than a real cost — so it is excluded from every headline on this page. Months where the fed price cannot cover all the kilos are marked ~ and show the honest estimate rather than the naive published figure.",
     },
   },
   {
@@ -765,7 +765,7 @@ const MONEY_METRICS: readonly Omit<MetricSpec, "section">[] = [
         "A quarter or a year is total pesos ÷ total kilos fed across its fully-priced closed blocks.",
       source: "view_analytics_cost_monthly.closed_blocks_true_php_kg",
       caveat:
-        "Blank — never zero — for a month with no fully-priced closed block. July 2026 reads ₱47.56 against ₱45.33 on arrival: ₱2.23 a kilo of pure storage time, on 4.68% weight loss.",
+        "Blank — never zero — for a month with no fully-priced closed block. A closed block always costs more per kilo than it arrived at — the gap is pure storage time (July 2026 lost 4.68% of its weight while sitting).",
     },
   },
   {

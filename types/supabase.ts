@@ -3117,6 +3117,29 @@ export type Database = {
         }
         Relationships: []
       }
+      view_analytics_supplier_monthly: {
+        Row: {
+          avg_price_php_kg: number | null
+          cumulative_share_pct: number | null
+          delivery_count: number | null
+          kg: number | null
+          kg_rank_in_month: number | null
+          month: number | null
+          month_avg_price_php_kg: number | null
+          month_market_kg: number | null
+          month_start: string | null
+          php_total: number | null
+          premium_php_kg: number | null
+          price_coverage_pct: number | null
+          priced_kg: number | null
+          share_of_month_pct: number | null
+          sundry_origin_delivery_count: number | null
+          sundry_origin_kg: number | null
+          supplier_canonical: string | null
+          year: number | null
+        }
+        Relationships: []
+      }
       view_blocking_grid: {
         Row: {
           avg_ash: number | null
