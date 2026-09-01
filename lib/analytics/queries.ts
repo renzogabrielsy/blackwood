@@ -32,6 +32,15 @@
 // and none is derivable from either, so aging stays visible for every role
 // including Production.
 //
+// **THE TWO P4 PRODUCTION VIEWS HAVE NOTHING TO NULL.** No ₱ column exists
+// in either and none is derivable (asserted by the migration: 0 of 35
+// columns match `php|peso|cost|price|value|amount`), so the whole
+// production matrix — tonnage, grades, downtime, power, bags — crosses the
+// wire intact for every role including Production. That is structural, not
+// an oversight: production is the one module of the platform with no money
+// in it, and the money that MEETS production already lives in
+// `view_analytics_cost_monthly` and is gated above.
+//
 // ── THE HONEST NULLINGS (three streams, one rule) ─────────────────────
 // Deliveries begin 2020-07; `rc_out` begins 2024-01; `production_runs`
 // begins 2025-11. A view that zero-fills a month before its stream existed
@@ -60,6 +69,8 @@ import type {
   AnalyticsMonth,
   BlockUtilization,
   CampaignCost,
+  ProductionGradeData,
+  ProductionGradeMonth,
   SupplierData,
   SupplierMonth,
 } from "./types";
@@ -243,6 +254,44 @@ interface SupplierRow {
   month_avg_price_php_kg: number | null;
 }
 
+interface ProductionRow {
+  month_start: string | null;
+  production_reported: boolean | null;
+  run_count: number | null;
+  shift_count: number | null;
+  reported_days: number | null;
+  produced_per_reported_day: number | null;
+  first_reported_date: string | null;
+  last_reported_date: string | null;
+  downtime_hrs: number | null;
+  downtime_shift_count: number | null;
+  downtime_shifts_with_duration: number | null;
+  downtime_shifts_reason_only: number | null;
+  kwh: number | null;
+  power_days: number | null;
+  power_meter_count: number | null;
+  kwh_suspect_reading_count: number | null;
+  kwh_suspect: number | null;
+  kwh_per_produced_kg: number | null;
+  kwh_per_produced_kg_excl_suspect: number | null;
+  sacks: number | null;
+  runs_with_sacks: number | null;
+  sacks_coverage_pct: number | null;
+}
+
+interface ProductionGradeRow {
+  month_start: string | null;
+  year: number | null;
+  month: number | null;
+  grade: string | null;
+  kg: number | null;
+  run_count: number | null;
+  share_of_month_pct: number | null;
+  month_produced_kg: number | null;
+  sacks: number | null;
+  runs_with_sacks: number | null;
+}
+
 /**
  * PostgREST's default ceiling. The watchlist measures 170 rows today, but a
  * read that silently comes back capped is exactly the failure mode
@@ -274,7 +323,7 @@ function campaignSeq(batch: string): number {
 /**
  * THE adapter. One call, one payload, everything `/analytics` renders.
  *
- * Row budget: the eight views measure 49 / 75 / 75 / 75 / 75 / 32 / 170 / 275
+ * Row budget: the ten views measure 49 / 75 / 75 / 75 / 75 / 32 / 170 / 275 / 18 / 39
  * — an order of magnitude or two under PostgREST's 1000-row cap — so these
  * reads are deliberately UNWINDOWED and span all history. A month-on-month
  * matrix that could not reach 2024 would not be the thing that was asked
@@ -296,6 +345,8 @@ export async function getAnalyticsData(): Promise<AnalyticsData> {
     batchRes,
     watchRes,
     supplierRes,
+    prodRes,
+    gradeRes,
   ] = await Promise.all([
     supabase
       .from("view_analytics_flow_monthly")
@@ -354,6 +405,26 @@ export async function getAnalyticsData(): Promise<AnalyticsData> {
       )
       .order("month_start", { ascending: true })
       .order("kg", { ascending: false }),
+    // P4 — the production matrix. 18 rows all-history (production months
+    // UNION electricity months: the meters start 2025-03 and production
+    // reporting starts 2025-11, so eight months carry power and no output).
+    // Three orders of magnitude under the cap, same unwindowed reasoning as
+    // every read above, and the `truncated` flag still rides on the grade
+    // read rather than the caller assuming.
+    supabase
+      .from("view_analytics_production_monthly")
+      .select(
+        "month_start, production_reported, run_count, shift_count, reported_days, produced_per_reported_day, first_reported_date, last_reported_date, downtime_hrs, downtime_shift_count, downtime_shifts_with_duration, downtime_shifts_reason_only, kwh, power_days, power_meter_count, kwh_suspect_reading_count, kwh_suspect, kwh_per_produced_kg, kwh_per_produced_kg_excl_suspect, sacks, runs_with_sacks, sacks_coverage_pct",
+      )
+      .order("month_start", { ascending: true }),
+    // 39 rows all-history.
+    supabase
+      .from("view_analytics_production_grade_monthly")
+      .select(
+        "month_start, year, month, grade, kg, run_count, share_of_month_pct, month_produced_kg, sacks, runs_with_sacks",
+      )
+      .order("month_start", { ascending: true })
+      .order("kg", { ascending: false }),
   ]);
 
   if (flowRes.error) throw new Error(`Analytics flow read failed: ${flowRes.error.message}`);
@@ -367,6 +438,10 @@ export async function getAnalyticsData(): Promise<AnalyticsData> {
     throw new Error(`Analytics watchlist read failed: ${watchRes.error.message}`);
   if (supplierRes.error)
     throw new Error(`Analytics supplier read failed: ${supplierRes.error.message}`);
+  if (prodRes.error)
+    throw new Error(`Analytics production read failed: ${prodRes.error.message}`);
+  if (gradeRes.error)
+    throw new Error(`Analytics production grade read failed: ${gradeRes.error.message}`);
 
   const rcinByMonth = new Map<string, RcInRow>();
   for (const r of (rcinRes.data ?? []) as RcInRow[]) {
@@ -384,6 +459,10 @@ export async function getAnalyticsData(): Promise<AnalyticsData> {
   for (const r of (agingRes.data ?? []) as AgingRow[]) {
     if (r.month_start) ageByMonth.set(r.month_start, r);
   }
+  const prodByMonth = new Map<string, ProductionRow>();
+  for (const r of (prodRes.data ?? []) as ProductionRow[]) {
+    if (r.month_start) prodByMonth.set(r.month_start, r);
+  }
 
   const months: AnalyticsMonth[] = ((flowRes.data ?? []) as FlowRow[])
     .filter((f): f is FlowRow & { month_start: string } => Boolean(f.month_start))
@@ -391,6 +470,12 @@ export async function getAnalyticsData(): Promise<AnalyticsData> {
       const rc = rcinByMonth.get(f.month_start);
       const inv = invByMonth.get(f.month_start);
       const age = ageByMonth.get(f.month_start);
+      // P4. NOT gated on `outflowRecorded`: the production view's own spine
+      // is production months ∪ ELECTRICITY months, and eight of those carry
+      // power with no output at all. Dropping the row wholesale (the way the
+      // money layer is dropped) would have thrown away 577,438 kWh from a
+      // block that has a kWh row in it.
+      const prod = prodByMonth.get(f.month_start);
       const outflowRecorded = inv?.outflow_recorded ?? false;
 
       // The honest nulling — see the header. `out_kg` for a month before
@@ -498,6 +583,39 @@ export async function getAnalyticsData(): Promise<AnalyticsData> {
         oldestAgeDays: num(age?.oldest_age_days),
         closedResidueKg: num(age?.closed_residue_kg),
         closedResidueBatches: num(age?.closed_residue_batches),
+
+        // ── P4: production. ₱-FREE, so no gate anywhere below ─────────
+        // Every figure the view publishes is mapped verbatim, INCLUDING the
+        // four companion counts (`downtime_shifts_reason_only`,
+        // `kwh_suspect_reading_count`, `runs_with_sacks`,
+        // `sacks_coverage_pct`). They are what keep a 0.00 downtime hour, a
+        // 696,924 kWh month and a blank bag count honest, and an adapter
+        // that dropped them would have handed the UI a number with no way
+        // to say what is wrong with it.
+        productionReported: Boolean(prod?.production_reported),
+        productionRunCount: num(prod?.run_count),
+        productionShiftCount: num(prod?.shift_count),
+        reportedDays: num(prod?.reported_days),
+        producedPerReportedDay: num(prod?.produced_per_reported_day),
+        firstReportedDate: prod?.first_reported_date ?? null,
+        lastReportedDate: prod?.last_reported_date ?? null,
+
+        downtimeHrs: num(prod?.downtime_hrs),
+        downtimeShiftCount: num(prod?.downtime_shift_count),
+        downtimeShiftsWithDuration: num(prod?.downtime_shifts_with_duration),
+        downtimeShiftsReasonOnly: num(prod?.downtime_shifts_reason_only),
+
+        kwh: num(prod?.kwh),
+        powerDays: num(prod?.power_days),
+        powerMeterCount: num(prod?.power_meter_count),
+        kwhSuspectReadingCount: num(prod?.kwh_suspect_reading_count),
+        kwhSuspectKwh: num(prod?.kwh_suspect),
+        kwhPerProducedKg: num(prod?.kwh_per_produced_kg),
+        kwhPerProducedKgExclSuspect: num(prod?.kwh_per_produced_kg_excl_suspect),
+
+        sacks: num(prod?.sacks),
+        runsWithSacks: num(prod?.runs_with_sacks),
+        sacksCoveragePct: num(prod?.sacks_coverage_pct),
       } satisfies AnalyticsMonth;
     });
 
@@ -645,6 +763,34 @@ export async function getAnalyticsData(): Promise<AnalyticsData> {
     truncated: supplierRows.length >= POSTGREST_ROW_CAP,
   };
 
+  // ── P4: the grade mix ──────────────────────────────────────────────
+  // Nothing is gated and nothing is nulled — there is no ₱ column in this
+  // view and none is derivable from it. The `share_of_month_pct` its rows
+  // carry is SQL's own, whose denominator is JOINED from the monthly
+  // production view rather than re-summed, so a grade share and the monthly
+  // headline cannot drift apart. Nothing is recomputed here.
+  const gradeRows = (gradeRes.data ?? []) as ProductionGradeRow[];
+  const productionGrades: ProductionGradeData = {
+    rows: gradeRows
+      .filter(
+        (g): g is ProductionGradeRow & { month_start: string; grade: string } =>
+          Boolean(g.month_start) && Boolean(g.grade),
+      )
+      .map((g) => ({
+        monthStart: g.month_start,
+        year: num0(g.year),
+        month: num0(g.month),
+        grade: g.grade,
+        kg: num(g.kg),
+        runCount: num(g.run_count),
+        shareOfMonthPct: num(g.share_of_month_pct),
+        monthProducedKg: num(g.month_produced_kg),
+        sacks: num(g.sacks),
+        runsWithSacks: num(g.runs_with_sacks),
+      })) satisfies ProductionGradeMonth[],
+    truncated: gradeRows.length >= POSTGREST_ROW_CAP,
+  };
+
   return {
     months,
     years,
@@ -655,6 +801,7 @@ export async function getAnalyticsData(): Promise<AnalyticsData> {
     campaigns,
     watchlist,
     suppliers,
+    productionGrades,
   };
 }
 

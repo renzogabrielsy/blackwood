@@ -29,6 +29,7 @@ import {
   METRICS,
   SECTIONS,
   type DeltaMode,
+  type MetricAnnotation,
   type MetricKey,
   type MetricSection,
   type MetricSpec,
@@ -194,18 +195,42 @@ export interface MatrixCell {
    */
   estimated: boolean;
   /**
-   * May a headline quote this cell? False when the figure is an estimate, or
-   * when the period is the metric's FIRST on record — a stream that started
-   * part-way through a month makes that month a reporting boundary rather
-   * than a business fact (production reporting opened mid-November 2025 at a
-   * yield of 11.9% and ₱337 per produced kilo, which is not a record anyone
-   * should act on). Purely a callout gate: the cell still renders.
+   * P4 — the row's OWN caveat for this period, or null. A mis-keyed meter
+   * reading, a downtime duration that stopped being filled in, a bag count
+   * that speaks for a fraction of its month. The cell prints its mark, merges
+   * its sentence into the hover, and — when the row's own value is blank but
+   * an honest estimate exists — prints `annotation.alt` in its place, labelled.
+   */
+  annotation: MetricAnnotation | null;
+  /**
+   * May a headline quote this cell? False when the figure is an estimate,
+   * when the row's own `annotate` flagged it, or when the period is the
+   * metric's FIRST on record — a stream that started part-way through a month
+   * makes that month a reporting boundary rather than a business fact
+   * (production reporting opened mid-November 2025 at a yield of 11.9% and
+   * ₱337 per produced kilo, which is not a record anyone should act on).
+   * Purely a callout gate: the cell still renders.
    */
   calloutable: boolean;
   /** Change against the immediately preceding period at this granularity. */
   delta: Change | null;
+  /**
+   * May a headline quote `delta`? A change is a statement about TWO periods,
+   * so the period it is measured FROM has to be quotable as well.
+   *
+   * Found by measurement, not by reasoning: with the production band in, the
+   * top line of the strip read *"Power fell 97.6% MoM in April 2026, to 16,572
+   * kWh — the biggest month-on-month move on the board."* April's own cell is
+   * sound and passed every gate; the 97.6% is entirely the mis-keyed March
+   * reading it was divided by. Gating the cell alone cannot catch that, and
+   * the same shape applies to the period after a metric's FIRST — a fall from
+   * a reporting boundary is a fact about when reporting started.
+   */
+  deltaQuotable: boolean;
   /** Change against the same period one year earlier. Null in the YEAR view — it would repeat `delta`. */
   yoy: Change | null;
+  /** The same rule for the year-ago comparison. */
+  yoyQuotable: boolean;
 }
 
 export interface MatrixRow {
@@ -243,6 +268,8 @@ export interface HistoryPoint {
   avg: number | null;
   /** Is this period inside the currently displayed window? Drives the chart's emphasis. */
   displayed: boolean;
+  /** P4 — the row's own caveat for this period, or null. Same object the cell carries. */
+  annotation: MetricAnnotation | null;
   /**
    * May a headline quote this period? Records are judged against the WHOLE
    * history, not only the displayed window, so the gate has to live here as
@@ -480,14 +507,27 @@ export interface MatrixSection {
  * Rows grouped into their declared bands, in `SECTIONS` order, empty bands
  * dropped. Presentation only — the grouping cannot change a single number,
  * which is why it lives beside the fold rather than inside it.
+ *
+ * `only` narrows to a subset of bands so the SAME table component can render
+ * the flow + money bands at the top of the page and the production band down
+ * in its own section. The fold is unchanged either way: `buildMatrix` still
+ * produces every row in one pass, so the callout strip still ranks production
+ * against money against volume, and a production record is judged by exactly
+ * the same machinery.
  */
-export function groupBySection(rows: readonly MatrixRow[]): MatrixSection[] {
-  return SECTIONS.map((s) => ({
-    key: s.key,
-    label: s.label,
-    hint: s.hint,
-    rows: rows.filter((r) => r.metric.section === s.key),
-  })).filter((s) => s.rows.length > 0);
+export function groupBySection(
+  rows: readonly MatrixRow[],
+  only?: readonly MetricSection[],
+): MatrixSection[] {
+  const wanted = only ? new Set(only) : null;
+  return SECTIONS.filter((s) => !wanted || wanted.has(s.key))
+    .map((s) => ({
+      key: s.key,
+      label: s.label,
+      hint: s.hint,
+      rows: rows.filter((r) => r.metric.section === s.key),
+    }))
+    .filter((s) => s.rows.length > 0);
 }
 
 /** THE fold. One pass, one set of numbers, shared by the grid, the charts and the callouts. */
@@ -537,9 +577,21 @@ export function buildMatrix(
     // The metric's FIRST period on record. A stream that opened part-way
     // through a period makes that period a reporting boundary, not a
     // business fact — so it is the ONE period no headline may quote.
+    // The row's own caveats, one per period of the FULL axis. Computed here
+    // beside `raws` so the callout gate below can read them by index — the
+    // same reason `estimated` is folded in `rawValue` rather than checked at
+    // the point of render.
+    const anns = all.map((p) =>
+      spec.annotate ? spec.annotate(p.months) : null,
+    );
+
     const firstIdx = values.findIndex((v) => v != null);
     const quotable = (i: number) =>
-      !all[i].isPartial && !raws[i].estimated && firstIdx >= 0 && i > firstIdx;
+      !all[i].isPartial &&
+      !raws[i].estimated &&
+      !anns[i]?.blocksCallout &&
+      firstIdx >= 0 &&
+      i > firstIdx;
 
     const history: HistoryPoint[] = all.map((p, i) => ({
       periodKey: p.key,
@@ -549,6 +601,7 @@ export function buildMatrix(
       isPartial: p.isPartial,
       avg: rollingWindow > 0 ? rollingMean(values, i, rollingWindow) : null,
       displayed: shownKeys.has(p.key),
+      annotation: anns[i],
       calloutable: quotable(i),
     }));
 
@@ -564,12 +617,15 @@ export function buildMatrix(
         holed: raw.holed,
         isPartial: p.isPartial,
         estimated: raw.estimated,
+        annotation: anns[i],
         calloutable: quotable(i),
         delta: change(raw.value, prev, spec.deltaMode),
+        deltaQuotable: i > 0 && quotable(i - 1),
         yoy:
           yoyIdx === undefined
             ? null
             : change(raw.value, values[yoyIdx], spec.deltaMode),
+        yoyQuotable: yoyIdx !== undefined && quotable(yoyIdx),
       };
     });
 
@@ -603,6 +659,7 @@ export function buildMatrix(
             isPartial: p.isPartial,
             avg: null,
             displayed: shownKeys.has(p.key),
+            annotation: null,
             // A comparison line is context for the row's own series; it is
             // never itself the subject of a headline.
             calloutable: false,
@@ -628,13 +685,16 @@ export function buildMatrix(
             holed: totalRaw.holed,
             isPartial: totalPeriod.isPartial,
             estimated: totalRaw.estimated,
+            annotation: spec.annotate ? spec.annotate(totalPeriod.months) : null,
             // The summary column is never a callout subject: it is a fold of
             // the window, not a period anyone can point at.
             calloutable: false,
             // A summary column has no "previous column" in view; the honest
             // comparison for a full year IS the year before it.
             delta: null,
+            deltaQuotable: false,
             yoy: change(totalRaw.value, priorTotalRaw?.value ?? null, spec.deltaMode),
+            yoyQuotable: false,
           }
         : null;
 
@@ -709,7 +769,28 @@ export function buildMatrix(
 //     September 2026 — the biggest month-on-month move on the board." The
 //     rule is now applied once, to all three kinds.
 //
-// All three gates are CALLOUT-ONLY. Every one of those cells still renders,
+//   • **NOR AN ANNOTATED CELL (P4).** A row may declare its own caveat for a
+//     period (`MetricSpec.annotate`), and a figure the page is itself warning
+//     about can never be the thing the page leads with. Measured, both would
+//     have topped the strip on the first render: August 2026 reads 0.00
+//     downtime hours because all 23 shifts recorded the repair and none
+//     recorded the duration — the lowest "record" on the board — and March
+//     2026 carries one mis-keyed meter reading worth 676,944 kWh, which is
+//     both the largest month-on-month move and the highest value the Power
+//     row has ever had. Same rule, same one gate.
+//
+//   • **AND A CHANGE NEEDS BOTH ENDS.** `cell.calloutable` gates the period a
+//     sentence is ABOUT; a mover and a year-ago gap are statements about two
+//     periods, so the one being measured FROM has to pass the same gate.
+//     Measured on the first P4 render, this was the top line of the strip:
+//     *"Power fell 97.6% MoM in April 2026, to 16,572 kWh — the biggest
+//     month-on-month move on the board."* April's own cell is sound and
+//     passed every gate above; the 97.6% is entirely the mis-keyed March
+//     reading it was divided by. The same shape had been latent since P1 for
+//     the period immediately after a metric's first — a fall from a reporting
+//     boundary is a fact about when reporting started, not about the plant.
+//
+// All five gates are CALLOUT-ONLY. Every one of those cells still renders,
 // still carries its delta, and still says in its hover exactly what it is.
 
 export type CalloutKind = "mover" | "yoy" | "high" | "low";
@@ -758,6 +839,12 @@ function plainValue(spec: MetricSpec, v: number): string {
       return `${n} days`;
     case "pct":
       return `${n}%`;
+    case "hours":
+      return `${n} h`;
+    case "kwh":
+      return `${n} kWh`;
+    case "kwh_per_kg":
+      return `${n} kWh/kg`;
     default:
       return n;
   }
@@ -801,7 +888,9 @@ export function buildCallouts(
     for (const cell of row.cells) {
       if (cell.value == null) continue;
       if (!cell.calloutable) continue;
-      if (cell.delta) {
+      // A change is a statement about TWO periods, so the base has to be
+      // quotable too — see `MatrixCell.deltaQuotable`.
+      if (cell.delta && cell.deltaQuotable) {
         const moveWords =
           spec.deltaMode === "pct"
             ? `${cell.delta.value > 0 ? "rose" : "fell"} ${unsigned(Math.abs(cell.delta.value), 1)}% ${deltaWord}`
@@ -821,7 +910,7 @@ export function buildCallouts(
           },
         });
       }
-      if (cell.yoy) {
+      if (cell.yoy && cell.yoyQuotable) {
         yoys.push({
           magnitude:
             (spec.deltaMode === "pct" ? 1000 : 1) * Math.abs(cell.yoy.value),

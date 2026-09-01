@@ -469,11 +469,126 @@ function AgingSplit({ month }: { month: AnalyticsMonth }) {
 }
 
 /**
+ * P4 — WHY A ZERO DOWNTIME HOUR IS NOT A PERFECT MONTH, as counts rather than
+ * as a sentence.
+ *
+ * The two halves of the shift report drifted apart in both directions:
+ * Nov 2025 – Apr 2026 recorded durations and not one reason; reasons begin
+ * May 2026; August 2026 records a reason on all 23 shifts and a duration on
+ * none. So the rail splits the month's downtime records three ways and lets
+ * the reader see which kind they are looking at.
+ */
+function DowntimeSplit({ month }: { month: AnalyticsMonth }) {
+  const withDuration = month.downtimeShiftsWithDuration ?? 0;
+  const reasonOnly = month.downtimeShiftsReasonOnly ?? 0;
+  const records = month.downtimeShiftCount ?? 0;
+  const other = Math.max(records - withDuration - reasonOnly, 0);
+  const total = withDuration + reasonOnly + other;
+  const items: RailItem[] = total <= 0 ? [] : [
+    {
+      key: "duration",
+      label: "Duration recorded",
+      value: String(withDuration),
+      unit: "shifts",
+      sharePct: (withDuration / total) * 100,
+      title: "Shifts that put a number on how long the plant stood still. These are the only ones the hours above can see.",
+    },
+    {
+      key: "reason_only",
+      label: "Repair named, duration left at zero",
+      value: String(reasonOnly),
+      unit: "shifts",
+      sharePct: (reasonOnly / total) * 100,
+      title:
+        "The work was recorded — cleaned a screen, changed a spring — and the duration was not. Real downtime that contributes nothing to the total.",
+    },
+    {
+      key: "other",
+      label: "Filed with neither",
+      value: String(other),
+      unit: "shifts",
+      sharePct: (other / total) * 100,
+      title: "A downtime record carrying no reason and no duration.",
+    },
+  ].filter((i) => Number(i.value) > 0);
+  return (
+    <div className="flex flex-col gap-2">
+      <BreakdownRail items={items} emptyText="No downtime record this month." maxHeight={130} />
+      <p className="px-3 pb-1 text-[11px] leading-relaxed text-muted-foreground">
+        A downtime total of zero can mean two completely different things.{" "}
+        <strong className="font-semibold">
+          A shift that named the repair and left the duration blank is real
+          downtime the hours cannot see
+        </strong>{" "}
+        — August 2026 is 23 shifts of exactly that, which is why its 0.00 hours
+        is marked and can never be quoted as a record. Nothing is estimated in
+        to fill the gap; the count is what makes the gap visible.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * P4 — the metered total against the part of it we can prove is wrong.
+ *
+ * The raw kWh is published exactly as metered so it can never disagree with
+ * the home dashboard's daily tile. This rail is where the mis-keyed reading is
+ * quantified instead — and nothing here repairs it, because correcting the
+ * underlying row is Renzo's call and a separate, audited write.
+ */
+function PowerSplit({ month }: { month: AnalyticsMonth }) {
+  const total = month.kwh ?? 0;
+  const suspect = month.kwhSuspectKwh ?? 0;
+  const sound = Math.max(total - suspect, 0);
+  const items: RailItem[] = total <= 0 ? [] : [
+    {
+      key: "sound",
+      label: "Readings that walk forward",
+      value: sound.toLocaleString("en-US", { maximumFractionDigits: 0 }),
+      unit: "kWh",
+      sharePct: (sound / total) * 100,
+      title: "Every reading whose start follows the previous day's end, as a meter does.",
+    },
+    {
+      key: "suspect",
+      label: "Mis-keyed readings",
+      meta: `${month.kwhSuspectReadingCount ?? 0} reading${(month.kwhSuspectReadingCount ?? 0) === 1 ? "" : "s"}`,
+      value: suspect.toLocaleString("en-US", { maximumFractionDigits: 0 }),
+      unit: "kWh",
+      sharePct: (suspect / total) * 100,
+      title:
+        "A starting reading left at zero against an end that was still climbing. A start of zero is only a genuine meter reset when the counter WRAPPED — this one did not.",
+    },
+  ].filter((i) => i.sharePct > 0);
+  return (
+    <div className="flex flex-col gap-2">
+      <BreakdownRail items={items} emptyText="No meter reading this month." maxHeight={120} />
+      <p className="px-3 pb-1 text-[11px] leading-relaxed text-muted-foreground">
+        The kWh total is published{" "}
+        <strong className="font-semibold">exactly as metered</strong> — it is
+        the record, and it must agree with the daily power tile on the home
+        page. The power-intensity row is where a mis-keyed reading is taken
+        out, because a wrong reading there does not look wrong, it looks like a
+        twenty-fold efficiency collapse. Nothing on this page corrects the
+        underlying reading.{" "}
+        {month.powerMeterCount != null && (
+          <>
+            {month.powerMeterCount} meter
+            {month.powerMeterCount === 1 ? "" : "s"} reported over{" "}
+            {month.powerDays ?? 0} day{(month.powerDays ?? 0) === 1 ? "" : "s"}.
+          </>
+        )}
+      </p>
+    </div>
+  );
+}
+
+/**
  * Which side panel a row earns, if any. Declared here rather than on the
  * registry because it is a LAYOUT fact about this component — the registry
  * describes numbers, not which pane they sit beside.
  */
-type SidePanel = "coverage" | "closed" | "aging" | null;
+type SidePanel = "coverage" | "closed" | "aging" | "downtime" | "power" | null;
 
 function sidePanelFor(key: MetricSpec["key"]): SidePanel {
   switch (key) {
@@ -487,6 +602,11 @@ function sidePanelFor(key: MetricSpec["key"]): SidePanel {
     case "stock_age":
     case "over_120d":
       return "aging";
+    case "downtime_hours":
+      return "downtime";
+    case "power_kwh":
+    case "power_intensity":
+      return "power";
     default:
       return null;
   }
@@ -540,6 +660,16 @@ export function MetricExpand({
   );
   const latest = React.useMemo(
     () => [...row.history].reverse().find((h) => h.value != null) ?? null,
+    [row.history],
+  );
+  /**
+   * The annotated periods INSIDE the displayed window, so the panel names them
+   * rather than leaving a gap in the chart unexplained. Scoped to the window
+   * on purpose: the chart draws all history, but a caveat about a period the
+   * reader is not looking at is noise.
+   */
+  const annotated = React.useMemo(
+    () => row.history.filter((h) => h.displayed && h.annotation),
     [row.history],
   );
   const high = comparable.length
@@ -652,6 +782,33 @@ export function MetricExpand({
                   {spec.pair.note}
                 </p>
               )}
+              {/* P4 — the row's OWN caveats, named period by period. The
+                  chart draws a GAP where a figure is suppressed (power
+                  intensity, March 2026) and the note beside it is the only
+                  thing that says a gap is deliberate rather than missing. */}
+              {annotated.length > 0 && (
+                <ul className="flex flex-col gap-1 px-1 pb-1 pt-1.5">
+                  {annotated.map((h) => (
+                    <li
+                      key={h.periodKey}
+                      className="flex items-start gap-1.5 text-[11px] leading-relaxed text-muted-foreground"
+                    >
+                      <span
+                        aria-hidden
+                        className="mt-px shrink-0 text-[10px] text-amber-600 dark:text-amber-400"
+                      >
+                        {h.annotation?.mark || "·"}
+                      </span>
+                      <span>
+                        <strong className="font-medium text-foreground">
+                          {h.fullLabel}
+                        </strong>{" "}
+                        {h.annotation?.title}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </DrilldownSection>
 
             {spec.key === "ending_inventory" && anchorMonth && (
@@ -691,6 +848,26 @@ export function MetricExpand({
                 bodyClassName="p-0"
               >
                 <AgingSplit month={anchorMonth} />
+              </DrilldownSection>
+            )}
+
+            {sidePanel === "downtime" && anchorMonth && (
+              <DrilldownSection
+                title="What the downtime records say"
+                subtitle={anchorMonth.monthStart.slice(0, 7)}
+                bodyClassName="p-0"
+              >
+                <DowntimeSplit month={anchorMonth} />
+              </DrilldownSection>
+            )}
+
+            {sidePanel === "power" && anchorMonth && (
+              <DrilldownSection
+                title="What the meters recorded"
+                subtitle={anchorMonth.monthStart.slice(0, 7)}
+                bodyClassName="p-0"
+              >
+                <PowerSplit month={anchorMonth} />
               </DrilldownSection>
             )}
           </div>

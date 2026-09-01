@@ -16,6 +16,8 @@
 //   • `view_analytics_batch_cost`     — P2: the PRODUCTION-BATCH basis
 //   • `view_analytics_aging_watchlist`— P2: LIVE "go and look at these"
 //   • `view_analytics_supplier_monthly`— P3: WHO we bought from, per month
+//   • `view_analytics_production_monthly` — P4: what the PLANT MADE
+//   • `view_analytics_production_grade_monthly` — P4: made, split by grade
 //   • `view_blocking_grid`            — LIVE block occupancy (see below)
 //
 // All aggregation across months (quarters, years, per-working-day) happens
@@ -210,6 +212,147 @@ export interface AnalyticsMonth {
   /** The resiko: what closed blocks still carry on the books. LOSS, not stock. */
   closedResidueKg: number | null;
   closedResidueBatches: number | null;
+
+  // ── PRODUCTION (view_analytics_production_monthly) — P4 ─────────────
+  //
+  // **NO ₱ COLUMN EXISTS HERE AND NONE IS DERIVABLE.** Production is the one
+  // module of the platform with no money in it, so nothing in this block is
+  // gated and the whole production matrix — tonnage, grades, downtime, power
+  // — is visible to every role including Production. The money that MEETS
+  // production (₱/kg fed, ₱ per produced kg) lives in the P2 block above and
+  // is gated there.
+  //
+  // **`producedKg` is deliberately NOT repeated here.** It already exists in
+  // the P2 block, and the two are literally the same number — both are
+  // `view_rc_movement_yield_monthly.total_produced` (measured: 0 mismatches
+  // across 10 of 10 production months, max gap 0.0 kg). A second field would
+  // be a second definition waiting to drift, so the Production output row
+  // reads the one that is already here.
+
+  /**
+   * Did production report at all this month?
+   *
+   * NOT the same question as `productionRecorded` above, which is derived
+   * from `produced_kg > 0` on the money view. This is the P4 view's own flag
+   * and exists because ITS spine is production months ∪ ELECTRICITY months:
+   * the meters start 2025-03 and production reporting starts 2025-11, so
+   * eight months carry power and no output at all. They are present, flagged
+   * false, with every production figure null rather than 0.
+   */
+  productionReported: boolean;
+  /** Production entries (grade × shift rows) behind the month's tonnage. */
+  productionRunCount: number | null;
+  /** Shifts reported that month. */
+  productionShiftCount: number | null;
+  /**
+   * PRODUCTION'S OWN denominator — days on which production actually
+   * reported. Deliberately NOT `workingDays`: they answer different
+   * questions, and substituting one silently changes what a per-day figure
+   * means.
+   */
+  reportedDays: number | null;
+  /** kg per reported day. The fair way to compare a short month with a long one. */
+  producedPerReportedDay: number | null;
+  /** First day production reported that month — what makes Nov 2025 a 3-day month. */
+  firstReportedDate: string | null;
+  lastReportedDate: string | null;
+
+  /**
+   * Hours lost, folded from the hours+minutes pair exactly the way the Daily
+   * ledger folds it (`view_production_daily.dt_total_hrs`, SELECTed here, not
+   * restated). **Read it WITH the three counts below** — see
+   * `downtimeShiftsReasonOnly`.
+   */
+  downtimeHrs: number | null;
+  /** Shifts that filed a downtime record at all. */
+  downtimeShiftCount: number | null;
+  /** Of those, how many actually put a number on it. */
+  downtimeShiftsWithDuration: number | null;
+  /**
+   * Of those, how many described the work — "cleaned the screens" — and left
+   * the duration at zero. **August 2026 is 23 of 23**, so its 0.00 hours is a
+   * gap in the report, not a flawless month, and the UI may never print that
+   * zero without this count beside it.
+   */
+  downtimeShiftsReasonOnly: number | null;
+
+  /** Metered consumption across every meter — the same figure the digest shows daily. */
+  kwh: number | null;
+  powerDays: number | null;
+  /** Reads 1 from January 2026 on: only the MAIN meter has reported since 2025-12-12. */
+  powerMeterCount: number | null;
+  /**
+   * Readings this month that are provably mis-keyed — a starting reading left
+   * at zero against an end that is still climbing. Structural, not a
+   * hardcoded date: over all 818 readings the rule fires on exactly ONE row
+   * (2026-03-01 / MAIN), which at ×120 publishes 676,944 kWh into a month
+   * whose real consumption is about 20,000.
+   */
+  kwhSuspectReadingCount: number | null;
+  /** The kWh those readings contributed. Subtracted to get the honest figure. */
+  kwhSuspectKwh: number | null;
+  /**
+   * kWh per kilo produced. **NULL — never wrong — on any month containing a
+   * suspect reading**, because a bad reading here does not look wrong, it
+   * looks like a finding: 2026-03 would report 0.7630 against neighbours
+   * reading 0.03, a twenty-fold efficiency collapse that never happened.
+   */
+  kwhPerProducedKg: number | null;
+  /** The same arithmetic with the broken readings removed. 2026-03 reads 0.0219. */
+  kwhPerProducedKgExclSuspect: number | null;
+
+  /**
+   * Bags counted. **NULL, never 0**, on a month where no run recorded any —
+   * not one production run carried a bag count before May 2026, and "we did
+   * not count bags" and "we produced no bags" are different answers.
+   */
+  sacks: number | null;
+  runsWithSacks: number | null;
+  /** PERCENT 0-100. May 2026 reads 2.63 — its 270 bags describe ONE run of 38. */
+  sacksCoveragePct: number | null;
+}
+
+/**
+ * ONE (month × grade) row — P4, `view_analytics_production_grade_monthly`.
+ *
+ * `kg` is SELECTed from the same `view_rc_movement_production_monthly` the
+ * monthly headline SUMs, so the grade rows are not a second count of the same
+ * charcoal — they are the same arithmetic, split. `shareOfMonthPct` takes its
+ * denominator by JOINING the monthly production view rather than re-summing,
+ * so a grade share and the monthly total cannot drift apart.
+ *
+ * ₱-FREE, like every P4 figure. Nothing here is gated.
+ */
+export interface ProductionGradeMonth {
+  /** yyyy-MM-01. */
+  monthStart: string;
+  year: number;
+  /** 1..12 */
+  month: number;
+  /** `3X50` · `2X6` · `4X8` — the product code as the plant writes it. */
+  grade: string;
+  /** Kilos of this grade produced that month. */
+  kg: number | null;
+  runCount: number | null;
+  /** PERCENT 0-100. The shares of a month always add to 100. */
+  shareOfMonthPct: number | null;
+  /** The month's own published total, carried so one row is self-auditable. */
+  monthProducedKg: number | null;
+  /** NULL (never 0) wherever bags were not being counted. */
+  sacks: number | null;
+  runsWithSacks: number | null;
+}
+
+/** The grade mini-matrix's slice of the payload. */
+export interface ProductionGradeData {
+  /** ALL history, ascending by (month, kg desc). 39 rows today. */
+  rows: ProductionGradeMonth[];
+  /**
+   * The read came back at PostgREST's row cap. Measured 39 rows all-history
+   * against a 1000 cap — structural honesty, exactly like the watchlist's and
+   * the supplier room's flags, not a live alarm.
+   */
+  truncated: boolean;
 }
 
 /**
@@ -468,4 +611,6 @@ export interface AnalyticsData {
   watchlist: AgingWatchlist;
   /** P3 — the supplier room's (month × supplier) rows, all history. */
   suppliers: SupplierData;
+  /** P4 — the (month × grade) rows behind the grade mix, all history. */
+  productionGrades: ProductionGradeData;
 }
