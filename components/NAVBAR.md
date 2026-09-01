@@ -44,6 +44,7 @@ The old long if-chain was refactored into an **ordered registry array**. Each en
 | `prefix('/inventory/flecon-bags')` | Back to Inventory | Bag Inventory | FLECON bag stock — balances & movement ledger |
 | `prefix('/inventory')` | Back to Dashboard | Inventory | Raw charcoal deliveries, usage & tracking |
 | `prefix('/production')` | Back to Dashboard | Production | Daily runs, downtime, waste, electricity & trucks |
+| `prefix('/analytics')` | Back to Dashboard | Analytics | ICTC month-on-month KPIs — price, volume, stock & runway |
 | `prefix('/summaries')` | Back to Dashboard | Summaries | Delivery price & volume analysis — by period or supplier |
 | `prefix('/price-demos/demo1')` | Back to Demos | Terminal | Dual-axis volume × price command view (concept 1 of 4) |
 | `prefix('/price-demos/demo2')` | Back to Demos | Ledger | Sortable supplier league table with sparklines (concept 2 of 4) |
@@ -75,7 +76,7 @@ A nested information architecture grouped by tenant. The dropdown is built from 
 | Constant | Section | Items |
 |----------|---------|-------|
 | `ICTC_INVENTORY` | ICTC · Davao → **Inventory** sub-group (indented) | Blocking (`/inventory/blocking`) · Deliveries (`/inventory?tab=deliveries`) · Usage (`/inventory?tab=usage`) · Movement (`/inventory/rc-movement`) · Bag Inventory (`/inventory/flecon-bags`) |
-| `ICTC_MODULES` | ICTC · Davao (siblings below Inventory) | Production (`/production`) · Summaries (`/summaries`) · Shipments (`/shipments`) · Accounting (disabled) |
+| `ICTC_MODULES` | ICTC · Davao (siblings below Inventory) | **Analytics (`/analytics`)** · Production (`/production`) · Summaries (`/summaries`) · Shipments (`/shipments`) · Accounting (disabled) |
 | `CENAPRO_MODULES` | Cenapro · Cebu | Production (`/cenapro/production`) · RC Deliveries (`/cenapro/deliveries`) · Liquidation (`/cenapro/liquidation`) · Flec Inventory (`/cenapro/inventory`) · QC Ledger (`/cenapro/qc`) · QC Breakdown (`/cenapro/qc/breakdown`) |
 
 Render structure inside `DropdownMenuContent`:

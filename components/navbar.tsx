@@ -78,6 +78,9 @@ const BREADCRUMB_REGISTRY: BreadcrumbEntry[] = [
     // were removed with the production plan — both routes are gone. See
     // `_archived/prod-schedule-v1/`.
     { test: prefix('/production'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Production', pageDescription: 'Daily runs, downtime, waste, electricity & trucks' },
+    // Owner analytics — the month-on-month room. The digest at `/` is the daily
+    // gateway; this is where a KPI is read across months, quarters and years.
+    { test: prefix('/analytics'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Analytics', pageDescription: 'ICTC month-on-month KPIs — price, volume, stock & runway' },
     { test: prefix('/summaries'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Summaries', pageDescription: 'Delivery price & volume analysis — by period or supplier' },
     // Shipments — export-doc readiness + ZIP download (Trello-backed). Detail route
     // (`/shipments/<cardId>`) matches the same prefix; the shared title is fine.
@@ -150,6 +153,7 @@ const ICTC_INVENTORY: Module[] = [
 
 // ICTC / Davao top-level modules shown as siblings BELOW the Inventory sub-group.
 const ICTC_MODULES: Module[] = [
+    { name: 'Analytics', href: '/analytics' },
     { name: 'Production', href: '/production' },
     { name: 'Summaries', href: '/summaries' },
     { name: 'Shipments', href: '/shipments' },

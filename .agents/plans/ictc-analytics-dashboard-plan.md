@@ -131,6 +131,108 @@ all history within row budgets). No new tables. No snapshot jobs.
 
 - **P1 — the matrix**: price, volume, active suppliers, IN/OUT/NET, ending kg, runway,
   batch/block counts. (Monthly views + the page + row-expand charts.)
+
+  > ### ✅ P1 DATA LAYER BUILT — 2026-09-01, applied
+  >
+  > Migrations `20260901115129_analytics_phase1_data_layer` (+ the one-line cost fix
+  > `20260901115314_analytics_inventory_eom_outflow_flag_scalar`). One function, three views,
+  > all `security_invoker` / `authenticated`-only / no `service_role`; row counts 49 / 75 / 75.
+  > Gates green: `tsc --noEmit` clean, `verify-worker-view-grants` 4 views / 0 findings.
+  > Types regenerated. **The page + server action are NOT built** — that is the frontend's half.
+  >
+  > - **`fn_delivery_class(batch_code, supplier, remarks)`** — `market | sundry_reentry |
+  >   recook_refeed`. All-time split: market **1,631 rows / 31,004,993 kg (98.010%)** ·
+  >   sundry_reentry **91 / 581,173 kg (1.837%)** · recook_refeed **5 / 48,244 kg (0.153%)**.
+  >   A delivery straight into the FEEDING AREA is a PURCHASE (all 13 raw-`FEED` rows are
+  >   Paquibot trucks at ₱19.50–₱25.00). It takes 3 arguments because 2 re-cooks announce
+  >   themselves only in `supplier` (@ ₱1.50/₱1.75 processing fees, on ordinary BLK/FEED codes)
+  >   and 1 sundry-batch row is remarked "FOR SUNDRYING" (still market).
+  > - **`view_analytics_rcin_monthly`** · **`view_analytics_flow_monthly`** ·
+  >   **`view_analytics_inventory_eom`** — full definitions in CLAUDE.md → Views → "Owner
+  >   analytics".
+  >
+  > **What the measurement changed about §1c's story.** The plan's 2026 table is reproduced
+  > exactly, and it was computed over ALL arrivals; the market-only figures differ, and the
+  > supplier count differs a LOT:
+  >
+  > | 2026 | Jan | Feb | Mar | Apr | May | Jun | Jul | Aug |
+  > |---|---|---|---|---|---|---|---|---|
+  > | tonnes, plan (all) | 1,505.4 | 2,004.4 | 1,988.8 | 713.9 | 1,034.1 | 762.0 | 901.5 | 825.6 |
+  > | tonnes, **market** | 1,468.3 | 1,864.1 | 1,788.9 | **598.2** | 1,034.1 | 762.0 | 901.5 | 824.0 |
+  > | ₱/kg, plan (all) | 47.64 | 48.41 | 47.20 | 44.58 | 44.96 | 38.25 | 37.88 | 39.90 |
+  > | ₱/kg, **market** | 47.53 | 48.26 | **47.51** | **46.84** | 44.96 | 38.25 | 37.88 | **39.97** |
+  > | suppliers, plan (all) | 14 | 20 | 21 | 7 | 4 | 4 | 4 | 6 |
+  > | suppliers, **market** | **13** | **14** | **10** | **4** | 4 | 4 | 4 | **5** |
+  >
+  > Two things worth carrying into the page. **April's real market price is ₱46.84, not ₱44.58** —
+  > 115,691 kg of sundry re-entry was dragging it down, so the "price collapse" starts a month
+  > later and more sharply than the plan's line shows. And **the participation story is stronger,
+  > not weaker**: Feb/Mar were 14 and 10 real market sellers, not 20 and 21 — the extra entries
+  > were sundry re-entries carrying an origin-supplier name. The high-price months still drew
+  > 3× the sellers of the ₱38 summer.
+  >
+  > **Two honest limits confirmed by measurement, both needing UI copy.** (1) `ending_kg`
+  > 8,492,517.09 kg reconciles to the live table EXACTLY (gap 0.00 kg) — but it is a NET of
+  > +11.71M kg positive and **−3.22M kg spread over 77 batches with negative balances**
+  > (misattribution, the L-042 shape, not evaporation). The view exposes the split; the page
+  > must print the caveat rather than showing an 8.5M headline alone. (2) `price_coverage_pct`
+  > currently reads **100.00 on every month** — all 1,727 deliveries are priced today. The
+  > column is structural honesty, not a live signal, so do not build a UI that only appears
+  > when coverage < 100.
+
+  > ### ✅ P1 PAGE BUILT — 2026-09-01
+  >
+  > `/analytics` is live: server page + adapter + the matrix + the row expand + the
+  > dictionary + the callouts + the working-day toggle, registered in the navbar
+  > (breadcrumb + `ICTC_MODULES`). Gates green: `tsc --noEmit` clean, `npm run lint`
+  > 146/16 (baseline, no new), `npm run build` clean, `verify-table-core` 84,
+  > `test:e2e` 57. Full architecture: **`app/(app)/analytics/CONTEXT.md`**.
+  >
+  > **Files.** `app/(app)/analytics/{page,analytics-view,analytics-matrix,metric-expand,metric-info,analytics-error}.tsx`
+  > + `lib/analytics/{types,metrics,matrix,format,queries}.ts`.
+  >
+  > **The matrix is a BESPOKE dense table, not the Blackwood Table** — and the reason is
+  > structural, not taste. The platform grid assumes rows are RECORDS and columns are
+  > FIELDS; this inverts both, so (a) `ColumnSpec.format` is per COLUMN while here `Mar`
+  > must print ₱48.26 on one row and 1,864.1 t on the next, (b) a cell is value + delta +
+  > year-ago chip and is never editable, so the edit journal / paste sink / caret model are
+  > pure cost, and (c) the row expand is the point of the page and `renderChromeRow` reaches
+  > only INSIDE a `table-fixed` row (a chart there would be ~1,500px wide). Twelve rows also
+  > means virtualisation buys nothing. Both platform LAYOUT rules are still obeyed: "never
+  > crush, always scroll" (`table-fixed` + `width: max-content` + a full `<colgroup>`, no
+  > flexible column) and opaque frozen panes (`.frozen-col` + `.frozen-edge` on the KPI-name
+  > column, solid tokens, hover/selected repainted solidly).
+  >
+  > **Rollup rules as shipped** — weighted (Σ₱ ÷ Σkg): Market price. Sum: Purchase volume,
+  > Sundry re-entry, RC IN total, RC OUT, Net flow, Working days. **Period-end** (a stock is
+  > not additive): Ending inventory, Inventory value, Runway, Active batches. **Peak** — the
+  > one approximation, and it is labelled in the dictionary: Active suppliers, because
+  > distinct sellers over a quarter is NOT derivable from three monthly distinct counts. The
+  > trailing summary column folds the displayed window through the SAME rule (built as a
+  > synthetic period), so "add the row up" is never applied to the five rows it would break.
+  >
+  > **Callouts** are returned by `buildMatrix` from the SAME pass that builds the cells —
+  > never a second computation — and are magnitude-only per §0a.5: the largest
+  > period-over-period move (only that one may claim "the biggest move on the board"), the
+  > widest year-ago gap, and highs/lows against a metric's own history with in-progress
+  > periods excluded from BOTH sides and a ≥6-period floor before the word "record" is used.
+  > Capped at 5, never two lines about one metric, restricted (₱) rows contribute nothing.
+  > **No colour semantics anywhere on the page** — a delta is a direction glyph and a muted
+  > number, per the "no threshold colouring yet" decision.
+  >
+  > **Two measured corrections during the build, both worth keeping.** A recharts BAR chart's
+  > "auto" Y domain starts at the data minimum, which turned a 30% spread in ending inventory
+  > into a visual collapse — bars now force a zero baseline while LINE metrics (price,
+  > runway) keep the padded domain the price drill-down uses. And a 360px dictionary popover
+  > opened with `side="right"` from the frozen left column flipped left and hung 133px off a
+  > 375px screen; it is `side="bottom"` with `max-h-[var(--radix-popover-content-available-height)]`.
+  >
+  > **Gateway links.** `DrilldownModal.footerLink` was widened from an object to
+  > object-or-array (every existing caller byte-identical), and RC IN / RC IN price / RC OUT /
+  > Flow each gained `Full analytics →` deep-linked to their own `?metric=`. Production and
+  > Power got none — P1 has no production-grade or power row, and a door to nowhere is worse
+  > than no door.
+
 - **P2 — the money layer**: inventory value ₱, true fed ₱/kg monthly, loss % of closed
   blocks, aging profile + watchlist, ₱-per-produced-kg.
 - **P3 — supplier room**: per-supplier monthly matrix (kg, share, premium/discount,

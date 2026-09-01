@@ -369,14 +369,29 @@ export function DrilldownSection({
 // The modal
 // ---------------------------------------------------------------------
 
+/** One footer destination — the owning module, or the room this tile belongs to. */
+export interface DrilldownFooterLink {
+  href: string;
+  label: string;
+}
+
 export interface DrilldownModalProps extends DrilldownModalState {
   title: string;
   /** one line under the title — the window, the unit, the source */
   description?: string;
   /** shown while a request is in flight; defaults to the chart skeleton */
   skeleton?: React.ReactNode;
-  /** bottom-left link back to the owning module */
-  footerLink?: { href: string; label: string };
+  /**
+   * Bottom-left link(s). ONE is the owning module ("Open RC IN"); an ARRAY adds
+   * the month-on-month room beside it ("Full analytics"), because a drill-down
+   * answers "what happened in this window" and `/analytics` answers "what has
+   * been happening" — a tile that can only reach its own ledger leaves the
+   * second question with no door.
+   *
+   * Widened from a single object rather than replaced: every existing caller
+   * passes one and is byte-identical.
+   */
+  footerLink?: DrilldownFooterLink | readonly DrilldownFooterLink[];
   /** small muted note pinned bottom-right (e.g. a population caveat) */
   footerNote?: string | null;
   /** the loaded body. Rendered only when `loading` and `error` are both falsy. */
@@ -398,6 +413,11 @@ export function DrilldownModal({
   footerNote,
   children,
 }: DrilldownModalProps) {
+  const links: readonly DrilldownFooterLink[] = footerLink
+    ? Array.isArray(footerLink)
+      ? footerLink
+      : [footerLink as DrilldownFooterLink]
+    : [];
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -437,16 +457,21 @@ export function DrilldownModal({
           )}
         </div>
 
-        {(footerLink || footerNote) && (
+        {(links.length > 0 || footerNote) && (
           <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t bg-background/90 px-4 py-2.5 backdrop-blur-sm sm:px-5">
-            {footerLink ? (
-              <a
-                href={footerLink.href}
-                className="inline-flex items-center gap-1 rounded text-xs font-medium text-foreground transition-colors duration-150 hover:text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {footerLink.label}
-                <ArrowRight className="size-3" />
-              </a>
+            {links.length > 0 ? (
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                {links.map((link) => (
+                  <a
+                    key={link.href}
+                    href={link.href}
+                    className="inline-flex items-center gap-1 rounded text-xs font-medium text-foreground transition-colors duration-150 hover:text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {link.label}
+                    <ArrowRight className="size-3" />
+                  </a>
+                ))}
+              </div>
             ) : (
               <span />
             )}
