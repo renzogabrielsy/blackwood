@@ -23,7 +23,6 @@
 //         delivered_php_kg, actual_fed_php_kg,
 //         campaign_weighted_actual_fed_php_kg, uplift_php_kg,
 //         php_per_produced_kg_delivered, php_per_produced_kg_true
-//     view_analytics_aging_watchlist → delivered_php_kg, value_php
 //     view_analytics_supplier_monthly→ avg_price_php_kg, php_total,
 //         premium_php_kg, month_avg_price_php_kg
 // They are nulled HERE, before the payload leaves the server — never
@@ -63,8 +62,6 @@ import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import { canViewPrices } from "@/lib/auth";
 import type {
-  AgingWatchItem,
-  AgingWatchlist,
   AnalyticsData,
   AnalyticsMonth,
   BlockUtilization,
@@ -211,28 +208,6 @@ interface BatchCostRow {
   php_per_produced_kg_true: number | null;
 }
 
-interface WatchlistRow {
-  batch_id: string | null;
-  batch_code: string | null;
-  status: string | null;
-  block_loc: string | null;
-  balance_kg: number | null;
-  age_days: number | null;
-  days_since_last_delivery: number | null;
-  first_delivery_date: string | null;
-  last_delivery_date: string | null;
-  delivered_kg: number | null;
-  delivery_count: number | null;
-  unpriced_delivery_count: number | null;
-  has_unpriced_delivery: boolean | null;
-  delivered_php_kg: number | null;
-  value_php: number | null;
-  fed_kg_to_date: number | null;
-  last_fed_date: string | null;
-  has_been_fed: boolean | null;
-  as_of_date: string | null;
-}
-
 interface SupplierRow {
   month_start: string | null;
   year: number | null;
@@ -293,7 +268,7 @@ interface ProductionGradeRow {
 }
 
 /**
- * PostgREST's default ceiling. The watchlist measures 170 rows today, but a
+ * PostgREST's default ceiling. The biggest read here is 275 rows, but a
  * read that silently comes back capped is exactly the failure mode
  * CLAUDE.md's row-budget note is about, so the payload carries a flag
  * instead of the caller assuming.
@@ -323,13 +298,13 @@ function campaignSeq(batch: string): number {
 /**
  * THE adapter. One call, one payload, everything `/analytics` renders.
  *
- * Row budget: the ten views measure 49 / 75 / 75 / 75 / 75 / 32 / 170 / 275 / 18 / 39
+ * Row budget: the nine views measure 49 / 75 / 75 / 75 / 75 / 32 / 275 / 18 / 39
  * — an order of magnitude or two under PostgREST's 1000-row cap — so these
  * reads are deliberately UNWINDOWED and span all history. A month-on-month
  * matrix that could not reach 2024 would not be the thing that was asked
- * for. The watchlist is the only one anywhere near the cap and it carries a
- * `truncated` flag. If a future view grows a daily grain, it must be
- * windowed (see the digest's note).
+ * for. The supplier read is the largest and it carries a `truncated` flag.
+ * If a future view grows a daily grain, it must be windowed (see the
+ * digest's note).
  */
 export async function getAnalyticsData(): Promise<AnalyticsData> {
   const supabase = await createClient();
@@ -343,7 +318,6 @@ export async function getAnalyticsData(): Promise<AnalyticsData> {
     costRes,
     agingRes,
     batchRes,
-    watchRes,
     supplierRes,
     prodRes,
     gradeRes,
@@ -384,14 +358,6 @@ export async function getAnalyticsData(): Promise<AnalyticsData> {
       .from("view_analytics_batch_cost")
       .select(
         "production_batch, campaign_year, campaign_label, first_fed_date, last_fed_date, feed_days, fed_kg, delivered_php_kg_fed, fed_value_php, fed_kg_price_traceable, fed_kg_price_untraceable, fed_price_coverage_pct, delivered_php_kg, actual_fed_php_kg, campaign_weighted_actual_fed_php_kg, uplift_php_kg, weight_lost_kg, loss_pct, blocks_fed, blocks_closed, blocks_open, blocks_in_price, blocks_closed_unpriced, campaign_fed_kg_included, campaign_fed_kg_excluded, campaign_fed_kg_included_pct, is_fully_covered, produced_kg, yield_pct, process_loss_kg, php_per_produced_kg_delivered, php_per_produced_kg_true",
-      ),
-    // The view is already ORDER BY age_days DESC — oldest first — so no
-    // client-side sort is applied and the list the screen shows is the
-    // list the database ranked.
-    supabase
-      .from("view_analytics_aging_watchlist")
-      .select(
-        "batch_id, batch_code, status, block_loc, balance_kg, age_days, days_since_last_delivery, first_delivery_date, last_delivery_date, delivered_kg, delivery_count, unpriced_delivery_count, has_unpriced_delivery, delivered_php_kg, value_php, fed_kg_to_date, last_fed_date, has_been_fed, as_of_date",
       ),
     // P3 — the supplier room. UNWINDOWED, same reasoning as every read above:
     // 275 rows for ALL of history (113 for the busiest single year), ~4x under
@@ -434,8 +400,6 @@ export async function getAnalyticsData(): Promise<AnalyticsData> {
   if (agingRes.error) throw new Error(`Analytics aging read failed: ${agingRes.error.message}`);
   if (batchRes.error)
     throw new Error(`Analytics campaign read failed: ${batchRes.error.message}`);
-  if (watchRes.error)
-    throw new Error(`Analytics watchlist read failed: ${watchRes.error.message}`);
   if (supplierRes.error)
     throw new Error(`Analytics supplier read failed: ${supplierRes.error.message}`);
   if (prodRes.error)
@@ -678,48 +642,22 @@ export async function getAnalyticsData(): Promise<AnalyticsData> {
         campaignSeq(a.productionBatch) - campaignSeq(b.productionBatch),
     );
 
-  const watchRows = (watchRes.data ?? []) as WatchlistRow[];
-  const items: AgingWatchItem[] = watchRows
-    .filter((w): w is WatchlistRow & { batch_id: string; batch_code: string } =>
-      Boolean(w.batch_id) && Boolean(w.batch_code),
-    )
-    .map((w) => ({
-      batchId: w.batch_id,
-      batchCode: w.batch_code,
-      status: w.status,
-      blockLoc: w.block_loc,
-      balanceKg: num(w.balance_kg),
-      ageDays: num(w.age_days),
-      daysSinceLastDelivery: num(w.days_since_last_delivery),
-      firstDeliveryDate: w.first_delivery_date,
-      lastDeliveryDate: w.last_delivery_date,
-      deliveredKg: num(w.delivered_kg),
-      deliveryCount: num(w.delivery_count),
-      unpricedDeliveryCount: num(w.unpriced_delivery_count),
-      hasUnpricedDelivery: Boolean(w.has_unpriced_delivery),
-      deliveredPhpKg: showPrices ? num(w.delivered_php_kg) : null,
-      valuePhp: showPrices ? num(w.value_php) : null,
-      fedKgToDate: num(w.fed_kg_to_date),
-      lastFedDate: w.last_fed_date,
-      hasBeenFed: Boolean(w.has_been_fed),
-    }));
-
-  // The headline is the newest month-end aging row, NOT a sum of the list
-  // above — `open_kg` there is the same population, measured equal to the
-  // kilo, and re-adding it here would be a second definition of how much
-  // charcoal is standing in the yard.
-  const watchlist: AgingWatchlist = {
-    items,
-    openKg: latest?.openKg ?? null,
-    openBatches: latest?.openBatches ?? null,
-    wtdAgeDays: latest?.wtdAgeDays ?? null,
-    pctOver120d: latest?.pctOver120d ?? null,
-    oldestAgeDays: latest?.oldestAgeDays ?? null,
-    closedResidueKg: latest?.closedResidueKg ?? null,
-    closedResidueBatches: latest?.closedResidueBatches ?? null,
-    asOfDate: watchRows[0]?.as_of_date ?? latest?.asOfDate ?? null,
-    truncated: watchRows.length >= POSTGREST_ROW_CAP,
-  };
+  // ── OWNER FEEDBACK R1: THE AGING WATCHLIST IS GONE ─────────────────
+  // Renzo, 2026-09-01, in as many words: "take out piles to go look at."
+  // The section, its nav anchor and this read all went with it, so the page
+  // makes one fewer round trip.
+  //
+  // **`view_analytics_aging_watchlist` still EXISTS in the database and is
+  // untouched** — dropping a view because one screen stopped rendering it
+  // would be destroying a thing to tidy a page. The `AgingWatchItem` /
+  // `AgingWatchlist` types and `aging-watchlist.tsx` are likewise left in
+  // place, unmounted, so the block can be brought back by re-adding this read
+  // and one JSX element.
+  //
+  // The AGING MATRIX ROWS are a different thing entirely and are unaffected:
+  // Avg stock age and Stock over 120 days read `view_analytics_aging_eom`,
+  // which is still read above and still feeds the ending-inventory expand's
+  // closed-residue split.
 
   // ── P3: the supplier room ──────────────────────────────────────────
   // Four ₱ columns are gated. Everything else — kilos, share, ranks,
@@ -799,7 +737,6 @@ export async function getAnalyticsData(): Promise<AnalyticsData> {
     utilization: blocksRes.error ? null : countOccupied(blocksRes.data),
     asOfDate: latest?.asOfDate ?? null,
     campaigns,
-    watchlist,
     suppliers,
     productionGrades,
   };

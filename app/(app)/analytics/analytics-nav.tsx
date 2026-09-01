@@ -1,7 +1,7 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// THE IN-PAGE ANCHOR ROW — six destinations for a page that now runs to five
+// THE IN-PAGE ANCHOR ROW — five destinations for a page that runs several
 // screens.
 //
 // P4 completes the page, and completion is what makes it long: the matrix's two
@@ -73,11 +73,10 @@ export const ANALYTICS_NAV: readonly AnalyticsNavItem[] = [
     label: "Production",
     title: "What the plant made, how long it stood still, what it burned, and the grade mix.",
   },
-  {
-    id: "section-watchlist",
-    label: "Watchlist",
-    title: "The oldest open piles standing in the yard right now.",
-  },
+  // OWNER FEEDBACK R1: the Watchlist anchor is gone with its section — Renzo
+  // does not want a list of "piles to go look at" on this page. The aging
+  // MATRIX rows (Avg stock age, Stock over 120 days) are untouched and still
+  // live in the Money band above.
 ];
 
 export function AnalyticsNav() {

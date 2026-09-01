@@ -246,7 +246,7 @@ export function SupplierExplorer({
 
       {/* The worked example names two real April prices, so it is ₱ and is
           gated like any other ₱ — the point survives without the numbers. */}
-      <p className="text-[10.5px] leading-relaxed text-muted-foreground">
+      <p className="text-[11.5px] leading-relaxed text-muted-foreground">
         {showPriceLine
           ? "The supplier line is drawn on its own scale so its SHAPE can be read beside the price — hover a month for the exact count. "
           : ""}

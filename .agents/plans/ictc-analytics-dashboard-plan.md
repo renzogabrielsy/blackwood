@@ -750,3 +750,78 @@ all history within row budgets). No new tables. No snapshot jobs.
    now affects every per-supplier KPI here. Fold or keep separate?
 5. Volume basis: booked `weight_kg` everywhere, or surface `true_weight_kg` deductions as a
    quality KPI too (they're display-only today)?
+
+## 6. OWNER FEEDBACK ROUND 1 APPLIED — 2026-09-01
+
+Renzo tested the live `/analytics` page and gave a ten-item list. All ten shipped on
+`feat/analytics-polish`. Full detail: `app/(app)/analytics/CONTEXT.md` → "Owner feedback
+round 1". The short version, and the two things the round deliberately refused:
+
+1. **Four matrix rows retired** — Sundry re-entry, Runway, Active batches, Working days.
+   Active suppliers was on his first list and he reversed on it, so it stays. **Only the
+   ROWS went**: every field still crosses the wire, no view changed, and `workingDays` is
+   still the divisor behind the per-working-day toggle — which is why that toggle keeps
+   working with its own row gone.
+2. **Ending inventory moved to the OPEN-PILES basis — after being wrong in BOTH
+   directions.** It read `ending_kg`, the NET of every batch balance: 8,492 t while
+   Blocking showed 10,000+ — *"kind of a weird basis"*, because a net subtracts a
+   bookkeeping artefact from a physical quantity. The first correction over-shot to
+   `positive_balance_kg` (11,707.9 t), which bounces off Renzo's anchor from the other side
+   by folding in 1,214.6 t of closed-block residue — and per the standing **resiko
+   doctrine** that residue is LOSS already recognised, not stock. It now reads
+   `view_analytics_aging_eom.open_kg`.
+
+   Two properties make that the right basis rather than the closest one: it is Blocking's
+   own population, and it is **as-of** (`close_date IS NULL OR close_date > as_of_date`),
+   so closing a block this week does not retroactively empty last year. Non-null and
+   non-zero on all 75 months of the spine.
+
+   Reconciled 2026-09-01: 11,707,912 kg of positive balances − 1,214,608 kg residue =
+   **10,493,304 kg (this row)**, and − 18,650 kg (the L-042 `AUGUST-26-FEED2` phantom,
+   which has no `location_ref` and therefore no cell in the 220-slot grid) =
+   **10,474,654 kg, the `view_blocking_grid` grand total exactly**. The row ties to
+   Blocking within that single disclosed phantom; the expand prints all three exclusions —
+   resiko, phantom, net-after-negatives — as numbers.
+
+   **`inventory_value` was NOT realigned and the gap is disclosed instead.** It still
+   values every positive balance because `view_analytics_inventory_eom` has no close date
+   at all — it derives balances from `batch_code` deltas and never joins `batches` — so an
+   open-piles valuation is a new SQL column, not a client-side division, and deriving one
+   in TypeScript would be a second definition of what a kilo cost. Measured: closed-block
+   residue is ₱34,752,633 of ₱424,331,252, **8.19%**, and the row's dictionary caveat says
+   exactly that. Backend handoff is filed at the end of
+   `app/(app)/analytics/CONTEXT.md`.
+3. **The row expand opens IN PLACE** — a `colSpan` row inserted under the row that was
+   clicked, with the panel inside it `sticky left-0` at the scroller's measured width.
+   Measured: 0 px drift when the table is scrolled 400 px sideways, frozen column intact,
+   zero document overflow. Same mechanism for the supplier expand. The below-table section
+   is gone.
+4. **Print one metric.** A Print button on each expand + a print stylesheet that
+   `display: none`s everything off the path to the card. The `visibility: hidden` version
+   was built first and MEASURED FAILING — hidden elements keep their space, so the card
+   landed pages down a blank document, and the sticky wrapper being a positioned ancestor
+   defeated `position: absolute; top: 0` as well.
+5. **One type scale up** across all four tables (cell values 12 → 14 px), with every column
+   width re-measured rather than left to clip. 375 px re-checked: zero horizontal document
+   overflow.
+6. **Colour — identity and direction, never judgement.** Five section accents and a
+   green/red tint on the period move. **No threshold colouring was introduced**; §0a.5's
+   rule stands until Renzo states real targets.
+7. **A Compare control.** The first indicator under a value is always the period-over-period
+   move and is not switchable; the second chip toggles between the year-ago percentage and
+   the same move as a real amount (`cmp=` in the URL).
+8. **Every dictionary entry rewritten to 1–2 plain sentences** — *"way too wordy… AI slop"* —
+   keeping the load-bearing facts (basis, exclusions, the NULL-≠-0 reasons) and the P4
+   annotation sentences' numbers.
+9. **"Delivered ₱/kg fed" → "Block price"**, everywhere: matrix row, campaign panel row,
+   both expands, the dictionary. Renzo's own words: *"the price of the charcoal when it
+   arrived at the block."* The metric KEY is unchanged, so every `?metric=` deep link still
+   resolves, and **"True price" keeps its name** — the rename only works as a pair.
+10. **The aging watchlist section is gone** — *"take out piles to go look at."* Component
+    unmounted, nav anchor dropped, adapter read dropped. **`view_analytics_aging_watchlist`
+    is untouched in the database** and `aging-watchlist.tsx` still compiles, so it is one
+    read and one JSX element away. The aging MATRIX rows (Avg stock age, Stock over 120
+    days) are unaffected.
+
+**What this round refused.** Nothing was dropped from the database to tidy a page, and
+"colour" was not allowed to become threshold semantics by the back door.

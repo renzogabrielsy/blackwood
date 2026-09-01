@@ -266,7 +266,7 @@ export function SupplierPremium({ data, canViewPrices }: SupplierPremiumProps) {
               <th
                 scope="row"
                 title="The only average this column allows: each supplier's premium weighted by the kilos it speaks for. It comes to zero because the market price IS the kilo-weighted average of these prices — an unweighted mean of the same column reads −₱2.52 for March 2026 and means nothing at all."
-                className="px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+                className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
               >
                 Weighted
               </th>
@@ -277,7 +277,7 @@ export function SupplierPremium({ data, canViewPrices }: SupplierPremiumProps) {
                 </span>
               </td>
               <td className="px-2 py-1 text-right">
-                <span className="font-mono text-[11px] font-semibold tabular-nums">
+                <span className="font-mono text-xs font-semibold tabular-nums">
                   {signedMoney(weightedAll)}
                 </span>
               </td>
@@ -292,7 +292,7 @@ export function SupplierPremium({ data, canViewPrices }: SupplierPremiumProps) {
         </table>
       </div>
 
-      <p className="text-[10.5px] leading-relaxed text-muted-foreground">
+      <p className="text-[11.5px] leading-relaxed text-muted-foreground">
         <strong className="font-medium text-foreground">
           Each row is measured against its OWN months.
         </strong>{" "}

@@ -1,7 +1,7 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// /analytics — the client shell. Owns the three view controls, the callout
+// /analytics — the client shell. Owns the four view controls, the callout
 // strip, the matrix and the expanded row.
 //
 // ── WHY THE VIEW STATE IS REACT STATE THAT WRITES ITSELF INTO THE URL ────────
@@ -10,10 +10,10 @@
 // and the reason for it is that a filter changes what the SERVER reads. Here
 // nothing does: `getAnalyticsData()` returns ALL history in one payload (49 /
 // 75 / 75 rows across three views — two orders of magnitude under the read
-// cap), and the year, the granularity and the working-day toggle only re-slice
-// what is already in the browser. Routing them through `router.replace` would
-// re-run four Supabase reads and re-render the whole page to change a column
-// header.
+// cap), and the year, the granularity, the working-day toggle and the
+// comparison chip only re-slice what is already in the browser. Routing them
+// through `router.replace` would re-run nine Supabase reads and re-render the
+// whole page to change a column header.
 //
 // So the state is local AND the URL is kept honest with
 // `window.history.replaceState`: the address bar always describes what is on
@@ -26,8 +26,17 @@
 // `buildMatrix` returns the cells AND the callouts from one pass over the same
 // values, so a headline can never disagree with the grid beneath it. They are
 // magnitude-only by the plan's rule: the biggest move, the widest year-ago gap,
-// and records against a metric's own history. No thresholds, no invented
-// "breach" rules, and no colour semantics anywhere on the page.
+// and records against a metric's own history. No thresholds and no invented
+// "breach" rules — the colour a callout carries is its SECTION's accent, which
+// says which block of the page it came from and nothing about whether the news
+// is good.
+//
+// ── OWNER FEEDBACK ROUND 1 (2026-09-01) ──────────────────────────────────────
+// Four matrix rows retired (see `metrics.ts`), the aging watchlist section
+// removed entirely — "take out piles to go look at" — the metric expand moved
+// INSIDE the table so it opens under the row that was clicked, and a new
+// page-level Compare control that switches the second chip under every value
+// between the year-ago percentage and the change as a real amount.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as React from "react";
@@ -41,8 +50,18 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
-import { buildMatrix, type Granularity } from "@/lib/analytics/matrix";
-import type { MetricKey, MetricSection } from "@/lib/analytics/metrics";
+import {
+  buildMatrix,
+  COMPARISON_MODES,
+  type ComparisonMode,
+  type Granularity,
+} from "@/lib/analytics/matrix";
+import {
+  METRIC_BY_KEY,
+  SECTION_ACCENT,
+  type MetricKey,
+  type MetricSection,
+} from "@/lib/analytics/metrics";
 import type { AnalyticsData, AnalyticsMonth } from "@/lib/analytics/types";
 import { AnalyticsMatrix } from "./analytics-matrix";
 import { AnalyticsNav } from "./analytics-nav";
@@ -50,13 +69,12 @@ import { MetricExpand } from "./metric-expand";
 import { BatchCostPanel } from "./batch-cost-panel";
 import { SupplierRoom } from "./supplier-room";
 import { ProductionRoom } from "./production-room";
-import { AgingWatchlist } from "./aging-watchlist";
 
 /**
  * The bands the TOP matrix renders. The production band is deliberately not
  * one of them — it is the same fold, rendered by the same component, down in
  * its own section after the supplier room, because the page's reading order is
- * PERIOD → CAMPAIGN → SUPPLIER → PRODUCTION → PILE.
+ * PERIOD → CAMPAIGN → SUPPLIER → PRODUCTION.
  */
 const TOP_BANDS: readonly MetricSection[] = ["flow", "money"];
 
@@ -71,6 +89,7 @@ function syncUrl(next: {
   year: number;
   granularity: Granularity;
   perWorkingDay: boolean;
+  comparison: ComparisonMode;
   metric: MetricKey | null;
 }) {
   if (typeof window === "undefined") return;
@@ -79,6 +98,8 @@ function syncUrl(next: {
   url.searchParams.set("g", next.granularity);
   if (next.perWorkingDay) url.searchParams.set("wd", "1");
   else url.searchParams.delete("wd");
+  if (next.comparison === "actual") url.searchParams.set("cmp", "actual");
+  else url.searchParams.delete("cmp");
   if (next.metric) url.searchParams.set("metric", next.metric);
   else url.searchParams.delete("metric");
   window.history.replaceState(null, "", url.toString());
@@ -89,6 +110,7 @@ export interface AnalyticsViewProps {
   initialYear: number;
   initialGranularity: Granularity;
   initialPerWorkingDay: boolean;
+  initialComparison: ComparisonMode;
   initialMetric: MetricKey | null;
 }
 
@@ -97,17 +119,20 @@ export function AnalyticsView({
   initialYear,
   initialGranularity,
   initialPerWorkingDay,
+  initialComparison,
   initialMetric,
 }: AnalyticsViewProps) {
   const [year, setYear] = React.useState(initialYear);
   const [granularity, setGranularity] =
     React.useState<Granularity>(initialGranularity);
   const [perWorkingDay, setPerWorkingDay] = React.useState(initialPerWorkingDay);
+  const [comparison, setComparison] =
+    React.useState<ComparisonMode>(initialComparison);
   const [metric, setMetric] = React.useState<MetricKey | null>(initialMetric);
 
   React.useEffect(() => {
-    syncUrl({ year, granularity, perWorkingDay, metric });
-  }, [year, granularity, perWorkingDay, metric]);
+    syncUrl({ year, granularity, perWorkingDay, comparison, metric });
+  }, [year, granularity, perWorkingDay, comparison, metric]);
 
   const matrix = React.useMemo(
     () =>
@@ -123,7 +148,7 @@ export function AnalyticsView({
   /**
    * The expanded row, but ONLY when it belongs to a band this matrix renders.
    * A production row's expand opens inside the production section instead, so
-   * the panel always sits directly under the table that named it.
+   * the panel always sits directly under the row that named it.
    */
   const expandedRow = React.useMemo(() => {
     if (!metric) return null;
@@ -142,19 +167,21 @@ export function AnalyticsView({
       ? "every year on record"
       : `${year}${matrix.periods.some((p) => p.isPartial) ? " · the marked column is still in progress" : ""}`;
 
+  /** What a printed metric card says the reader was looking at. */
+  const printScope = granularity === "Y" ? "All years" : String(year);
+
   return (
     <div className="flex flex-col gap-4">
       {/* ── In-page anchors ──────────────────────────────────────────────
-          P4 completes the page, and completion is what makes it long: two
-          matrix bands, the campaign panel, the supplier room, the production
-          room and the watchlist. Sticky, so it never leaves; a flow element,
-          so pinning it shifts nothing. */}
+          The page runs long: two matrix bands, the campaign panel, the
+          supplier room and the production room. Sticky, so it never leaves;
+          a flow element, so pinning it shifts nothing. */}
       <AnalyticsNav />
 
       {/* ── Controls ─────────────────────────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <div className="flex items-center gap-2">
-          <span className="text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
+          <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
             Year
           </span>
           <Select
@@ -163,14 +190,14 @@ export function AnalyticsView({
             disabled={granularity === "Y"}
           >
             <SelectTrigger
-              className="h-7 w-[92px] gap-1 border-border/60 bg-background px-2 font-mono text-[11px] hover:bg-muted/50"
+              className="h-8 w-[100px] gap-1 border-border/60 bg-background px-2 font-mono text-xs hover:bg-muted/50"
               aria-label="Year"
             >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               {data.years.map((y) => (
-                <SelectItem key={y} value={String(y)} className="font-mono text-[11px]">
+                <SelectItem key={y} value={String(y)} className="font-mono text-xs">
                   {y}
                 </SelectItem>
               ))}
@@ -193,7 +220,7 @@ export function AnalyticsView({
                 aria-pressed={active}
                 onClick={() => !active && setGranularity(g.key)}
                 className={cn(
-                  "cursor-pointer rounded px-2.5 py-1 text-[11px] font-medium transition-colors duration-150",
+                  "cursor-pointer rounded px-2.5 py-1 text-xs font-medium transition-colors duration-150",
                   "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                   active
                     ? "bg-background text-foreground shadow-sm"
@@ -206,6 +233,47 @@ export function AnalyticsView({
           })}
         </div>
 
+        {/* ── The comparison chip ────────────────────────────────────────
+            OWNER FEEDBACK R1. The FIRST indicator under a value is always
+            the period-over-period move and is deliberately not switchable —
+            it is the question this page exists to answer. This control only
+            decides what rides beside it. */}
+        <div className="flex items-center gap-2">
+          <span
+            className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground"
+            title="The first line under every value is always the change against the previous column. This picks what the small chip beside it shows."
+          >
+            Compare
+          </span>
+          <div
+            role="group"
+            aria-label="Second comparison chip"
+            className="inline-flex shrink-0 items-center gap-0.5 rounded-md border bg-muted/40 p-0.5"
+          >
+            {COMPARISON_MODES.map((c) => {
+              const active = c.key === comparison;
+              return (
+                <button
+                  key={c.key}
+                  type="button"
+                  title={c.title}
+                  aria-pressed={active}
+                  onClick={() => !active && setComparison(c.key)}
+                  className={cn(
+                    "cursor-pointer rounded px-2 py-1 text-xs font-medium transition-colors duration-150",
+                    "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    active
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {c.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         <label className="flex cursor-pointer select-none items-center gap-2">
           <Switch
             checked={perWorkingDay}
@@ -214,7 +282,7 @@ export function AnalyticsView({
           />
           <span
             className={cn(
-              "text-[11px] transition-colors duration-150",
+              "text-xs transition-colors duration-150",
               perWorkingDay ? "font-medium text-foreground" : "text-muted-foreground",
             )}
             title="Divides the volume and consumption rows by the days the site was actually active, so a short month is comparable with a long one. Prices, stock levels and counts are unaffected."
@@ -222,13 +290,13 @@ export function AnalyticsView({
             Per working day
           </span>
           {perWorkingDay && (
-            <span className="rounded border border-border/70 px-1 font-mono text-[9.5px] leading-[14px] text-muted-foreground">
+            <span className="rounded border border-border/70 px-1 font-mono text-[10px] leading-4 text-muted-foreground">
               volumes ÷ working days
             </span>
           )}
         </label>
 
-        <span className="ml-auto flex items-center gap-3 text-[10.5px] text-muted-foreground">
+        <span className="ml-auto flex items-center gap-3 text-[11px] text-muted-foreground">
           {/* LIVE, never historical — a batch only records where it is NOW, so
               past block occupancy is not reconstructable and is never a row. */}
           {data.utilization && (
@@ -236,12 +304,12 @@ export function AnalyticsView({
               className="inline-flex items-center gap-1"
               title="How many of the 220 standard warehouse blocks hold a batch RIGHT NOW. Historical occupancy is not reconstructable — a batch only records where it is today — so this is never shown as a month-by-month row."
             >
-              <Layers className="size-3" aria-hidden />
+              <Layers className="size-3.5" aria-hidden />
               <span className="font-mono tabular-nums text-foreground">
                 {data.utilization.occupied}/{data.utilization.total}
               </span>
               blocks occupied
-              <span className="rounded border border-border/70 px-1 text-[9px] uppercase tracking-wide">
+              <span className="rounded border border-border/70 px-1 text-[9.5px] uppercase tracking-wide">
                 today
               </span>
             </span>
@@ -250,62 +318,74 @@ export function AnalyticsView({
         </span>
       </div>
 
-      {/* ── Callouts ─────────────────────────────────────────────────────── */}
+      {/* ── Callouts ─────────────────────────────────────────────────────
+          The dot carries the SECTION the sentence came from — identity, not a
+          verdict. Nothing here turns amber because a number is high. */}
       {matrix.callouts.length > 0 && (
         <ul className="stagger-fast grid grid-cols-1 gap-1.5 lg:grid-cols-2">
-          {matrix.callouts.map((c) => (
-            <li
-              key={c.key}
-              className="flex items-start gap-2 rounded-md border bg-card/60 px-2.5 py-1.5"
-            >
-              <TrendingUp
-                className="mt-0.5 size-3 shrink-0 text-muted-foreground"
-                aria-hidden
-              />
-              <p className="text-[11.5px] leading-relaxed text-foreground">{c.text}</p>
-            </li>
-          ))}
+          {matrix.callouts.map((c) => {
+            const section = METRIC_BY_KEY.get(c.metricKey)?.section ?? "flow";
+            const accent = SECTION_ACCENT[section];
+            return (
+              <li
+                key={c.key}
+                className="bw-accent-rule flex items-start gap-2 rounded-md border bg-card/60 py-1.5 pl-3 pr-2.5"
+                style={{ "--bw-accent": accent } as React.CSSProperties}
+              >
+                <TrendingUp
+                  className="mt-0.5 size-3.5 shrink-0"
+                  style={{ color: accent }}
+                  aria-hidden
+                />
+                <p className="text-xs leading-relaxed text-foreground">{c.text}</p>
+              </li>
+            );
+          })}
         </ul>
       )}
 
-      {/* ── The matrix ───────────────────────────────────────────────────── */}
+      {/* ── The matrix, with the expand INSIDE it ─────────────────────────
+          The panel is rendered as a full-width row directly beneath the row
+          that was clicked, rather than below the whole table — owner feedback
+          R1, "such a long scroll". */}
       <AnalyticsMatrix
         matrix={matrix}
         selected={metric}
         onSelect={setMetric}
         perWorkingDay={perWorkingDay}
+        comparison={comparison}
         sections={TOP_BANDS}
+        expand={
+          expandedRow ? (
+            <MetricExpand
+              row={expandedRow}
+              granularity={granularity}
+              totalLabel={matrix.totalLabel}
+              totalFullLabel={matrix.totalFullLabel}
+              anchorMonth={anchorMonth}
+              perWorkingDay={perWorkingDay}
+              scopeLabel={printScope}
+              asOfDate={data.asOfDate}
+              onClose={() => setMetric(null)}
+            />
+          ) : undefined
+        }
       />
 
-      {/* ── The expanded row ─────────────────────────────────────────────── */}
-      {expandedRow && (
-        <MetricExpand
-          row={expandedRow}
-          granularity={granularity}
-          totalLabel={matrix.totalLabel}
-          totalFullLabel={matrix.totalFullLabel}
-          anchorMonth={anchorMonth}
-          perWorkingDay={perWorkingDay}
-          onClose={() => setMetric(null)}
-        />
-      )}
-
-      {/* ── The BATCH basis, and the live watchlist ───────────────────────
-          Both are OUTSIDE the matrix on purpose. The campaign panel is a
-          different AXIS (campaigns cross month boundaries, so a campaign is
-          not a period), and the watchlist is a different GRAIN entirely —
-          one row per named pile, today, not one column per period. Folding
-          either into the matrix would have meant a column that is neither a
+      {/* ── The BATCH basis ───────────────────────────────────────────────
+          OUTSIDE the matrix on purpose: a campaign is a different AXIS. It
+          crosses month boundaries (AUGUST closed and SEPTEMBER opened on
+          2026-08-29), so folding it in would mean a column that is neither a
           month nor a quarter sitting beside columns that are. */}
       <div id="section-campaigns" className="scroll-mt-24">
         <BatchCostPanel campaigns={data.campaigns} canViewPrices={data.canViewPrices} />
       </div>
 
       {/* ── The SUPPLIER axis ──────────────────────────────────────────
-          Third of the five cuts this page makes through the same yard:
-          period → campaign → supplier → production → pile. It follows the
-          year picker above (a supplier year is a calendar year, always) but
-          not the Y/Q/M toggle: a quarter column of suppliers would be a
+          Third of the four cuts this page makes through the same yard:
+          period → campaign → supplier → production. It follows the year
+          picker above (a supplier year is a calendar year, always) but not
+          the Y/Q/M toggle: a quarter column of suppliers would be a
           different question, and the room's own axis is already twelve
           months wide. */}
       <div id="section-suppliers" className="scroll-mt-24">
@@ -321,7 +401,7 @@ export function AnalyticsView({
           Where the yard's kilos stop being charcoal and start being
           product. Its six rows are the SAME `buildMatrix` fold as the table
           at the top — same rollups, same expand, same callout strip — the
-          band is simply rendered here, after the three blocks that are
+          band is simply rendered here, after the two blocks that are
           about buying and holding. No ₱ exists anywhere in it, so it is
           live for every role including Production. */}
       <ProductionRoom
@@ -333,14 +413,10 @@ export function AnalyticsView({
         selected={metric}
         onSelect={setMetric}
         perWorkingDay={perWorkingDay}
+        comparison={comparison}
+        printScope={printScope}
+        asOfDate={data.asOfDate}
       />
-
-      <div id="section-watchlist" className="scroll-mt-24">
-        <AgingWatchlist
-          watchlist={data.watchlist}
-          canViewPrices={data.canViewPrices}
-        />
-      </div>
 
       {/* ── Footer: the restatement policy, printed once, on the page ─────
           The analyst audit's gap #4. Every figure here is rebuilt from the
@@ -348,16 +424,17 @@ export function AnalyticsView({
           a correction to a past record correctly changes a past column. Saying
           so is the difference between a restatement and an unexplained
           discrepancy. */}
-      <footer className="flex flex-col gap-1 border-t pt-3 text-[10.5px] leading-relaxed text-muted-foreground">
+      <footer className="flex flex-col gap-1 border-t pt-3 text-[11px] leading-relaxed text-muted-foreground">
         <p>
           Figures reflect the underlying records as of today; corrections to past
           records restate history (audited).
         </p>
         <p>
           Nothing on this page is snapshotted — every month is rebuilt from the
-          delivery and feeding rows themselves, so the newest column equals the
-          live inventory total exactly. A blank cell is never a zero: hover it and
-          it says why it is empty.
+          delivery and feeding rows themselves. A blank cell is never a zero:
+          hover it and it says why it is empty. The first figure under a value is
+          always the change against the previous column; the chip beside it is
+          whichever comparison the Compare control is set to.
           {data.asOfDate && (
             <>
               {" "}
