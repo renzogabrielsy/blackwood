@@ -25,6 +25,7 @@ import type { ComparisonMode, Granularity } from "@/lib/analytics/matrix";
 import { METRIC_BY_KEY, type MetricKey } from "@/lib/analytics/metrics";
 import { AnalyticsView } from "./analytics-view";
 import { AnalyticsError } from "./analytics-error";
+import { parseHidden } from "@/lib/analytics/period-selection";
 
 /** Same page-shell container the Home Digest uses, so the two rooms line up. */
 const SHELL_CLS =
@@ -102,6 +103,11 @@ export default async function AnalyticsPage({
         initialPerWorkingDay={first(params.wd) === "1"}
         initialComparison={resolveComparison(params.cmp)}
         initialMetric={resolveMetric(params.metric)}
+        // OWNER FEEDBACK R2 — the switched-off period columns, resolved
+        // server-side like every other control so a shared or refreshed
+        // filtered view renders correctly on the FIRST paint. Absent means
+        // every column, which is the default and the clean address.
+        initialHidden={parseHidden(first(params.hide))}
       />
     </div>
   );

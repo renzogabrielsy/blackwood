@@ -37,6 +37,46 @@
 //   • its rolling-mean legend is hardcoded to day/month by
 //     `rollingLabel(granularity)`, and this chart's buckets are months,
 //     QUARTERS or YEARS.
+//
+// ── THE YEAR CHECKLIST (owner feedback R2, 2026-09-02) ──────────────────────
+// Renzo: *"I would also like the option to click which years to display."* The
+// chart draws EVERY period on record — back to July 2020 — and several rows are
+// honestly blank for most of that (rc_out begins 2024-01, production 2025-11),
+// so a reader who wants to look at the last two years is reading a chart that
+// is two thirds empty. The header now carries the same checklist the matrix's
+// column filter uses (`period-filter.tsx`), listing the years this row's own
+// history spans, everything on by default, with All / None.
+//
+// **Three things it changes, and one it deliberately does not.**
+//   • The CHART redraws over what is left, and so do the axis domain and the
+//     shaded window band.
+//   • The ROLLING AVERAGE is recomputed over the selection and **breaks at a
+//     hidden year** rather than bridging it — the hidden periods are nulled,
+//     `rollingMean` is run over that sequence, and only then are they dropped,
+//     so any window overlapping the gap yields null exactly as it already does
+//     at a month nothing was recorded in. Joining 2023 straight to 2026 with a
+//     smoothed line would invent a trend across a hole the reader made.
+//   • The STAT STRIP recomputes — Latest, Highest, Lowest and the window figure
+//     — and every one of those labels says `· selected` while it is filtered,
+//     because "Highest" over three chosen years is a different claim from
+//     "Highest" over the whole record. The window figure is re-folded through
+//     `foldSelection`, i.e. the SAME rollup machinery every column uses, so a
+//     selected price is still Σ pesos ÷ Σ priced kilos and never a mean of the
+//     surviving points.
+//   • It does NOT change any comparison. A cell's month-on-month move and its
+//     year-ago chip read the real neighbouring period whether or not it is on
+//     screen — comparison uses data, display uses the filter. Stated on the
+//     card, not just here.
+//
+// **The selection is per-expand session state and is NOT written to the URL.**
+// The page's own controls are (`year`, `g`, `wd`, `cmp`, `metric`, `hide`) and
+// this one deliberately is not: it is scoped to ONE metric's chart, so a param
+// carrying it would silently mean something different the moment `metric=`
+// changed — a shared link would arrive with a filter belonging to a row the
+// recipient is not looking at. The matrix's COLUMN filter is shareable and does
+// live in the URL (`?hide=`), because it describes the page's own window rather
+// than one card's exploration. Opening a different row starts fresh: both call
+// sites key this component by metric.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as React from "react";
@@ -63,11 +103,19 @@ import {
 import { BreakdownRail } from "@/components/digest/drilldown/series-parts";
 import type { RailItem } from "@/components/digest/drilldown/series-parts";
 import { cn } from "@/lib/utils";
-import type { HistoryPoint, MatrixRow } from "@/lib/analytics/matrix";
-import { GRANULARITY_LABEL, type Granularity } from "@/lib/analytics/matrix";
+import type { HistoryPoint, MatrixRow, Period } from "@/lib/analytics/matrix";
+import {
+  foldSelection,
+  GRANULARITY_LABEL,
+  rollingMean,
+  rollingWindowFor,
+  type Granularity,
+} from "@/lib/analytics/matrix";
 import { fmtCompact, unitSuffix } from "@/lib/analytics/format";
 import type { AnalyticsMonth } from "@/lib/analytics/types";
 import type { MetricSpec } from "@/lib/analytics/metrics";
+import { PeriodFilter, type PeriodFilterOption } from "./period-filter";
+import { NO_HIDDEN } from "@/lib/analytics/period-selection";
 
 const CHART_HEIGHT = 260;
 
@@ -123,12 +171,20 @@ function MetricTrendChart({
   history,
   pairHistory,
   granularity,
+  emptyText,
 }: {
   spec: MetricSpec;
   history: readonly HistoryPoint[];
   /** The comparison series, folded by the SAME rollup rules. Null when none. */
   pairHistory: readonly HistoryPoint[] | null;
   granularity: Granularity;
+  /**
+   * What to say when there is nothing to draw. The default is "nothing was
+   * ever recorded"; the year checklist supplies a different sentence, because
+   * switching every year off is a state the reader created and can undo, and
+   * telling them the metric has no data would simply be false.
+   */
+  emptyText?: string;
 }) {
   const tip = drilldownTooltipChrome();
   const noun = bucketNounFor(granularity);
@@ -168,7 +224,7 @@ function MetricTrendChart({
   if (values.length === 0) {
     return (
       <p className="px-3 py-12 text-center text-xs text-muted-foreground">
-        Nothing recorded for this metric yet.
+        {emptyText ?? "Nothing recorded for this metric yet."}
       </p>
     );
   }
@@ -712,6 +768,20 @@ function printCard(card: HTMLElement | null) {
 export interface MetricExpandProps {
   row: MatrixRow;
   granularity: Granularity;
+  /**
+   * The COMPLETE period axis at this granularity (`Matrix.allPeriods`). The
+   * year checklist folds whatever survives it into the window stat, and it has
+   * to be periods rather than the row's own history points because a rollup
+   * needs the MONTHS underneath — a price over a selection is Σ pesos ÷ Σ
+   * priced kilos, which no amount of averaging the points can produce.
+   */
+  allPeriods: readonly Period[];
+  /**
+   * The options the matrix itself was folded with (`Matrix.foldOptions`).
+   * Passed through rather than re-derived so a selection can never be folded
+   * under different rules than the grid it sits inside.
+   */
+  foldOptions: { canViewPrices: boolean; perWorkingDay: boolean };
   /** Header for the trailing summary column, so the strip names the window. */
   totalLabel: string;
   totalFullLabel: string;
@@ -728,6 +798,8 @@ export interface MetricExpandProps {
 export function MetricExpand({
   row,
   granularity,
+  allPeriods,
+  foldOptions,
   totalLabel,
   totalFullLabel,
   anchorMonth,
@@ -743,12 +815,101 @@ export function MetricExpand({
   const normalised = perWorkingDay && spec.perWorkingDay;
   const sidePanel = sidePanelFor(spec.key);
 
+  // ── THE YEAR CHECKLIST (owner feedback R2) ──────────────────────────────
+  // Session state, keyed to this card, never to the URL — see the block
+  // comment at the top of the file. The state is the HIDDEN set, so the
+  // "always default to all checked" requirement is a property of the shape.
+  const [hiddenYears, setHiddenYears] =
+    React.useState<ReadonlySet<string>>(NO_HIDDEN);
+  const isFiltered = hiddenYears.size > 0;
+
+  /**
+   * One line per year this row's history spans, carrying how much of that year
+   * actually holds a figure. That count is the point: the whole reason the
+   * control exists is that several rows are honestly blank for years at a time,
+   * and a reader deciding what to switch off should be able to see which years
+   * those are without switching them off first.
+   */
+  const yearOptions = React.useMemo<PeriodFilterOption[]>(() => {
+    const byYear = new Map<number, { total: number; withValue: number }>();
+    for (const h of row.history) {
+      const e = byYear.get(h.year) ?? { total: 0, withValue: 0 };
+      e.total += 1;
+      if (h.value != null) e.withValue += 1;
+      byYear.set(h.year, e);
+    }
+    return [...byYear.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([y, e]) => ({
+        key: String(y),
+        label: String(y),
+        // At YEAR granularity every year IS one period, so "1/1" on every line
+        // is chrome that says nothing.
+        meta: granularity === "Y" ? undefined : `${e.withValue}/${e.total}`,
+        empty: e.withValue === 0,
+        title:
+          e.withValue === 0
+            ? `${y} — nothing was recorded for this figure. A genuine blank, not a zero; switching it off tidies the chart and changes no number.`
+            : `${y} — ${e.withValue} of ${e.total} ${noun}s carry a figure.`,
+      }));
+  }, [row.history, granularity, noun]);
+
+  const shownYearCount = yearOptions.filter((o) => !hiddenYears.has(o.key)).length;
+  const selectedSuffix = isFiltered ? " · selected" : "";
+
+  const rollWindow = rollingWindowFor(granularity);
+
+  /**
+   * The chart's data, after the checklist.
+   *
+   * THE ORDER MATTERS AND IS THE WHOLE TRICK: the hidden periods are nulled
+   * FIRST, the trailing mean is recomputed over that nulled sequence, and only
+   * THEN are they dropped. So a window that spans a hidden year yields null and
+   * the average line breaks at the gap — the same break a month with no records
+   * already makes — instead of joining the two sides of a hole the reader made
+   * and calling the join a trend. Filtering first and averaging after would
+   * have produced exactly that fabricated line.
+   */
+  const view = React.useMemo(() => {
+    if (!isFiltered) {
+      return { history: row.history, pair: row.pairHistory };
+    }
+    const keep = (h: HistoryPoint) => !hiddenYears.has(String(h.year));
+    const values = row.history.map((h) => (keep(h) ? h.value : null));
+    const history: HistoryPoint[] = [];
+    for (let i = 0; i < row.history.length; i += 1) {
+      const h = row.history[i];
+      if (!keep(h)) continue;
+      history.push({
+        ...h,
+        avg: rollWindow > 0 ? rollingMean(values, i, rollWindow) : null,
+      });
+    }
+    return {
+      history,
+      pair: row.pairHistory ? row.pairHistory.filter(keep) : null,
+    };
+  }, [row.history, row.pairHistory, hiddenYears, isFiltered, rollWindow]);
+
+  /**
+   * The window figure, re-folded over the selected years through the SAME
+   * `foldPeriod` + `rawValue` pair every matrix column goes through. Null while
+   * nothing is filtered, where the honest figure is the matrix's own summary
+   * column and re-deriving it here would only create a way for the two to
+   * disagree.
+   */
+  const selectionFold = React.useMemo(() => {
+    if (!isFiltered) return null;
+    const selected = allPeriods.filter((p) => !hiddenYears.has(String(p.year)));
+    return foldSelection(spec, selected, foldOptions);
+  }, [isFiltered, allPeriods, hiddenYears, spec, foldOptions]);
+
   const settled = React.useMemo(
     () =>
-      row.history.filter(
+      view.history.filter(
         (h): h is HistoryPoint & { value: number } => !h.isPartial && h.value != null,
       ),
-    [row.history],
+    [view.history],
   );
   /**
    * The COMPARABLE subset — the same gate the callout strip uses, so the
@@ -763,8 +924,8 @@ export function MetricExpand({
     [settled],
   );
   const latest = React.useMemo(
-    () => [...row.history].reverse().find((h) => h.value != null) ?? null,
-    [row.history],
+    () => [...view.history].reverse().find((h) => h.value != null) ?? null,
+    [view.history],
   );
   /**
    * The annotated periods INSIDE the displayed window, so the panel names them
@@ -773,8 +934,8 @@ export function MetricExpand({
    * reader is not looking at is noise.
    */
   const annotated = React.useMemo(
-    () => row.history.filter((h) => h.displayed && h.annotation),
-    [row.history],
+    () => view.history.filter((h) => h.displayed && h.annotation),
+    [view.history],
   );
   const high = comparable.length
     ? comparable.reduce((a, b) => (b.value > a.value ? b : a))
@@ -788,7 +949,25 @@ export function MetricExpand({
     ` An in-progress ${noun} cannot set a record, and neither can an estimate or the first ${noun} a figure was ever recorded.` +
     (excluded > 0
       ? ` ${excluded} settled ${noun}${excluded === 1 ? " is" : "s are"} held out on those grounds.`
+      : "") +
+    (isFiltered
+      ? ` Only the ${shownYearCount} year${shownYearCount === 1 ? "" : "s"} you left switched on are considered — this is the highest and lowest of the SELECTION, not of the whole record.`
       : "");
+
+  /** What the chart card's own header says it is drawing. */
+  const chartSubtitle = isFiltered
+    ? `${settled.length} settled ${noun}s · ${shownYearCount}/${yearOptions.length} years`
+    : granularity === "Y"
+      ? `${settled.length} settled ${noun}s`
+      : `${settled.length} settled ${noun}s · shaded band is the window above`;
+
+  /** The years, spelled out — for the printed sheet and the card's own note. */
+  const selectedYearsNote = isFiltered
+    ? yearOptions
+        .filter((o) => !hiddenYears.has(o.key))
+        .map((o) => o.label)
+        .join(", ") || "none"
+    : null;
 
   return (
     <section
@@ -807,6 +986,17 @@ export function MetricExpand({
           {scopeLabel} · {GRANULARITY_LABEL[granularity].toLowerCase()} columns
           {asOfDate ? ` · records through ${asOfDate}` : ""}
         </p>
+        {/* The paper must say what was FILTERED OUT. A printed chart that
+            silently omits three years is the exact thing this page's
+            restatement policy exists to prevent. */}
+        {selectedYearsNote && (
+          <p className="text-[11px] text-muted-foreground">
+            History filtered to {selectedYearsNote} ({shownYearCount} of{" "}
+            {yearOptions.length} years). Hidden years are not restated — every
+            change shown is still measured against the period that really
+            precedes it.
+          </p>
+        )}
       </div>
 
       <header className="flex flex-wrap items-baseline justify-between gap-2 border-b px-3 py-2 print:hidden">
@@ -855,31 +1045,54 @@ export function MetricExpand({
       ) : (
         <div className="flex flex-col gap-3 p-3">
           {/* Summary strip — the same four questions every drill-down answers. */}
+          {/* Every label carries `· selected` while the checklist is filtered.
+              "Highest" over three chosen years is a different claim from
+              "Highest" over the whole record, and an unlabelled stat that
+              quietly changed meaning is the one thing a filter must not do. */}
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <DrilldownStat
-              label="Latest"
+              label={`Latest${selectedSuffix}`}
               value={latest?.value == null ? "—" : fmtExact(spec, latest.value)}
               unit={latest?.value == null ? undefined : unit}
               sub={latest?.fullLabel}
-            />
-            <DrilldownStat
-              label={totalLabel}
-              value={
-                row.total?.value == null ? "—" : fmtExact(spec, row.total.value)
+              title={
+                isFiltered
+                  ? "The newest period among the years you left switched on."
+                  : undefined
               }
-              unit={row.total?.value == null ? undefined : unit}
-              sub={totalFullLabel}
-              title={`How the ${totalLabel} column is built: ${spec.dictionary.rollup}`}
             />
+            {selectionFold ? (
+              <DrilldownStat
+                label="Selected"
+                value={
+                  selectionFold.value == null
+                    ? "—"
+                    : fmtExact(spec, selectionFold.value)
+                }
+                unit={selectionFold.value == null ? undefined : unit}
+                sub={`${shownYearCount} of ${yearOptions.length} years · ${selectionFold.periodCount} ${noun}s`}
+                title={`Folded over the years you left switched on, by this row's own rule — ${spec.dictionary.rollup} It is never an average of the points on the chart.`}
+              />
+            ) : (
+              <DrilldownStat
+                label={totalLabel}
+                value={
+                  row.total?.value == null ? "—" : fmtExact(spec, row.total.value)
+                }
+                unit={row.total?.value == null ? undefined : unit}
+                sub={totalFullLabel}
+                title={`How the ${totalLabel} column is built: ${spec.dictionary.rollup}`}
+              />
+            )}
             <DrilldownStat
-              label="Highest"
+              label={`Highest${selectedSuffix}`}
               value={high ? fmtExact(spec, high.value) : "—"}
               unit={high ? unit : undefined}
               sub={high?.fullLabel}
               title={recordScope}
             />
             <DrilldownStat
-              label="Lowest"
+              label={`Lowest${selectedSuffix}`}
               value={low ? fmtExact(spec, low.value) : "—"}
               unit={low ? unit : undefined}
               sub={low?.fullLabel}
@@ -896,23 +1109,58 @@ export function MetricExpand({
           >
             <DrilldownSection
               className="print:break-inside-avoid"
-              title={`${spec.label} — every ${noun} on record`}
-              subtitle={
-                granularity === "Y"
-                  ? `${settled.length} settled ${noun}s`
-                  : `${settled.length} settled ${noun}s · shaded band is the window above`
+              title={
+                isFiltered
+                  ? `${spec.label} — the years you chose`
+                  : `${spec.label} — every ${noun} on record`
+              }
+              subtitle={chartSubtitle}
+              action={
+                // `data-print-hide` — a control is not part of the report.
+                <span data-print-hide>
+                  <PeriodFilter
+                    label="Years"
+                    noun="year"
+                    align="end"
+                    options={yearOptions}
+                    hidden={hiddenYears}
+                    onChange={setHiddenYears}
+                    title={`Choose which years this chart draws. Every year is on by default. Hiding one removes its points and its share of the figures above — it never changes what a remaining ${noun} says, and a rolling average breaks at the gap rather than drawing across it.`}
+                  />
+                </span>
               }
               bodyClassName="p-2 pb-1"
             >
               <MetricTrendChart
                 spec={spec}
-                history={row.history}
-                pairHistory={row.pairHistory}
+                history={view.history}
+                pairHistory={view.pair}
                 granularity={granularity}
+                emptyText={
+                  isFiltered
+                    ? "Every year is switched off. Open the Years filter and turn one back on — nothing has been discarded."
+                    : undefined
+                }
               />
               {spec.pair && (
                 <p className="px-1 pb-1 pt-1.5 text-xs leading-relaxed text-muted-foreground">
                   {spec.pair.note}
+                </p>
+              )}
+              {/* The honesty line the filter owes. Hiding a year changes what
+                  is DRAWN; it never changes what a drawn figure means. */}
+              {isFiltered && (
+                <p className="px-1 pb-1 pt-1.5 text-xs leading-relaxed text-muted-foreground">
+                  Showing{" "}
+                  <span className="font-medium text-foreground">
+                    {selectedYearsNote}
+                  </span>
+                  . Hidden years are still in the record and still stand behind
+                  every comparison — a change is measured against the period
+                  that really precedes it, on screen or not. The trailing
+                  average is recomputed over what is left and{" "}
+                  <strong className="font-semibold">breaks at the gap</strong>{" "}
+                  rather than drawing across a year you put away.
                 </p>
               )}
               {/* P4 — the row's OWN caveats, named period by period. The

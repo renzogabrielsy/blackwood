@@ -491,9 +491,17 @@ export function AnalyticsMatrix({
   }, [matrix.periods, matrix.rows]);
 
   if (matrix.periods.length === 0) {
+    // TWO completely different states, and calling them both "no records"
+    // would be false in the second. The window genuinely being empty is a
+    // fact about the data; every column switched off is a state the reader
+    // created a second ago and can undo — telling them there are no records
+    // would send them looking for a bug.
+    const everythingHidden = matrix.windowPeriods.length > 0;
     return (
       <div className="rounded-lg border bg-card px-4 py-10 text-center text-xs text-muted-foreground">
-        No months recorded in this period.
+        {everythingHidden
+          ? `Every column is switched off. Open the Columns filter above and turn one back on — all ${matrix.windowPeriods.length} are still there.`
+          : "No months recorded in this period."}
       </div>
     );
   }
