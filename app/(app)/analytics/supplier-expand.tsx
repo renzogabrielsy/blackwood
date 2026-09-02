@@ -97,10 +97,21 @@ function n(v: number | null, decimals: number): string {
   });
 }
 
+/** The prose form — `+₱1.24`. Still what the HOVERS and the chart say. */
 function signedMoney(v: number | null): string {
   if (v == null) return "—";
   const sign = v > 0 ? "+" : v < 0 ? "−" : "";
   return `${sign}₱${n(Math.abs(v), 2)}`;
+}
+
+/**
+ * R6 — the CELL form: the sign and the number, with no ₱, because the ₱/kg is
+ * pinned to the left of the stat. A hover and a column want different strings.
+ */
+function signedAmount(v: number | null): string {
+  if (v == null) return "—";
+  const sign = v > 0 ? "+" : v < 0 ? "−" : "";
+  return `${sign}${n(Math.abs(v), 2)}`;
 }
 
 export interface SupplierExpandProps {
@@ -336,7 +347,8 @@ export function SupplierExpand({
           <DrilldownStat
             label={`Bought${selectedSuffix}`}
             value={row.returnsOnly ? "—" : t1(fold.kg)}
-            unit={row.returnsOnly ? undefined : "t"}
+            unit={row.returnsOnly ? undefined : "T"}
+            unitSide="left"
             sub={`${fold.deliveries} truckload${fold.deliveries === 1 ? "" : "s"}${
               isFiltered ? ` · ${fold.monthCount} months` : ""
             }`}
@@ -346,6 +358,7 @@ export function SupplierExpand({
             label={`Share${selectedSuffix}`}
             value={fold.sharePct == null ? "—" : n(fold.sharePct, 1)}
             unit={fold.sharePct == null ? undefined : "%"}
+            unitSide="left"
             sub={
               isFiltered
                 ? "of the months shown"
@@ -364,13 +377,19 @@ export function SupplierExpand({
             value={
               !canViewPrices ? "—" : fold.avgPrice == null ? "—" : n(fold.avgPrice, 2)
             }
+            unit={canViewPrices && fold.avgPrice != null ? "₱/kg" : undefined}
+            unitSide="left"
             sub={canViewPrices ? undefined : "restricted"}
             tone={canViewPrices ? "default" : "muted"}
             title="Total pesos ÷ total priced kilos over the months shown — never the mean of the monthly prices."
           />
           <DrilldownStat
             label={`Premium${selectedSuffix}`}
-            value={!canViewPrices ? "—" : signedMoney(fold.premium)}
+            // R6 — the ₱ moved out of the number and onto the left glyph, so
+            // the premium prints its SIGN and nothing else beside it.
+            value={!canViewPrices ? "—" : signedAmount(fold.premium)}
+            unit={canViewPrices && fold.premium != null ? "₱/kg" : undefined}
+            unitSide="left"
             sub={canViewPrices ? "weighted by priced kg" : "restricted"}
             tone={canViewPrices ? "default" : "muted"}
             title="Their weighted price minus the market price for the same kilos. Averaged across the months shown WEIGHTED by priced kilos — the only aggregation this column allows."
@@ -379,6 +398,7 @@ export function SupplierExpand({
             label={`Priced${selectedSuffix}`}
             value={fold.coveragePct == null ? "—" : n(fold.coveragePct, 1)}
             unit={fold.coveragePct == null ? undefined : "%"}
+            unitSide="left"
             sub={`${t1(fold.pricedKg)} t of ${t1(fold.kg)} t`}
             title="What share of their kilos in the months shown already carry a price. An unpriced truckload is in neither half of any average, rather than counted as free."
           />

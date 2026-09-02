@@ -52,6 +52,7 @@ import { campaignKey, campaignMonthKeys } from "@/lib/analytics/campaign";
 import { applyOrder } from "@/lib/analytics/row-order";
 import type { CampaignCost } from "@/lib/analytics/types";
 import { PeriodFilter, type PeriodFilterOption } from "./period-filter";
+import { UnitValue } from "./unit-value";
 import { RowHandle, rowDropProps } from "./row-handle";
 import { useRowOrder } from "./use-row-order";
 import { printCard } from "./print-card";
@@ -64,6 +65,22 @@ const W_CAMPAIGN = "var(--an-w-campaign)";
 
 type Format = "tonnes" | "php" | "pct" | "count";
 
+/**
+ * R6 — the glyph a row pins to the LEFT of every cell.
+ *
+ * The panel has its own tiny `Format` union rather than the registry's
+ * `MetricUnit` (it is not a `MetricSpec` — it has no rollup, no history and no
+ * chart), so it maps its own. The VALUES match `format.ts → UNIT_GLYPH`
+ * exactly, and the two `count` rows say what they count rather than printing a
+ * bare number beside eight rows that all declare a unit.
+ */
+const FORMAT_GLYPH: Record<Format, string> = {
+  tonnes: "T",
+  php: "₱/kg",
+  pct: "%",
+  count: "",
+};
+
 interface PanelRow {
   key: string;
   label: string;
@@ -75,6 +92,8 @@ interface PanelRow {
   /** The number the panel exists for — printed heavier, with a rule above it. */
   star?: boolean;
   value(c: CampaignCost): number | null;
+  /** R6 — overrides `FORMAT_GLYPH` where a bare `count` needs a noun. */
+  glyph?: string;
   /** The figure is measured over only PART of the campaign. Marks the cell `~`. */
   estimated?(c: CampaignCost): boolean;
   /** The row-label hover: what it is, and what it leaves out. */
@@ -184,6 +203,7 @@ const ROWS: readonly PanelRow[] = [
     label: "Blocks closed",
     sublabel: "piles finished",
     format: "count",
+    glyph: "piles",
     decimals: 0,
     price: false,
     value: (c) => c.blocksClosed,
@@ -283,10 +303,13 @@ function CampaignCell({
         className="border-l px-2 py-1"
         title="₱ figures are withheld for your role. Nothing was sent to this browser."
       >
-        <div className="flex h-[var(--an-h-5)] items-center justify-end gap-1 font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] text-muted-foreground/60">
-          <Lock className="size-2.5" aria-hidden />
-          <span>—</span>
-        </div>
+        <UnitValue
+          glyph={row.glyph ?? FORMAT_GLYPH[row.format]}
+          className="h-[var(--an-h-5)] font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] text-muted-foreground/60"
+          after={<Lock className="size-2.5 shrink-0" aria-hidden />}
+        >
+          —
+        </UnitValue>
       </td>
     );
   }
@@ -301,9 +324,12 @@ function CampaignCell({
           "No figure for this campaign — blank, never zero."
         }
       >
-        <div className="flex h-[var(--an-h-5)] items-center justify-end font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] text-muted-foreground/60">
+        <UnitValue
+          glyph={row.glyph ?? FORMAT_GLYPH[row.format]}
+          className="h-[var(--an-h-5)] font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] text-muted-foreground/60"
+        >
           —
-        </div>
+        </UnitValue>
       </td>
     );
   }
@@ -320,33 +346,24 @@ function CampaignCell({
 
   return (
     <td className="border-l px-2 py-1" title={title.join(" · ")}>
-      {row.format === "php" ? (
-        <div className="flex h-[var(--an-h-5)] items-baseline justify-between gap-1 font-mono text-[length:var(--bw-fs-13)] tabular-nums">
-          <span className="shrink-0 text-[length:var(--bw-fs-11)] text-muted-foreground">₱</span>
-          <span className="flex min-w-0 items-baseline gap-0.5">
-            <span className={cn("truncate", row.star && "font-semibold")}>
-              {fmt(row, v)}
+      {/* R6 — the accounting format, for every unit and not only ₱. */}
+      <UnitValue
+        glyph={row.glyph ?? FORMAT_GLYPH[row.format]}
+        className="h-[var(--an-h-5)] font-mono text-[length:var(--bw-fs-13)] tabular-nums"
+        valueClassName={row.star ? "font-semibold" : undefined}
+        after={
+          estimated ? (
+            <span
+              className="shrink-0 text-[length:var(--bw-fs-11)] leading-none text-muted-foreground"
+              aria-label="estimated"
+            >
+              ~
             </span>
-            {estimated && (
-              <span
-                className="shrink-0 text-[length:var(--bw-fs-11)] leading-none text-muted-foreground"
-                aria-label="estimated"
-              >
-                ~
-              </span>
-            )}
-          </span>
-        </div>
-      ) : (
-        <div className="flex h-[var(--an-h-5)] items-baseline justify-end font-mono text-[length:var(--bw-fs-13)] tabular-nums">
-          <span className={cn("truncate", row.star && "font-semibold")}>
-            {fmt(row, v)}
-          </span>
-          {row.format === "pct" && (
-            <span className="ml-px text-[length:var(--bw-fs-11)] text-muted-foreground">%</span>
-          )}
-        </div>
-      )}
+          ) : undefined
+        }
+      >
+        {fmt(row, v)}
+      </UnitValue>
     </td>
   );
 }

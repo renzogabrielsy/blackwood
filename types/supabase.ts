@@ -3102,6 +3102,54 @@ export type Database = {
         }
         Relationships: []
       }
+      view_analytics_production_by_batch: {
+        Row: {
+          campaign_label: string | null
+          campaign_year: number | null
+          downtime_hrs: number | null
+          downtime_shift_count: number | null
+          downtime_shifts_reason_only: number | null
+          downtime_shifts_with_duration: number | null
+          fed_kg: number | null
+          first_reported_date: string | null
+          kwh: number | null
+          kwh_days: number | null
+          kwh_meter_count: number | null
+          kwh_per_produced_kg: number | null
+          kwh_per_produced_kg_excl_suspect: number | null
+          kwh_suspect: number | null
+          kwh_suspect_reading_count: number | null
+          kwh_unmapped_pre_campaign: number | null
+          last_reported_date: string | null
+          produced_kg: number | null
+          produced_per_reported_day: number | null
+          production_batch: string | null
+          production_reported: boolean | null
+          reported_days: number | null
+          run_count: number | null
+          runs_with_sacks: number | null
+          sacks: number | null
+          sacks_coverage_pct: number | null
+          shift_count: number | null
+          yield_pct: number | null
+        }
+        Relationships: []
+      }
+      view_analytics_production_grade_by_batch: {
+        Row: {
+          campaign_label: string | null
+          campaign_produced_kg: number | null
+          campaign_year: number | null
+          grade: string | null
+          kg: number | null
+          production_batch: string | null
+          run_count: number | null
+          runs_with_sacks: number | null
+          sacks: number | null
+          share_of_campaign_pct: number | null
+        }
+        Relationships: []
+      }
       view_analytics_production_grade_monthly: {
         Row: {
           grade: string | null

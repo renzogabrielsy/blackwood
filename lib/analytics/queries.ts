@@ -66,8 +66,10 @@ import type {
   AnalyticsMonth,
   BlockUtilization,
   CampaignCost,
+  ProductionBatchData,
+  ProductionBatchRow,
+  ProductionGradeBatch,
   ProductionGradeData,
-  ProductionGradeMonth,
   SupplierData,
   SupplierMonth,
 } from "./types";
@@ -230,24 +232,39 @@ interface SupplierRow {
   month_avg_price_php_kg: number | null;
 }
 
-interface ProductionRow {
-  month_start: string | null;
+/**
+ * OWNER FEEDBACK R6 — the production band reads the BATCH clock.
+ *
+ * These two shapes replaced the calendar `view_analytics_production_monthly` /
+ * `_grade_monthly` reads. **Neither monthly view was dropped** — both are
+ * untouched in the database and still feed the Home Digest; this page simply
+ * stopped reading them, because a production batch is the unit the plant runs
+ * and a calendar month splits one campaign across two columns.
+ */
+interface ProductionBatchViewRow {
+  production_batch: string | null;
+  campaign_year: number | null;
+  campaign_label: string | null;
   production_reported: boolean | null;
+  first_reported_date: string | null;
+  last_reported_date: string | null;
+  produced_kg: number | null;
   run_count: number | null;
   shift_count: number | null;
   reported_days: number | null;
   produced_per_reported_day: number | null;
-  first_reported_date: string | null;
-  last_reported_date: string | null;
+  fed_kg: number | null;
+  yield_pct: number | null;
   downtime_hrs: number | null;
   downtime_shift_count: number | null;
   downtime_shifts_with_duration: number | null;
   downtime_shifts_reason_only: number | null;
   kwh: number | null;
-  power_days: number | null;
-  power_meter_count: number | null;
+  kwh_days: number | null;
+  kwh_meter_count: number | null;
   kwh_suspect_reading_count: number | null;
   kwh_suspect: number | null;
+  kwh_unmapped_pre_campaign: number | null;
   kwh_per_produced_kg: number | null;
   kwh_per_produced_kg_excl_suspect: number | null;
   sacks: number | null;
@@ -255,15 +272,15 @@ interface ProductionRow {
   sacks_coverage_pct: number | null;
 }
 
-interface ProductionGradeRow {
-  month_start: string | null;
-  year: number | null;
-  month: number | null;
+interface ProductionGradeBatchRow {
+  production_batch: string | null;
+  campaign_year: number | null;
+  campaign_label: string | null;
   grade: string | null;
   kg: number | null;
   run_count: number | null;
-  share_of_month_pct: number | null;
-  month_produced_kg: number | null;
+  share_of_campaign_pct: number | null;
+  campaign_produced_kg: number | null;
   sacks: number | null;
   runs_with_sacks: number | null;
 }
@@ -369,25 +386,23 @@ export async function getAnalyticsData(): Promise<AnalyticsData> {
       )
       .order("month_start", { ascending: true })
       .order("kg", { ascending: false }),
-    // P4 — the production matrix. 18 rows all-history (production months
-    // UNION electricity months: the meters start 2025-03 and production
-    // reporting starts 2025-11, so eight months carry power and no output).
-    // Three orders of magnitude under the cap, same unwindowed reasoning as
-    // every read above, and the `truncated` flag still rides on the grade
-    // read rather than the caller assuming.
+    // R6 — the production band, on the BATCH clock. 32 rows all-history (the
+    // same spine the campaign panel uses: campaign_options UNION
+    // campaign_yield, so a batch that has PRODUCED but not yet been FED still
+    // gets a column — SEPTEMBER 2026 is exactly that today). Two orders of
+    // magnitude under the cap, same unwindowed reasoning as every read above,
+    // and both carry a `truncated` flag rather than the caller assuming.
     supabase
-      .from("view_analytics_production_monthly")
+      .from("view_analytics_production_by_batch")
       .select(
-        "month_start, production_reported, run_count, shift_count, reported_days, produced_per_reported_day, first_reported_date, last_reported_date, downtime_hrs, downtime_shift_count, downtime_shifts_with_duration, downtime_shifts_reason_only, kwh, power_days, power_meter_count, kwh_suspect_reading_count, kwh_suspect, kwh_per_produced_kg, kwh_per_produced_kg_excl_suspect, sacks, runs_with_sacks, sacks_coverage_pct",
-      )
-      .order("month_start", { ascending: true }),
-    // 39 rows all-history.
+        "production_batch, campaign_year, campaign_label, production_reported, first_reported_date, last_reported_date, produced_kg, run_count, shift_count, reported_days, produced_per_reported_day, fed_kg, yield_pct, downtime_hrs, downtime_shift_count, downtime_shifts_with_duration, downtime_shifts_reason_only, kwh, kwh_days, kwh_meter_count, kwh_suspect_reading_count, kwh_suspect, kwh_unmapped_pre_campaign, kwh_per_produced_kg, kwh_per_produced_kg_excl_suspect, sacks, runs_with_sacks, sacks_coverage_pct",
+      ),
+    // 19 rows all-history.
     supabase
-      .from("view_analytics_production_grade_monthly")
+      .from("view_analytics_production_grade_by_batch")
       .select(
-        "month_start, year, month, grade, kg, run_count, share_of_month_pct, month_produced_kg, sacks, runs_with_sacks",
+        "production_batch, campaign_year, campaign_label, grade, kg, run_count, share_of_campaign_pct, campaign_produced_kg, sacks, runs_with_sacks",
       )
-      .order("month_start", { ascending: true })
       .order("kg", { ascending: false }),
   ]);
 
@@ -421,23 +436,12 @@ export async function getAnalyticsData(): Promise<AnalyticsData> {
   for (const r of (agingRes.data ?? []) as AgingRow[]) {
     if (r.month_start) ageByMonth.set(r.month_start, r);
   }
-  const prodByMonth = new Map<string, ProductionRow>();
-  for (const r of (prodRes.data ?? []) as ProductionRow[]) {
-    if (r.month_start) prodByMonth.set(r.month_start, r);
-  }
-
   const months: AnalyticsMonth[] = ((flowRes.data ?? []) as FlowRow[])
     .filter((f): f is FlowRow & { month_start: string } => Boolean(f.month_start))
     .map((f) => {
       const rc = rcinByMonth.get(f.month_start);
       const inv = invByMonth.get(f.month_start);
       const age = ageByMonth.get(f.month_start);
-      // P4. NOT gated on `outflowRecorded`: the production view's own spine
-      // is production months ∪ ELECTRICITY months, and eight of those carry
-      // power with no output at all. Dropping the row wholesale (the way the
-      // money layer is dropped) would have thrown away 577,438 kWh from a
-      // block that has a kWh row in it.
-      const prod = prodByMonth.get(f.month_start);
       const outflowRecorded = inv?.outflow_recorded ?? false;
 
       // The honest nulling — see the header. `out_kg` for a month before
@@ -546,38 +550,10 @@ export async function getAnalyticsData(): Promise<AnalyticsData> {
         closedResidueKg: num(age?.closed_residue_kg),
         closedResidueBatches: num(age?.closed_residue_batches),
 
-        // ── P4: production. ₱-FREE, so no gate anywhere below ─────────
-        // Every figure the view publishes is mapped verbatim, INCLUDING the
-        // four companion counts (`downtime_shifts_reason_only`,
-        // `kwh_suspect_reading_count`, `runs_with_sacks`,
-        // `sacks_coverage_pct`). They are what keep a 0.00 downtime hour, a
-        // 696,924 kWh month and a blank bag count honest, and an adapter
-        // that dropped them would have handed the UI a number with no way
-        // to say what is wrong with it.
-        productionReported: Boolean(prod?.production_reported),
-        productionRunCount: num(prod?.run_count),
-        productionShiftCount: num(prod?.shift_count),
-        reportedDays: num(prod?.reported_days),
-        producedPerReportedDay: num(prod?.produced_per_reported_day),
-        firstReportedDate: prod?.first_reported_date ?? null,
-        lastReportedDate: prod?.last_reported_date ?? null,
-
-        downtimeHrs: num(prod?.downtime_hrs),
-        downtimeShiftCount: num(prod?.downtime_shift_count),
-        downtimeShiftsWithDuration: num(prod?.downtime_shifts_with_duration),
-        downtimeShiftsReasonOnly: num(prod?.downtime_shifts_reason_only),
-
-        kwh: num(prod?.kwh),
-        powerDays: num(prod?.power_days),
-        powerMeterCount: num(prod?.power_meter_count),
-        kwhSuspectReadingCount: num(prod?.kwh_suspect_reading_count),
-        kwhSuspectKwh: num(prod?.kwh_suspect),
-        kwhPerProducedKg: num(prod?.kwh_per_produced_kg),
-        kwhPerProducedKgExclSuspect: num(prod?.kwh_per_produced_kg_excl_suspect),
-
-        sacks: num(prod?.sacks),
-        runsWithSacks: num(prod?.runs_with_sacks),
-        sacksCoveragePct: num(prod?.sacks_coverage_pct),
+        // ── R6: the calendar PRODUCTION block is gone from this shape ──
+        // It moved to `productionBatches` below, on the batch clock. See
+        // `types.ts` → `AnalyticsMonth` for the reasoning and for the proof
+        // that nothing was dropped from SQL.
       } satisfies AnalyticsMonth;
     });
 
@@ -699,31 +675,107 @@ export async function getAnalyticsData(): Promise<AnalyticsData> {
     truncated: supplierRows.length >= POSTGREST_ROW_CAP,
   };
 
-  // ── P4: the grade mix ──────────────────────────────────────────────
-  // Nothing is gated and nothing is nulled — there is no ₱ column in this
-  // view and none is derivable from it. The `share_of_month_pct` its rows
-  // carry is SQL's own, whose denominator is JOINED from the monthly
-  // production view rather than re-summed, so a grade share and the monthly
-  // headline cannot drift apart. Nothing is recomputed here.
-  const gradeRows = (gradeRes.data ?? []) as ProductionGradeRow[];
+  // ── R6: the production band and its grade mix, on the BATCH clock ──
+  // Nothing is gated and nothing is nulled — no ₱ column exists in either
+  // view and none is derivable from them, so the whole band stays live for
+  // the Production role. Every companion count is mapped verbatim
+  // (`downtime_shifts_reason_only`, `kwh_suspect_reading_count`,
+  // `runs_with_sacks`, `kwh_unmapped_pre_campaign`): they are what keep a
+  // 0.00 downtime hour, a 696,948 kWh campaign and a blank bag count honest,
+  // and an adapter that dropped them would hand the UI a number with no way
+  // to say what is wrong with it.
+  const batchRows = (prodRes.data ?? []) as ProductionBatchViewRow[];
+  const productionBatches: ProductionBatchData = {
+    rows: batchRows
+      .filter(
+        (
+          b,
+        ): b is ProductionBatchViewRow & {
+          production_batch: string;
+          campaign_year: number;
+        } => Boolean(b.production_batch) && b.campaign_year != null,
+      )
+      .map((b) => ({
+        productionBatch: b.production_batch,
+        campaignYear: b.campaign_year,
+        campaignLabel:
+          b.campaign_label ?? `${b.production_batch} ${b.campaign_year}`,
+
+        productionReported: Boolean(b.production_reported),
+        firstReportedDate: b.first_reported_date ?? null,
+        lastReportedDate: b.last_reported_date ?? null,
+
+        producedKg: num(b.produced_kg),
+        productionRunCount: num(b.run_count),
+        productionShiftCount: num(b.shift_count),
+        reportedDays: num(b.reported_days),
+        producedPerReportedDay: num(b.produced_per_reported_day),
+
+        fedKg: num(b.fed_kg),
+        yieldPct: num(b.yield_pct),
+
+        downtimeHrs: num(b.downtime_hrs),
+        downtimeShiftCount: num(b.downtime_shift_count),
+        downtimeShiftsWithDuration: num(b.downtime_shifts_with_duration),
+        downtimeShiftsReasonOnly: num(b.downtime_shifts_reason_only),
+
+        kwh: num(b.kwh),
+        powerDays: num(b.kwh_days),
+        powerMeterCount: num(b.kwh_meter_count),
+        kwhSuspectReadingCount: num(b.kwh_suspect_reading_count),
+        kwhSuspectKwh: num(b.kwh_suspect),
+        kwhUnmappedPreCampaign: num(b.kwh_unmapped_pre_campaign),
+        kwhPerProducedKg: num(b.kwh_per_produced_kg),
+        kwhPerProducedKgExclSuspect: num(b.kwh_per_produced_kg_excl_suspect),
+
+        sacks: num(b.sacks),
+        runsWithSacks: num(b.runs_with_sacks),
+        sacksCoveragePct: num(b.sacks_coverage_pct),
+      }))
+      // The SAME order as `campaigns` above — chronological by the month each
+      // batch is NAMED for — so ONE `?bhide=` checklist drives the campaign
+      // panel, this band and the grade mix, and the two tables' columns line
+      // up index for index rather than by coincidence.
+      .sort(
+        (a, b) =>
+          a.campaignYear - b.campaignYear ||
+          campaignSeq(a.productionBatch) - campaignSeq(b.productionBatch),
+      ) satisfies ProductionBatchRow[],
+    truncated: batchRows.length >= POSTGREST_ROW_CAP,
+  };
+
+  // The `share_of_campaign_pct` these rows carry is SQL's own, whose
+  // denominator is JOINED from the campaign production view rather than
+  // re-summed, so a grade share and the campaign headline cannot drift apart.
+  // Nothing is recomputed here.
+  const gradeRows = (gradeRes.data ?? []) as ProductionGradeBatchRow[];
   const productionGrades: ProductionGradeData = {
     rows: gradeRows
       .filter(
-        (g): g is ProductionGradeRow & { month_start: string; grade: string } =>
-          Boolean(g.month_start) && Boolean(g.grade),
+        (
+          g,
+        ): g is ProductionGradeBatchRow & {
+          production_batch: string;
+          campaign_year: number;
+          grade: string;
+        } =>
+          Boolean(g.production_batch) &&
+          g.campaign_year != null &&
+          Boolean(g.grade),
       )
       .map((g) => ({
-        monthStart: g.month_start,
-        year: num0(g.year),
-        month: num0(g.month),
+        productionBatch: g.production_batch,
+        campaignYear: g.campaign_year,
+        campaignLabel:
+          g.campaign_label ?? `${g.production_batch} ${g.campaign_year}`,
         grade: g.grade,
         kg: num(g.kg),
         runCount: num(g.run_count),
-        shareOfMonthPct: num(g.share_of_month_pct),
-        monthProducedKg: num(g.month_produced_kg),
+        shareOfCampaignPct: num(g.share_of_campaign_pct),
+        campaignProducedKg: num(g.campaign_produced_kg),
         sacks: num(g.sacks),
         runsWithSacks: num(g.runs_with_sacks),
-      })) satisfies ProductionGradeMonth[],
+      })) satisfies ProductionGradeBatch[],
     truncated: gradeRows.length >= POSTGREST_ROW_CAP,
   };
 
@@ -736,6 +788,7 @@ export async function getAnalyticsData(): Promise<AnalyticsData> {
     asOfDate: latest?.asOfDate ?? null,
     campaigns,
     suppliers,
+    productionBatches,
     productionGrades,
   };
 }

@@ -244,16 +244,19 @@ export interface MetricAnnotation {
  * differently from the line it is compared against is not a comparison.
  * Both halves are SQL figures; nothing here re-derives a monthly number.
  */
-export interface MetricPair {
+export interface MetricPairOf<U> {
   label: string;
   /** Recharts colour token. Picked for contrast against `MetricSpec.color`. */
   color: string;
-  read(m: AnalyticsMonth): number | null;
-  numerator(m: AnalyticsMonth): number | null;
-  denominator(m: AnalyticsMonth): number | null;
+  read(m: U): number | null;
+  numerator(m: U): number | null;
+  denominator(m: U): number | null;
   /** One sentence under the chart saying what the gap between the lines IS. */
   note: string;
 }
+
+/** The calendar-month flavour, which is what every RC Inventory row is. */
+export type MetricPair = MetricPairOf<AnalyticsMonth>;
 
 export interface MetricDictionaryEntry {
   /** One sentence: what the number IS. */
@@ -270,7 +273,23 @@ export interface MetricDictionaryEntry {
   caveat?: string;
 }
 
-export interface MetricSpec {
+/**
+ * ONE KPI row, over whatever UNIT its clock is made of.
+ *
+ * ── WHY THIS IS GENERIC (owner feedback R6, 2026-09-02) ────────────────────
+ * Until R6 every row on this page was read against a CALENDAR MONTH, so
+ * `AnalyticsMonth` could be hardcoded here. R6 moves the whole Production band
+ * onto the PRODUCTION-BATCH clock — a campaign, not a month — so a row is now
+ * read against one of two units, and the machinery that folds it (rollups,
+ * deltas, the callout gate, the expand) is identical either way.
+ *
+ * The alternative was a second copy of `matrix.ts` keyed on campaigns, which is
+ * exactly the "second definition waiting to drift" this codebase keeps refusing.
+ * So the SHAPE is parameterised and the arithmetic is written once;
+ * `MetricSpec` remains the month flavour, so every existing call site is
+ * unchanged.
+ */
+export interface MetricSpecOf<U> {
   key: MetricKey;
   /** Which visual band of the matrix the row sits in. */
   section: MetricSection;
@@ -279,17 +298,24 @@ export interface MetricSpec {
   /** A 1–3 word qualifier under the label (the unit, mostly). */
   sublabel: string;
   unit: MetricUnit;
+  /**
+   * R6 — the glyph this row pins to the LEFT of every value cell, when the unit
+   * alone cannot say it. Only `count` rows need one: "12 sellers", "270 bags"
+   * and "17 piles" are three different things and `UNIT_GLYPH.count` is blank
+   * on purpose. Everything else derives from `unit` (`format.ts → UNIT_GLYPH`).
+   */
+  glyph?: string;
   rollup: RollupRule;
   /**
-   * The month's own figure, in DISPLAY units (tonnes, not kg). Returning
+   * The unit's own figure, in DISPLAY units (tonnes, not kg). Returning
    * `null` means "no figure", never zero — a null is skipped by `sum` and
    * marks the period cell as holed.
    */
-  read(m: AnalyticsMonth): number | null;
+  read(m: U): number | null;
   /** `weighted` only — the pesos side. */
-  numerator?(m: AnalyticsMonth): number | null;
+  numerator?(m: U): number | null;
   /** `weighted` only — the kilos side. */
-  denominator?(m: AnalyticsMonth): number | null;
+  denominator?(m: U): number | null;
   deltaMode: DeltaMode;
   /** May the working-day toggle divide this row? Volumes yes; stocks and rates no. */
   perWorkingDay: boolean;
@@ -314,21 +340,24 @@ export interface MetricSpec {
    * explains, and `matrix.ts` refuses to build any callout out of it — an
    * estimate can neither set a record nor be the biggest move on the board.
    */
-  estimated?(m: AnalyticsMonth): boolean;
+  estimated?(m: U): boolean;
   /**
    * P4 — the row's own caveat for ONE period, or null when it has none.
    *
-   * It takes the period's MONTHS rather than one month, because the caveat is
+   * It takes the period's UNITS rather than one unit, because the caveat is
    * a property of the whole column: a quarter containing March 2026 carries
    * the mis-keyed meter reading exactly as March does, and hiding that behind
    * two clean months is the silent understatement this layer exists to
    * prevent — the same argument `rawValue` already applies to `estimated`.
    */
-  annotate?(months: readonly AnalyticsMonth[]): MetricAnnotation | null;
+  annotate?(units: readonly U[]): MetricAnnotation | null;
   /** The comparison line drawn beside this row in its expand, if it has one. */
-  pair?: MetricPair;
+  pair?: MetricPairOf<U>;
   dictionary: MetricDictionaryEntry;
 }
+
+/** The calendar-month flavour — every RC Inventory row. */
+export type MetricSpec = MetricSpecOf<AnalyticsMonth>;
 
 const KG_PER_TONNE = 1000;
 
@@ -337,10 +366,10 @@ function t(kg: number | null | undefined): number | null {
   return kg == null ? null : kg / KG_PER_TONNE;
 }
 
-/** FRACTION → percent, preserving null. The ONE place the ×100 happens. */
-function pct(fraction: number | null | undefined): number | null {
-  return fraction == null ? null : fraction * 100;
-}
+// (`pct()` — FRACTION → percent — moved to `production-batch.ts` with the
+// Yield and Process loss rows in R6. It is still the ONE place that ×100
+// happens for those two, and no RC Inventory row needs it: `pct_over_120d`
+// arrives from SQL already in percent.)
 
 
 // ---------------------------------------------------------------------
@@ -411,6 +440,9 @@ const FLOW_METRICS: readonly Omit<MetricSpec, "section">[] = [
     label: "Active suppliers",
     sublabel: "sellers",
     unit: "count",
+    // R6 — the left-hand glyph. `UNIT_GLYPH.count` is blank on purpose: a count
+    // has to say WHAT it counts, and "sellers" is only right on this row.
+    glyph: "sellers",
     rollup: "peak",
     read: (m) => m.activeSuppliers,
     deltaMode: "abs",
@@ -671,489 +703,32 @@ const FLOW_METRICS: readonly Omit<MetricSpec, "section">[] = [
   },
 ] as const;
 
-// ---------------------------------------------------------------------
-// P4 — THE PRODUCTION LAYER
-// ---------------------------------------------------------------------
-//
-// **Not one row here is `price: true`, and that is structural.** No ₱ column
-// exists in either P4 view and none is derivable from them (the migration
-// asserts it: 0 of 35 columns match `php|peso|cost|price|value|amount`), so
-// the whole production band is visible to every role including Production and
-// the adapter has nothing to null. The money that MEETS production already
-// lives in the money band above and is gated there.
-//
-// **The denominator rule this band exists to protect.** `reported_days` is
-// PRODUCTION'S OWN count of days it reported, not the flow view's working
-// days, and the two answer different questions. So `production_output` is
-// deliberately NOT `perWorkingDay` — the toggle would divide the plant's
-// tonnage by the YARD's activity and silently change what the figure means.
-// The honest normalisation is its own row, `production_per_day`, which
-// divides by the right denominator and says so.
-//
-// **Three figures are wrong-looking-right or right-looking-wrong, and each
-// carries an `annotate` rather than a silent correction.** See
-// `MetricAnnotation` above for why an annotated cell can never be a headline.
-
-/** Plain number, for annotation copy. */
-function nfmt(v: number, decimals = 0): string {
-  return v.toLocaleString("en-US", {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-  });
-}
-
-function sumOf(
-  months: readonly AnalyticsMonth[],
-  pick: (m: AnalyticsMonth) => number | null,
-): number {
-  let total = 0;
-  for (const m of months) total += pick(m) ?? 0;
-  return total;
-}
-
 /**
- * A downtime total of 0.00 hours can mean two completely different things.
+ * THE CALENDAR registry — the RC Inventory rows, section stamped by
+ * construction so a row can never be filed under the wrong band by hand.
  *
- * Measured across the history: Nov 2025 – Apr 2026 recorded durations and NOT
- * ONE reason; reasons begin May 2026 (5 of 22); Jun and Jul record both; and
- * **August 2026 is reason-only 23 of 23** — every shift named a repair
- * ("CLEANED SCREEN RS 2A AND RS 2B") and none said how long it took. On a
- * matrix that renders as the best month the plant has ever had. The two
- * halves of the report drifted apart in both directions, so this is a count
- * of a real pattern, never an invented threshold.
- */
-function downtimeAnnotation(
-  months: readonly AnalyticsMonth[],
-): MetricAnnotation | null {
-  const reasonOnly = sumOf(months, (m) => m.downtimeShiftsReasonOnly);
-  if (reasonOnly <= 0) return null;
-  const withDuration = sumOf(months, (m) => m.downtimeShiftsWithDuration);
-  const records = sumOf(months, (m) => m.downtimeShiftCount);
-  const shift = (n: number) => `${n} shift${n === 1 ? "" : "s"}`;
-  return {
-    mark: "⚠",
-    blocksCallout: true,
-    title:
-      withDuration === 0
-        ? `All ${shift(reasonOnly)} with a downtime record named the repair and left the duration at zero. This total is a gap in the report, not a period when the plant never stopped. Shown as recorded; never quoted as a record.`
-        : `${reasonOnly} of the ${shift(records)} with a downtime record named the repair and left the duration at zero, so these hours are short by an unknown amount. Shown as recorded; never quoted as a record.`,
-  };
-}
-
-/**
- * ONE mis-keyed meter reading can be 97% of its month, and it does not look
- * wrong — it looks like a finding.
+ * ── OWNER FEEDBACK R6 (2026-09-02): THE PRODUCTION ROWS ARE NOT HERE ───────
+ * They moved, whole, to `lib/analytics/production-batch.ts`, because the band
+ * moved to the PRODUCTION-BATCH clock and a campaign is not a month. This is
+ * the R4 argument taken one step further: R4 retired the calendar MONEY rows
+ * because the campaign was the right clock for a cost; R6 retires the calendar
+ * PRODUCTION rows because a campaign is the clock the plant runs on, full stop
+ * — a changeover day carries two batches, so a calendar month splits one
+ * campaign's output across two columns and mixes two campaigns into one.
  *
- * The detector is STRUCTURAL, not a hardcoded date: a `start_kwh` of 0 is a
- * genuine meter reset only if the counter WRAPPED, i.e. that row's end is
- * BELOW the meter's previous end. Over all 818 readings the rule fires on
- * exactly one row (2026-03-01 / MAIN, ×120 multiplier, 676,944 kWh into a
- * month whose real consumption is about 20,000) and correctly clears
- * 2026-03-04, which is a real rollover. Nothing is repaired — correcting the
- * reading is a separate, audited write.
- */
-function powerAnnotation(
-  months: readonly AnalyticsMonth[],
-): MetricAnnotation | null {
-  const count = sumOf(months, (m) => m.kwhSuspectReadingCount);
-  if (count <= 0) return null;
-  const suspect = sumOf(months, (m) => m.kwhSuspectKwh);
-  const total = sumOf(months, (m) => m.kwh);
-  const share = total > 0 ? (suspect / total) * 100 : null;
-  return {
-    mark: "⚠",
-    blocksCallout: true,
-    title:
-      `${count} meter reading${count === 1 ? "" : "s"} here ${count === 1 ? "is" : "are"} mis-keyed — a start left at zero against an end still climbing — and ${nfmt(suspect)} kWh of this total comes from ${count === 1 ? "it" : "them"}` +
-      (share == null ? "" : `, ${nfmt(share, 1)}% of the period`) +
-      `. Published exactly as metered: fixing the reading is a separate, audited write. Power intensity is where it is taken out. Never quoted as a record.`,
-  };
-}
-
-/**
- * The intensity's own annotation — the mirror image of the one above, and the
- * distinction between them is the whole rule. The kWh total is FACTUALLY
- * WRONG, so its ratio is suppressed; the total itself is still published as
- * metered. Suppressing a correct number is how a data layer starts lying, so
- * the honest estimate is printed beside the ⚠ rather than withheld.
- */
-function powerIntensityAnnotation(
-  months: readonly AnalyticsMonth[],
-): MetricAnnotation | null {
-  const base = powerAnnotation(months);
-  if (!base) return null;
-  const only = months.length === 1 ? months[0] : null;
-  const excl = only?.kwhPerProducedKgExclSuspect ?? null;
-  const clean = months.filter((m) => (m.kwhSuspectReadingCount ?? 0) === 0).length;
-  return {
-    mark: "⚠",
-    blocksCallout: true,
-    alt:
-      excl == null
-        ? undefined
-        : { value: excl, label: "excl. the mis-keyed reading" },
-    title:
-      `Blank rather than wrong: this period holds a mis-keyed meter reading, and an intensity built on it reports an efficiency collapse that never happened (March 2026 would read 0.7630 against neighbours at 0.03). ` +
-      (excl != null
-        ? `The figure beside the ⚠ is the same sum with the bad reading removed — an estimate, labelled as one.`
-        : clean > 0
-          ? `The figure above is measured over the ${clean} unaffected month${clean === 1 ? "" : "s"} only.`
-          : `Every month here is affected, so there is no honest figure to show.`),
-  };
-}
-
-/**
- * Bags did not exist before May 2026. Zero of the 179 runs from Nov 2025
- * through Apr 2026 carry a bag count; May carries 1 of 38, June 36 of 38,
- * July 44 of 44, August 33 of 33. A 0 would assert "we produced no bags"
- * where the truth is "we did not count them", so SQL publishes NULL and this
- * says what the coverage is when it is short.
- */
-function sacksAnnotation(
-  months: readonly AnalyticsMonth[],
-): MetricAnnotation | null {
-  const runs = sumOf(months, (m) => m.productionRunCount);
-  if (runs <= 0) return null;
-  const withSacks = sumOf(months, (m) => m.runsWithSacks);
-  if (withSacks >= runs) return null;
-  if (withSacks === 0) {
-    return {
-      mark: "",
-      blocksCallout: true,
-      title: `None of the ${runs} production entries here recorded a bag count — bags were only counted from May 2026. Blank, never zero: "we did not count" and "we made none" are different answers.`,
-    };
-  }
-  return {
-    mark: "~",
-    blocksCallout: true,
-    title: `This speaks for ${withSacks} of the period's ${runs} production entries — ${nfmt((100 * withSacks) / runs, 1)}% coverage — so it is a floor, not the period's bags. Never quoted as a record.`,
-  };
-}
-
-/**
- * May this month contribute to a power-intensity rollup AT ALL?
+ * The decisive gain is a TIE rather than a preference: this band's Yield is now
+ * literally `view_rc_movement_campaign_yield.yield_pct`, the very column the
+ * campaign panel above it reads, so the two screens cannot disagree. On the
+ * calendar clock they agreed only by coincidence and drifted whenever a batch
+ * straddled a month boundary — which is most of them.
  *
- * A weighted rollup sums the numerator and the denominator INDEPENDENTLY, so a
- * month that has one and not the other adds to one side of the fraction and
- * nothing to the other. Every other weighted row on this page is safe from
- * that by construction — its two halves are co-null — but this one is not, and
- * it was measured going wrong on the very first render: the P4 spine carries
- * **eight months with metered power and no production at all** (the meters
- * start 2025-03, production reporting starts 2025-11), so the 2025 column
- * added 577,438 kWh to the numerator against a denominator those months
- * contribute nothing to, and the year read **0.9190 kWh/kg against a true
- * 0.1527** — six times too high, in the exact shape of the silent hole this
- * codebase keeps re-learning.
- *
- * So both halves are gated on the SAME predicate: a month counts only if it
- * has a sound kWh reading AND a produced figure to divide it by. The suspect
- * test rides here too, which is why a quarter containing March 2026 is
- * measured over its unaffected months.
+ * Nothing was deleted from SQL: `view_analytics_production_monthly` and
+ * `view_analytics_production_grade_monthly` are untouched and still feed the
+ * Home Digest. Only this page stopped reading them.
  */
-function intensityUsable(m: AnalyticsMonth): boolean {
-  if ((m.kwhSuspectReadingCount ?? 0) > 0) return false;
-  return m.kwh != null && m.producedKg != null && m.producedKg > 0;
-}
-
-/**
- * May this month contribute to a YIELD (or process-loss) rollup AT ALL?
- *
- * The same predicate as `intensityUsable` above, for the same measured reason,
- * and it was a real bug found while moving the Yield row into this band in
- * owner feedback R4. A weighted rollup sums numerator and denominator
- * INDEPENDENTLY, and the spine carries months with FED kilos and no production
- * at all — feedings begin 2024-01, production reporting begins 2025-11. A
- * quarter or a year spanning that boundary put ten months of fed kilos into the
- * denominator against two months of product in the numerator: **2025 read a
- * 2.5% yield instead of ~14%**, and the `num.had === 0` guard could not catch
- * it because two of the twelve months genuinely did report.
- *
- * So both halves gate on ONE predicate: a month counts only if it has fed kilos
- * AND a produced figure to divide them by. `dependsOn` does not do this job —
- * it decides what a BLANK means, not which months an average may be built from.
- */
-function yieldUsable(m: AnalyticsMonth): boolean {
-  return m.fedKg != null && m.fedKg > 0 && m.producedKg != null;
-}
-
-const PRODUCTION_METRICS: readonly Omit<MetricSpec, "section">[] = [
-  {
-    key: "production_output",
-    label: "Production output",
-    sublabel: "tonnes made",
-    unit: "tonnes",
-    rollup: "sum",
-    // The SAME `producedKg` the money band reads — both are
-    // `view_rc_movement_yield_monthly.total_produced` (measured equal on 10
-    // of 10 months, max gap 0.0 kg). One field, one definition; a second
-    // would be a second definition waiting to drift.
-    read: (m) => t(m.producedKg),
-    deltaMode: "pct",
-    // Deliberately NOT divisible by working days — see the band's header.
-    perWorkingDay: false,
-    price: false,
-    chart: "bar",
-    color: "var(--chart-2)",
-    avgColor: "var(--chart-4)",
-    decimals: 1,
-    dependsOn: ["production"],
-    dictionary: {
-      definition: "How much finished charcoal the plant made that month.",
-      basis:
-        "The month's production entries, taken straight from the RC Movement production view rather than counted again — so this row and that screen cannot disagree.",
-      exclusions: "Nothing. Every grade and every shift. What went IN is the RC OUT row.",
-      rollup: "Quarters and years are plain sums of their months.",
-      source: "view_analytics_production_monthly.produced_kg",
-      caveat:
-        "Daily reporting began 27 November 2025, so earlier months are blank, never zero. November itself is three days inside a full month and is kept out of every headline.",
-    },
-  },
-  {
-    key: "production_per_day",
-    label: "Output per reported day",
-    sublabel: "tonnes / day reported",
-    unit: "tonnes",
-    rollup: "weighted",
-    read: (m) => t(m.producedPerReportedDay),
-    numerator: (m) => t(m.producedKg),
-    denominator: (m) => m.reportedDays,
-    deltaMode: "pct",
-    perWorkingDay: false,
-    price: false,
-    chart: "bar",
-    color: "var(--chart-1)",
-    avgColor: "var(--chart-3)",
-    decimals: 1,
-    dependsOn: ["production"],
-    dictionary: {
-      definition:
-        "How much the plant made on a day it was actually running — the fair way to compare a short month with a long one.",
-      basis: "Tonnes produced ÷ the days production reported that month.",
-      exclusions:
-        "Days production did not report are out of the denominator, so a rest day cannot dilute the figure.",
-      rollup:
-        "A quarter or a year is total tonnes ÷ total reported days, not the mean of the months.",
-      source: "view_analytics_production_monthly.produced_per_reported_day",
-      caveat:
-        "The denominator is PRODUCTION'S own reported days, not days the yard was busy — the yard can take charcoal in on a day the plant does not run. That is also why the per-working-day toggle leaves this whole band alone.",
-    },
-  },
-  // ── Yield and its complement (owner feedback R4) ─────────────────────
-  // Yield arrived here from the dissolved money band. It belongs beside the
-  // output it divides: it is a statement about the PLANT (how much product
-  // came out of what went in), not about what anything cost, and it carries no
-  // ₱ — which is why moving it changed no gate.
-  {
-    key: "yield_rate",
-    label: "Yield",
-    sublabel: "% of fed kilos",
-    unit: "pct",
-    rollup: "weighted",
-    read: (m) => pct(m.yieldPct),
-    // ×100 on the NUMERATOR so the weighted rule stays Σnum ÷ Σden and the
-    // result lands in percent — there is no second scaling step to forget.
-    // BOTH halves gate on `yieldUsable`: see that function for the measured
-    // reason (2025 read 2.5% against a real ~14% before it existed).
-    numerator: (m) =>
-      yieldUsable(m) && m.producedKg != null ? m.producedKg * 100 : null,
-    denominator: (m) => (yieldUsable(m) ? m.fedKg : null),
-    deltaMode: "abs",
-    perWorkingDay: false,
-    price: false,
-    chart: "line",
-    color: "var(--chart-2)",
-    avgColor: "var(--chart-4)",
-    decimals: 1,
-    dependsOn: ["outflow", "production"],
-    dictionary: {
-      definition:
-        "How much finished product came out of every hundred kilos of charcoal fed in.",
-      basis:
-        "Kilos produced ÷ kilos fed. The change under a cell is in percentage POINTS, not a percentage of a percentage.",
-      exclusions:
-        "A month that fed charcoal before production reporting existed is out of BOTH halves — counting its kilos in the denominator alone would have read 2025 as a 2.5% yield.",
-      rollup: "A quarter or a year is total produced ÷ total fed, not the mean of the months.",
-      source: "view_analytics_cost_monthly.yield_pct",
-      caveat:
-        "Blank before November 2025, never 0% — a zero would roll into a year as if the plant had turned eight thousand tonnes into nothing. November itself is a part-month at 11.9% and is kept out of the headlines.",
-    },
-  },
-  {
-    // ── OWNER FEEDBACK R4 — the other side of the same fraction ─────────
-    // Renzo: "what the kilns ate." Yield says what came out; this says what
-    // did not, and the two are the same measurement read from opposite ends.
-    // It is a SEPARATE ROW rather than a hover on the yield row because it is
-    // the number he wants to watch move — a loss going up is the alarming
-    // reading of a yield going down, and a page that only prints the cheerful
-    // half makes the reader do the subtraction.
-    //
-    // `read` is literally `1 − yield`, so the two rows always sum to exactly
-    // 100 in a MONTH cell; the weighted rollup is Σ(fed − produced) ÷ Σ fed,
-    // which is algebraically 1 − Σproduced ÷ Σfed, so they sum to 100 in a
-    // quarter and a year too. Same `yieldUsable` gate on both halves.
-    key: "process_loss",
-    label: "Process loss",
-    sublabel: "% of fed kilos",
-    unit: "pct",
-    rollup: "weighted",
-    read: (m) => (m.yieldPct == null ? null : (1 - m.yieldPct) * 100),
-    numerator: (m) =>
-      yieldUsable(m) && m.fedKg != null && m.producedKg != null
-        ? (m.fedKg - m.producedKg) * 100
-        : null,
-    denominator: (m) => (yieldUsable(m) ? m.fedKg : null),
-    deltaMode: "abs",
-    perWorkingDay: false,
-    price: false,
-    chart: "line",
-    color: "var(--chart-5)",
-    avgColor: "var(--chart-3)",
-    decimals: 1,
-    dependsOn: ["outflow", "production"],
-    dictionary: {
-      definition:
-        "What the kilns ate — the difference between the charcoal fed in and the product that came out.",
-      basis:
-        "Kilos fed minus kilos produced, over kilos fed. Exactly one hundred minus the yield above it, by construction rather than by coincidence.",
-      exclusions:
-        "Same as yield: a month that fed charcoal before production reporting existed is out of both halves.",
-      rollup:
-        "A quarter or a year is total kilos lost ÷ total kilos fed, not the mean of the months. It still adds to exactly 100 with the yield beside it.",
-      source: "view_analytics_cost_monthly.yield_pct (its complement)",
-      caveat:
-        "This is cooking loss, not yard loss. Weight that evaporated while charcoal SAT is a different figure and lives on the campaign panel as Weight lost. The change under a cell is in percentage POINTS.",
-    },
-  },
-  {
-    key: "downtime_hours",
-    label: "Downtime",
-    sublabel: "hours lost",
-    unit: "hours",
-    rollup: "sum",
-    read: (m) => m.downtimeHrs,
-    deltaMode: "abs",
-    perWorkingDay: false,
-    price: false,
-    chart: "bar",
-    color: "var(--chart-5)",
-    avgColor: "var(--chart-3)",
-    decimals: 2,
-    dependsOn: ["production"],
-    annotate: downtimeAnnotation,
-    dictionary: {
-      definition: "How many hours the plant stood still that month, as the shift reports recorded it.",
-      basis:
-        "The hours-and-minutes pair on each shift's downtime record, folded the same way the Daily production ledger folds it. Two halves of one duration, not alternatives.",
-      exclusions:
-        "A shift that filed no downtime record is not counted as zero downtime — it is simply not in the sum.",
-      rollup: "Quarters and years are plain sums of their months.",
-      source: "view_analytics_production_monthly.downtime_hrs",
-      caveat:
-        "A zero here means two different things, so read it with the ⚠. In August 2026 all 23 shifts named a repair and every one left the duration blank: the work was recorded, the number stopped being. That month reads 0.00 h and was not a flawless month.",
-    },
-  },
-  {
-    key: "power_kwh",
-    label: "Power",
-    sublabel: "kWh metered",
-    unit: "kwh",
-    rollup: "sum",
-    read: (m) => m.kwh,
-    deltaMode: "pct",
-    perWorkingDay: false,
-    price: false,
-    chart: "bar",
-    color: "var(--chart-3)",
-    avgColor: "var(--chart-4)",
-    decimals: 0,
-    // NO `dependsOn`. The meters start March 2025 and production reporting
-    // starts November 2025, so eight months carry power and no output at all.
-    // Declaring a production dependency would have blanked eight months of
-    // real metered electricity — 577,438 kWh — and called it "not reported".
-    annotate: powerAnnotation,
-    dictionary: {
-      definition:
-        "How much electricity the site drew that month, across every meter — the same figure the home dashboard shows daily.",
-      basis: "Each daily reading's consumption, multiplier applied, added up.",
-      exclusions:
-        "Nothing. The total is published exactly as metered, including a reading we can prove is wrong.",
-      rollup: "Quarters and years are plain sums of their months.",
-      source: "view_analytics_production_monthly.kwh",
-      caveat:
-        "One reading on 1 March 2026 was mis-keyed, and at a ×120 multiplier it alone publishes 676,944 kWh into a month whose real draw is about 20,000. Marked ⚠ and NOT corrected here — this row is the metered record. Only the MAIN meter has reported since December 2025.",
-    },
-  },
-  {
-    key: "power_intensity",
-    label: "Power intensity",
-    sublabel: "kWh / kg made",
-    unit: "kwh_per_kg",
-    rollup: "weighted",
-    read: (m) => m.kwhPerProducedKg,
-    // NULL-STRICT and PAIRED — see `intensityUsable`.
-    numerator: (m) => (intensityUsable(m) ? m.kwh : null),
-    denominator: (m) => (intensityUsable(m) ? m.producedKg : null),
-    deltaMode: "pct",
-    perWorkingDay: false,
-    price: false,
-    chart: "line",
-    color: "var(--chart-4)",
-    avgColor: "var(--chart-3)",
-    decimals: 4,
-    dependsOn: ["production"],
-    annotate: powerIntensityAnnotation,
-    dictionary: {
-      definition:
-        "Units of electricity per kilo of product — whether the plant is getting more or less efficient.",
-      basis: "The month's metered kWh ÷ the kilos it produced.",
-      exclusions:
-        "A month holding a mis-keyed meter reading is left out entirely, here and in any quarter or year it belongs to.",
-      rollup:
-        "A quarter or a year is total kWh ÷ total kilos produced across its clean months, not the mean of the monthly rates.",
-      source: "view_analytics_production_monthly.kwh_per_produced_kg",
-      caveat:
-        "Blank rather than wrong. March 2026 would read 0.7630 against neighbours at 0.03 — a collapse that never happened — so it is suppressed and the figure without the bad reading (0.0219) prints beside the ⚠. November 2025 reads 1.2766 and is NOT suppressed: it is correct, just not comparable.",
-    },
-  },
-  {
-    key: "sacks_counted",
-    label: "Bags counted",
-    sublabel: "sacks",
-    unit: "count",
-    rollup: "sum",
-    read: (m) => m.sacks,
-    deltaMode: "pct",
-    perWorkingDay: false,
-    price: false,
-    chart: "bar",
-    color: "var(--chart-1)",
-    avgColor: "var(--chart-4)",
-    decimals: 0,
-    dependsOn: ["production"],
-    annotate: sacksAnnotation,
-    dictionary: {
-      definition: "How many bags the month's production entries recorded.",
-      basis: "The bag counts on the month's production runs, added up.",
-      exclusions:
-        "A run with no bag count is not counted as zero bags — it is simply not in the sum, and the ~ says how many such runs there were.",
-      rollup: "Quarters and years are plain sums of their months.",
-      source: "view_analytics_production_monthly.sacks",
-      caveat:
-        "Bags were not counted before May 2026, so those months are blank rather than zero. May itself covers 1 run of 38, so its 270 bags describe a single entry; June onward is effectively complete.",
-    },
-  },
-] as const;
-
-/**
- * THE registry — the RC Inventory rows, then the production rows, section
- * stamped by construction so a row can never be filed under the wrong band by
- * hand. (The money band between them was dissolved in owner feedback R4; every
- * field it read still crosses the wire.)
- */
-export const METRICS: readonly MetricSpec[] = [
-  ...FLOW_METRICS.map((m): MetricSpec => ({ ...m, section: "flow" })),
-  ...PRODUCTION_METRICS.map((m): MetricSpec => ({ ...m, section: "production" })),
-];
+export const METRICS: readonly MetricSpec[] = FLOW_METRICS.map(
+  (m): MetricSpec => ({ ...m, section: "flow" }),
+);
 
 /** Lookup by key — the registry is small enough that a map is built once. */
 export const METRIC_BY_KEY: ReadonlyMap<MetricKey, MetricSpec> = new Map(

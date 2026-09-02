@@ -79,7 +79,7 @@ import { DELTA_LABEL, groupBySection } from "@/lib/analytics/matrix";
 import type {
   MetricKey,
   MetricSection,
-  MetricSpec,
+  MetricSpecOf,
 } from "@/lib/analytics/metrics";
 import {
   BLANK_TITLE,
@@ -88,8 +88,19 @@ import {
   fmtChange,
   fmtCompact,
   fmtMetricValue,
+  unitGlyphFor,
 } from "@/lib/analytics/format";
 import { MetricInfo, dictionaryTitle } from "./metric-info";
+import { UnitValue } from "./unit-value";
+
+/**
+ * Every row on this table declares its own unit, so the component only ever
+ * needs the presentational half of a spec. `AnySpec` is that half — which is
+ * also what lets ONE table render the calendar band (rows read against months)
+ * and the Production band (rows read against production batches) without either
+ * knowing what the other is made of. See `matrix.ts` → `Period<U>`.
+ */
+type AnySpec = MetricSpecOf<never>;
 
 // Explicit pixel widths — the sum below IS the table's minWidth.
 //
@@ -116,11 +127,11 @@ const W_TOTAL = "var(--an-w-total)";
  * figures, and 2026-03 alone reads 696,924 because of the mis-keyed reading
  * this page exists to flag.
  */
-function isCompactUnit(spec: MetricSpec): boolean {
+function isCompactUnit(spec: AnySpec): boolean {
   return spec.unit === "php" || spec.unit === "kwh";
 }
 
-function exactText(spec: MetricSpec, value: number): string {
+function exactText(spec: AnySpec, value: number): string {
   const n = value.toLocaleString("en-US", {
     minimumFractionDigits: spec.decimals,
     maximumFractionDigits: spec.decimals,
@@ -157,7 +168,7 @@ function ChangeLine({
   comparison,
 }: {
   cell: MatrixCell;
-  spec: MetricSpec;
+  spec: AnySpec;
   deltaWord: string;
   comparison: ComparisonMode;
 }) {
@@ -280,7 +291,7 @@ function ValueCell({
   emphasis,
 }: {
   cell: MatrixCell;
-  spec: MetricSpec;
+  spec: AnySpec;
   deltaWord: string;
   comparison: ComparisonMode;
   /** Fed-price coverage for the period, for the `~` hover. Null when N/A. */
@@ -315,18 +326,30 @@ function ValueCell({
             : (ann?.title ?? BLANK_TITLE[reason])
         }
       >
-        <div className="flex h-[var(--an-h-5)] items-center justify-end gap-1 font-mono text-[length:var(--bw-fs-14)] leading-[var(--bw-lh-sm)] text-muted-foreground/60">
-          {reason === "restricted" && <Lock className="size-3" aria-hidden />}
-          {ann?.mark && (
-            <span
-              aria-hidden
-              className="text-[length:var(--bw-fs-11)] leading-none text-amber-600 dark:text-amber-400"
-            >
-              {ann.mark}
-            </span>
-          )}
-          <span>{alt ? fmtMetricValue(spec, alt.value) : "—"}</span>
-        </div>
+        {/* R6 — the glyph holds its place on a BLANK too. A unit column that
+            disappears whenever a figure does would make the numbers above and
+            below a blank sit at different x. */}
+        <UnitValue
+          glyph={unitGlyphFor(spec)}
+          className="h-[var(--an-h-5)] font-mono text-[length:var(--bw-fs-14)] leading-[var(--bw-lh-sm)] text-muted-foreground/60"
+          after={
+            <>
+              {reason === "restricted" && (
+                <Lock className="size-3 shrink-0" aria-hidden />
+              )}
+              {ann?.mark && (
+                <span
+                  aria-hidden
+                  className="shrink-0 text-[length:var(--bw-fs-11)] leading-none text-amber-600 dark:text-amber-400"
+                >
+                  {ann.mark}
+                </span>
+              )}
+            </>
+          }
+        >
+          {alt ? fmtMetricValue(spec, alt.value) : "—"}
+        </UnitValue>
         {alt && (
           <div className="mt-0.5 h-[var(--an-h-4)] truncate text-right text-[length:var(--bw-fs-10)] leading-[var(--bw-lh-4)] text-muted-foreground">
             {alt.label}
@@ -356,26 +379,17 @@ function ValueCell({
       className={cn("border-l px-2 py-1.5 align-top", emphasis && "bg-muted/40")}
       title={titleParts.join(" · ")}
     >
-      {/* Accounting format for ₱: glyph pinned left, number pinned right. */}
-      {spec.unit === "php_per_kg" || spec.unit === "php" ? (
-        <div className="flex h-[var(--an-h-5)] items-baseline justify-between gap-1 font-mono text-[length:var(--bw-fs-14)] leading-[var(--bw-lh-sm)] tabular-nums">
-          <span className="shrink-0 text-[length:var(--bw-fs-11)] text-muted-foreground">₱</span>
-          <span className="flex min-w-0 items-baseline gap-0.5">
-            <span className="truncate font-medium">{shown}</span>
-            {marks}
-          </span>
-        </div>
-      ) : (
-        <div className="flex h-[var(--an-h-5)] items-baseline justify-end gap-1 font-mono text-[length:var(--bw-fs-14)] leading-[var(--bw-lh-sm)] tabular-nums">
-          <span className="truncate font-medium">
-            {shown}
-            {spec.unit === "pct" && (
-              <span className="ml-px text-[length:var(--bw-fs-11)] text-muted-foreground">%</span>
-            )}
-          </span>
-          {marks}
-        </div>
-      )}
+      {/* R6 — THE accounting format, for every unit and not only ₱: the unit
+          pinned left, the number pinned right, no trailing suffix. See
+          `unit-value.tsx` for why the digits keep the right edge. */}
+      <UnitValue
+        glyph={unitGlyphFor(spec)}
+        className="h-[var(--an-h-5)] font-mono text-[length:var(--bw-fs-14)] leading-[var(--bw-lh-sm)] tabular-nums"
+        valueClassName="font-medium"
+        after={marks}
+      >
+        {shown}
+      </UnitValue>
       <ChangeLine
         cell={cell}
         spec={spec}
@@ -386,8 +400,8 @@ function ValueCell({
   );
 }
 
-export interface AnalyticsMatrixProps {
-  matrix: Matrix;
+export interface AnalyticsMatrixProps<U> {
+  matrix: Matrix<U>;
   /** The expanded row, or null. */
   selected: MetricKey | null;
   onSelect(key: MetricKey | null): void;
@@ -413,6 +427,17 @@ export interface AnalyticsMatrixProps {
    */
   sections?: readonly MetricSection[];
   /**
+   * R6 — fed-price coverage per COLUMN, for the `~` hover only.
+   *
+   * It used to be computed inside this component by reaching into each period's
+   * MONTHS for `fedKgPriceTraceable`. That reach is exactly what stopped the
+   * table being reusable across clocks, and it was never the table's business:
+   * coverage belongs to a PERIOD, not to any one row, so the caller that owns
+   * the clock supplies it. The Production band has no such figure and passes
+   * nothing, which is honest rather than a gap — no batch row is an estimate.
+   */
+  coverageByPeriod?: ReadonlyMap<string, number | null>;
+  /**
    * OWNER FEEDBACK R5 — print this whole band as one report.
    *
    * The matrix does not build the report: it owns the rows and their ORDER,
@@ -427,7 +452,7 @@ export interface AnalyticsMatrixProps {
   printingSection?: MetricSection | null;
 }
 
-export function AnalyticsMatrix({
+export function AnalyticsMatrix<U>({
   matrix,
   selected,
   onSelect,
@@ -435,9 +460,10 @@ export function AnalyticsMatrix({
   comparison,
   expand,
   sections: only,
+  coverageByPeriod,
   onPrintSection,
   printingSection,
-}: AnalyticsMatrixProps) {
+}: AnalyticsMatrixProps<U>) {
   const deltaWord = DELTA_LABEL[matrix.granularity];
   // The sum of the colgroup IS the table's minWidth ("never crush, always
   // scroll"). It is a `calc()` rather than an addition now that the widths are
@@ -488,39 +514,11 @@ export function AnalyticsMatrix({
   const panelWidth =
     frameWidth == null ? undefined : `min(${frameWidth}px, ${minWidth})`;
 
-  /** Fed-price coverage per COLUMN, for the `~` hover only.
-   *
-   * Σ traceable ÷ Σ all over the column's months — the same Σnum ÷ Σden the
-   * weighted rows use, over two columns the SQL layer publishes. It is
-   * hover copy, never a figure the grid prints, and it is computed here
-   * rather than in the fold because it belongs to a PERIOD rather than to
-   * any one row.
-   */
-  const coverageByPeriod = React.useMemo(() => {
-    const out = new Map<string, number | null>();
-    let winTraceable = 0;
-    let winAll = 0;
-    for (const p of matrix.periods) {
-      let traceable = 0;
-      let all = 0;
-      for (const m of p.months) {
-        traceable += m.fedKgPriceTraceable ?? 0;
-        all += (m.fedKgPriceTraceable ?? 0) + (m.fedKgPriceUntraceable ?? 0);
-      }
-      out.set(p.key, all > 0 ? (traceable / all) * 100 : null);
-      winTraceable += traceable;
-      winAll += all;
-    }
-    // The trailing summary column too — its `~` needs a hover that names a
-    // real share rather than falling back to the generic sentence.
-    if (matrix.rows[0]?.total) {
-      out.set(
-        matrix.rows[0].total.periodKey,
-        winAll > 0 ? (winTraceable / winAll) * 100 : null,
-      );
-    }
-    return out;
-  }, [matrix.periods, matrix.rows]);
+  /** Empty map = no coverage figure exists on this clock. */
+  const coverage = React.useMemo(
+    () => coverageByPeriod ?? new Map<string, number | null>(),
+    [coverageByPeriod],
+  );
 
   if (matrix.periods.length === 0) {
     // TWO completely different states, and calling them both "no records"
@@ -602,7 +600,7 @@ export function AnalyticsMatrix({
               selected={selected}
               onSelect={onSelect}
               perWorkingDay={perWorkingDay}
-              coverageByPeriod={coverageByPeriod}
+              coverageByPeriod={coverage}
               periodCount={matrix.periods.length}
               colCount={colCount}
               panelWidth={panelWidth}
@@ -693,7 +691,7 @@ function SectionBand({
  * rather than merely refused. A handle emits its own key, and the only order
  * that key can be resolved against is this band's.
  */
-function MatrixSectionRows({
+function MatrixSectionRows<U>({
   section,
   deltaWord,
   comparison,
@@ -708,7 +706,7 @@ function MatrixSectionRows({
   onPrintSection,
   printing,
 }: {
-  section: MatrixSection;
+  section: MatrixSection<U>;
   deltaWord: string;
   comparison: ComparisonMode;
   selected: MetricKey | null;
@@ -832,7 +830,7 @@ function MatrixSectionRows({
   );
 }
 
-function MatrixRowView({
+function MatrixRowView<U>({
   row,
   deltaWord,
   comparison,
@@ -849,7 +847,7 @@ function MatrixRowView({
   onDragEnd,
   onDrop,
 }: {
-  row: MatrixRow;
+  row: MatrixRow<U>;
   deltaWord: string;
   comparison: ComparisonMode;
   accent: string;

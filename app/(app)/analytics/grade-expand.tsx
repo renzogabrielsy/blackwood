@@ -61,7 +61,7 @@ import {
   foldGradeSelection,
   PRODUCTION_DICTIONARY,
   type GradeRow,
-  type GradeYear,
+  type GradeSet,
 } from "@/lib/analytics/production";
 import { ChartToggle } from "./metric-expand";
 import { PeriodFilter, type PeriodFilterOption } from "./period-filter";
@@ -88,7 +88,7 @@ function pct1(v: number | null): string {
 
 export interface GradeExpandProps {
   row: GradeRow;
-  data: GradeYear;
+  data: GradeSet;
   /** R3's master switch, threaded through the production room like every other. */
   showDictionary: boolean;
   /** What a printed card says the reader was looking at. */
@@ -109,56 +109,53 @@ export function GradeExpand({
   const tip = drilldownTooltipChrome();
 
   /**
-   * The month checklist, with the R4 smart default: it opens on the months
-   * this GRADE was actually made in.
+   * The BATCH checklist, with the R4 smart default: it opens on the batches
+   * this GRADE was actually made in. (R6: these were months until the band
+   * moved to the batch clock; the rule is unchanged, the unit is not.)
    *
    * Same three properties that keep the KPI card's year default honest — it is
-   * derived from the row's own cells rather than from a date, the empty months
+   * derived from the row's own cells rather than from a date, the empty batches
    * are still listed and one click brings them back, and **it can never hide
-   * everything** (a grade with no month at all opens fully checked, because an
+   * everything** (a grade with no batch at all opens fully checked, because an
    * empty chart under an empty-state sentence the reader did not cause is
    * worse than an empty chart).
    */
-  const [hiddenMonths, setHiddenMonths] = React.useState<ReadonlySet<string>>(
-    () => {
-      const empty = data.months
-        .filter((m, i) => row.cells[i]?.kg == null)
-        .map((m) => m.monthStart);
-      if (empty.length === 0 || empty.length === data.months.length) {
-        return NO_HIDDEN;
-      }
-      return new Set(empty);
-    },
-  );
-  const isFiltered = hiddenMonths.size > 0;
+  const [hiddenCols, setHiddenCols] = React.useState<ReadonlySet<string>>(() => {
+    const empty = data.columns
+      .filter((c, i) => row.cells[i]?.kg == null)
+      .map((c) => c.key);
+    if (empty.length === 0 || empty.length === data.columns.length) {
+      return NO_HIDDEN;
+    }
+    return new Set(empty);
+  });
+  const isFiltered = hiddenCols.size > 0;
   const [showAvg, setShowAvg] = React.useState(true);
 
-  const monthOptions = React.useMemo<PeriodFilterOption[]>(
+  const colOptions = React.useMemo<PeriodFilterOption[]>(
     () =>
-      data.months.map((m, i) => {
+      data.columns.map((c, i) => {
         const cell = row.cells[i];
         return {
-          key: m.monthStart,
-          label: m.label,
+          key: c.key,
+          label: c.label,
           meta: cell?.kg == null ? "—" : `${t1(cell.kg)}t`,
           empty: cell?.kg == null,
           title:
             cell?.kg == null
-              ? `${m.fullLabel} — ${row.grade} was not run that month. A genuine blank, not a zero.`
-              : `${m.fullLabel} — ${t1(cell.kg)} t of ${row.grade}, ${pct1(cell.sharePct)}% of everything made that month.`,
+              ? `${c.fullLabel} — ${row.grade} was not run in that batch. A genuine blank, not a zero.`
+              : `${c.fullLabel} — ${t1(cell.kg)} t of ${row.grade}, ${pct1(cell.sharePct)}% of everything that batch made.`,
         };
       }),
-    [data.months, row.cells, row.grade],
+    [data.columns, row.cells, row.grade],
   );
 
-  const shownMonthCount = monthOptions.filter(
-    (o) => !hiddenMonths.has(o.key),
-  ).length;
+  const shownColCount = colOptions.filter((o) => !hiddenCols.has(o.key)).length;
   const selectedSuffix = isFiltered ? " · selected" : "";
 
   const fold = React.useMemo(
-    () => foldGradeSelection(row, data.months, hiddenMonths),
-    [row, data.months, hiddenMonths],
+    () => foldGradeSelection(row, data.columns, hiddenCols),
+    [row, data.columns, hiddenCols],
   );
 
   /**
@@ -173,9 +170,9 @@ export function GradeExpand({
    * re-implemented, so there is one definition of the smoothing on this page.
    */
   const points = React.useMemo(() => {
-    const win = rollingWindowFor("M");
-    const values = data.months.map((m, i) =>
-      hiddenMonths.has(m.monthStart) ? null : (row.cells[i]?.kg ?? null),
+    const win = rollingWindowFor("B");
+    const values = data.columns.map((c, i) =>
+      hiddenCols.has(c.key) ? null : (row.cells[i]?.kg ?? null),
     );
     const out: {
       key: string;
@@ -185,21 +182,21 @@ export function GradeExpand({
       share: number | null;
       avg: number | null;
     }[] = [];
-    data.months.forEach((m, i) => {
-      if (hiddenMonths.has(m.monthStart)) return;
+    data.columns.forEach((c, i) => {
+      if (hiddenCols.has(c.key)) return;
       const cell = row.cells[i];
       const raw = win > 0 ? rollingMean(values, i, win) : null;
       out.push({
-        key: m.monthStart,
-        label: m.label,
-        fullLabel: m.fullLabel,
+        key: c.key,
+        label: c.label,
+        fullLabel: c.fullLabel,
         tonnes: cell?.kg == null ? null : cell.kg / 1000,
         share: cell?.sharePct ?? null,
         avg: raw == null ? null : raw / 1000,
       });
     });
     return out;
-  }, [data.months, row.cells, hiddenMonths]);
+  }, [data.columns, row.cells, hiddenCols]);
 
   const railItems: RailItem[] = points
     .filter((p) => p.tonnes != null)
@@ -209,12 +206,12 @@ export function GradeExpand({
       value: t1((p.tonnes ?? 0) * 1000),
       unit: "t",
       sharePct: p.share ?? 0,
-      title: `${t1((p.tonnes ?? 0) * 1000)} t of ${row.grade} — ${pct1(p.share)}% of everything made that month.`,
+      title: `${t1((p.tonnes ?? 0) * 1000)} t of ${row.grade} — ${pct1(p.share)}% of everything that batch made.`,
     }));
 
-  const selectedMonthsNote = isFiltered
-    ? monthOptions
-        .filter((o) => !hiddenMonths.has(o.key))
+  const selectedColsNote = isFiltered
+    ? colOptions
+        .filter((o) => !hiddenCols.has(o.key))
         .map((o) => o.label)
         .join(", ") || "none"
     : null;
@@ -235,15 +232,15 @@ export function GradeExpand({
           {row.grade}
         </h1>
         <p className="text-[length:var(--bw-fs-11)] text-muted-foreground">
-          Production grade · {data.year} · {scopeLabel}
+          Production grade · by production batch · {scopeLabel}
           {asOfDate ? ` · records through ${asOfDate}` : ""}
         </p>
-        {selectedMonthsNote && (
+        {selectedColsNote && (
           <p className="text-[length:var(--bw-fs-11)] text-muted-foreground">
-            Filtered to {selectedMonthsNote} ({shownMonthCount} of{" "}
-            {monthOptions.length} months). Hidden months are not restated — the
-            figures above are folded over the months shown, and the share&rsquo;s
-            denominator narrowed with them.
+            Filtered to {selectedColsNote} ({shownColCount} of{" "}
+            {colOptions.length} batches). Hidden batches are not restated — the
+            figures above are folded over the batches shown, and the
+            share&rsquo;s denominator narrowed with them.
           </p>
         )}
       </div>
@@ -255,8 +252,8 @@ export function GradeExpand({
           </h3>
           <p className="text-[length:var(--bw-fs-105)] text-muted-foreground">
             #{row.rank} of {data.gradeCount} grade
-            {data.gradeCount === 1 ? "" : "s"} in {data.year} · made in{" "}
-            {row.activeMonths} month{row.activeMonths === 1 ? "" : "s"}
+            {data.gradeCount === 1 ? "" : "s"} · made in {row.activeColumns}{" "}
+            batch{row.activeColumns === 1 ? "" : "es"}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1.5" data-print-hide>
@@ -282,41 +279,48 @@ export function GradeExpand({
 
       <div className="flex flex-col gap-3 p-3">
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {/* R6 — the unit sits on the LEFT here too, so the strip and the
+              table under it announce a unit in the same place. */}
           <DrilldownStat
             label={`Made${selectedSuffix}`}
             value={t1(fold.kg)}
-            unit="t"
+            unit="T"
+            unitSide="left"
             sub={`${fold.runCount} production entr${fold.runCount === 1 ? "y" : "ies"}${
-              isFiltered ? ` · ${fold.monthCount} months` : ""
+              isFiltered ? ` · ${fold.columnCount} batches` : ""
             }`}
-            title="Kilos of this grade in the months shown. A plain sum — the only rollup a volume allows."
+            title="Kilos of this grade in the batches shown. A plain sum — the only rollup a volume allows."
           />
           <DrilldownStat
             label={`Share${selectedSuffix}`}
             value={pct1(fold.sharePct)}
             unit={fold.sharePct == null ? undefined : "%"}
-            sub={isFiltered ? "of the months shown" : `of ${data.year}`}
+            unitSide="left"
+            sub={isFiltered ? "of the batches shown" : "of the batches on show"}
             title={
               isFiltered
-                ? "This grade's kilos over everything the plant made in the MONTHS SHOWN — the denominator narrows with the selection, so this is a share of those months rather than of the year."
-                : "This grade's kilos over everything the plant made in the year — Σ ÷ Σ, never the average of the monthly percentages."
+                ? "This grade's kilos over everything the plant made in the BATCHES SHOWN — the denominator narrows with the selection, so this is a share of those batches rather than of every batch."
+                : "This grade's kilos over everything the plant made in these batches — Σ ÷ Σ, never the average of the per-batch percentages."
             }
           />
           <DrilldownStat
-            label={`Best month${selectedSuffix}`}
-            value={t1(fold.bestMonth?.kg ?? null)}
-            unit={fold.bestMonth ? "t" : undefined}
-            sub={fold.bestMonth?.fullLabel}
-            title="The biggest month for this grade among the ones shown. A magnitude, not a verdict."
+            label={`Best batch${selectedSuffix}`}
+            value={t1(fold.bestColumn?.kg ?? null)}
+            unit={fold.bestColumn ? "T" : undefined}
+            unitSide="left"
+            sub={fold.bestColumn?.fullLabel}
+            title="The biggest batch for this grade among the ones shown. A magnitude, not a verdict."
           />
           <DrilldownStat
             label={`Bags${selectedSuffix}`}
             value={
               fold.sacks == null ? "—" : fold.sacks.toLocaleString("en-US")
             }
+            unit={fold.sacks == null ? undefined : "bags"}
+            unitSide="left"
             sub={fold.sacks == null ? "not recorded" : "counted"}
             tone={fold.sacks == null ? "muted" : "default"}
-            title="Bags counted against this grade in the months shown. It is NULL and never 0 where bags were not being counted — the plant only began recording them in May 2026, and a zero would claim none were filled."
+            title="Bags counted against this grade in the batches shown. It is NULL and never 0 where bags were not being counted — the plant only began recording them in May 2026, and a zero would claim none were filled."
           />
         </div>
 
@@ -324,13 +328,13 @@ export function GradeExpand({
           <DrilldownSection
             title={
               isFiltered
-                ? `${row.grade} — the months you chose`
-                : `${row.grade} through ${data.year}`
+                ? `${row.grade} — the batches you chose`
+                : `${row.grade}, batch by batch`
             }
             subtitle={
-              `tonnes made · share of the month` +
+              `tonnes made · share of the batch` +
               (isFiltered
-                ? ` · ${shownMonthCount}/${monthOptions.length} months`
+                ? ` · ${shownColCount}/${colOptions.length} batches`
                 : "")
             }
             action={
@@ -342,22 +346,23 @@ export function GradeExpand({
                 <ChartToggle
                   on={showAvg}
                   onChange={setShowAvg}
-                  label="3-month avg"
+                  label="3-batch avg"
                   color="var(--chart-3)"
                   title={
                     showAvg
-                      ? "Hide the 3-month avg line. It is a trailing mean over the last three months and it breaks at a gap rather than drawing across one."
-                      : "Draw the 3-month avg line — a trailing mean over the last three months, which breaks at a gap rather than drawing across one."
+                      ? "Hide the 3-batch avg line. It is a trailing mean over the last three batches and it breaks at a gap rather than drawing across one."
+                      : "Draw the 3-batch avg line — a trailing mean over the last three batches, which breaks at a gap rather than drawing across one."
                   }
                 />
                 <PeriodFilter
-                  label="Months"
-                  noun="month"
+                  label="Batches"
+                  noun="batch"
+                  nounPlural="batches"
                   align="end"
-                  options={monthOptions}
-                  hidden={hiddenMonths}
-                  onChange={setHiddenMonths}
-                  title="Choose which months this card covers. It opens on the months this grade was actually run; the rest are listed and one click brings them back. Hiding a month removes its bar AND its share of the figures above — the share's denominator narrows with it, so a filtered share is a share of the months shown."
+                  options={colOptions}
+                  hidden={hiddenCols}
+                  onChange={setHiddenCols}
+                  title="Choose which production batches this card covers. It opens on the batches this grade was actually run in; the rest are listed and one click brings them back. Hiding a batch removes its bar AND its share of the figures above — the share's denominator narrows with it, so a filtered share is a share of the batches shown."
                 />
               </span>
             }
@@ -415,9 +420,9 @@ export function GradeExpand({
                         if (value == null) return ["—", String(name)];
                         const v = Number(value);
                         if (name === "share")
-                          return [`${pct1(v)}%`, "Share of the month"];
+                          return [`${pct1(v)}%`, "Share of the batch"];
                         if (name === "avg")
-                          return [`${v.toFixed(1)} t`, "3-month avg"];
+                          return [`${v.toFixed(1)} t`, "3-batch avg"];
                         return [`${v.toFixed(1)} t`, `${row.grade} made`];
                       }}
                       labelFormatter={(label, payload) =>
@@ -431,9 +436,9 @@ export function GradeExpand({
                       }}
                       formatter={(v) =>
                         v === "share"
-                          ? "Share of the month (%, right)"
+                          ? "Share of the batch (%, right)"
                           : v === "avg"
-                            ? "3-month avg (t)"
+                            ? "3-batch avg (t)"
                             : `${row.grade} (t, left)`
                       }
                     />
@@ -480,28 +485,28 @@ export function GradeExpand({
             ) : (
               <p className="px-3 py-10 text-center text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] text-muted-foreground">
                 {isFiltered
-                  ? "Every month is switched off. Open the Months filter and turn one back on — nothing has been discarded."
-                  : `${row.grade} was not run in ${data.year}.`}
+                  ? "Every batch is switched off. Open the Batches filter and turn one back on — nothing has been discarded."
+                  : `${row.grade} was not run in any of these batches.`}
               </p>
             )}
             {isFiltered && drewSomething && (
               <p className="px-1 pb-1 pt-1.5 text-[length:var(--bw-fs-12)] leading-relaxed text-muted-foreground">
                 Showing{" "}
                 <span className="font-medium text-foreground">
-                  {selectedMonthsNote}
+                  {selectedColsNote}
                 </span>
-                . This card opens on the months this grade was actually run; the
-                rest are one click away in{" "}
-                <span className="font-medium text-foreground">Months</span>. The
-                figures above are re-folded over what is left, and the
-                share&rsquo;s denominator is the produced kilos of those months
+                . This card opens on the batches this grade was actually run in;
+                the rest are one click away in{" "}
+                <span className="font-medium text-foreground">Batches</span>.
+                The figures above are re-folded over what is left, and the
+                share&rsquo;s denominator is the produced kilos of those batches
                 — never a sum of the grade rows.
                 {showAvg && (
                   <>
                     {" "}
                     The trailing average is recomputed over what is left and{" "}
                     <strong className="font-semibold">breaks at the gap</strong>{" "}
-                    rather than drawing across a month you put away.
+                    rather than drawing across a batch you put away.
                   </>
                 )}
               </p>
@@ -509,7 +514,7 @@ export function GradeExpand({
           </DrilldownSection>
 
           <DrilldownSection
-            title="Month by month"
+            title="Batch by batch"
             subtitle="share of everything made"
             bodyClassName="p-0"
           >
