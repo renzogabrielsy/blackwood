@@ -141,6 +141,12 @@ export default async function AnalyticsPage({
         // filtered view renders correctly on the FIRST paint. Absent means
         // every column, which is the default and the clean address.
         initialHidden={parseHidden(first(params.hide))}
+        // OWNER FEEDBACK R5 — the switched-off production campaigns, spelled
+        // exactly like `hide` and resolved by the same codec. It is in the URL
+        // for the same reason `hide` is: it decides what is on screen — the
+        // campaign panel's columns AND the months the production band covers —
+        // so a link carrying it shows the recipient the same figures.
+        initialHiddenCampaigns={parseHidden(first(params.bhide))}
         initialShowDictionary={resolveDictionary(params.dict)}
       />
     </div>

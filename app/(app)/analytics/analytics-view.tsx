@@ -65,7 +65,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as React from "react";
-import { Layers, TrendingUp } from "lucide-react";
+import { Layers } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -80,13 +80,9 @@ import {
   COMPARISON_MODES,
   type ComparisonMode,
   type Granularity,
+  type MatrixRow,
 } from "@/lib/analytics/matrix";
-import {
-  METRIC_BY_KEY,
-  SECTION_ACCENT,
-  type MetricKey,
-  type MetricSection,
-} from "@/lib/analytics/metrics";
+import type { MetricKey, MetricSection } from "@/lib/analytics/metrics";
 import type { AnalyticsData, AnalyticsMonth } from "@/lib/analytics/types";
 import { AnalyticsMatrix } from "./analytics-matrix";
 import { AnalyticsNav } from "./analytics-nav";
@@ -95,7 +91,9 @@ import { BatchCostPanel } from "./batch-cost-panel";
 import { SupplierRoom } from "./supplier-room";
 import { ProductionRoom } from "./production-room";
 import { PeriodFilter, type PeriodFilterOption } from "./period-filter";
+import { GroupPrintPage, GroupPrintStage } from "./group-print";
 import { NO_HIDDEN, serializeHidden } from "@/lib/analytics/period-selection";
+import { selectedCampaignMonths } from "@/lib/analytics/campaign";
 
 /**
  * The bands the TOP matrix renders. The production band is deliberately not
@@ -123,6 +121,7 @@ function syncUrl(next: {
   comparison: ComparisonMode;
   metric: MetricKey | null;
   hidden: ReadonlySet<string>;
+  hiddenCampaigns: ReadonlySet<string>;
   showDictionary: boolean;
 }) {
   if (typeof window === "undefined") return;
@@ -141,6 +140,14 @@ function syncUrl(next: {
   const hide = serializeHidden(next.hidden);
   if (hide) url.searchParams.set("hide", hide);
   else url.searchParams.delete("hide");
+  // R5 — the campaign checklist. IN the URL, spelled the same way, because it
+  // describes the page's own window exactly as `hide` does: it decides which
+  // campaign columns are shown AND which months the production band covers, so
+  // a link carrying it shows the recipient the same figures. (The row ORDER,
+  // added in the same round, deliberately is not — see `use-row-order.ts`.)
+  const bhide = serializeHidden(next.hiddenCampaigns);
+  if (bhide) url.searchParams.set("bhide", bhide);
+  else url.searchParams.delete("bhide");
   // Only the NON-default state is spelled, same as `wd` and `cmp` — see
   // `resolveDictionary` in `page.tsx`.
   if (!next.showDictionary) url.searchParams.set("dict", "off");
@@ -163,6 +170,8 @@ export interface AnalyticsViewProps {
   initialMetric: MetricKey | null;
   /** The switched-off period keys from `?hide=`. Empty = every column. */
   initialHidden: ReadonlySet<string>;
+  /** R5 — the switched-off campaign keys from `?bhide=`. Empty = every batch. */
+  initialHiddenCampaigns: ReadonlySet<string>;
   /** R3 — whether an expand card prints its two dictionary blocks. */
   initialShowDictionary: boolean;
 }
@@ -175,6 +184,7 @@ export function AnalyticsView({
   initialComparison,
   initialMetric,
   initialHidden,
+  initialHiddenCampaigns,
   initialShowDictionary,
 }: AnalyticsViewProps) {
   const [year, setYear] = React.useState(initialYear);
@@ -196,6 +206,22 @@ export function AnalyticsView({
   const [hidden, setHidden] =
     React.useState<ReadonlySet<string>>(initialHidden ?? NO_HIDDEN);
   /**
+   * OWNER FEEDBACK R5 — the switched-OFF production campaigns.
+   *
+   * Renzo: *"this group sorely lacks what RC Inventory has in terms of data
+   * filtering."* Same shape as every other checklist on the page (the state is
+   * what is HIDDEN, so "all checked" is a property rather than a default), and
+   * keyed by `campaignLabel`.
+   *
+   * It lives HERE rather than inside the campaign panel because it does two
+   * jobs: it chooses the panel's columns AND — R5 item 8 — it chooses which
+   * MONTHS the production band and the grade mix cover. A filter with two
+   * consumers cannot be owned by one of them.
+   */
+  const [hiddenCampaigns, setHiddenCampaigns] = React.useState<
+    ReadonlySet<string>
+  >(initialHiddenCampaigns ?? NO_HIDDEN);
+  /**
    * OWNER FEEDBACK R3 — one switch for every expand card's dictionary blocks.
    *
    * Renzo asked for "a master toggle instead" of a per-card one, and the shape
@@ -216,6 +242,7 @@ export function AnalyticsView({
       comparison,
       metric,
       hidden,
+      hiddenCampaigns,
       showDictionary,
     });
   }, [
@@ -225,6 +252,7 @@ export function AnalyticsView({
     comparison,
     metric,
     hidden,
+    hiddenCampaigns,
     showDictionary,
   ]);
 
@@ -238,6 +266,77 @@ export function AnalyticsView({
         hiddenPeriods: hidden,
       }),
     [data.months, data.canViewPrices, granularity, year, perWorkingDay, hidden],
+  );
+
+  /**
+   * ── R5 ITEM 8 — THE BATCH FILTER DRIVES THE PRODUCTION BAND ─────────────
+   *
+   * The months the SELECTED campaigns ran in, or `null` when nothing is
+   * switched off. `null` is not "every month": it means there is no filter at
+   * all, which is what lets the production band reuse the page's own fold
+   * rather than building an identical second one under a different name.
+   */
+  const campaignMonths = React.useMemo(
+    () => selectedCampaignMonths(data.campaigns, hiddenCampaigns),
+    [data.campaigns, hiddenCampaigns],
+  );
+
+  /**
+   * The production band's own period selection: the page's hidden columns,
+   * PLUS every period that does not overlap a selected campaign.
+   *
+   * **A MONTH IS ATOMIC HERE, and the page says so out loud** (the note in
+   * `production-room.tsx`). Downtime and electricity are metered by calendar
+   * month while a campaign straddles month boundaries — AUGUST closed and
+   * SEPTEMBER opened on 2026-08-29 — so a month that overlaps a SELECTED and
+   * an UNSELECTED campaign is shown WHOLE. Splitting it would mean inventing a
+   * per-campaign share of a meter reading that was never taken per campaign,
+   * which is the one thing this page does not do.
+   */
+  const productionHidden = React.useMemo(() => {
+    if (!campaignMonths) return hidden;
+    const next = new Set(hidden);
+    for (const p of matrix.windowPeriods) {
+      const overlaps = p.months.some((m) =>
+        campaignMonths.has(m.monthStart.slice(0, 7)),
+      );
+      if (!overlaps) next.add(p.key);
+    }
+    return next;
+  }, [campaignMonths, hidden, matrix.windowPeriods]);
+
+  /**
+   * The production band's fold. Identical options to the matrix above it —
+   * same months, same rollups, same ₱ gate — differing ONLY in which periods
+   * are switched off, so a production cell prints the same number it would
+   * have printed unfiltered and the summary column honestly re-folds over the
+   * selection and renames itself `Selected`, exactly as the column checklist
+   * already makes it do.
+   *
+   * When no campaign is switched off this IS the page's own matrix object, not
+   * a copy of it.
+   */
+  const productionMatrix = React.useMemo(
+    () =>
+      productionHidden === hidden
+        ? matrix
+        : buildMatrix(data.months, {
+            granularity,
+            year,
+            canViewPrices: data.canViewPrices,
+            perWorkingDay,
+            hiddenPeriods: productionHidden,
+          }),
+    [
+      productionHidden,
+      hidden,
+      matrix,
+      data.months,
+      data.canViewPrices,
+      granularity,
+      year,
+      perWorkingDay,
+    ],
   );
 
   /**
@@ -306,6 +405,43 @@ export function AnalyticsView({
     : granularity === "Y"
       ? "All years"
       : String(year);
+
+  /**
+   * ── R5 ITEM 3 — PRINT A WHOLE METRIC GROUP ─────────────────────────────
+   *
+   * The band hands up its rows IN THE READER'S OWN ORDER (it is the only thing
+   * that knows that order), and the stage below renders each one as the SAME
+   * card the per-row Print button already produces. The per-row button is
+   * untouched: a group print is that mechanism given more than one card, not a
+   * second kind of report.
+   *
+   * `null` while nothing is printing, so the ten recharts instances a report
+   * costs are only ever paid when a button has actually been pressed.
+   */
+  const [printKeys, setPrintKeys] = React.useState<readonly MetricKey[] | null>(
+    null,
+  );
+  const [printBand, setPrintBand] = React.useState<MetricSection | null>(null);
+
+  const startBandPrint = React.useCallback(
+    (section: MetricSection, keys: readonly MetricKey[]) => {
+      setPrintBand(section);
+      setPrintKeys(keys);
+    },
+    [],
+  );
+  const endBandPrint = React.useCallback(() => {
+    setPrintBand(null);
+    setPrintKeys(null);
+  }, []);
+
+  const printRows = React.useMemo(() => {
+    if (!printKeys) return [];
+    const byKey = new Map(matrix.rows.map((r) => [r.metric.key, r] as const));
+    return printKeys
+      .map((k) => byKey.get(k))
+      .filter((r): r is MatrixRow => r != null);
+  }, [printKeys, matrix.rows]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -506,31 +642,19 @@ export function AnalyticsView({
         </span>
       </div>
 
-      {/* ── Callouts ─────────────────────────────────────────────────────
-          The dot carries the SECTION the sentence came from — identity, not a
-          verdict. Nothing here turns amber because a number is high. */}
-      {matrix.callouts.length > 0 && (
-        <ul className="stagger-fast grid grid-cols-1 gap-1.5 lg:grid-cols-2">
-          {matrix.callouts.map((c) => {
-            const section = METRIC_BY_KEY.get(c.metricKey)?.section ?? "flow";
-            const accent = SECTION_ACCENT[section];
-            return (
-              <li
-                key={c.key}
-                className="bw-accent-rule flex items-start gap-2 rounded-md border bg-card/60 py-1.5 pl-3 pr-2.5"
-                style={{ "--bw-accent": accent } as React.CSSProperties}
-              >
-                <TrendingUp
-                  className="mt-0.5 size-3.5 shrink-0"
-                  style={{ color: accent }}
-                  aria-hidden
-                />
-                <p className="text-[length:var(--bw-fs-12)] leading-relaxed text-foreground">{c.text}</p>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+      {/* ── THE CALLOUT STRIP IS GONE (owner feedback R5) ────────────────
+          Renzo's screenshots marked it for removal: it sat between the
+          controls and the grid, restating in prose what the deltas underneath
+          every value already say, and pushed the matrix a strip's height down
+          the screen on every load.
+
+          **Only the UI went.** `buildMatrix` still returns `callouts` and
+          `MatrixCell.calloutable` / `deltaQuotable` / `yoyQuotable` are all
+          untouched — that gate is not decoration, it is what stops an
+          estimate, a first period, an unfinished period or an annotated
+          figure being quoted, and the row expand's Highest / Lowest stats read
+          the SAME `comparable` predicate. Deleting the fold to tidy a strip
+          would have taken the honesty rules with it. */}
 
       {/* ── The matrix, with the expand INSIDE it ─────────────────────────
           The panel is rendered as a full-width row directly beneath the row
@@ -543,6 +667,8 @@ export function AnalyticsView({
         perWorkingDay={perWorkingDay}
         comparison={comparison}
         sections={TOP_BANDS}
+        onPrintSection={startBandPrint}
+        printingSection={printBand}
         expand={
           expandedRow ? (
             <MetricExpand
@@ -575,16 +701,63 @@ export function AnalyticsView({
           2026-08-29), so folding it in would mean a column that is neither a
           month nor a quarter sitting beside columns that are. */}
       <div id="section-campaigns" className="scroll-mt-24">
-        <BatchCostPanel campaigns={data.campaigns} canViewPrices={data.canViewPrices} />
+        <BatchCostPanel
+          campaigns={data.campaigns}
+          canViewPrices={data.canViewPrices}
+          // R5 — the panel's own checklist. The STATE lives here because it
+          // has two consumers: this panel's columns and the production band's
+          // months.
+          hidden={hiddenCampaigns}
+          onHiddenChange={setHiddenCampaigns}
+        />
       </div>
 
+      {/* ── The PRODUCTION axis ────────────────────────────────────────
+          Where the yard's kilos stop being charcoal and start being
+          product. Its rows are the SAME `buildMatrix` machinery as the table
+          at the top — same months, same rollups, same expand.
+
+          ── R5 ITEM 7: IT MOVED ABOVE THE SUPPLIER ROOM ────────────────
+          Not for taste. R5 item 8 makes the campaign checklist DRIVE this
+          band's months, and a control and the thing it controls cannot have
+          an unrelated section between them — a reader who unticks four
+          batches has to be able to see what that did without scrolling past
+          the whole supplier room to find out. The two blocks are now
+          adjacent and read as one thought: the batch basis, then the
+          calendar months those batches ran in.
+
+          The page's descending axis is otherwise intact — PERIOD → CAMPAIGN
+          → PRODUCTION → SUPPLIER — and suppliers reads last on its own
+          merits: it is the only block that answers "who", it is the widest
+          (a matrix, a premium table and a chart), and nothing else on the
+          page depends on it. No ₱ exists anywhere in production, so it is
+          live for every role including Production. */}
+      <ProductionRoom
+        matrix={productionMatrix}
+        months={data.months}
+        grades={data.productionGrades}
+        year={year}
+        granularity={granularity}
+        selected={metric}
+        onSelect={setMetric}
+        perWorkingDay={perWorkingDay}
+        comparison={comparison}
+        printScope={printScope}
+        asOfDate={data.asOfDate}
+        showDictionary={showDictionary}
+        // R5 — the months the selected batches ran in, or null for no filter.
+        campaignMonths={campaignMonths}
+        campaignSelection={{
+          selected: data.campaigns.length - hiddenCampaigns.size,
+          total: data.campaigns.length,
+        }}
+      />
+
       {/* ── The SUPPLIER axis ──────────────────────────────────────────
-          Third of the four cuts this page makes through the same yard:
-          period → campaign → supplier → production. It follows the year
-          picker above (a supplier year is a calendar year, always) but not
-          the Y/Q/M toggle: a quarter column of suppliers would be a
-          different question, and the room's own axis is already twelve
-          months wide. */}
+          Who we bought from. It follows the year picker above (a supplier
+          year is a calendar year, always) but not the Y/Q/M toggle: a
+          quarter column of suppliers would be a different question, and the
+          room's own axis is already twelve months wide. */}
       <div id="section-suppliers" className="scroll-mt-24">
         <SupplierRoom
           suppliers={data.suppliers}
@@ -601,27 +774,38 @@ export function AnalyticsView({
         />
       </div>
 
-      {/* ── The PRODUCTION axis ────────────────────────────────────────
-          Where the yard's kilos stop being charcoal and start being
-          product. Its six rows are the SAME `buildMatrix` fold as the table
-          at the top — same rollups, same expand, same callout strip — the
-          band is simply rendered here, after the two blocks that are
-          about buying and holding. No ₱ exists anywhere in it, so it is
-          live for every role including Production. */}
-      <ProductionRoom
-        matrix={matrix}
-        months={data.months}
-        grades={data.productionGrades}
-        year={year}
-        granularity={granularity}
-        selected={metric}
-        onSelect={setMetric}
-        perWorkingDay={perWorkingDay}
-        comparison={comparison}
-        printScope={printScope}
-        asOfDate={data.asOfDate}
-        showDictionary={showDictionary}
-      />
+      {/* ── R5 — the RC Inventory band's group report, while it is printing.
+          Off-screen but genuinely laid out, because recharts measures a real
+          box and a `display: none` one has none. See `group-print.tsx`. */}
+      {printKeys && printBand === "flow" && printRows.length > 0 && (
+        <GroupPrintStage
+          title="RC Inventory"
+          subtitle={`${printScope} · ${noun.one} columns${
+            data.asOfDate ? ` · records through ${data.asOfDate}` : ""
+          }`}
+          countLabel={`${printRows.length} metric${printRows.length === 1 ? "" : "s"}`}
+          onDone={endBandPrint}
+        >
+          {printRows.map((r) => (
+            <GroupPrintPage key={r.metric.key}>
+              <MetricExpand
+                row={r}
+                granularity={granularity}
+                allPeriods={matrix.allPeriods}
+                foldOptions={matrix.foldOptions}
+                totalLabel={matrix.totalLabel}
+                totalFullLabel={matrix.totalFullLabel}
+                anchorMonth={anchorMonth}
+                perWorkingDay={perWorkingDay}
+                scopeLabel={printScope}
+                asOfDate={data.asOfDate}
+                showDictionary={showDictionary}
+                onClose={endBandPrint}
+              />
+            </GroupPrintPage>
+          ))}
+        </GroupPrintStage>
+      )}
 
       {/* ── Footer: the restatement policy, printed once, on the page ─────
           The analyst audit's gap #4. Every figure here is rebuilt from the
@@ -679,6 +863,23 @@ export function AnalyticsView({
               </span>
             </>
           )}
+        </p>
+        {/* ── What R5 added, said once, on the page ────────────────────── */}
+        <p>
+          The <span className="font-medium text-foreground">Batches</span>{" "}
+          filter on the campaign panel also chooses which{" "}
+          <span className="font-medium text-foreground">months</span> the
+          production band and the grade mix cover — production is metered by
+          calendar month while a batch straddles months, so a month that
+          overlaps both a selected and an unselected batch is shown whole. Rows
+          can be dragged into your own order within their own group (or moved
+          with <span className="font-mono">↑</span> /{" "}
+          <span className="font-mono">↓</span> from the grip); that order is
+          remembered in this browser only, never travels in a link, and changes
+          no figure. Each group&rsquo;s{" "}
+          <span className="font-medium text-foreground">Print</span> button
+          produces one landscape report — every row in that group as its own
+          page, in the order you put them in.
         </p>
       </footer>
     </div>

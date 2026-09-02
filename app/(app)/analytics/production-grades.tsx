@@ -25,9 +25,14 @@
 // the footer says so out loud instead of quietly showing one of them.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import * as React from "react";
+import { ChevronRight, Printer } from "lucide-react";
+import { cn } from "@/lib/utils";
 import type { GradeCell, GradeRow, GradeYear } from "@/lib/analytics/production";
 import { PRODUCTION_DICTIONARY } from "@/lib/analytics/production";
 import { DictionaryPopover } from "./metric-info";
+import { GradeExpand } from "./grade-expand";
+import { GroupPrintPage, GroupPrintStage } from "./group-print";
 
 // Explicit pixel widths — the sum below IS the table's minWidth.
 // R3: CSS variables, so the widths move with the big-screen type scale.
@@ -101,20 +106,50 @@ function ValueCell({ grade, cell }: { grade: string; cell: GradeCell | null }) {
 function GradeRowView({
   row,
   months,
+  selected,
+  onSelect,
 }: {
   row: GradeRow;
   months: GradeYear["months"];
+  selected: boolean;
+  onSelect(grade: string | null): void;
 }) {
   return (
-    <tr className="group h-[var(--an-h-48)] border-b transition-all duration-150 hover:bg-muted/30">
+    <tr
+      className={cn(
+        // R5 — the divider, carried by the opaque frozen cell too.
+        "group bw-row-rule h-[var(--an-h-48)] transition-all duration-150",
+        selected ? "bg-muted/50" : "hover:bg-muted/30",
+      )}
+    >
       <th
         scope="row"
         // SOLID token only — this cell sits ON TOP of scrolling cells.
-        className="frozen-col frozen-edge border-b bg-card px-2 py-1 text-left align-middle font-normal group-hover:bg-muted"
+        className={cn(
+          "frozen-col frozen-edge px-2 py-1 text-left align-middle font-normal",
+          selected ? "bg-accent" : "bg-card group-hover:bg-muted",
+        )}
         style={{ left: 0 }}
-        title={`${row.grade} · #${row.rank} by tonnage · ${kgExact(row.kg)} across ${row.activeMonths} month${row.activeMonths === 1 ? "" : "s"} and ${row.runCount} production entr${row.runCount === 1 ? "y" : "ies"}`}
       >
-        <span className="flex min-w-0 items-center gap-1.5">
+        {/* R5 — grade rows open like everything else on the page. There is
+            deliberately NO drag handle here: a grade row prints its own RANK
+            (#1 by tonnage), so a hand-sorted order would contradict the number
+            in the row beside it. Reordering is for METRIC rows, whose order is
+            arbitrary; a ranked list already has one. */}
+        <button
+          type="button"
+          onClick={() => onSelect(selected ? null : row.grade)}
+          aria-expanded={selected}
+          title={`${row.grade} · #${row.rank} by tonnage · ${kgExact(row.kg)} across ${row.activeMonths} month${row.activeMonths === 1 ? "" : "s"} and ${row.runCount} production entr${row.runCount === 1 ? "y" : "ies"}`}
+          className="flex w-full min-w-0 cursor-pointer items-center gap-1.5 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <ChevronRight
+            aria-hidden
+            className={cn(
+              "size-3 shrink-0 text-muted-foreground transition-transform duration-150",
+              selected && "rotate-90 text-foreground",
+            )}
+          />
           <span className="w-[16px] shrink-0 text-right font-mono text-[length:var(--bw-fs-105)] text-muted-foreground tabular-nums">
             {row.rank}
           </span>
@@ -127,7 +162,7 @@ function GradeRowView({
               {row.runCount} entr{row.runCount === 1 ? "y" : "ies"}
             </span>
           </span>
-        </span>
+        </button>
       </th>
 
       {months.map((m, i) => (
@@ -155,25 +190,101 @@ export interface ProductionGradesProps {
   data: GradeYear;
   /** The read came back at the row cap — the panel says so rather than assuming. */
   truncated: boolean;
+  /** R3's master switch, threaded down so this room's expands obey it too. */
+  showDictionary: boolean;
+  scopeLabel: string;
+  asOfDate: string | null;
 }
 
-export function ProductionGrades({ data, truncated }: ProductionGradesProps) {
+export function ProductionGrades({
+  data,
+  truncated,
+  showDictionary,
+  scopeLabel,
+  asOfDate,
+}: ProductionGradesProps) {
+  const [selected, setSelected] = React.useState<string | null>(null);
+  const [printing, setPrinting] = React.useState(false);
+
+  /**
+   * The VISIBLE width of the scroller, for the in-place expand — measured,
+   * never assumed, and clamped to the table's own width so a table narrower
+   * than the viewport cannot be pushed into horizontal overflow by its own
+   * expand. The same mechanism the two matrices use; see the KPI matrix's
+   * header comment for why a non-positive measurement means "not measured
+   * yet" rather than "zero wide".
+   */
+  const scrollerRef = React.useRef<HTMLDivElement | null>(null);
+  const [frameWidth, setFrameWidth] = React.useState<number | null>(null);
+
+  React.useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const measure = () => {
+      const w = el.clientWidth;
+      if (w > 0) setFrameWidth(w);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // A grade selected in one year need not exist in the next, and a batch
+  // filter can take one off the table mid-session.
+  React.useEffect(() => {
+    if (selected && !data.rows.some((r) => r.grade === selected)) {
+      setSelected(null);
+    }
+  }, [selected, data.rows]);
+
+  const endPrint = React.useCallback(() => setPrinting(false), []);
+
   if (data.months.length === 0) {
     return (
       <div className="rounded-lg border bg-card px-4 py-8 text-center text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] text-muted-foreground">
-        Production was not reported in {data.year}.
+        {data.filtered
+          ? `No month the selected batches ran in reported production in ${data.year}.`
+          : `Production was not reported in ${data.year}.`}
       </div>
     );
   }
 
   const minWidth = `calc(${W_GRADE} + ${data.months.length} * ${W_MONTH} + ${W_TOTAL})`;
+  const panelWidth =
+    frameWidth == null ? undefined : `min(${frameWidth}px, ${minWidth})`;
+  const colCount = data.months.length + 2;
   // The tie, CHECKED. Equal by proof today; printed the moment it is not.
   const tieGap = data.totalGradeKg - data.totalKg;
   const tieBroken = Math.abs(tieGap) > TIE_TOLERANCE_KG;
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="overflow-x-auto rounded-lg border bg-card">
+      {/* ── R5 — the grade group's own header and Print action ────────── */}
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <p className="text-[length:var(--bw-fs-115)] text-muted-foreground">
+          <span className="font-medium text-foreground">Grade mix</span> ·{" "}
+          {data.gradeCount} grade{data.gradeCount === 1 ? "" : "s"} across{" "}
+          {data.months.length} month{data.months.length === 1 ? "" : "s"}
+          {data.filtered ? " the selected batches ran in" : ` of ${data.year}`}.
+          Open a grade for its chart.
+        </p>
+        {data.rows.length > 0 && (
+          <button
+            type="button"
+            disabled={printing}
+            onClick={() => setPrinting(true)}
+            data-print-hide
+            title={`Print all ${data.rows.length} grades as one landscape report — each grade's chart, figures and definitions on its own page, in the order shown here.`}
+            className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border/60 bg-background px-2 py-0.5 text-[length:var(--bw-fs-11)] text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait disabled:opacity-60"
+          >
+            <Printer className="size-3" aria-hidden />
+            {printing ? "Preparing…" : `Print ${data.rows.length}`}
+          </button>
+        )}
+      </div>
+
+      <div ref={scrollerRef} className="overflow-x-auto rounded-lg border bg-card">
         <table
           className="table-fixed text-[length:var(--bw-fs-14)] leading-[var(--bw-lh-sm)]"
           style={{
@@ -239,7 +350,39 @@ export function ProductionGrades({ data, truncated }: ProductionGradesProps) {
 
           <tbody>
             {data.rows.map((row) => (
-              <GradeRowView key={row.grade} row={row} months={data.months} />
+              <React.Fragment key={row.grade}>
+                <GradeRowView
+                  row={row}
+                  months={data.months}
+                  selected={selected === row.grade}
+                  onSelect={setSelected}
+                />
+                {/* The expand, IN PLACE — pinned to the visible frame so it
+                    does not drift sideways when the months are scrolled. */}
+                {selected === row.grade && (
+                  <tr className="border-b">
+                    <td colSpan={colCount} className="p-0 align-top">
+                      <div
+                        className="sticky left-0 p-2"
+                        style={{ width: panelWidth ?? "100%" }}
+                      >
+                        <GradeExpand
+                          // Keyed by grade AND year — a fresh, smart-defaulted
+                          // month filter per card, the same discipline every
+                          // other expand on this page keeps.
+                          key={`${row.grade}:${data.year}`}
+                          row={row}
+                          data={data}
+                          showDictionary={showDictionary}
+                          scopeLabel={scopeLabel}
+                          asOfDate={asOfDate}
+                          onClose={() => setSelected(null)}
+                        />
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </React.Fragment>
             ))}
 
             {/* ── Σ made — the matrix's OWN figure, not a sum of the column ── */}
@@ -298,9 +441,37 @@ export function ProductionGrades({ data, truncated }: ProductionGradesProps) {
         ) : (
           " The grades add to the published total exactly."
         )}
+        {data.filtered &&
+          " These columns are the months the batches you selected above ran in; the year figures are folded over those months, not the whole year."}
         {truncated &&
           " This read came back at the database row limit, so the grade set may be short of the full one."}
       </p>
+
+      {/* R5 — the group report, while it is printing. Off-screen but genuinely
+          laid out, because recharts measures a real box. See `group-print.tsx`. */}
+      {printing && (
+        <GroupPrintStage
+          title="Grade mix"
+          subtitle={`${data.year} · ${data.months.length} month${data.months.length === 1 ? "" : "s"}${
+            data.filtered ? " (the selected batches' months)" : ""
+          } · ${scopeLabel}${asOfDate ? ` · records through ${asOfDate}` : ""}`}
+          countLabel={`${data.rows.length} grade${data.rows.length === 1 ? "" : "s"}`}
+          onDone={endPrint}
+        >
+          {data.rows.map((row) => (
+            <GroupPrintPage key={row.grade}>
+              <GradeExpand
+                row={row}
+                data={data}
+                showDictionary={showDictionary}
+                scopeLabel={scopeLabel}
+                asOfDate={asOfDate}
+                onClose={endPrint}
+              />
+            </GroupPrintPage>
+          ))}
+        </GroupPrintStage>
+      )}
     </div>
   );
 }

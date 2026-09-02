@@ -44,11 +44,17 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as React from "react";
-import { Lock, TrendingUp } from "lucide-react";
+import { Lock, Printer, RotateCcw, TrendingUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { estimateTitle } from "@/lib/analytics/format";
 import { SECTION_ACCENT } from "@/lib/analytics/metrics";
+import { campaignKey, campaignMonthKeys } from "@/lib/analytics/campaign";
+import { applyOrder } from "@/lib/analytics/row-order";
 import type { CampaignCost } from "@/lib/analytics/types";
+import { PeriodFilter, type PeriodFilterOption } from "./period-filter";
+import { RowHandle, rowDropProps } from "./row-handle";
+import { useRowOrder } from "./use-row-order";
+import { printCard } from "./print-card";
 
 // Explicit pixel widths — the sum below IS the table's minWidth.
 // R3: CSS variables, so the widths move with the big-screen type scale.
@@ -346,19 +352,92 @@ function CampaignCell({
 }
 
 export interface BatchCostPanelProps {
+  /** EVERY campaign, in chronological order — the checklist lists them all. */
   campaigns: readonly CampaignCost[];
   canViewPrices: boolean;
+  /**
+   * R5 — the switched-OFF campaign keys. Owned by the page shell, because the
+   * same selection also decides which months the production band covers.
+   */
+  hidden: ReadonlySet<string>;
+  onHiddenChange(next: Set<string>): void;
 }
 
-export function BatchCostPanel({ campaigns, canViewPrices }: BatchCostPanelProps) {
+export function BatchCostPanel({
+  campaigns,
+  canViewPrices,
+  hidden,
+  onHiddenChange,
+}: BatchCostPanelProps) {
   const scrollerRef = React.useRef<HTMLDivElement | null>(null);
+  const sectionRef = React.useRef<HTMLElement | null>(null);
+  const [dragging, setDragging] = React.useState<string | null>(null);
+
+  /**
+   * ── R5 — THE BATCH CHECKLIST ──────────────────────────────────────────
+   * Renzo: *"this group sorely lacks what RC Inventory has in terms of data
+   * filtering."*
+   *
+   * The options are `campaigns` in PAYLOAD ORDER, and that is the whole
+   * sorting story: the adapter already orders campaigns chronologically by the
+   * month their NAME spells (`campaignSeq`, now in `lib/analytics/campaign.ts`
+   * so this file and the server share one definition). So the checklist reads
+   * JAN → DEC within each year, matching the columns beside it exactly, and
+   * nothing here re-derives an order that could disagree with them. An
+   * alphabetical list — APRIL, AUGUST, DECEMBER — would have been the obvious
+   * bug and is unrepresentable here.
+   */
+  const options = React.useMemo<PeriodFilterOption[]>(
+    () =>
+      campaigns.map((c) => {
+        const months = campaignMonthKeys(c);
+        return {
+          key: campaignKey(c),
+          label: c.campaignLabel,
+          meta: c.lastFedDate ? c.lastFedDate.slice(5) : "not fed",
+          empty: c.fedKg == null,
+          title:
+            `${c.campaignLabel} — ${
+              c.firstFedDate && c.lastFedDate
+                ? `fed ${c.firstFedDate} → ${c.lastFedDate}`
+                : "no feeding recorded yet"
+            }. Covers ${months.length} calendar month${months.length === 1 ? "" : "s"}` +
+            `${months.length ? ` (${months.join(", ")})` : ""} — unticking it also removes those months from the production band below, unless another selected batch runs in them.`,
+        };
+      }),
+    [campaigns],
+  );
+
+  const shownCampaigns = React.useMemo(
+    () =>
+      hidden.size === 0
+        ? campaigns
+        : campaigns.filter((c) => !hidden.has(campaignKey(c))),
+    [campaigns, hidden],
+  );
+
+  /** R5 — the reader's own row order for this group. */
+  const defaultKeys = React.useMemo(() => ROWS.map((r) => r.key), []);
+  const rowOrder = useRowOrder("campaign", defaultKeys);
+  const rows = React.useMemo(
+    () => applyOrder(ROWS, rowOrder.order, (r) => r.key),
+    [rowOrder.order],
+  );
+
+  const onDrop = React.useCallback(
+    (key: string, target: string) => {
+      rowOrder.drop(key, target);
+      setDragging(null);
+    },
+    [rowOrder],
+  );
 
   // Open on the CURRENT campaign. Thirty-two columns start in 2024, and the
   // one anyone came for is the last.
   React.useEffect(() => {
     const el = scrollerRef.current;
     if (el) el.scrollLeft = el.scrollWidth;
-  }, [campaigns.length]);
+  }, [shownCampaigns.length]);
 
   if (campaigns.length === 0) {
     return (
@@ -368,10 +447,10 @@ export function BatchCostPanel({ campaigns, canViewPrices }: BatchCostPanelProps
     );
   }
 
-  const minWidth = `calc(${W_LABEL} + ${campaigns.length} * ${W_CAMPAIGN})`;
+  const minWidth = `calc(${W_LABEL} + ${shownCampaigns.length} * ${W_CAMPAIGN})`;
 
   return (
-    <section className="flex flex-col gap-2">
+    <section ref={sectionRef} className="flex flex-col gap-2">
       <header
         className="bw-accent-rule flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 pl-2.5"
         style={{ "--bw-accent": SECTION_ACCENT.campaigns } as React.CSSProperties}
@@ -397,11 +476,66 @@ export function BatchCostPanel({ campaigns, canViewPrices }: BatchCostPanelProps
             and blocks closed and weight lost moved here.
           </p>
         </div>
-        <span className="shrink-0 text-[length:var(--bw-fs-115)] text-muted-foreground">
-          {campaigns.length} campaigns · scroll left for older
+        {/* ── R5 — the group's own controls ────────────────────────────── */}
+        <span
+          className="flex shrink-0 flex-wrap items-center justify-end gap-1.5"
+          data-print-hide
+        >
+          <span className="text-[length:var(--bw-fs-115)] text-muted-foreground">
+            {hidden.size > 0
+              ? `${shownCampaigns.length} of ${campaigns.length} batches`
+              : `${campaigns.length} campaigns · scroll left for older`}
+          </span>
+          <PeriodFilter
+            label="Batches"
+            noun="batch"
+            nounPlural="batches"
+            align="end"
+            options={options}
+            hidden={hidden}
+            onChange={onHiddenChange}
+            title="Choose which production batches this panel shows. Everything is on by default and the list is in the batches' own chronological order — January to December within each year, taken from the month each batch is NAMED for, never alphabetically. Unticking a batch ALSO narrows the production band below to the calendar months the remaining batches ran in."
+          />
+          {rowOrder.custom && (
+            <button
+              type="button"
+              onClick={rowOrder.reset}
+              title="Put these rows back in their original order. The order is remembered in this browser only and never changed a figure."
+              className="inline-flex h-[var(--an-h-8)] cursor-pointer items-center gap-1 rounded-md border border-border/60 bg-background px-2 text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] font-medium text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <RotateCcw className="size-3" aria-hidden />
+              Reset order
+            </button>
+          )}
+          {/* This panel has no per-column detail card, so its group print is
+              the TABLE itself — the same landscape sheet, carrying the thing
+              the panel actually is. `printCard` marks the section for the
+              duration and unmarks it afterwards (R5), so nothing on this page
+              wears `data-print-card` permanently except the two expands. */}
+          <button
+            type="button"
+            onClick={() => printCard(sectionRef.current)}
+            title="Print this panel as one landscape sheet — the batch columns as shown, in the row order you set."
+            className="inline-flex h-[var(--an-h-8)] cursor-pointer items-center gap-1 rounded-md border border-border/60 bg-background px-2 text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] font-medium text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Printer className="size-3" aria-hidden />
+            Print
+          </button>
         </span>
       </header>
 
+      {/* TWO different facts, never one sentence. "No campaigns recorded" is
+          about the data; "every batch is switched off" is a state the reader
+          created a second ago and can undo — the same split the matrix's own
+          empty state makes. */}
+      {shownCampaigns.length === 0 ? (
+        <div className="rounded-lg border bg-card px-4 py-8 text-center text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] text-muted-foreground">
+          Every batch is switched off. Open the Batches filter above and turn
+          one back on — all {campaigns.length} are still there. The production
+          band below follows this selection, so it is empty too until one comes
+          back.
+        </div>
+      ) : (
       <div ref={scrollerRef} className="overflow-x-auto rounded-lg border bg-card">
         <table
           className="table-fixed text-[length:var(--bw-fs-14)] leading-[var(--bw-lh-sm)]"
@@ -414,7 +548,7 @@ export function BatchCostPanel({ campaigns, canViewPrices }: BatchCostPanelProps
         >
           <colgroup>
             <col style={{ width: W_LABEL }} />
-            {campaigns.map((c) => (
+            {shownCampaigns.map((c) => (
               <col key={c.campaignLabel} style={{ width: W_CAMPAIGN }} />
             ))}
           </colgroup>
@@ -429,7 +563,7 @@ export function BatchCostPanel({ campaigns, canViewPrices }: BatchCostPanelProps
               >
                 Campaign
               </th>
-              {campaigns.map((c) => (
+              {shownCampaigns.map((c) => (
                 <th
                   key={c.campaignLabel}
                   scope="col"
@@ -452,21 +586,27 @@ export function BatchCostPanel({ campaigns, canViewPrices }: BatchCostPanelProps
           </thead>
 
           <tbody>
-            {ROWS.map((row) => {
+            {rows.map((row, i) => {
               const restricted = row.price && !canViewPrices;
+              const isDragging = dragging === row.key;
               return (
                 <tr
                   key={row.key}
+                  {...rowDropProps(row.key, dragging, onDrop)}
                   className={cn(
-                    "group h-[var(--an-h-10)] border-b transition-all duration-150 last:border-0",
+                    // R5 — the divider Renzo asked for, carried by the opaque
+                    // frozen label cell as solidly as by a scrolling one.
+                    "group bw-row-rule h-[var(--an-h-10)] transition-all duration-150",
                     row.star ? "bg-muted/30" : "hover:bg-muted/20",
+                    isDragging && "opacity-40",
+                    dragging && !isDragging && "hover:bg-accent/60",
                   )}
                 >
                   <th
                     scope="row"
                     title={row.title}
                     className={cn(
-                      "frozen-col frozen-edge border-b px-2 py-1 text-left align-middle font-normal",
+                      "frozen-col frozen-edge px-2 py-1 text-left align-middle font-normal",
                       // SOLID tokens only — this cell sits ON TOP of scrolling
                       // cells, so any alpha lets them bleed through it.
                       row.star ? "bg-accent" : "bg-card group-hover:bg-muted",
@@ -474,6 +614,16 @@ export function BatchCostPanel({ campaigns, canViewPrices }: BatchCostPanelProps
                     style={{ left: 0 }}
                   >
                     <span className="flex items-baseline gap-1">
+                      <RowHandle
+                        rowKey={row.key}
+                        label={row.label}
+                        position={i + 1}
+                        total={rows.length}
+                        onMove={rowOrder.move}
+                        onDragStart={setDragging}
+                        onDragEnd={() => setDragging(null)}
+                        className="self-center"
+                      />
                       {row.star && (
                         <TrendingUp
                           aria-hidden
@@ -495,7 +645,7 @@ export function BatchCostPanel({ campaigns, canViewPrices }: BatchCostPanelProps
                       </span>
                     </span>
                   </th>
-                  {campaigns.map((c) => (
+                  {shownCampaigns.map((c) => (
                     <CampaignCell
                       key={c.campaignLabel}
                       row={row}
@@ -518,7 +668,7 @@ export function BatchCostPanel({ campaigns, canViewPrices }: BatchCostPanelProps
               >
                 Blocks closed / priced
               </th>
-              {campaigns.map((c) => (
+              {shownCampaigns.map((c) => (
                 <td
                   key={c.campaignLabel}
                   className="border-l px-2 py-1 text-right"
@@ -540,6 +690,7 @@ export function BatchCostPanel({ campaigns, canViewPrices }: BatchCostPanelProps
           </tbody>
         </table>
       </div>
+      )}
 
       <p className="text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
         A <span className="font-mono">~</span> marks a figure measured over only

@@ -182,7 +182,9 @@ function SupplierRowView({
   return (
     <tr
       className={cn(
-        "group h-[var(--an-h-48)] border-b transition-all duration-150",
+        // R5 — the divider Renzo asked for, carried by the opaque frozen cell
+        // as solidly as by a scrolling one. See `.bw-row-rule` in globals.css.
+        "group bw-row-rule h-[var(--an-h-48)] transition-all duration-150",
         selected ? "bg-muted/50" : "hover:bg-muted/30",
       )}
     >
@@ -190,7 +192,7 @@ function SupplierRowView({
         scope="row"
         className={cn(
           // SOLID token only — this cell sits ON TOP of scrolling cells.
-          "frozen-col frozen-edge border-b px-2 py-1 text-left align-middle font-normal",
+          "frozen-col frozen-edge px-2 py-1 text-left align-middle font-normal",
           selected ? "bg-accent" : "bg-card group-hover:bg-muted",
         )}
         style={{ left: 0 }}

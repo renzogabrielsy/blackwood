@@ -71,6 +71,7 @@ import type {
   SupplierData,
   SupplierMonth,
 } from "./types";
+import { campaignSeq } from "./campaign";
 
 /** The operator's mental baseline — warehouses A/B/C/D only (PCA/PCB are opt-in). */
 const STANDARD_BLOCK_SLOTS = 220;
@@ -282,18 +283,15 @@ const POSTGREST_ROW_CAP = 1000;
  * index) — NOT `first_fed_date`, which is NULL for a campaign that has
  * produced but not yet been fed (SEPTEMBER 2026 is exactly that today) and
  * would sort it to an end of the axis rather than to its place in the year.
+ *
+ * OWNER FEEDBACK R5: `campaignSeq` and its month list moved to
+ * `lib/analytics/campaign.ts` — a PURE module — because the campaign panel's
+ * new checklist has to list campaigns in the same chronological order these
+ * columns are in, and this file is `server-only`. One definition, two callers;
+ * a copy of the twelve names inside a client component would have drifted the
+ * first time one of them was touched.
  */
-const CAMPAIGN_MONTHS = [
-  "JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE",
-  "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER",
-];
 
-function campaignSeq(batch: string): number {
-  const i = CAMPAIGN_MONTHS.indexOf(batch.trim().toUpperCase());
-  // An unrecognised batch name sorts after the twelve months of its year
-  // rather than silently landing in January.
-  return i === -1 ? 99 : i;
-}
 
 /**
  * THE adapter. One call, one payload, everything `/analytics` renders.

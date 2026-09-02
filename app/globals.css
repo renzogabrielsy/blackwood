@@ -789,6 +789,70 @@ input[type=number] {
   box-shadow: inset 3px 0 0 0 var(--bw-accent, var(--border));
 }
 
+/* ─── /analytics — THE ROW DIVIDER (owner feedback R5, 2026-09-02) ───────────
+   Renzo asked for "a visible line between every matrix row". The rows already
+   carried `border-b`, so this is not a NEW line — it is the existing one made
+   readable: `--border` is tuned for a card edge sitting on the page ground, and
+   at four tables' worth of 62 px rows it disappears into the fill.
+
+   ── IT IS A BORDER ON THE CELLS, NOT ON THE ROW ────────────────────────────
+   Deliberately, and it is the frozen-pane rule that decides it. These tables
+   are `border-collapse: separate`, where a `<tr>` cannot paint a border at all;
+   and the first cell of every row is a sticky, fully OPAQUE frozen column that
+   sits ON TOP of scrolling cells. A divider drawn as a background stripe or an
+   overlay would be interrupted at exactly that column. A border-bottom on each
+   `<th>`/`<td>` is carried by the frozen cell as solidly as by a scrolling one,
+   which is the whole requirement.
+
+   Both themes, and the dark value is the higher one on purpose: a hairline at
+   16% of the foreground reads clearly on white and vanishes on zinc-950.
+
+   Specificity beats `.border-b` (0,1,1 against 0,1,0) with no `!important`, so
+   a row that wants a heavier rule — a `Σ` footer, a section band — can still
+   set one of its own. */
+:root {
+  --bw-row-rule: color-mix(in oklab, var(--foreground) 16%, transparent);
+}
+
+.dark {
+  --bw-row-rule: color-mix(in oklab, var(--foreground) 24%, transparent);
+}
+
+.bw-row-rule > th,
+.bw-row-rule > td {
+  border-bottom-width: 1px;
+  border-bottom-style: solid;
+  border-bottom-color: var(--bw-row-rule);
+}
+
+/* ─── /analytics — THE GROUP PRINT STAGE (owner feedback R5) ─────────────────
+   A whole metric group prints as one report: every row's card, one after
+   another, page-broken. The cards have to EXIST and be LAID OUT before
+   `window.print()` — `ResponsiveContainer` measures its parent box, a
+   `display: none` parent has no box, and a print media query does not apply
+   until the dialog is already open, so a `hidden print:block` sheet prints
+   empty chart frames. Measured, not assumed.
+
+   So the sheet is a real 1040 px column parked inside a zero-sized clipped box:
+   recharts measures it, nothing is visible, and no page scrollbar moves. When
+   `printCard` tags the stage `data-print-ancestor` the existing print rules
+   flatten it (static, auto width, visible overflow) and the column lands at the
+   top of the sheet exactly as a single card does. */
+.bw-print-stage {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  z-index: -1;
+  pointer-events: none;
+}
+
+.bw-print-sheet {
+  width: 1040px;
+}
+
 /* ─── /analytics — THE BIG-SCREEN TYPE SCALE (owner feedback R3, 2026-09-02) ─
    Renzo: *"Make it more visible on bigger screens. It utilizes the space well
    on my smaller 14-inch MacBook Pro screen, but on my 27-inch 1440p monitor it
@@ -896,7 +960,7 @@ input[type=number] {
   --an-h-10: 40px; /* campaign panel row           */
 
   /* Column widths. The sum of each set IS that table's minWidth. */
-  --an-w-name: 232px; /* KPI matrix · frozen metric column   */
+  --an-w-name: 248px; /* KPI matrix · frozen metric column   */
   --an-w-period: 116px; /* KPI matrix · one period column      */
   --an-w-total: 128px; /* KPI matrix · trailing summary       */
   --an-w-campaign: 128px; /* batch-cost panel · one campaign     */
@@ -953,7 +1017,7 @@ input[type=number] {
     --an-h-7: 33px;
     --an-h-10: 47px;
 
-    --an-w-name: 276px;
+    --an-w-name: 296px;
     --an-w-period: 138px;
     --an-w-total: 152px;
     --an-w-campaign: 152px;
@@ -1016,7 +1080,7 @@ input[type=number] {
     --an-h-7: 28px;
     --an-h-10: 40px;
 
-    --an-w-name: 232px;
+    --an-w-name: 248px;
     --an-w-period: 116px;
     --an-w-total: 128px;
     --an-w-campaign: 128px;
@@ -1150,5 +1214,37 @@ input[type=number] {
 
   body.bw-printing [data-print-card] [data-print-block] {
     break-inside: avoid;
+  }
+
+  /* ── OWNER FEEDBACK R5 — a GROUP report's page breaks ─────────────────
+     One card per sheet, in the order the group is shown on screen. The break
+     lives on the wrapper the group print puts around each card rather than on
+     the card itself, so the SAME card can be printed alone by its own Print
+     button without knowing which it is in.
+
+     `page-break-after` is kept beside `break-after` deliberately: the modern
+     property is what governs, the legacy one is what several print engines
+     still honour, and a report whose pages silently ran together would be
+     worse than a report that carried one redundant declaration.
+
+     The LAST card takes no break — a trailing forced break is a blank final
+     sheet, which is exactly the failure the single-card sheet was measured
+     into avoiding in R1. */
+  body.bw-printing [data-print-card] [data-print-page] {
+    break-after: page;
+    page-break-after: always;
+  }
+
+  body.bw-printing [data-print-card] [data-print-page]:last-child {
+    break-after: auto;
+    page-break-after: auto;
+  }
+
+  /* The stage itself must never keep its screen geometry on paper. It is
+     already flattened as a `data-print-ancestor`; this is the sheet INSIDE it,
+     whose fixed 1040 px column exists only so recharts has something to
+     measure. */
+  body.bw-printing .bw-print-sheet {
+    width: 100% !important;
   }
 }
