@@ -253,15 +253,25 @@ export function SupplierRoom({
         />
       </div>
 
-      <p className="text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
-        A cell is tonnes bought with that supplier&rsquo;s share of the month
-        under it; a <span className="font-mono">·</span> means they did nothing
-        at all that month. The <span className="font-mono">Σ market</span> row is
-        the monthly matrix&rsquo;s own Purchase volume figure rather than a sum
-        of the rows above it, so the two can never drift apart.
-        {suppliers.truncated &&
-          " This read came back at the database row limit, so the supplier set may be short of the full one."}
-      </p>
+      {/* ── THE "A CELL IS TONNES BOUGHT…" BLOCK IS GONE (owner feedback R5)
+          Renzo's screenshots marked it for removal. Everything it said is
+          still on screen where it is needed: the `Supplier` header carries the
+          dictionary popover with the full definition, every cell's own hover
+          reads "X t — Y% of everything bought that month", the `·` cell's
+          hover says "did nothing at all this month", and the `Σ market` row's
+          own hover states that it is the matrix's published Purchase volume
+          figure rather than a sum of the rows.
+
+          The TRUNCATION warning survives, because it is not documentation —
+          it is a fact about THIS read, it appears nowhere else, and a supplier
+          list that is quietly short of the real one is exactly the thing a
+          reader must be told about. */}
+      {suppliers.truncated && (
+        <p className="text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
+          This read came back at the database row limit, so the supplier set may
+          be short of the full one.
+        </p>
+      )}
     </section>
   );
 }

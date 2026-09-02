@@ -110,6 +110,11 @@ export interface GradeYear {
   topGradeSharePct: number | null;
   /** How many distinct grades the year ran. */
   gradeCount: number;
+  /**
+   * R5 — a batch selection narrowed the columns, so every figure here is over
+   * THOSE months and the room must say so rather than calling it the year.
+   */
+  filtered: boolean;
 }
 
 function sum(values: readonly (number | null)[]): number {
@@ -133,8 +138,30 @@ export function buildGradeYear(
   rows: readonly ProductionGradeMonth[],
   months: readonly AnalyticsMonth[],
   year: number,
+  /**
+   * OWNER FEEDBACK R5 — the `YYYY-MM` months the selected production batches
+   * ran in, or `null` for no filter at all.
+   *
+   * It narrows the COLUMNS, and everything downstream re-folds over what is
+   * left through the arithmetic that was already here: the year column is
+   * still a plain sum of the columns, the year share is still Σ kilos ÷ Σ
+   * kilos, and `totalKg` is still the published `producedKg` of the months
+   * shown rather than a sum of the grade rows. So a filtered grade mix is a
+   * mix of those months rather than the year with columns painted out — the
+   * same rule the matrix's own column checklist obeys.
+   *
+   * `null` and "every month" are deliberately different values: `null` means
+   * the reader has not filtered anything, which is what lets the room say
+   * "the year" instead of "the months you chose".
+   */
+  monthFilter?: ReadonlySet<string> | null,
 ): GradeYear {
-  const inYear = rows.filter((r) => r.year === year && (r.kg ?? 0) > 0);
+  const inYear = rows.filter(
+    (r) =>
+      r.year === year &&
+      (r.kg ?? 0) > 0 &&
+      (!monthFilter || monthFilter.has(r.monthStart.slice(0, 7))),
+  );
 
   const byMonth = new Map<string, ProductionGradeMonth[]>();
   for (const r of inYear) {
@@ -220,6 +247,78 @@ export function buildGradeYear(
     topGrade: built[0]?.grade ?? null,
     topGradeSharePct: built[0]?.sharePct ?? null,
     gradeCount: built.length,
+    filtered: monthFilter != null,
+  };
+}
+
+/**
+ * ONE grade's figures over an arbitrary subset of its year's months (R5).
+ *
+ * The grade rows became expandable in R5 — Renzo: *"grade rows open charts /
+ * breakdown like everything else"* — and an expand carries a month checklist,
+ * so its stats have to re-fold. Every rule the year column obeys is obeyed
+ * here because it is the same arithmetic over a shorter list: kilos are a
+ * plain sum, and **the SHARE's denominator narrows with the selection** (the
+ * months' own published `producedKg`, never a sum of the grade rows), so a
+ * four-month share is a share of those four months rather than of the year.
+ *
+ * Nothing is averaged: there is no figure on a grade row that an average of
+ * monthly percentages could produce.
+ */
+export interface GradeFold {
+  kg: number;
+  /** PERCENT 0-100 — Σ this grade ÷ Σ everything made in the months shown. */
+  sharePct: number | null;
+  /** Months in the selection this grade was actually made in. */
+  activeMonths: number;
+  /** Months in the selection, whether or not this grade ran. */
+  monthCount: number;
+  runCount: number;
+  /** NULL (never 0) when no run in the selection recorded a bag count. */
+  sacks: number | null;
+  /** The grade's best month in the selection, by kilos. */
+  bestMonth: GradeCell | null;
+}
+
+export function foldGradeSelection(
+  row: GradeRow,
+  months: readonly GradeMonthColumn[],
+  /** The switched-OFF `monthStart` values. Empty = every month. */
+  hiddenMonths: ReadonlySet<string>,
+): GradeFold {
+  let kg = 0;
+  let denominator = 0;
+  let activeMonths = 0;
+  let monthCount = 0;
+  let runCount = 0;
+  let sacks = 0;
+  let hadSacks = false;
+  let bestMonth: GradeCell | null = null;
+
+  months.forEach((m, i) => {
+    if (hiddenMonths.has(m.monthStart)) return;
+    monthCount += 1;
+    if (m.producedKg != null) denominator += m.producedKg;
+    const cell = row.cells[i];
+    if (!cell || cell.kg == null) return;
+    activeMonths += 1;
+    kg += cell.kg;
+    runCount += cell.runCount ?? 0;
+    if (cell.sacks != null) {
+      hadSacks = true;
+      sacks += cell.sacks;
+    }
+    if (!bestMonth || cell.kg > (bestMonth.kg ?? 0)) bestMonth = cell;
+  });
+
+  return {
+    kg,
+    sharePct: denominator > 0 ? (100 * kg) / denominator : null,
+    activeMonths,
+    monthCount,
+    runCount,
+    sacks: hadSacks ? sacks : null,
+    bestMonth,
   };
 }
 

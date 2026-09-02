@@ -294,23 +294,21 @@ export function SupplierPremium({ data, canViewPrices }: SupplierPremiumProps) {
         </table>
       </div>
 
-      <p className="text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
-        <strong className="font-medium text-foreground">
-          Each row is measured against its OWN months.
-        </strong>{" "}
-        A supplier who only turned up while charcoal was dear is compared with
-        that month, not with the year — which is why a seller can show a higher
-        ₱/kg than the year figure above and still read as a discount.{" "}
-        <strong className="font-medium text-foreground">
-          The big sellers sit near market by construction.
-        </strong>{" "}
-        Once the top two are three quarters of the volume they largely ARE the
-        market average, so their premium is small whatever they charge — the
-        spread lives at the bottom of the book. Weighted by the kilos each one
-        speaks for, the whole column comes to{" "}
-        <span className="font-mono text-foreground">{signedMoney(weightedAll)}</span>{" "}
-        by construction, which is why it is never averaged any other way.
-      </p>
+      {/* ── THE FOOTNOTE PARAGRAPHS ARE GONE (owner feedback R5) ──────────
+          Renzo's screenshots marked both explanatory blocks under this panel
+          for removal — "Each row is measured against its OWN months…" and the
+          big-sellers-sit-near-market paragraph.
+
+          **Not one fact went with them.** Every sentence they carried already
+          existed at the point of use and still does: the header says the
+          comparison is against "the months THEY sold in"; the `year ₱…/kg`
+          chip beside it carries the hover explaining it is context and not the
+          baseline; each row's own hover spells out the weighting; the
+          `Weighted` footer PRINTS the ₱0.00 identity rather than asserting it;
+          and the `Premium & discount` dictionary popover in the heading holds
+          the full definition, basis, exclusions and rollup. The prose was a
+          fourth copy of all of it sitting under a panel a reader had already
+          finished reading. */}
     </section>
   );
 }

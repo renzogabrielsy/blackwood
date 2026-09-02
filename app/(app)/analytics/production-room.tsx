@@ -34,8 +34,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as React from "react";
-import { Factory } from "lucide-react";
-import type { ComparisonMode, Matrix } from "@/lib/analytics/matrix";
+import { CalendarRange, Factory } from "lucide-react";
+import type { ComparisonMode, Matrix, MatrixRow } from "@/lib/analytics/matrix";
 import { SECTION_ACCENT } from "@/lib/analytics/metrics";
 import type { MetricKey, MetricSection } from "@/lib/analytics/metrics";
 import type { Granularity } from "@/lib/analytics/matrix";
@@ -48,6 +48,7 @@ import { AnalyticsMatrix } from "./analytics-matrix";
 import { MetricExpand } from "./metric-expand";
 import { DictionaryPopover } from "./metric-info";
 import { ProductionGrades } from "./production-grades";
+import { GroupPrintPage, GroupPrintStage } from "./group-print";
 
 /** This section renders exactly one band of the shared matrix. */
 const PRODUCTION_BAND: readonly MetricSection[] = ["production"];
@@ -117,6 +118,21 @@ export interface ProductionRoomProps {
    * has to reach it here or half the page's expands would ignore it.
    */
   showDictionary: boolean;
+  /**
+   * ── R5 ITEM 8 — the months the SELECTED production batches ran in ──────
+   *
+   * `null` means no batch filter at all, which is a different answer from
+   * "every month": it is what lets this room say "in 2026" rather than "in the
+   * months you chose", and it is what lets the page hand down its own matrix
+   * object rather than an identical second fold.
+   *
+   * The matrix arriving in `matrix` is ALREADY narrowed to these months by the
+   * shell — this prop exists so the grade mix can be narrowed the same way and
+   * so the room can SAY what it is showing.
+   */
+  campaignMonths: ReadonlySet<string> | null;
+  /** How many batches are switched on, for the note. */
+  campaignSelection: { selected: number; total: number };
 }
 
 export function ProductionRoom({
@@ -132,11 +148,30 @@ export function ProductionRoom({
   printScope,
   asOfDate,
   showDictionary,
+  campaignMonths,
+  campaignSelection,
 }: ProductionRoomProps) {
   const gradeYear = React.useMemo(
-    () => buildGradeYear(grades.rows, months, year),
-    [grades.rows, months, year],
+    () => buildGradeYear(grades.rows, months, year, campaignMonths),
+    [grades.rows, months, year, campaignMonths],
   );
+
+  /** R5 — the band's group report, mounted only while it is being printed. */
+  const [printKeys, setPrintKeys] = React.useState<readonly MetricKey[] | null>(
+    null,
+  );
+  const startPrint = React.useCallback(
+    (_section: MetricSection, keys: readonly MetricKey[]) => setPrintKeys(keys),
+    [],
+  );
+  const endPrint = React.useCallback(() => setPrintKeys(null), []);
+  const printRows = React.useMemo(() => {
+    if (!printKeys) return [];
+    const byKey = new Map(matrix.rows.map((r) => [r.metric.key, r] as const));
+    return printKeys
+      .map((k) => byKey.get(k))
+      .filter((r): r is MatrixRow => r != null);
+  }, [printKeys, matrix.rows]);
 
   /** The selected row, but ONLY when it belongs to this band. */
   const expandedRow = React.useMemo(() => {
@@ -154,9 +189,19 @@ export function ProductionRoom({
     return inWindow[inWindow.length - 1] ?? months[months.length - 1] ?? null;
   }, [matrix.periods, months]);
 
-  /** The year's own headline figures, straight from the monthly series. */
+  /**
+   * The year's own headline figures, straight from the monthly series — and
+   * narrowed to the selected batches' months when there is a batch filter, so
+   * the chips describe the same window the table under them does. A chip that
+   * quietly kept reading the whole year beside a filtered grid would be the
+   * page disagreeing with itself.
+   */
   const summary = React.useMemo(() => {
-    const inYear = months.filter((m) => m.year === year);
+    const inYear = months.filter(
+      (m) =>
+        m.year === year &&
+        (!campaignMonths || campaignMonths.has(m.monthStart.slice(0, 7))),
+    );
     let reportedDays = 0;
     let kwh = 0;
     let suspectReadings = 0;
@@ -179,7 +224,7 @@ export function ProductionRoom({
       downtimeRecords,
       reportedMonths,
     };
-  }, [months, year]);
+  }, [months, year, campaignMonths]);
 
   return (
     <section id="section-production" className="flex scroll-mt-24 flex-col gap-3">
@@ -202,6 +247,63 @@ export function ProductionRoom({
             production&rsquo;s own reported days rather than the yard&rsquo;s
             working days, and there is no ₱ anywhere in this section — it is
             live for every role.
+          </p>
+          {/* ── R5 ITEM 8 — THE CLARIFICATION, AT THE POINT OF USE ────────
+              Renzo asked for this to be recorded where a reader meets it, not
+              only in a context file. It is the calendar-vs-batch answer from
+              R4 read in the other direction: R4 retired the money band because
+              the CAMPAIGN was the right clock for a cost; this band is the one
+              place the CALENDAR clock is still the right one, because downtime
+              and electricity are metered by calendar month and nothing in the
+              database attributes a meter reading to a campaign.
+
+              The honest edge is stated rather than smoothed over: a month is
+              ATOMIC here. */}
+          <p className="mt-1 flex items-start gap-1.5 text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
+            <CalendarRange
+              className="mt-0.5 size-3 shrink-0"
+              aria-hidden
+            />
+            <span>
+              <strong className="font-medium text-foreground">
+                This band is the CALENDAR month view.
+              </strong>{" "}
+              Downtime and electricity are metered by calendar month, while a
+              production batch straddles months — AUGUST closed and SEPTEMBER
+              opened on the same day. Output and yield{" "}
+              <em>per batch</em> live in the{" "}
+              <a
+                href="#section-campaigns"
+                className="underline underline-offset-2 hover:text-foreground"
+              >
+                By production batch
+              </a>{" "}
+              panel above; this shows the months those batches ran in.
+              {campaignMonths ? (
+                <>
+                  {" "}
+                  <strong className="font-medium text-foreground">
+                    Filtered to {campaignSelection.selected} of{" "}
+                    {campaignSelection.total} batches
+                  </strong>{" "}
+                  — {campaignMonths.size} calendar month
+                  {campaignMonths.size === 1 ? "" : "s"} in all. A month that
+                  overlaps a selected AND an unselected batch is shown{" "}
+                  <strong className="font-medium text-foreground">whole</strong>
+                  : months are atomic here, and splitting one would mean
+                  inventing a per-batch share of a meter reading that was never
+                  taken per batch.
+                </>
+              ) : (
+                <>
+                  {" "}
+                  Use the{" "}
+                  <span className="font-medium text-foreground">Batches</span>{" "}
+                  filter on that panel to narrow this band to the months a
+                  particular batch ran in.
+                </>
+              )}
+            </span>
           </p>
         </div>
         <span className="shrink-0 text-[length:var(--bw-fs-115)] text-muted-foreground">
@@ -283,6 +385,8 @@ export function ProductionRoom({
         perWorkingDay={perWorkingDay}
         comparison={comparison}
         sections={PRODUCTION_BAND}
+        onPrintSection={startPrint}
+        printingSection={printKeys ? "production" : null}
         expand={
           expandedRow ? (
             <MetricExpand
@@ -310,7 +414,46 @@ export function ProductionRoom({
           Follows the YEAR picker and deliberately not the Y/Q/M toggle: a
           product mix is read across a year's months, and a quarter column of
           grades would be a different question. */}
-      <ProductionGrades data={gradeYear} truncated={grades.truncated} />
+      <ProductionGrades
+        data={gradeYear}
+        truncated={grades.truncated}
+        showDictionary={showDictionary}
+        scopeLabel={printScope}
+        asOfDate={asOfDate}
+      />
+
+      {/* R5 — the production band's group report, while it is printing. */}
+      {printKeys && printRows.length > 0 && (
+        <GroupPrintStage
+          title="Production"
+          subtitle={`${printScope}${
+            campaignMonths
+              ? ` · ${campaignSelection.selected} of ${campaignSelection.total} batches, ${campaignMonths.size} calendar month${campaignMonths.size === 1 ? "" : "s"}`
+              : ""
+          }${asOfDate ? ` · records through ${asOfDate}` : ""}`}
+          countLabel={`${printRows.length} metric${printRows.length === 1 ? "" : "s"}`}
+          onDone={endPrint}
+        >
+          {printRows.map((r) => (
+            <GroupPrintPage key={r.metric.key}>
+              <MetricExpand
+                row={r}
+                granularity={granularity}
+                allPeriods={matrix.allPeriods}
+                foldOptions={matrix.foldOptions}
+                totalLabel={matrix.totalLabel}
+                totalFullLabel={matrix.totalFullLabel}
+                anchorMonth={anchorMonth}
+                perWorkingDay={perWorkingDay}
+                scopeLabel={printScope}
+                asOfDate={asOfDate}
+                showDictionary={showDictionary}
+                onClose={endPrint}
+              />
+            </GroupPrintPage>
+          ))}
+        </GroupPrintStage>
+      )}
     </section>
   );
 }

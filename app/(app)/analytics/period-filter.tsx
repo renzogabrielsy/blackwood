@@ -61,8 +61,14 @@ export interface PeriodFilterOption {
 export interface PeriodFilterProps {
   /** The control's own name — `Columns`, `Years`. */
   label: string;
-  /** Singular noun for the counts — `column`, `year`. */
+  /** Singular noun for the counts — `column`, `year`, `batch`. */
   noun: string;
+  /**
+   * Plural, when `noun + "s"` is wrong. R5 added a `batch` filter and the
+   * fallback produced "9 of 9 batchs shown" in the control's accessible name —
+   * a label a screen reader would actually say out loud.
+   */
+  nounPlural?: string;
   options: readonly PeriodFilterOption[];
   /** The switched-OFF keys. Absent from this set = on. Empty = everything on. */
   hidden: ReadonlySet<string>;
@@ -76,6 +82,7 @@ export interface PeriodFilterProps {
 export function PeriodFilter({
   label,
   noun,
+  nounPlural,
   options,
   hidden,
   onChange,
@@ -83,6 +90,7 @@ export function PeriodFilter({
   align = "start",
   className,
 }: PeriodFilterProps) {
+  const plural = nounPlural ?? `${noun}s`;
   const total = options.length;
   const shown = options.filter((o) => !hidden.has(o.key)).length;
   const filtered = shown < total;
@@ -121,9 +129,9 @@ export function PeriodFilter({
           type="button"
           title={
             title ??
-            `Choose which ${noun}s to show. Everything is on by default; hiding one removes it from view and never changes what the others say.`
+            `Choose which ${plural} to show. Everything is on by default; hiding one removes it from view and never changes what the others say.`
           }
-          aria-label={`${label} filter — ${shown} of ${total} ${noun}s shown`}
+          aria-label={`${label} filter — ${shown} of ${total} ${plural} shown`}
           className={cn(
             "inline-flex h-[var(--an-h-8)] shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] font-medium",
             "transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",

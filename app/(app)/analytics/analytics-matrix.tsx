@@ -62,14 +62,18 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as React from "react";
-import { ChevronRight, Lock } from "lucide-react";
+import { ChevronRight, Lock, Printer, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { RowHandle, rowDropProps } from "./row-handle";
+import { useRowOrder } from "./use-row-order";
+import { applyOrder } from "@/lib/analytics/row-order";
 import type {
   Change,
   ComparisonMode,
   Matrix,
   MatrixCell,
   MatrixRow,
+  MatrixSection,
 } from "@/lib/analytics/matrix";
 import { DELTA_LABEL, groupBySection } from "@/lib/analytics/matrix";
 import type {
@@ -408,6 +412,19 @@ export interface AnalyticsMatrixProps {
    * callout strip are the same numbers by construction.
    */
   sections?: readonly MetricSection[];
+  /**
+   * OWNER FEEDBACK R5 — print this whole band as one report.
+   *
+   * The matrix does not build the report: it owns the rows and their ORDER,
+   * so it is the only thing that knows what "every row in this group, in the
+   * sequence the reader put them in" means, and it hands that list up. The
+   * caller renders the cards, because a card needs the fold options, the
+   * anchor month and the page's own dictionary switch — all of which live one
+   * level above this component.
+   */
+  onPrintSection?(section: MetricSection, orderedKeys: readonly MetricKey[]): void;
+  /** The band currently being printed, so its button can say so. */
+  printingSection?: MetricSection | null;
 }
 
 export function AnalyticsMatrix({
@@ -418,6 +435,8 @@ export function AnalyticsMatrix({
   comparison,
   expand,
   sections: only,
+  onPrintSection,
+  printingSection,
 }: AnalyticsMatrixProps) {
   const deltaWord = DELTA_LABEL[matrix.granularity];
   // The sum of the colgroup IS the table's minWidth ("never crush, always
@@ -575,46 +594,22 @@ export function AnalyticsMatrix({
 
         <tbody>
           {sections.map((section) => (
-            <React.Fragment key={section.key}>
-              <SectionBand
-                id={`band-${section.key}`}
-                label={section.label}
-                hint={section.hint}
-                accent={section.accent}
-                span={matrix.periods.length + 1}
-              />
-              {section.rows.map((row) => (
-                <React.Fragment key={row.metric.key}>
-                  <MatrixRowView
-                    row={row}
-                    deltaWord={deltaWord}
-                    comparison={comparison}
-                    accent={section.accent}
-                    selected={selected === row.metric.key}
-                    onSelect={onSelect}
-                    perWorkingDay={perWorkingDay}
-                    coverageByPeriod={coverageByPeriod}
-                  />
-                  {/* ── The expand, IN PLACE ────────────────────────────
-                      A full-width row directly beneath the row that was
-                      clicked, with the panel `sticky left-0` inside it at the
-                      scroller's measured width so it never drifts off-screen
-                      when the periods are scrolled. */}
-                  {expand && selected === row.metric.key && (
-                    <tr className="border-b">
-                      <td colSpan={colCount} className="p-0 align-top">
-                        <div
-                          className="sticky left-0 p-2"
-                          style={{ width: panelWidth ?? "100%" }}
-                        >
-                          {expand}
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </React.Fragment>
-              ))}
-            </React.Fragment>
+            <MatrixSectionRows
+              key={section.key}
+              section={section}
+              deltaWord={deltaWord}
+              comparison={comparison}
+              selected={selected}
+              onSelect={onSelect}
+              perWorkingDay={perWorkingDay}
+              coverageByPeriod={coverageByPeriod}
+              periodCount={matrix.periods.length}
+              colCount={colCount}
+              panelWidth={panelWidth}
+              expand={expand}
+              onPrintSection={onPrintSection}
+              printing={printingSection === section.key}
+            />
           ))}
         </tbody>
       </table>
@@ -638,6 +633,7 @@ function SectionBand({
   hint,
   accent,
   span,
+  actions,
 }: {
   /** Anchor target for the in-page nav. `scroll-mt-*` clears the sticky bar. */
   id?: string;
@@ -645,6 +641,8 @@ function SectionBand({
   hint: string;
   accent: string;
   span: number;
+  /** R5 — the group's Print action and its reset-order affordance. */
+  actions?: React.ReactNode;
 }) {
   return (
     <tr id={id} className="h-[var(--an-h-7)] scroll-mt-24 border-b bg-muted/40">
@@ -664,7 +662,16 @@ function SectionBand({
           borderLeft: `3px solid ${accent}`,
         }}
       >
-        {label}
+        {/* R5 — the group's actions live in the FROZEN cell, not out in the
+            hint. Measured: the hint `<td>` spans every period column, so
+            anything right-aligned inside it sits at the far end of a table
+            that is 1,400 px wider than the viewport — a Print button nobody
+            can see is not a Print button. The frozen cell is the only part of
+            a band row that is always on screen. */}
+        <span className="flex items-center justify-between gap-1.5">
+          <span className="min-w-0 truncate">{label}</span>
+          {actions}
+        </span>
       </th>
       <td colSpan={span} className="border-b border-l px-2 py-0.5">
         <span className="block truncate text-[length:var(--bw-fs-11)] leading-[var(--bw-lh-4)] text-muted-foreground/80">
@@ -672,6 +679,156 @@ function SectionBand({
         </span>
       </td>
     </tr>
+  );
+}
+
+/**
+ * ONE band: its header row, its rows in the READER'S order, and the expand.
+ *
+ * It is a component rather than a loop body for one structural reason — the
+ * row order is a hook, and a hook cannot be called once per section inside a
+ * `map`. Making the section a component is also what scopes everything else
+ * correctly: the drag state, the saved order and the reset affordance all
+ * belong to exactly one band, so **a cross-section drag is unrepresentable**
+ * rather than merely refused. A handle emits its own key, and the only order
+ * that key can be resolved against is this band's.
+ */
+function MatrixSectionRows({
+  section,
+  deltaWord,
+  comparison,
+  selected,
+  onSelect,
+  perWorkingDay,
+  coverageByPeriod,
+  periodCount,
+  colCount,
+  panelWidth,
+  expand,
+  onPrintSection,
+  printing,
+}: {
+  section: MatrixSection;
+  deltaWord: string;
+  comparison: ComparisonMode;
+  selected: MetricKey | null;
+  onSelect(key: MetricKey | null): void;
+  perWorkingDay: boolean;
+  coverageByPeriod: ReadonlyMap<string, number | null>;
+  periodCount: number;
+  colCount: number;
+  panelWidth: string | undefined;
+  expand?: React.ReactNode;
+  onPrintSection?(section: MetricSection, orderedKeys: readonly MetricKey[]): void;
+  printing: boolean;
+}) {
+  const defaultKeys = React.useMemo(
+    () => section.rows.map((r) => r.metric.key as string),
+    [section.rows],
+  );
+  const rowOrder = useRowOrder(`metrics:${section.key}`, defaultKeys);
+  const [dragging, setDragging] = React.useState<string | null>(null);
+
+  const rows = React.useMemo(
+    () => applyOrder(section.rows, rowOrder.order, (r) => r.metric.key as string),
+    [section.rows, rowOrder.order],
+  );
+
+  const endDrag = React.useCallback(() => setDragging(null), []);
+  const onDrop = React.useCallback(
+    (key: string, target: string) => {
+      rowOrder.drop(key, target);
+      setDragging(null);
+    },
+    [rowOrder],
+  );
+
+  return (
+    <>
+      <SectionBand
+        id={`band-${section.key}`}
+        label={section.label}
+        hint={section.hint}
+        accent={section.accent}
+        span={periodCount + 1}
+        actions={
+          <span className="flex shrink-0 items-center gap-1" data-print-hide>
+            {/* Unobtrusive by design: it appears only once the reader has
+                actually moved something, so a page nobody has reordered
+                carries no control at all. */}
+            {/* Icon-only: it shares a 248 px frozen cell with the band label
+                and the Print button, and its `title` + `aria-label` carry the
+                whole sentence. */}
+            {rowOrder.custom && (
+              <button
+                type="button"
+                onClick={rowOrder.reset}
+                aria-label={`Reset the ${section.label} row order`}
+                title={`Put the ${section.label} rows back in their original order. The order is remembered in this browser only and never changed a figure.`}
+                className="inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded border border-border/70 text-muted-foreground transition-colors duration-150 hover:bg-background hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <RotateCcw className="size-2.5" aria-hidden />
+              </button>
+            )}
+            {onPrintSection && rows.length > 0 && (
+              <button
+                type="button"
+                disabled={printing}
+                onClick={() =>
+                  onPrintSection(
+                    section.key,
+                    rows.map((r) => r.metric.key),
+                  )
+                }
+                title={`Print all ${rows.length} ${section.label} rows as one landscape report — each row's chart, figures and definitions on its own page, in the order shown here.`}
+                className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded border border-border/70 px-1.5 py-px text-[length:var(--bw-fs-10)] font-normal normal-case leading-[var(--bw-lh-4)] tracking-normal text-muted-foreground transition-colors duration-150 hover:bg-background hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait disabled:opacity-60"
+              >
+                <Printer className="size-2.5" aria-hidden />
+                {printing ? "Preparing…" : `Print ${rows.length}`}
+              </button>
+            )}
+          </span>
+        }
+      />
+      {rows.map((row, i) => (
+        <React.Fragment key={row.metric.key}>
+          <MatrixRowView
+            row={row}
+            deltaWord={deltaWord}
+            comparison={comparison}
+            accent={section.accent}
+            selected={selected === row.metric.key}
+            onSelect={onSelect}
+            perWorkingDay={perWorkingDay}
+            coverageByPeriod={coverageByPeriod}
+            position={i + 1}
+            total={rows.length}
+            dragging={dragging}
+            onMove={rowOrder.move}
+            onDragStart={setDragging}
+            onDragEnd={endDrag}
+            onDrop={onDrop}
+          />
+          {/* ── The expand, IN PLACE ────────────────────────────
+              A full-width row directly beneath the row that was
+              clicked, with the panel `sticky left-0` inside it at the
+              scroller's measured width so it never drifts off-screen
+              when the periods are scrolled. */}
+          {expand && selected === row.metric.key && (
+            <tr className="border-b">
+              <td colSpan={colCount} className="p-0 align-top">
+                <div
+                  className="sticky left-0 p-2"
+                  style={{ width: panelWidth ?? "100%" }}
+                >
+                  {expand}
+                </div>
+              </td>
+            </tr>
+          )}
+        </React.Fragment>
+      ))}
+    </>
   );
 }
 
@@ -684,6 +841,13 @@ function MatrixRowView({
   onSelect,
   perWorkingDay,
   coverageByPeriod,
+  position,
+  total,
+  dragging,
+  onMove,
+  onDragStart,
+  onDragEnd,
+  onDrop,
 }: {
   row: MatrixRow;
   deltaWord: string;
@@ -693,15 +857,32 @@ function MatrixRowView({
   onSelect(key: MetricKey | null): void;
   perWorkingDay: boolean;
   coverageByPeriod: ReadonlyMap<string, number | null>;
+  /** R5 — this row's 1-based slot in its band, and the band's size. */
+  position: number;
+  total: number;
+  dragging: string | null;
+  onMove(key: string, delta: number): void;
+  onDragStart(key: string): void;
+  onDragEnd(): void;
+  onDrop(key: string, target: string): void;
 }) {
   const spec = row.metric;
   const normalised = perWorkingDay && spec.perWorkingDay;
+  const isDragging = dragging === spec.key;
 
   return (
     <tr
+      {...rowDropProps(spec.key, dragging, onDrop)}
       className={cn(
-        "group h-[var(--an-h-62)] border-b transition-all duration-150",
+        // R5 — `bw-row-rule` replaces the faint `border-b`: the divider Renzo
+        // asked for, carried by every cell INCLUDING the opaque frozen one.
+        "group bw-row-rule h-[var(--an-h-62)] transition-all duration-150",
         selected ? "bg-muted/50" : "hover:bg-muted/30",
+        // Compositor-only, per the motion rules: the row being dragged fades
+        // rather than moving, so the grid it is being dragged through does not
+        // reflow under the pointer.
+        isDragging && "opacity-40",
+        dragging && !isDragging && "hover:bg-accent/60",
       )}
     >
       {/* The frozen cell repaints the row state with a SOLID token — an alpha
@@ -709,12 +890,22 @@ function MatrixRowView({
       <th
         scope="row"
         className={cn(
-          "frozen-col frozen-edge border-b px-2 py-1.5 text-left align-top font-normal",
+          "frozen-col frozen-edge px-2 py-1.5 text-left align-top font-normal",
           selected ? "bg-accent" : "bg-card group-hover:bg-muted",
         )}
         style={{ left: 0 }}
       >
         <div className="flex items-start gap-1">
+          <RowHandle
+            rowKey={spec.key}
+            label={spec.label}
+            position={position}
+            total={total}
+            onMove={onMove}
+            onDragStart={onDragStart}
+            onDragEnd={onDragEnd}
+            className="mt-0.5"
+          />
           <button
             type="button"
             onClick={() => onSelect(selected ? null : spec.key)}

@@ -65,15 +65,20 @@ export const ANALYTICS_NAV: readonly AnalyticsNavItem[] = [
     label: "Campaigns",
     title: "The production-batch basis — one column per campaign, including the cost of storage time.",
   },
+  // OWNER FEEDBACK R5: Production moved ABOVE Suppliers, and the anchors moved
+  // with it — an anchor row that does not match the page's own order is worse
+  // than no anchor row. The reason is item 8: the campaign checklist now
+  // decides which MONTHS the production band covers, so the control and the
+  // thing it controls are adjacent. See `analytics-view.tsx`.
+  {
+    id: "section-production",
+    label: "Production",
+    title: "What the plant made, how long it stood still, what it burned, and the grade mix — for the months the selected batches ran in.",
+  },
   {
     id: "section-suppliers",
     label: "Suppliers",
     title: "Who we bought from, what share of the yard each one is, and on what terms.",
-  },
-  {
-    id: "section-production",
-    label: "Production",
-    title: "What the plant made, how long it stood still, what it burned, and the grade mix.",
   },
   // OWNER FEEDBACK R1: the Watchlist anchor is gone with its section — Renzo
   // does not want a list of "piles to go look at" on this page. The aging

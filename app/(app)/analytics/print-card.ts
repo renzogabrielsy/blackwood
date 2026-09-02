@@ -25,9 +25,25 @@
 // rather than at import time.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ── OWNER FEEDBACK R5 — IT MAY NOW MARK THE CARD ITSELF ─────────────────────
+//
+// R5 adds two print paths whose subject is not a permanently-marked expand
+// panel: a whole metric GROUP (a stage of cards built for the occasion) and the
+// campaign table (an ordinary section). Both need `data-print-card` for the
+// duration of the print and MUST NOT carry it the rest of the time — the print
+// stylesheet keys "hide everything else" off exactly that attribute, so a
+// second element wearing it permanently would leave the campaign panel
+// rendered on the sheet every time someone printed a metric.
+//
+// So the attribute is applied here when it is missing and removed again with
+// the rest of the marks. An element that already carries it (the two expand
+// panels, unchanged since R1/R4) is left exactly as it was.
 export function printCard(card: HTMLElement | null) {
   if (typeof document === "undefined" || !card) return;
   const body = document.body;
+
+  const ownedCardMark = !card.hasAttribute("data-print-card");
+  if (ownedCardMark) card.setAttribute("data-print-card", "");
 
   const tagged: HTMLElement[] = [];
   for (
@@ -42,6 +58,7 @@ export function printCard(card: HTMLElement | null) {
   const clear = () => {
     body.classList.remove("bw-printing");
     for (const el of tagged) el.removeAttribute("data-print-ancestor");
+    if (ownedCardMark) card.removeAttribute("data-print-card");
   };
 
   body.classList.add("bw-printing");

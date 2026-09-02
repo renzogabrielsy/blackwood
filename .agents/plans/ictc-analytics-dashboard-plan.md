@@ -1111,3 +1111,72 @@ the control can never hide every period.
 browser-verified in a throwaway harness at `app/dev/table-playground/analytics-r4/`
 (a NEW subdirectory — the committed Blackwood Table playground beside it was not
 touched), since deleted.
+
+---
+
+## 10. OWNER FEEDBACK ROUND 5 APPLIED — 2026-09-02 (ROUND 5)
+
+Renzo's eight-item list. **This round re-ordered the page, removed two surfaces, and
+gave every table group a filter, an order and a report.** Full detail and every
+measurement lives in `app/(app)/analytics/CONTEXT.md` → "Owner feedback round 5"; this
+is the plan-level record of WHAT was decided and WHY.
+
+| # | Asked for | Landed |
+|---|---|---|
+| 1 | A visible line between every matrix row | `.bw-row-rule` — a border on each CELL, so the opaque frozen column carries it |
+| 2 | Drag-to-reorder rows within their section | Grip handle + HTML5 DnD + ↑/↓ keyboard, persisted per browser |
+| 3 | Print per metric group | One landscape report, each row's card on its own page |
+| 4 | Remove the callout strip and two supplier prose blocks | UI unmounted; every pure function and honesty gate kept |
+| 5 | Grade rows expand like everything else | `grade-expand.tsx`, full universal module contract |
+| 6 | The campaign panel gets its own checklist | Chronological by the month the batch NAME spells, never alphabetical |
+| 7 | Production above Suppliers | Page order and anchors both moved |
+| 8 | The batch filter drives the production months | A second fold + a `monthFilter` on the grade year |
+
+### 10.1 The two decisions worth recording at plan level
+
+**Row order is per-browser `localStorage`, not a URL param.** Every other control on
+this page is in the address bar because each describes WHAT IS ON SCREEN — a link
+carrying one shows the recipient the same figures. A row order describes how one reader
+likes to read: it changes no number, hides nothing, and pasting it into a colleague's
+browser would rearrange a page they had already learned. It is also eight to ten keys
+per section and would dominate the address. The page footer states this.
+
+**The batch filter IS a URL param (`?bhide=`)**, by the same test read the other way: it
+decides what is on screen — the campaign panel's columns AND the production band's
+months — so it must survive a refresh and a share.
+
+### 10.2 The page's reading order, restated
+
+**PERIOD → CAMPAIGN → PRODUCTION → SUPPLIER.** §4's original order put production last
+because it is where kilos stop being charcoal and start being product. R5 moves it up one
+place for a stronger reason: the campaign checklist now DRIVES the production band's
+months, and a control cannot be separated from the thing it controls by an unrelated
+section. Suppliers reads last on its own merits — it is the only block answering "who",
+it is the widest, and nothing else on the page depends on it.
+
+### 10.3 What was NOT removed with the callout strip
+
+`buildMatrix` still returns `callouts`, and `MatrixCell.calloutable` / `deltaQuotable` /
+`yoyQuotable` are untouched. That gate is not decoration — it is what stops an estimate, a
+metric's first period, an unfinished period or an annotated figure being quoted, and the
+row expand's Highest / Lowest stats read the same predicate. §6's and §7's honesty rules
+are intact; only the strip that displayed their output is gone.
+
+### 10.4 The honest edge, stated at the point of use
+
+Production is metered by CALENDAR month while a batch straddles months, and nothing in
+the database attributes a meter reading to a campaign. So when the batch filter narrows
+the band, **a month overlapping a selected AND an unselected batch is shown WHOLE** —
+splitting it would mean inventing a per-batch share of a reading never taken per batch.
+The production band's header says this in as many words, and points at the campaign panel
+for output and yield per batch. It is R4's calendar-vs-batch answer read in the other
+direction: R4 retired the money band because the CAMPAIGN was the right clock for a cost;
+this band is the one place the CALENDAR clock is still the right one.
+
+### 10.5 Gates
+
+`npx tsc --noEmit` clean · `npm run lint` 146 problems / 16 errors (unchanged) ·
+`npm run build` clean · `verify-table-core` 84 assertions · `test:e2e` 57 passed ·
+browser-verified in a throwaway harness at `app/dev/table-playground/analytics-r5/`
+(a NEW subdirectory — the committed Blackwood Table playground beside it was not
+touched), since deleted.
