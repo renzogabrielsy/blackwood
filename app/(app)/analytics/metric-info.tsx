@@ -48,10 +48,10 @@ export function dictionaryTitle(spec: MetricSpec): string {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <div className="text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
+      <div className="text-[length:var(--bw-fs-105)] font-medium uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
-      <p className="mt-0.5 text-xs leading-relaxed text-foreground">
+      <p className="mt-0.5 text-[length:var(--bw-fs-12)] leading-relaxed text-foreground">
         {children}
       </p>
     </div>
@@ -106,11 +106,13 @@ export function DictionaryPopover({
         onClick={(e) => e.stopPropagation()}
         // Capped and scrollable: the longest entry runs ~520px, which overhangs
         // a phone viewport. The card scrolls; it never gets cut off.
-        className="max-h-[var(--radix-popover-content-available-height)] w-[min(360px,calc(100vw-2rem))] overflow-y-auto p-0"
+        // `bw-analytics` — Radix portals this to <body>, outside the shell div
+        // that carries the page scale. (R3, 2026-09-02.)
+        className="bw-analytics max-h-[var(--radix-popover-content-available-height)] w-[min(360px,calc(100vw-2rem))] overflow-y-auto p-0"
       >
         <div className="border-b px-3 py-2">
-          <div className="text-[13px] font-semibold tracking-tight">{label}</div>
-          <div className="text-[11.5px] text-muted-foreground">{sublabel}</div>
+          <div className="text-[length:var(--bw-fs-13)] font-semibold tracking-tight">{label}</div>
+          <div className="text-[length:var(--bw-fs-115)] text-muted-foreground">{sublabel}</div>
         </div>
         <div className="flex flex-col gap-2.5 px-3 py-2.5">
           <Field label="What it is">{d.definition}</Field>
@@ -119,17 +121,17 @@ export function DictionaryPopover({
           <Field label="Quarter &amp; year columns">{d.rollup}</Field>
           {d.caveat && (
             <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5">
-              <div className="text-[10px] font-medium uppercase tracking-wide text-amber-700 dark:text-amber-400">
+              <div className="text-[length:var(--bw-fs-10)] font-medium uppercase tracking-wide text-amber-700 dark:text-amber-400">
                 Worth knowing
               </div>
-              <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+              <p className="mt-0.5 text-[length:var(--bw-fs-12)] leading-relaxed text-muted-foreground">
                 {d.caveat}
               </p>
             </div>
           )}
         </div>
         <div className="border-t px-3 py-1.5">
-          <span className="font-mono text-[10px] text-muted-foreground">
+          <span className="font-mono text-[length:var(--bw-fs-10)] text-muted-foreground">
             {d.source}
           </span>
         </div>

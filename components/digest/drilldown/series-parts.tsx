@@ -255,7 +255,13 @@ export function BreakdownRail({
 }: {
   items: RailItem[];
   emptyText: string;
-  maxHeight?: number;
+  /**
+   * Any CSS length. It was `number` until 2026-09-02; the analytics row expand
+   * now sizes its rails off the same custom property its chart uses, so the
+   * rail beside a chart keeps matching it when the big-screen scale grows both.
+   * A plain number still means px, so every existing caller is unchanged.
+   */
+  maxHeight?: number | string;
   color?: string;
 }) {
   if (items.length === 0) {
@@ -271,21 +277,24 @@ export function BreakdownRail({
       {items.map((item, i) => (
         <li key={item.key} className="py-1">
           <div className="flex items-baseline justify-between gap-2">
-            <span className="min-w-0 truncate text-xs" title={item.title}>
-              <span className="mr-1.5 font-mono text-[10px] text-muted-foreground tabular-nums">
+            <span
+              className="min-w-0 truncate text-[length:var(--bw-fs-12,0.75rem)] leading-[var(--bw-lh-xs,1rem)]"
+              title={item.title}
+            >
+              <span className="mr-1.5 font-mono text-[length:var(--bw-fs-10,10px)] text-muted-foreground tabular-nums">
                 {i + 1}
               </span>
               {item.label}
               {item.meta && (
-                <span className="ml-1.5 text-[10px] text-muted-foreground">
+                <span className="ml-1.5 text-[length:var(--bw-fs-10,10px)] text-muted-foreground">
                   {item.meta}
                 </span>
               )}
             </span>
-            <span className="shrink-0 font-mono text-xs tabular-nums">
+            <span className="shrink-0 font-mono text-[length:var(--bw-fs-12,0.75rem)] leading-[var(--bw-lh-xs,1rem)] tabular-nums">
               {item.value}
               {item.unit && (
-                <span className="ml-1 text-[10px] text-muted-foreground">
+                <span className="ml-1 text-[length:var(--bw-fs-10,10px)] text-muted-foreground">
                   {item.unit}
                 </span>
               )}

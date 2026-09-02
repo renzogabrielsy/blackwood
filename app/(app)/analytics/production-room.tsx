@@ -78,15 +78,15 @@ function Chip({
 }) {
   return (
     <div className="min-w-0 rounded-md border bg-background/40 px-2.5 py-1.5" title={title}>
-      <div className="truncate text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
+      <div className="truncate text-[length:var(--bw-fs-105)] font-medium uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
       <div className="flex items-baseline gap-1">
-        <span className="truncate font-mono text-[15px] font-semibold tabular-nums">
+        <span className="truncate font-mono text-[length:var(--bw-fs-15)] font-semibold tabular-nums">
           {value}
         </span>
         {sub && (
-          <span className="truncate text-[11px] text-muted-foreground">{sub}</span>
+          <span className="truncate text-[length:var(--bw-fs-11)] text-muted-foreground">{sub}</span>
         )}
       </div>
     </div>
@@ -110,6 +110,13 @@ export interface ProductionRoomProps {
   /** What a printed metric card says the reader was looking at. */
   printScope: string;
   asOfDate: string | null;
+  /**
+   * R3 — the page's master `Definitions` switch, passed straight through. This
+   * room mounts its OWN `MetricExpand` (a production row's panel has to open
+   * under the production band, not under the matrix at the top), so the switch
+   * has to reach it here or half the page's expands would ignore it.
+   */
+  showDictionary: boolean;
 }
 
 export function ProductionRoom({
@@ -124,6 +131,7 @@ export function ProductionRoom({
   comparison,
   printScope,
   asOfDate,
+  showDictionary,
 }: ProductionRoomProps) {
   const gradeYear = React.useMemo(
     () => buildGradeYear(grades.rows, months, year),
@@ -183,12 +191,12 @@ export function ProductionRoom({
       >
         <div className="min-w-0">
           <h2
-            className="text-[13px] font-semibold uppercase tracking-wide"
+            className="text-[length:var(--bw-fs-13)] font-semibold uppercase tracking-wide"
             style={{ color: SECTION_ACCENT.production }}
           >
             Production
           </h2>
-          <p className="text-xs leading-relaxed text-muted-foreground">
+          <p className="text-[length:var(--bw-fs-12)] leading-relaxed text-muted-foreground">
             What the plant made in {gradeYear.year}, how long it stood still and
             what it burned doing it. Everything here is measured against
             production&rsquo;s own reported days rather than the yard&rsquo;s
@@ -196,7 +204,7 @@ export function ProductionRoom({
             live for every role.
           </p>
         </div>
-        <span className="shrink-0 text-[11.5px] text-muted-foreground">
+        <span className="shrink-0 text-[length:var(--bw-fs-115)] text-muted-foreground">
           {summary.reportedMonths} month
           {summary.reportedMonths === 1 ? "" : "s"} reported ·{" "}
           <span className="font-mono">{t1(gradeYear.totalKg)}</span> t
@@ -235,7 +243,7 @@ export function ProductionRoom({
         />
       </div>
 
-      <div className="-mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px] text-muted-foreground">
+      <div className="-mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[length:var(--bw-fs-115)] text-muted-foreground">
         <Factory className="size-3 shrink-0" aria-hidden />
         <span className="inline-flex items-center gap-1">
           Reported days, not working days
@@ -291,6 +299,7 @@ export function ProductionRoom({
               perWorkingDay={perWorkingDay}
               scopeLabel={printScope}
               asOfDate={asOfDate}
+              showDictionary={showDictionary}
               onClose={() => onSelect(null)}
             />
           ) : undefined

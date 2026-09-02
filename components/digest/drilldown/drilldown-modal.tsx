@@ -68,7 +68,11 @@ const SKELETON_BARS = [
 
 export const DRILLDOWN_AXIS_TICK = {
   fill: "var(--muted-foreground)",
-  fontSize: 10,
+  // A recharts tick is an SVG <text>, so this can be any CSS length string —
+  // and reading the ambient type scale (2026-09-02) is what lets an analytics
+  // chart's axis grow with the rest of the page on a wide screen. Unset — the
+  // Home Digest — it resolves to the 10px it has always been.
+  fontSize: "var(--bw-fs-10, 10px)",
   fontFamily: "var(--font-geist-sans, inherit)",
 };
 
@@ -78,11 +82,14 @@ export function drilldownTooltipChrome() {
       background: "var(--popover)",
       border: "1px solid var(--border)",
       borderRadius: "0.5rem",
-      fontSize: "11px",
+      fontSize: "var(--bw-fs-11, 11px)",
       color: "var(--popover-foreground)",
       boxShadow: "0 4px 16px rgba(0,0,0,0.12)",
     } as React.CSSProperties,
-    labelStyle: { color: "var(--muted-foreground)", fontSize: "10px" },
+    labelStyle: {
+      color: "var(--muted-foreground)",
+      fontSize: "var(--bw-fs-10, 10px)",
+    },
     itemStyle: { color: "var(--popover-foreground)" },
     cursor: { stroke: "var(--border)", strokeWidth: 1 },
   };
@@ -305,13 +312,13 @@ export function DrilldownStat({
 }) {
   return (
     <div className="min-w-0 rounded-lg border bg-card/60 px-3 py-2" title={title}>
-      <div className="truncate text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
+      <div className="truncate text-[length:var(--bw-fs-105,10.5px)] font-medium uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
       <div className="mt-0.5 flex items-baseline gap-1">
         <span
           className={cn(
-            "truncate font-mono text-lg font-semibold tabular-nums leading-none",
+            "truncate font-mono text-[length:var(--bw-fs-18,1.125rem)] font-semibold tabular-nums leading-none",
             tone === "muted" && "text-muted-foreground",
             tone === "up" && "text-emerald-700 dark:text-emerald-300",
             tone === "down" && "text-red-700 dark:text-red-300"
@@ -320,13 +327,13 @@ export function DrilldownStat({
           {value}
         </span>
         {unit && (
-          <span className="shrink-0 text-[10.5px] text-muted-foreground">
+          <span className="shrink-0 text-[length:var(--bw-fs-105,10.5px)] text-muted-foreground">
             {unit}
           </span>
         )}
       </div>
       {sub && (
-        <div className="mt-0.5 truncate text-[10.5px] text-muted-foreground">
+        <div className="mt-0.5 truncate text-[length:var(--bw-fs-105,10.5px)] text-muted-foreground">
           {sub}
         </div>
       )}
@@ -360,12 +367,12 @@ export function DrilldownSection({
       className={cn("flex min-w-0 flex-col rounded-lg border bg-card/60", className)}
     >
       <header className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2">
-        <h4 className="min-w-0 truncate text-xs font-semibold tracking-tight">
+        <h4 className="min-w-0 truncate text-[length:var(--bw-fs-12,0.75rem)] font-semibold leading-[var(--bw-lh-xs,1rem)] tracking-tight">
           {title}
         </h4>
         <span className="flex shrink-0 items-center gap-2">
           {subtitle && (
-            <span className="text-[10.5px] text-muted-foreground">
+            <span className="text-[length:var(--bw-fs-105,10.5px)] text-muted-foreground">
               {subtitle}
             </span>
           )}

@@ -27,9 +27,25 @@ import { AnalyticsView } from "./analytics-view";
 import { AnalyticsError } from "./analytics-error";
 import { parseHidden } from "@/lib/analytics/period-selection";
 
-/** Same page-shell container the Home Digest uses, so the two rooms line up. */
+/**
+ * Same page-shell container the Home Digest uses, so the two rooms line up —
+ * plus the two things owner feedback R3 added to it.
+ *
+ * **`bw-analytics`** carries the page's type + geometry scale (`globals.css`).
+ * Every size on this page reads a variable, and this class is where the
+ * big-screen values are switched on above 1920 px.
+ *
+ * **The container itself is relaxed at the same breakpoint.** `max-w-7xl` is
+ * 1280 px, so on a 2560 px monitor the whole room was rendering inside HALF the
+ * screen with empty gutters either side — which is most of what "does not
+ * really scale well" was describing. 1760 px is chosen against the widest thing
+ * on the page rather than picked for looks: the KPI matrix at its big scale and
+ * a full nine-column year is 276 + 9x138 + 152 = 1670 px, so at 1760 the matrix
+ * finally fits without scrolling sideways, and the page still leaves real
+ * margin on a 2560 px screen rather than running edge to edge.
+ */
 const SHELL_CLS =
-  "mx-auto flex w-full max-w-7xl flex-col gap-4 px-3 py-4 sm:gap-6 sm:px-6 sm:py-5";
+  "bw-analytics mx-auto flex w-full max-w-7xl min-[1920px]:max-w-[1760px] flex-col gap-4 px-3 py-4 sm:gap-6 sm:px-6 sm:py-5";
 
 type Param = string | string[] | undefined;
 
@@ -51,6 +67,23 @@ function resolveYear(raw: Param, years: readonly number[], fallback: number): nu
 /** What the second chip under every value shows. Defaults to the year-ago read. */
 function resolveComparison(raw: Param): ComparisonMode {
   return first(raw) === "actual" ? "actual" : "yoy";
+}
+
+/**
+ * OWNER FEEDBACK R3 — the master `Definitions` switch.
+ *
+ * Spelled the way `wd` and `cmp` already are: the param exists ONLY in the
+ * non-default state, so the default view keeps a clean address and the param's
+ * presence always means something. It is the R2 hidden-set decision in its
+ * smallest form — "on" cannot be encoded, so it cannot be forgotten.
+ *
+ * It IS in the URL rather than in session state because it describes the whole
+ * page rather than one card's exploration of one row: it applies to every
+ * expand at once, so a shared link carrying it means the same thing to whoever
+ * opens it — which is exactly the test the expand's own Years filter fails.
+ */
+function resolveDictionary(raw: Param): boolean {
+  return first(raw) !== "off";
 }
 
 function resolveMetric(raw: Param): MetricKey | null {
@@ -87,7 +120,7 @@ export default async function AnalyticsPage({
   if (data.months.length === 0) {
     return (
       <div className={SHELL_CLS}>
-        <div className="rounded-lg border bg-card px-4 py-12 text-center text-sm text-muted-foreground">
+        <div className="rounded-lg border bg-card px-4 py-12 text-center text-[length:var(--bw-fs-14)] leading-[var(--bw-lh-sm)] text-muted-foreground">
           No delivery or feeding records yet — there is nothing to chart.
         </div>
       </div>
@@ -108,6 +141,7 @@ export default async function AnalyticsPage({
         // filtered view renders correctly on the FIRST paint. Absent means
         // every column, which is the default and the clean address.
         initialHidden={parseHidden(first(params.hide))}
+        initialShowDictionary={resolveDictionary(params.dict)}
       />
     </div>
   );

@@ -80,15 +80,15 @@ function Stat({
 }) {
   return (
     <div className="min-w-0 rounded-md border bg-background/40 px-2.5 py-1.5" title={title}>
-      <div className="truncate text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+      <div className="truncate text-[length:var(--bw-fs-10)] font-medium uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
       <div className="flex items-baseline gap-1">
-        <span className="truncate font-mono text-sm font-semibold tabular-nums">
+        <span className="truncate font-mono text-[length:var(--bw-fs-14)] leading-[var(--bw-lh-sm)] font-semibold tabular-nums">
           {value}
         </span>
         {unit && (
-          <span className="shrink-0 text-[10px] text-muted-foreground">{unit}</span>
+          <span className="shrink-0 text-[length:var(--bw-fs-10)] text-muted-foreground">{unit}</span>
         )}
       </div>
     </div>
@@ -109,17 +109,17 @@ export function AgingWatchlist({ watchlist, canViewPrices }: AgingWatchlistProps
     <section className="flex flex-col gap-2">
       <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <div className="min-w-0">
-          <h2 className="text-xs font-semibold uppercase tracking-wide">
+          <h2 className="text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] font-semibold uppercase tracking-wide">
             Piles to go and look at
           </h2>
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
+          <p className="text-[length:var(--bw-fs-11)] leading-relaxed text-muted-foreground">
             Every open pile holding more than a tonne, oldest first. Charcoal
             keeps losing weight the longer it sits, and the money already spent
             on it does not shrink with it.
           </p>
         </div>
         {watchlist.asOfDate && (
-          <span className="shrink-0 text-[10.5px] text-muted-foreground">
+          <span className="shrink-0 text-[length:var(--bw-fs-105)] text-muted-foreground">
             live · <span className="font-mono">{watchlist.asOfDate}</span>
           </span>
         )}
@@ -155,13 +155,13 @@ export function AgingWatchlist({ watchlist, canViewPrices }: AgingWatchlistProps
         </div>
 
         {watchlist.items.length === 0 ? (
-          <p className="px-3 py-8 text-center text-xs text-muted-foreground">
+          <p className="px-3 py-8 text-center text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] text-muted-foreground">
             No open pile is holding more than a tonne.
           </p>
         ) : (
           <div className="overflow-x-auto">
             <table
-              className="w-full table-fixed text-xs"
+              className="w-full table-fixed text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)]"
               style={{ minWidth: 640, borderCollapse: "separate", borderSpacing: 0 }}
             >
               <colgroup>
@@ -174,7 +174,7 @@ export function AgingWatchlist({ watchlist, canViewPrices }: AgingWatchlistProps
                 <col style={{ width: 108 }} />
               </colgroup>
               <thead>
-                <tr className="h-7 border-b">
+                <tr className="h-[var(--an-h-7)] border-b">
                   {[
                     ["Batch", "text-left"],
                     ["Block", "text-left"],
@@ -188,7 +188,7 @@ export function AgingWatchlist({ watchlist, canViewPrices }: AgingWatchlistProps
                       key={label}
                       scope="col"
                       className={cn(
-                        "border-b bg-muted px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground",
+                        "border-b bg-muted px-2 py-1 text-[length:var(--bw-fs-10)] font-medium uppercase tracking-wide text-muted-foreground",
                         align,
                       )}
                     >
@@ -204,10 +204,10 @@ export function AgingWatchlist({ watchlist, canViewPrices }: AgingWatchlistProps
                   return (
                     <tr
                       key={item.batchId}
-                      className="h-8 border-b transition-all duration-150 last:border-0 hover:bg-muted/30"
+                      className="h-[var(--an-h-8)] border-b transition-all duration-150 last:border-0 hover:bg-muted/30"
                     >
                       <td className="px-2 py-1">
-                        <span className="block truncate font-mono text-[11px] font-medium">
+                        <span className="block truncate font-mono text-[length:var(--bw-fs-11)] font-medium">
                           {item.batchCode}
                         </span>
                       </td>
@@ -216,7 +216,7 @@ export function AgingWatchlist({ watchlist, canViewPrices }: AgingWatchlistProps
                           <Link
                             href={`/inventory/blocking?block=${encodeURIComponent(item.blockLoc!)}`}
                             title={`Open ${item.blockLoc} in the Blocking grid`}
-                            className="inline-flex max-w-full items-center gap-0.5 rounded font-mono text-[11px] text-foreground underline-offset-2 transition-colors duration-150 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            className="inline-flex max-w-full items-center gap-0.5 rounded font-mono text-[length:var(--bw-fs-11)] text-foreground underline-offset-2 transition-colors duration-150 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           >
                             <span className="truncate">{item.blockLoc}</span>
                             <ArrowUpRight
@@ -225,39 +225,39 @@ export function AgingWatchlist({ watchlist, canViewPrices }: AgingWatchlistProps
                             />
                           </Link>
                         ) : (
-                          <span className="block truncate font-mono text-[11px] text-muted-foreground">
+                          <span className="block truncate font-mono text-[length:var(--bw-fs-11)] text-muted-foreground">
                             {item.blockLoc ?? "—"}
                           </span>
                         )}
                       </td>
                       <td className="px-2 py-1">
-                        <span className="inline-flex items-center rounded border border-border/70 px-1 text-[9.5px] uppercase leading-[15px] tracking-wide text-muted-foreground">
+                        <span className="inline-flex items-center rounded border border-border/70 px-1 text-[length:var(--bw-fs-95)] uppercase leading-[var(--bw-lh-15)] tracking-wide text-muted-foreground">
                           {item.status ?? "—"}
                         </span>
                       </td>
                       <td
-                        className="px-2 py-1 text-right font-mono text-[11px] tabular-nums"
+                        className="px-2 py-1 text-right font-mono text-[length:var(--bw-fs-11)] tabular-nums"
                         title="Weight-weighted average age of everything tipped into this pile. There is no first-in-first-out accounting — the feeding records say which pile kilos left, never which truckload within it."
                       >
                         {n(item.ageDays, 0)}
                       </td>
-                      <td className="px-2 py-1 text-right font-mono text-[11px] tabular-nums">
+                      <td className="px-2 py-1 text-right font-mono text-[length:var(--bw-fs-11)] tabular-nums">
                         {t1(item.balanceKg)}
-                        <span className="ml-0.5 text-[9.5px] text-muted-foreground">
+                        <span className="ml-0.5 text-[length:var(--bw-fs-95)] text-muted-foreground">
                           t
                         </span>
                       </td>
                       <td className="px-2 py-1">
                         {canViewPrices ? (
                           <div
-                            className="flex items-baseline justify-between gap-1 font-mono text-[11px] tabular-nums"
+                            className="flex items-baseline justify-between gap-1 font-mono text-[length:var(--bw-fs-11)] tabular-nums"
                             title={
                               item.hasUnpricedDelivery
                                 ? `${item.unpricedDeliveryCount} of this pile's ${item.deliveryCount} truckloads is still awaiting a price, so this average covers only the priced ones.`
                                 : undefined
                             }
                           >
-                            <span className="shrink-0 text-[9.5px] text-muted-foreground">
+                            <span className="shrink-0 text-[length:var(--bw-fs-95)] text-muted-foreground">
                               ₱
                             </span>
                             <span className="truncate">
@@ -265,7 +265,7 @@ export function AgingWatchlist({ watchlist, canViewPrices }: AgingWatchlistProps
                               {item.hasUnpricedDelivery && (
                                 <span
                                   aria-label="partly unpriced"
-                                  className="ml-px text-[9.5px] text-muted-foreground"
+                                  className="ml-px text-[length:var(--bw-fs-95)] text-muted-foreground"
                                 >
                                   ~
                                 </span>
@@ -273,21 +273,21 @@ export function AgingWatchlist({ watchlist, canViewPrices }: AgingWatchlistProps
                             </span>
                           </div>
                         ) : (
-                          <div className="flex items-center justify-end gap-1 font-mono text-[11px] text-muted-foreground/60">
+                          <div className="flex items-center justify-end gap-1 font-mono text-[length:var(--bw-fs-11)] text-muted-foreground/60">
                             <Lock className="size-2.5" aria-hidden />—
                           </div>
                         )}
                       </td>
                       <td className="px-2 py-1">
                         {canViewPrices ? (
-                          <div className="flex items-baseline justify-between gap-1 font-mono text-[11px] tabular-nums">
-                            <span className="shrink-0 text-[9.5px] text-muted-foreground">
+                          <div className="flex items-baseline justify-between gap-1 font-mono text-[length:var(--bw-fs-11)] tabular-nums">
+                            <span className="shrink-0 text-[length:var(--bw-fs-95)] text-muted-foreground">
                               ₱
                             </span>
                             <span className="truncate">{n(item.valuePhp, 0)}</span>
                           </div>
                         ) : (
-                          <div className="flex items-center justify-end gap-1 font-mono text-[11px] text-muted-foreground/60">
+                          <div className="flex items-center justify-end gap-1 font-mono text-[length:var(--bw-fs-11)] text-muted-foreground/60">
                             <Lock className="size-2.5" aria-hidden />—
                           </div>
                         )}
@@ -306,7 +306,7 @@ export function AgingWatchlist({ watchlist, canViewPrices }: AgingWatchlistProps
               type="button"
               onClick={() => setShowAll((v) => !v)}
               aria-expanded={showAll}
-              className="cursor-pointer rounded text-[11px] text-muted-foreground transition-colors duration-150 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="cursor-pointer rounded text-[length:var(--bw-fs-11)] text-muted-foreground transition-colors duration-150 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               {showAll
                 ? `Show the ${TOP_N} oldest only`
@@ -316,7 +316,7 @@ export function AgingWatchlist({ watchlist, canViewPrices }: AgingWatchlistProps
         )}
       </div>
 
-      <p className="text-[10.5px] leading-relaxed text-muted-foreground">
+      <p className="text-[length:var(--bw-fs-105)] leading-relaxed text-muted-foreground">
         <strong className="font-medium text-foreground">
           Closed blocks are not on this list.
         </strong>{" "}

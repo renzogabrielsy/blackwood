@@ -51,8 +51,10 @@ import { SECTION_ACCENT } from "@/lib/analytics/metrics";
 import type { CampaignCost } from "@/lib/analytics/types";
 
 // Explicit pixel widths — the sum below IS the table's minWidth.
-const W_LABEL = 232;
-const W_CAMPAIGN = 128;
+// R3: CSS variables, so the widths move with the big-screen type scale.
+// Big values: 232 -> 276, 128 -> 152.
+const W_LABEL = "var(--an-w-name)";
+const W_CAMPAIGN = "var(--an-w-campaign)";
 
 type Format = "tonnes" | "php" | "pct" | "count";
 
@@ -240,7 +242,7 @@ function CampaignCell({
         className="border-l px-2 py-1"
         title="₱ figures are withheld for your role. Nothing was sent to this browser."
       >
-        <div className="flex h-5 items-center justify-end gap-1 font-mono text-xs text-muted-foreground/60">
+        <div className="flex h-[var(--an-h-5)] items-center justify-end gap-1 font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] text-muted-foreground/60">
           <Lock className="size-2.5" aria-hidden />
           <span>—</span>
         </div>
@@ -258,7 +260,7 @@ function CampaignCell({
           "No figure for this campaign — blank, never zero."
         }
       >
-        <div className="flex h-5 items-center justify-end font-mono text-xs text-muted-foreground/60">
+        <div className="flex h-[var(--an-h-5)] items-center justify-end font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] text-muted-foreground/60">
           —
         </div>
       </td>
@@ -278,15 +280,15 @@ function CampaignCell({
   return (
     <td className="border-l px-2 py-1" title={title.join(" · ")}>
       {row.format === "php" ? (
-        <div className="flex h-5 items-baseline justify-between gap-1 font-mono text-[13px] tabular-nums">
-          <span className="shrink-0 text-[11px] text-muted-foreground">₱</span>
+        <div className="flex h-[var(--an-h-5)] items-baseline justify-between gap-1 font-mono text-[length:var(--bw-fs-13)] tabular-nums">
+          <span className="shrink-0 text-[length:var(--bw-fs-11)] text-muted-foreground">₱</span>
           <span className="flex min-w-0 items-baseline gap-0.5">
             <span className={cn("truncate", row.star && "font-semibold")}>
               {fmt(row, v)}
             </span>
             {estimated && (
               <span
-                className="shrink-0 text-[11px] leading-none text-muted-foreground"
+                className="shrink-0 text-[length:var(--bw-fs-11)] leading-none text-muted-foreground"
                 aria-label="estimated"
               >
                 ~
@@ -295,12 +297,12 @@ function CampaignCell({
           </span>
         </div>
       ) : (
-        <div className="flex h-5 items-baseline justify-end font-mono text-[13px] tabular-nums">
+        <div className="flex h-[var(--an-h-5)] items-baseline justify-end font-mono text-[length:var(--bw-fs-13)] tabular-nums">
           <span className={cn("truncate", row.star && "font-semibold")}>
             {fmt(row, v)}
           </span>
           {row.format === "pct" && (
-            <span className="ml-px text-[11px] text-muted-foreground">%</span>
+            <span className="ml-px text-[length:var(--bw-fs-11)] text-muted-foreground">%</span>
           )}
         </div>
       )}
@@ -325,13 +327,13 @@ export function BatchCostPanel({ campaigns, canViewPrices }: BatchCostPanelProps
 
   if (campaigns.length === 0) {
     return (
-      <section className="rounded-lg border bg-card px-4 py-8 text-center text-xs text-muted-foreground">
+      <section className="rounded-lg border bg-card px-4 py-8 text-center text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] text-muted-foreground">
         No production campaigns recorded yet.
       </section>
     );
   }
 
-  const minWidth = W_LABEL + campaigns.length * W_CAMPAIGN;
+  const minWidth = `calc(${W_LABEL} + ${campaigns.length} * ${W_CAMPAIGN})`;
 
   return (
     <section className="flex flex-col gap-2">
@@ -341,12 +343,12 @@ export function BatchCostPanel({ campaigns, canViewPrices }: BatchCostPanelProps
       >
         <div className="min-w-0">
           <h2
-            className="text-[13px] font-semibold uppercase tracking-wide"
+            className="text-[length:var(--bw-fs-13)] font-semibold uppercase tracking-wide"
             style={{ color: SECTION_ACCENT.campaigns }}
           >
             By production batch
           </h2>
-          <p className="text-xs leading-relaxed text-muted-foreground">
+          <p className="text-[length:var(--bw-fs-12)] leading-relaxed text-muted-foreground">
             A campaign is the unit the plant actually runs, and it{" "}
             <strong className="font-medium text-foreground">
               spans calendar months
@@ -356,14 +358,14 @@ export function BatchCostPanel({ campaigns, canViewPrices }: BatchCostPanelProps
             different and also-true answer from the matrix above.
           </p>
         </div>
-        <span className="shrink-0 text-[11.5px] text-muted-foreground">
+        <span className="shrink-0 text-[length:var(--bw-fs-115)] text-muted-foreground">
           {campaigns.length} campaigns · scroll left for older
         </span>
       </header>
 
       <div ref={scrollerRef} className="overflow-x-auto rounded-lg border bg-card">
         <table
-          className="table-fixed text-sm"
+          className="table-fixed text-[length:var(--bw-fs-14)] leading-[var(--bw-lh-sm)]"
           style={{
             width: "max-content",
             minWidth,
@@ -379,11 +381,11 @@ export function BatchCostPanel({ campaigns, canViewPrices }: BatchCostPanelProps
           </colgroup>
 
           <thead>
-            <tr className="h-9 border-b">
+            <tr className="h-[var(--an-h-9)] border-b">
               {/* Sticky-left AND opaque — it overlaps scrolling cells. */}
               <th
                 scope="col"
-                className="frozen-col frozen-edge border-b bg-muted px-2 py-1 text-left text-[11.5px] font-medium uppercase tracking-wide text-muted-foreground"
+                className="frozen-col frozen-edge border-b bg-muted px-2 py-1 text-left text-[length:var(--bw-fs-115)] font-medium uppercase tracking-wide text-muted-foreground"
                 style={{ left: 0 }}
               >
                 Campaign
@@ -399,10 +401,10 @@ export function BatchCostPanel({ campaigns, canViewPrices }: BatchCostPanelProps
                   } · ${coverageSentence(c)}`}
                   className="border-b border-l bg-muted px-2 py-1 text-right align-bottom"
                 >
-                  <span className="block truncate text-[11.5px] font-medium uppercase tracking-wide text-muted-foreground">
+                  <span className="block truncate text-[length:var(--bw-fs-115)] font-medium uppercase tracking-wide text-muted-foreground">
                     {c.productionBatch.slice(0, 3)} {c.campaignYear}
                   </span>
-                  <span className="block truncate font-mono text-[10px] leading-3 text-muted-foreground/70">
+                  <span className="block truncate font-mono text-[length:var(--bw-fs-10)] leading-[var(--bw-lh-3)] text-muted-foreground/70">
                     {c.lastFedDate ? c.lastFedDate.slice(5) : "not fed"}
                   </span>
                 </th>
@@ -417,7 +419,7 @@ export function BatchCostPanel({ campaigns, canViewPrices }: BatchCostPanelProps
                 <tr
                   key={row.key}
                   className={cn(
-                    "group h-10 border-b transition-all duration-150 last:border-0",
+                    "group h-[var(--an-h-10)] border-b transition-all duration-150 last:border-0",
                     row.star ? "bg-muted/30" : "hover:bg-muted/20",
                   )}
                 >
@@ -442,13 +444,13 @@ export function BatchCostPanel({ campaigns, canViewPrices }: BatchCostPanelProps
                       <span className="min-w-0">
                         <span
                           className={cn(
-                            "block truncate text-[12.5px] leading-4",
+                            "block truncate text-[length:var(--bw-fs-125)] leading-[var(--bw-lh-4)]",
                             row.star ? "font-semibold" : "font-medium",
                           )}
                         >
                           {row.label}
                         </span>
-                        <span className="block truncate text-[10.5px] leading-4 text-muted-foreground">
+                        <span className="block truncate text-[length:var(--bw-fs-105)] leading-[var(--bw-lh-4)] text-muted-foreground">
                           {restricted ? "restricted" : row.sublabel}
                         </span>
                       </span>
@@ -468,11 +470,11 @@ export function BatchCostPanel({ campaigns, canViewPrices }: BatchCostPanelProps
 
             {/* The coverage line — so a blank true price is explained IN the
                 table rather than only in a hover nobody hunts for. */}
-            <tr className="h-7 border-t bg-muted/20">
+            <tr className="h-[var(--an-h-7)] border-t bg-muted/20">
               <th
                 scope="row"
                 title="A campaign's true cost is only final once every block it fed has been closed and priced. This line says how far along that is."
-                className="frozen-col frozen-edge bg-muted px-2 py-1 text-left text-[11px] font-medium uppercase tracking-wide text-muted-foreground"
+                className="frozen-col frozen-edge bg-muted px-2 py-1 text-left text-[length:var(--bw-fs-11)] font-medium uppercase tracking-wide text-muted-foreground"
                 style={{ left: 0 }}
               >
                 Blocks closed / priced
@@ -485,7 +487,7 @@ export function BatchCostPanel({ campaigns, canViewPrices }: BatchCostPanelProps
                 >
                   <span
                     className={cn(
-                      "font-mono text-[11px] tabular-nums",
+                      "font-mono text-[length:var(--bw-fs-11)] tabular-nums",
                       c.isFullyCovered ? "text-muted-foreground" : "text-foreground",
                     )}
                   >
@@ -500,7 +502,7 @@ export function BatchCostPanel({ campaigns, canViewPrices }: BatchCostPanelProps
         </table>
       </div>
 
-      <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+      <p className="text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
         A <span className="font-mono">~</span> marks a figure measured over only
         part of the campaign — either blocks that are not yet closed and priced,
         or kilos fed out of piles with no delivery record at all. A dash is never

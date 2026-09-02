@@ -880,3 +880,157 @@ a thin wrapper over the same `foldPeriod` + `rawValue` pair every column already
 mean of the surviving cells stays inexpressible in `matrix.ts`. And no filter is allowed to
 change an arithmetic comparison: hiding a period removes it from view and from the fold,
 never from the record a neighbouring figure is measured against.
+
+---
+
+## 8. OWNER FEEDBACK ROUND 3 APPLIED — 2026-09-02 (big-screen scale + three controls)
+
+Renzo, on the live page: *"Make it more visible on bigger screens. It utilizes the space
+well on my smaller 14-inch MacBook Pro screen, but on my 27-inch 1440p monitor it does not
+really scale well. Text is much smaller. Overall I'd like to see things clearer."* — plus
+three follow-ons in the same round: *"toggle on/off the 3 month average line in the
+charts"*, *"toggle on and off the 'what it is' sections below the chart (could be a master
+toggle instead)"*, and *"ability to default to landscape when printing"*.
+
+### 8.1 The breakpoint is 1920px, and Tailwind's `2xl` would have been wrong
+
+A 14-inch MacBook Pro reports a **logical** width of **1512 px** at its default scaling and
+**1800 px** in "More Space". Tailwind's `2xl` is **1536 px**, so a `2xl:` bump would have
+fired on the exact laptop Renzo says already reads well — the one screen this change had to
+leave alone. 1800 is therefore the highest width that must stay small, and **1920** is the
+next standard desktop step above it. A 2560-wide monitor crosses it with a window at 75% of
+the screen; a window narrower than 1920 on that monitor is genuinely laptop-sized, so
+falling back to the small scale there is correct rather than a miss.
+
+ONE step, not a ladder: a second breakpoint doubles what has to be verified and there is no
+third screen in evidence.
+
+**Measured at the boundary:** 1800 px → small (`--bw-fs-14: .875rem`, name column 232 px);
+**1919 px → small**; **1920 px → big** (17 px, 276 px). No JavaScript is involved, so there
+is no `matchMedia`, no hydration seam and nothing to get wrong on a resize.
+
+### 8.2 A CSS-variable ladder, because type and column width cannot be allowed to drift
+
+The page's geometry is not only type: four tables carry explicit `<colgroup>` widths whose
+SUM is each table's `minWidth` ("never crush, always scroll"). A type bump that left those
+widths alone would clip a header — exactly the failure R1 re-measured every width to avoid.
+Both are now variables on one container (`.bw-analytics`, `globals.css`), so they can only
+move together.
+
+**The small scale is declared on `:root`, only the big one on `.bw-analytics`.** Two
+reasons, both load-bearing: Radix PORTALS the year `Select` and both `Popover`s to `<body>`,
+outside the container, so a `var()` that resolved to nothing there would have dropped the
+declaration entirely; and the shared drill-down chassis can then read the same variables
+with its own literal as the fallback, leaving the Home Digest reading the number it always
+did. (All three portals also carry `bw-analytics` so they scale WITH the page — the `:root`
+declaration is the net under them, not the mechanism.)
+
+**Type — one variable per size that already existed, so the small scale is reproduced
+exactly rather than approximated by merging sizes into a shorter ladder (~1.19x):**
+
+| token | small | big | where |
+|---|---|---|---|
+| `--bw-fs-9` | 9 | 11 | direction glyph |
+| `--bw-fs-95` | 9.5 | 11.5 | "today" chip |
+| `--bw-fs-10` | 10 | 12 | comparison chips, rail ordinals, chart axis ticks |
+| `--bw-fs-105` | 10.5 | 12.5 | stat labels, card subtitles |
+| `--bw-fs-11` | 11 | 13 | sublabels, section bands, deltas, chart legend |
+| `--bw-fs-115` | 11.5 | 13.5 | table headers |
+| `--bw-fs-12` (`text-xs`) | .75rem | 14 | body copy, controls, checklist |
+| `--bw-fs-125` | 12.5 | 15 | |
+| `--bw-fs-13` | 13 | 15.5 | KPI row labels |
+| `--bw-fs-14` (`text-sm`) | .875rem | 17 | **cell values** |
+| `--bw-fs-15` | 15 | 18 | |
+| `--bw-fs-16` (`text-base`) | 1rem | 19 | |
+| `--bw-fs-18` (`text-lg`) | 1.125rem | 22 | drill-down stat value |
+
+The four that stand in for a NAMED Tailwind size keep Tailwind's own **rem** units, so the
+small scale is byte-identical even for a reader who has raised their browser's root font
+size; the rest were px literals in the source and stay px.
+
+**Boxes:** row 62 → 74, header row 36 → 42, section band 28 → 33, value line 20 → 24, delta
+line 16 → 19, controls 32 → 38. **Charts:** expand 260 → **340**, supplier expand 220 →
+**290** — `ResponsiveContainer` is `height="100%"` inside those boxes, so recharts
+re-measures for free.
+
+**Widths, re-derived at the big scale (~1.19x, matching the type):**
+
+| table | small | big |
+|---|---|---|
+| KPI matrix | 232 / 116 / 128 | **276 / 138 / 152** |
+| Campaign panel | 232 / 128 | **276 / 152** |
+| Supplier matrix | 196 / 92 / 124 | **234 / 110 / 148** |
+| Grade mix | 184 / 92 / 124 | **220 / 110 / 148** |
+| Premium table | 148 / 78 / 196 / 82 / 92 | **176 / 94 / 234 / 98 / 110** |
+
+Each table's `minWidth` became a `calc()` over the same variables, so the "sum of the
+colgroup IS the minWidth" guarantee is now structural rather than re-typed. The in-place
+expand's clamp became a CSS `min(measuredFrame, thatCalc)` for the same reason — identical
+semantics, resolved at the same breakpoint.
+
+**The container was the other half of the problem.** `max-w-7xl` is 1280 px, so on a 2560 px
+monitor the whole room rendered inside HALF the screen. Above 1920 it relaxes to
+**1760 px** — sized against the widest real object rather than picked for looks: the KPI
+matrix at the big scale with a nine-column year is 276 + 9x138 + 152 = **1670 px**, so at
+1760 it finally fits with no sideways scroll and the page still leaves real margin.
+
+### 8.3 The three controls
+
+**The 3-period average line** — a labelled checkbox beside the chart card's `Years` filter,
+DEFAULT ON. Not a clickable recharts legend: its hit target is a ~10 px swatch that looks
+exactly like the static legend it has always been (a control that must be discovered by
+clicking things is not a control), and it sits INSIDE the print card. The line is genuinely
+removed rather than hidden, so recharts drops its legend entry with it and print needs no
+rule of its own. `canDrawAvg()` is the ONE definition of when the line can exist at all —
+never at YEAR granularity, never on the paired Block-price-vs-True-cost chart — and where it
+returns false the control is not rendered either. **The paired chart carries no average
+today and still does not.** Session state per card, matched to the `Years` filter beside it.
+
+**`Definitions` — a MASTER page switch** (`?dict=off`), beside `Per working day` and wearing
+the same `Switch`, DEFAULT ON. Master rather than per-card for a reason the per-card version
+could not meet: both matrices key an expand by metric, so a per-card setting would come back
+on the moment a different row was opened. It governs the two dictionary CARDS only — every
+row name keeps its own `Info` popover, which is the definition at the point of use and costs
+no vertical space. The param is spelled only in the non-default state (the R2 rule), so the
+default view keeps a clean address.
+
+**Landscape print** — `@page { size: A4 landscape; margin: 12mm }`. It is the right default
+rather than a preference because the card is a WIDE object: measured under the real print
+rules, landscape keeps the chart and its side rail two-column (`676px 320px`) and the stat
+strip at 246 px a cell, where portrait collapses the rail UNDER the chart (`lg:` is 1024 px,
+portrait's printable column is 703 px) and squeezes the stats to 164 px.
+
+### 8.4 Measured in the browser (throwaway harness under `app/dev/table-playground/`, deleted)
+
+- **1512 px is byte-identical to before**, both themes: header 11.5 px, row label 13 px,
+  sublabel 11 px, value 14 px, delta 11 px, band 11 px; widths 232/116/128, campaign 232/128,
+  supplier 196/92/124, premium 148/78/196/82/92, grade 184/92/124; container 1280 px; zero
+  horizontal document overflow.
+- **2560 px**: header 13.5, label 15.5, sublabel 13, value 17, band 13; row box 74, header row
+  42, band 33, value line 24; container 1760; KPI table 1670 inside a 1710 frame — **no
+  sideways scroll**; campaign 1644, supplier 1372, grade 1358, premium 712, all inside the
+  frame; chart 340 px, stat value 22 px, axis ticks 12 px; **zero truncated labels** (the two
+  that ellipsised at 1512 both fit); zero horizontal document overflow.
+- **Frozen panes at both scales**: the KPI name column stays `position: sticky; left: 0;
+  z-index: 10` over a SOLID token and **drifts 0 px** with the periods scrolled 174 / 300 px.
+  The supplier matrix's in-place expand resolves to
+  `min(1710px, calc(--an-w-supplier + 9 * --an-w-month + --an-w-month-total))` = 1372 px and
+  drifts 0 px.
+- **All three portals scale**: the `Columns` popover (items 14 px, header 13 px), the row
+  `Info` popover, and the year `Select` (option 14 px) — each inside `.bw-analytics`, each
+  inside the viewport.
+- **375 px unchanged**: container 375, small scale, **zero horizontal document overflow**,
+  every table scrolling inside its own wrapper.
+- **Print, emulated by lifting every `@media print` rule into a live stylesheet**: `@page`
+  reports `a4 landscape / 12mm`; the card lands at `top: 0, left: 0` at the full 1032 px
+  printable width; the on-screen header and both `data-print-hide` controls are `display:
+  none`; the paper-only title and restatement lines are `display: block`; and the scale is
+  **pinned small on paper** (`--bw-fs-14: .875rem`, `--an-chart: 260px`) so what R1 measured
+  onto a sheet keeps landing on a sheet whatever monitor the dialog was opened from. A plain
+  metric (RC OUT) is **0.96 of a page**; a rail-carrying metric with `Definitions` off is
+  0.91 (Ending inventory) and 0.73 (Block price).
+- **Both toggles**: the average line and its legend entry disappear together and come back
+  (`aria-checked` follows); the paired row and YEAR granularity render no control at all;
+  `Definitions` off removes both dictionary cards from the top matrix's expand AND from the
+  production room's own expand, takes the card from 773 → 611 px, writes `?dict=off`, drops
+  the param again when switched back on, and leaves all 44 row `Info` buttons in place.

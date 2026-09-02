@@ -47,7 +47,8 @@ import type { SupplierRow, SupplierYear } from "@/lib/analytics/supplier";
 import { SUPPLIER_DICTIONARY } from "@/lib/analytics/supplier";
 import { DictionaryPopover } from "./metric-info";
 
-const CHART_HEIGHT = 220;
+// R3: 220 -> 290 px above 1920 px. See `metric-expand.tsx`.
+const CHART_HEIGHT = "var(--an-chart-sm)";
 
 function t1(kg: number | null): string {
   if (kg == null) return "—";
@@ -145,10 +146,10 @@ export function SupplierExpand({
     <section className="animate-fade-up rounded-lg border bg-card">
       <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b px-3 py-2">
         <div className="min-w-0">
-          <h3 className="truncate text-sm font-semibold tracking-tight">
+          <h3 className="truncate text-[length:var(--bw-fs-14)] leading-[var(--bw-lh-sm)] font-semibold tracking-tight">
             {row.supplier}
           </h3>
-          <p className="text-[10.5px] text-muted-foreground">
+          <p className="text-[length:var(--bw-fs-105)] text-muted-foreground">
             {row.returnsOnly
               ? `Bought nothing in ${data.year} — only returning sun-dried material carried their name.`
               : `#${row.rank} of ${data.concentration.supplierCount} sellers in ${data.year} · active in ${row.activeMonths} month${row.activeMonths === 1 ? "" : "s"}`}
@@ -157,7 +158,7 @@ export function SupplierExpand({
         <button
           type="button"
           onClick={onClose}
-          className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors duration-150 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-[length:var(--bw-fs-11)] text-muted-foreground transition-colors duration-150 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <X className="size-3" aria-hidden />
           Close
@@ -275,7 +276,7 @@ export function SupplierExpand({
                     }
                   />
                   <Legend
-                    wrapperStyle={{ fontSize: "11px", paddingTop: 4 }}
+                    wrapperStyle={{ fontSize: "var(--bw-fs-11)", paddingTop: 4 }}
                     formatter={(v) =>
                       v === "premium"
                         ? "Premium (₱/kg, right)"
@@ -326,7 +327,7 @@ export function SupplierExpand({
             <BreakdownRail
               items={railItems}
               emptyText="Nothing recorded for this supplier in the selected year."
-              maxHeight={CHART_HEIGHT + 20}
+              maxHeight={`calc(${CHART_HEIGHT} + 20px)`}
             />
           </DrilldownSection>
         </div>
@@ -337,7 +338,7 @@ export function SupplierExpand({
               className="mt-0.5 size-3 shrink-0 text-muted-foreground"
               aria-hidden
             />
-            <p className="text-[11px] leading-relaxed text-muted-foreground">
+            <p className="text-[length:var(--bw-fs-11)] leading-relaxed text-muted-foreground">
               <strong className="font-medium text-foreground">
                 {t1(row.sundryKg)} t returned from sundry
               </strong>{" "}
@@ -358,7 +359,7 @@ export function SupplierExpand({
         )}
 
         {!canViewPrices && (
-          <p className="flex items-center gap-1.5 text-[10.5px] text-muted-foreground">
+          <p className="flex items-center gap-1.5 text-[length:var(--bw-fs-105)] text-muted-foreground">
             <Lock className="size-3 shrink-0" aria-hidden />
             Prices and premiums are withheld server-side for your role; the
             volume and participation figures above are live.

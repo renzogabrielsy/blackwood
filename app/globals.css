@@ -789,6 +789,252 @@ input[type=number] {
   box-shadow: inset 3px 0 0 0 var(--bw-accent, var(--border));
 }
 
+/* ─── /analytics — THE BIG-SCREEN TYPE SCALE (owner feedback R3, 2026-09-02) ─
+   Renzo: *"Make it more visible on bigger screens. It utilizes the space well
+   on my smaller 14-inch MacBook Pro screen, but on my 27-inch 1440p monitor it
+   does not really scale well. Text is much smaller. Overall I'd like to see
+   things clearer."*
+
+   ── WHY A CSS-VARIABLE LADDER AND NOT RESPONSIVE UTILITIES ────────────────
+   The page's geometry is not only type: the four tables carry explicit
+   `<colgroup>` widths whose SUM is each table's `minWidth` ("never crush,
+   always scroll"). A type bump that left those widths alone would clip a
+   header — the exact failure R1 re-measured every width to avoid. Declaring
+   BOTH the type and the widths as variables on one container means the two can
+   only ever move together, and it keeps the whole thing out of JavaScript:
+   there is no `matchMedia`, no hydration seam, and a chart height or a column
+   width is resolved by the same media query that resolved the font under it.
+
+   ── WHY 1920px, AND WHY NOT TAILWIND'S `2xl` ──────────────────────────────
+   `2xl` is 1536px and a 14-inch MacBook Pro reports a LOGICAL width of 1512px
+   by default and 1800px in "More Space" — so `2xl:` would fire on the laptop
+   Renzo says already reads well, which is precisely the screen this change
+   must not touch. 1800 is therefore the highest width that must stay small,
+   and 1920 is the next standard desktop step above it. A 2560-wide monitor
+   crosses it with a window at 75% of the screen; a window NARROWER than 1920
+   on that monitor is genuinely laptop-sized, so falling back to the small
+   scale there is correct rather than a miss.
+
+   ONE step, not a ladder of them: a second breakpoint doubles what has to be
+   verified and there is no third screen in evidence.
+
+   ── THE SCALE ──────────────────────────────────────────────────────────────
+   ~1.19x on type, applied as a VAR PER EXISTING SIZE rather than by merging
+   sizes into a smaller ladder — so the small scale is reproduced exactly (the
+   1512px rendering is unchanged, byte for byte) and the big scale is the same
+   design one step up rather than a redesign. Widths move by the same ~1.19x,
+   re-derived against the bigger glyphs; box heights (row, cell, header) move
+   with the line boxes they contain.
+
+   ── WHERE THE TWO SCALES ARE DECLARED, AND WHY THE SMALL ONE IS ON :root ──
+   The SMALL scale — every value the page renders today — is declared on
+   `:root`, and only the BIG one is scoped to `.bw-analytics`. Two reasons, both
+   load-bearing:
+
+     1. **Radix portals escape the container.** The year `SelectContent` and
+        both `PopoverContent`s render into `document.body`, OUTSIDE the shell
+        div that carries the class. Had the small values lived only on
+        `.bw-analytics`, every `var()` inside a popover would have resolved to
+        nothing and the declaration would have been dropped at computed-value
+        time — a font-size silently inheriting from <body>. On `:root` the
+        worst case is "renders exactly as it does today", which is a safe
+        floor rather than a broken one. (Those three portals ALSO carry
+        `bw-analytics` so they scale WITH the page; the :root declaration is
+        the net under them, not the mechanism.)
+     2. **The shared drill-down chassis can opt in without knowing about us.**
+        `components/digest/drilldown/` reads a few `--bw-fs-*` with the literal
+        it always had as the fallback. With the small scale on `:root` the Home
+        Digest reads the identical number it always did, and the same component
+        grows when it is mounted inside `.bw-analytics` on a wide screen.
+
+   `--bw-fs-*` / `--bw-lh-*` are therefore a NEUTRAL ambient type scale;
+   `--an-*` is this page's own geometry and is both declared and consumed only
+   here. */
+:root {
+  /* Type — one var per size that exists in the page today. */
+  --bw-fs-9: 9px;
+  --bw-fs-95: 9.5px;
+  --bw-fs-10: 10px;
+  --bw-fs-105: 10.5px;
+  --bw-fs-11: 11px;
+  --bw-fs-115: 11.5px;
+  /* The four that stand in for a NAMED Tailwind size keep Tailwind's own rem
+     units, so the small scale is byte-identical to what those classes emit
+     — including for a reader who has raised their browser's root font size.
+     The rest were px literals in the source (`text-[10.5px]`) and stay px. */
+  --bw-fs-12: 0.75rem; /* text-xs   */
+  --bw-fs-125: 12.5px;
+  --bw-fs-13: 13px;
+  --bw-fs-14: 0.875rem; /* text-sm   */
+  --bw-fs-15: 15px;
+  --bw-fs-16: 1rem; /* text-base */
+  --bw-fs-18: 1.125rem; /* text-lg — the drill-down stat value */
+
+  /* Line heights. `--bw-lh-xs/sm/base` are the ones Tailwind's named sizes
+     carry implicitly and which an explicit font-size var would otherwise
+     drop; the numbered ones are the explicit `leading-*` in use. */
+  --bw-lh-xs: 1rem;
+  --bw-lh-sm: 1.25rem;
+  --bw-lh-base: 1.5rem;
+  --bw-lh-3: 12px;
+  --bw-lh-4: 16px;
+  --bw-lh-13: 13px;
+  --bw-lh-14: 14px;
+  --bw-lh-15: 15px;
+  --bw-lh-17: 17px;
+
+  /* Box heights — the cell/row/header boxes the line boxes above sit in. */
+  --an-h-4: 16px; /* the delta line under a value */
+  --an-h-5: 20px; /* the value line itself        */
+  --an-h-8: 32px; /* control height               */
+  --an-h-9: 36px; /* matrix header row            */
+  --an-h-15: 15px; /* the comparison-chip line     */
+  --an-h-30: 30px; /* supplier / grade cell body   */
+  --an-h-48: 48px; /* supplier / grade row         */
+  --an-h-62: 62px; /* KPI matrix row               */
+  --an-h-7: 28px; /* section band + sub-header row */
+  --an-h-10: 40px; /* campaign panel row           */
+
+  /* Column widths. The sum of each set IS that table's minWidth. */
+  --an-w-name: 232px; /* KPI matrix · frozen metric column   */
+  --an-w-period: 116px; /* KPI matrix · one period column      */
+  --an-w-total: 128px; /* KPI matrix · trailing summary       */
+  --an-w-campaign: 128px; /* batch-cost panel · one campaign     */
+  --an-w-supplier: 196px; /* supplier matrix · frozen name       */
+  --an-w-month: 92px; /* supplier + grade · one month        */
+  --an-w-month-total: 124px; /* supplier + grade · YTD              */
+  --an-w-grade: 184px; /* grade mix · frozen name             */
+  --an-w-prem-name: 148px; /* premium table · supplier            */
+  --an-w-prem-price: 78px; /* premium table · ₱/kg                */
+  --an-w-prem-bar: 196px; /* premium table · diverging bar       */
+  --an-w-prem-premium: 82px; /* premium table · premium             */
+  --an-w-prem-kg: 92px; /* premium table · priced kg           */
+
+  /* Charts — the "see things clearer" payload. `ResponsiveContainer` is
+     `height="100%"` inside these boxes, so recharts re-measures for free. */
+  --an-chart: 260px;
+  --an-chart-sm: 220px;
+}
+
+@media (min-width: 1920px) {
+  .bw-analytics {
+    --bw-fs-9: 11px;
+    --bw-fs-95: 11.5px;
+    --bw-fs-10: 12px;
+    --bw-fs-105: 12.5px;
+    --bw-fs-11: 13px;
+    --bw-fs-115: 13.5px;
+    --bw-fs-12: 14px;
+    --bw-fs-125: 15px;
+    --bw-fs-13: 15.5px;
+    --bw-fs-14: 17px;
+    --bw-fs-15: 18px;
+    --bw-fs-16: 19px;
+    --bw-fs-18: 22px;
+
+    --bw-lh-xs: 19px;
+    --bw-lh-sm: 24px;
+    --bw-lh-base: 28px;
+    --bw-lh-3: 14px;
+    --bw-lh-4: 19px;
+    --bw-lh-13: 15.5px;
+    --bw-lh-14: 17px;
+    --bw-lh-15: 18px;
+    --bw-lh-17: 20px;
+
+    --an-h-4: 19px;
+    --an-h-5: 24px;
+    --an-h-8: 38px;
+    --an-h-9: 42px;
+    --an-h-15: 18px;
+    --an-h-30: 36px;
+    --an-h-48: 57px;
+    --an-h-62: 74px;
+    --an-h-7: 33px;
+    --an-h-10: 47px;
+
+    --an-w-name: 276px;
+    --an-w-period: 138px;
+    --an-w-total: 152px;
+    --an-w-campaign: 152px;
+    --an-w-supplier: 234px;
+    --an-w-month: 110px;
+    --an-w-month-total: 148px;
+    --an-w-grade: 220px;
+    --an-w-prem-name: 176px;
+    --an-w-prem-price: 94px;
+    --an-w-prem-bar: 234px;
+    --an-w-prem-premium: 98px;
+    --an-w-prem-kg: 110px;
+
+    --an-chart: 340px;
+    --an-chart-sm: 290px;
+  }
+}
+
+/* PAPER IS ALWAYS THE SMALL SCALE, pinned rather than inherited.
+   A print context evaluates width media queries against the PAGE BOX (A4 is
+   ~794 CSS px), so `min-width: 1920px` would not match anyway — but relying on
+   that is relying on an engine detail. Re-declaring the small values here
+   makes it a stated rule: what R1 measured onto one A4 sheet keeps landing on
+   one A4 sheet whatever monitor the dialog was opened from. It is placed AFTER
+   the big block on purpose — same specificity, so source order decides. */
+@media print {
+  .bw-analytics {
+    --bw-fs-9: 9px;
+    --bw-fs-95: 9.5px;
+    --bw-fs-10: 10px;
+    --bw-fs-105: 10.5px;
+    --bw-fs-11: 11px;
+    --bw-fs-115: 11.5px;
+    --bw-fs-12: 0.75rem;
+    --bw-fs-125: 12.5px;
+    --bw-fs-13: 13px;
+    --bw-fs-14: 0.875rem;
+    --bw-fs-15: 15px;
+    --bw-fs-16: 1rem;
+    --bw-fs-18: 1.125rem;
+
+    --bw-lh-xs: 1rem;
+    --bw-lh-sm: 1.25rem;
+    --bw-lh-base: 1.5rem;
+    --bw-lh-3: 12px;
+    --bw-lh-4: 16px;
+    --bw-lh-13: 13px;
+    --bw-lh-14: 14px;
+    --bw-lh-15: 15px;
+    --bw-lh-17: 17px;
+
+    --an-h-4: 16px;
+    --an-h-5: 20px;
+    --an-h-8: 32px;
+    --an-h-9: 36px;
+    --an-h-15: 15px;
+    --an-h-30: 30px;
+    --an-h-48: 48px;
+    --an-h-62: 62px;
+    --an-h-7: 28px;
+    --an-h-10: 40px;
+
+    --an-w-name: 232px;
+    --an-w-period: 116px;
+    --an-w-total: 128px;
+    --an-w-campaign: 128px;
+    --an-w-supplier: 196px;
+    --an-w-month: 92px;
+    --an-w-month-total: 124px;
+    --an-w-grade: 184px;
+    --an-w-prem-name: 148px;
+    --an-w-prem-price: 78px;
+    --an-w-prem-bar: 196px;
+    --an-w-prem-premium: 82px;
+    --an-w-prem-kg: 92px;
+
+    --an-chart: 260px;
+    --an-chart-sm: 220px;
+  }
+}
+
 /* ─── /analytics — PRINT ONE METRIC CARD ────────────────────────────────────
    Renzo asked for a per-metric PDF, and the pragmatic route is the browser's
    own print-to-PDF. The expand panel carries `data-print-card`; the Print
@@ -814,9 +1060,27 @@ input[type=number] {
    The chart is a recharts SVG carrying explicit width/height attributes sized
    for the screen, so it is scaled to the printable column rather than clipped
    at the margin. */
+/* LANDSCAPE by default (owner feedback R3, 2026-09-02): *"ability to default
+   to landscape when printing"*.
+
+   It is the right default rather than a preference, and the card's own shape
+   is why. The metric card is a WIDE object — a four-across stat strip, a chart
+   beside a 320 px side rail, and two dictionary blocks in a two-column grid —
+   all of which collapse to one column at portrait's ~733 px printable width
+   and then need the height back. A4 landscape at a 12 mm margin gives ~1032 px
+   of printable width and ~703 px of height, so the card keeps the layout it
+   was designed in and the sheet keeps its "one card, one page" property.
+
+   The margin came down 14 mm -> 12 mm with the rotation for the same reason:
+   landscape is the short dimension vertically, and the two millimetres are
+   worth more as height here than as white space.
+
+   `@page` cannot be scoped to a class, so this governs any print of the app —
+   which today means exactly this card: the per-metric Print button is the
+   only deliberate print path in the product. */
 @page {
-  size: A4;
-  margin: 14mm;
+  size: A4 landscape;
+  margin: 12mm;
 }
 
 @media print {

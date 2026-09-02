@@ -19,10 +19,10 @@ export function AnalyticsError({ message }: { message: string }) {
       <div className="flex items-start gap-2">
         <AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden />
         <div className="min-w-0 flex-1">
-          <div className="text-xs font-semibold text-foreground">
+          <div className="text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] font-semibold text-foreground">
             Could not load Analytics
           </div>
-          <p className="mt-1 whitespace-pre-wrap break-words text-xs text-muted-foreground">
+          <p className="mt-1 whitespace-pre-wrap break-words text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] text-muted-foreground">
             {message}
           </p>
           <button
@@ -33,7 +33,7 @@ export function AnalyticsError({ message }: { message: string }) {
                 setTimeout(() => setCopied(false), 2000);
               });
             }}
-            className="mt-2 inline-flex cursor-pointer items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[10.5px] text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground"
+            className="mt-2 inline-flex cursor-pointer items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[length:var(--bw-fs-105)] text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground"
           >
             <Copy className="size-2.5" aria-hidden />
             {copied ? "Copied" : "Copy"}

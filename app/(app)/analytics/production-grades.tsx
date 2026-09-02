@@ -30,9 +30,11 @@ import { PRODUCTION_DICTIONARY } from "@/lib/analytics/production";
 import { DictionaryPopover } from "./metric-info";
 
 // Explicit pixel widths — the sum below IS the table's minWidth.
-const W_GRADE = 184;
-const W_MONTH = 92;
-const W_TOTAL = 124;
+// R3: CSS variables, so the widths move with the big-screen type scale.
+// Big values: 184 -> 220, 92 -> 110, 124 -> 148.
+const W_GRADE = "var(--an-w-grade)";
+const W_MONTH = "var(--an-w-month)";
+const W_TOTAL = "var(--an-w-month-total)";
 
 /** The two figures may drift by rounding; a real disagreement is a whole kilo. */
 const TIE_TOLERANCE_KG = 1;
@@ -76,7 +78,7 @@ function ValueCell({ grade, cell }: { grade: string; cell: GradeCell | null }) {
         className="border-l px-2 py-1"
         title={`${grade} was not made in this month.`}
       >
-        <div className="flex h-[30px] items-center justify-end font-mono text-xs text-muted-foreground/50">
+        <div className="flex h-[var(--an-h-30)] items-center justify-end font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] text-muted-foreground/50">
           ·
         </div>
       </td>
@@ -84,11 +86,11 @@ function ValueCell({ grade, cell }: { grade: string; cell: GradeCell | null }) {
   }
   return (
     <td className="border-l px-2 py-1" title={cellTitle(grade, cell)}>
-      <div className="flex h-[30px] flex-col items-end justify-center">
-        <span className="truncate font-mono text-xs leading-4 tabular-nums">
+      <div className="flex h-[var(--an-h-30)] flex-col items-end justify-center">
+        <span className="truncate font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-4)] tabular-nums">
           {t1(cell.kg)}
         </span>
-        <span className="truncate font-mono text-[10.5px] leading-4 text-muted-foreground tabular-nums">
+        <span className="truncate font-mono text-[length:var(--bw-fs-105)] leading-[var(--bw-lh-4)] text-muted-foreground tabular-nums">
           {pct1(cell.sharePct) || " "}
         </span>
       </div>
@@ -104,7 +106,7 @@ function GradeRowView({
   months: GradeYear["months"];
 }) {
   return (
-    <tr className="group h-[48px] border-b transition-all duration-150 hover:bg-muted/30">
+    <tr className="group h-[var(--an-h-48)] border-b transition-all duration-150 hover:bg-muted/30">
       <th
         scope="row"
         // SOLID token only — this cell sits ON TOP of scrolling cells.
@@ -113,14 +115,14 @@ function GradeRowView({
         title={`${row.grade} · #${row.rank} by tonnage · ${kgExact(row.kg)} across ${row.activeMonths} month${row.activeMonths === 1 ? "" : "s"} and ${row.runCount} production entr${row.runCount === 1 ? "y" : "ies"}`}
       >
         <span className="flex min-w-0 items-center gap-1.5">
-          <span className="w-[16px] shrink-0 text-right font-mono text-[10.5px] text-muted-foreground tabular-nums">
+          <span className="w-[16px] shrink-0 text-right font-mono text-[length:var(--bw-fs-105)] text-muted-foreground tabular-nums">
             {row.rank}
           </span>
           <span className="min-w-0">
-            <span className="block truncate font-mono text-[12.5px] font-medium leading-4">
+            <span className="block truncate font-mono text-[length:var(--bw-fs-125)] font-medium leading-[var(--bw-lh-4)]">
               {row.grade}
             </span>
-            <span className="block truncate text-[10.5px] leading-4 text-muted-foreground">
+            <span className="block truncate text-[length:var(--bw-fs-105)] leading-[var(--bw-lh-4)] text-muted-foreground">
               {row.activeMonths} month{row.activeMonths === 1 ? "" : "s"} ·{" "}
               {row.runCount} entr{row.runCount === 1 ? "y" : "ies"}
             </span>
@@ -136,11 +138,11 @@ function GradeRowView({
         className="border-l bg-muted/40 px-2 py-1"
         title={`${kgExact(row.kg)} of ${row.grade} across the year · ${pct1(row.sharePct)} of everything made${row.sacks == null ? " · no bag count recorded for this grade" : ` · ${row.sacks.toLocaleString("en-US")} bags counted`}`}
       >
-        <div className="flex h-[30px] flex-col items-end justify-center">
-          <span className="truncate font-mono text-xs font-semibold leading-4 tabular-nums">
+        <div className="flex h-[var(--an-h-30)] flex-col items-end justify-center">
+          <span className="truncate font-mono text-[length:var(--bw-fs-12)] font-semibold leading-[var(--bw-lh-4)] tabular-nums">
             {t1(row.kg)}
           </span>
-          <span className="truncate font-mono text-[10.5px] leading-4 text-muted-foreground tabular-nums">
+          <span className="truncate font-mono text-[length:var(--bw-fs-105)] leading-[var(--bw-lh-4)] text-muted-foreground tabular-nums">
             {pct1(row.sharePct) || " "}
           </span>
         </div>
@@ -158,13 +160,13 @@ export interface ProductionGradesProps {
 export function ProductionGrades({ data, truncated }: ProductionGradesProps) {
   if (data.months.length === 0) {
     return (
-      <div className="rounded-lg border bg-card px-4 py-8 text-center text-xs text-muted-foreground">
+      <div className="rounded-lg border bg-card px-4 py-8 text-center text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] text-muted-foreground">
         Production was not reported in {data.year}.
       </div>
     );
   }
 
-  const minWidth = W_GRADE + data.months.length * W_MONTH + W_TOTAL;
+  const minWidth = `calc(${W_GRADE} + ${data.months.length} * ${W_MONTH} + ${W_TOTAL})`;
   // The tie, CHECKED. Equal by proof today; printed the moment it is not.
   const tieGap = data.totalGradeKg - data.totalKg;
   const tieBroken = Math.abs(tieGap) > TIE_TOLERANCE_KG;
@@ -173,7 +175,7 @@ export function ProductionGrades({ data, truncated }: ProductionGradesProps) {
     <div className="flex flex-col gap-2">
       <div className="overflow-x-auto rounded-lg border bg-card">
         <table
-          className="table-fixed text-sm"
+          className="table-fixed text-[length:var(--bw-fs-14)] leading-[var(--bw-lh-sm)]"
           style={{
             width: "max-content",
             minWidth,
@@ -190,10 +192,10 @@ export function ProductionGrades({ data, truncated }: ProductionGradesProps) {
           </colgroup>
 
           <thead>
-            <tr className="h-9 border-b">
+            <tr className="h-[var(--an-h-9)] border-b">
               <th
                 scope="col"
-                className="frozen-col frozen-edge border-b bg-muted px-2 py-1 text-left align-bottom text-[11.5px] font-medium uppercase tracking-wide text-muted-foreground"
+                className="frozen-col frozen-edge border-b bg-muted px-2 py-1 text-left align-bottom text-[length:var(--bw-fs-115)] font-medium uppercase tracking-wide text-muted-foreground"
                 style={{ left: 0 }}
               >
                 <span className="flex items-center gap-1">
@@ -212,10 +214,10 @@ export function ProductionGrades({ data, truncated }: ProductionGradesProps) {
                   title={`${m.fullLabel} · ${m.producedKg == null ? "nothing reported" : kgExact(m.producedKg)} made across ${m.gradeCount} grade${m.gradeCount === 1 ? "" : "s"}`}
                   className="border-b border-l bg-muted px-2 py-1 text-right align-bottom"
                 >
-                  <span className="block truncate text-[11.5px] font-medium uppercase tracking-wide text-muted-foreground">
+                  <span className="block truncate text-[length:var(--bw-fs-115)] font-medium uppercase tracking-wide text-muted-foreground">
                     {m.label}
                   </span>
-                  <span className="block truncate font-mono text-[10px] leading-3 text-muted-foreground/70">
+                  <span className="block truncate font-mono text-[length:var(--bw-fs-10)] leading-[var(--bw-lh-3)] text-muted-foreground/70">
                     {m.gradeCount} grade{m.gradeCount === 1 ? "" : "s"}
                   </span>
                 </th>
@@ -225,10 +227,10 @@ export function ProductionGrades({ data, truncated }: ProductionGradesProps) {
                 title={`Everything made in ${data.year}, and each grade's share of it. The year figure is the sum of the months and the share is that sum over the year's produced kilos — never an average of monthly percentages.`}
                 className="border-b border-l bg-muted px-2 py-1 text-right align-bottom"
               >
-                <span className="block truncate text-[11.5px] font-medium uppercase tracking-wide text-muted-foreground">
+                <span className="block truncate text-[length:var(--bw-fs-115)] font-medium uppercase tracking-wide text-muted-foreground">
                   {data.year}
                 </span>
-                <span className="block truncate font-mono text-[10px] leading-3 text-muted-foreground/70">
+                <span className="block truncate font-mono text-[length:var(--bw-fs-10)] leading-[var(--bw-lh-3)] text-muted-foreground/70">
                   tonnes · share
                 </span>
               </th>
@@ -241,11 +243,11 @@ export function ProductionGrades({ data, truncated }: ProductionGradesProps) {
             ))}
 
             {/* ── Σ made — the matrix's OWN figure, not a sum of the column ── */}
-            <tr className="h-9 border-t bg-muted/30">
+            <tr className="h-[var(--an-h-9)] border-t bg-muted/30">
               <th
                 scope="row"
                 title="Everything the plant made that month, as the Production output row above publishes it. This row is not added up from the grades — it is the same figure, so the two can never drift apart."
-                className="frozen-col frozen-edge bg-muted px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
+                className="frozen-col frozen-edge bg-muted px-2 py-1 text-left text-[length:var(--bw-fs-11)] font-semibold uppercase tracking-wide text-muted-foreground"
                 style={{ left: 0 }}
               >
                 Σ made
@@ -256,7 +258,7 @@ export function ProductionGrades({ data, truncated }: ProductionGradesProps) {
                   className="border-l px-2 py-1 text-right"
                   title={`${m.fullLabel} · ${m.producedKg == null ? "nothing reported" : kgExact(m.producedKg)} — the Production output row's own figure.`}
                 >
-                  <span className="font-mono text-xs font-semibold tabular-nums">
+                  <span className="font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] font-semibold tabular-nums">
                     {t1(m.producedKg)}
                   </span>
                 </td>
@@ -265,7 +267,7 @@ export function ProductionGrades({ data, truncated }: ProductionGradesProps) {
                 className="border-l bg-muted/40 px-2 py-1 text-right"
                 title={`${kgExact(data.totalKg)} made in ${data.year}.`}
               >
-                <span className="font-mono text-xs font-semibold tabular-nums">
+                <span className="font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] font-semibold tabular-nums">
                   {t1(data.totalKg)}
                 </span>
               </td>
@@ -274,7 +276,7 @@ export function ProductionGrades({ data, truncated }: ProductionGradesProps) {
         </table>
       </div>
 
-      <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+      <p className="text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
         A cell is tonnes of that grade with its share of the month under it; a{" "}
         <span className="font-mono">·</span> means the grade was not run that
         month. The <span className="font-mono">Σ made</span> row is the

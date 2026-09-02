@@ -137,7 +137,7 @@ export function AnalyticsNav() {
                 onClick={() => setActive(item.id)}
                 aria-current={isActive ? "true" : undefined}
                 className={cn(
-                  "block rounded px-2 py-0.5 text-[11px] transition-colors duration-150",
+                  "block rounded px-2 py-0.5 text-[length:var(--bw-fs-11)] transition-colors duration-150",
                   "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                   isActive
                     ? "bg-muted text-foreground"

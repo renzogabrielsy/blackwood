@@ -38,11 +38,13 @@ import type { SupplierYear } from "@/lib/analytics/supplier";
 import { SUPPLIER_DICTIONARY, weightedPremiumPhpKg } from "@/lib/analytics/supplier";
 import { DictionaryPopover } from "./metric-info";
 
-const W_NAME = 148;
-const W_PRICE = 78;
-const W_BAR = 196;
-const W_PREMIUM = 82;
-const W_KG = 92;
+// R3: CSS variables, so the widths move with the big-screen type scale.
+// Big values: 148 -> 176, 78 -> 94, 196 -> 234, 82 -> 98, 92 -> 110.
+const W_NAME = "var(--an-w-prem-name)";
+const W_PRICE = "var(--an-w-prem-price)";
+const W_BAR = "var(--an-w-prem-bar)";
+const W_PREMIUM = "var(--an-w-prem-premium)";
+const W_KG = "var(--an-w-prem-kg)";
 
 function money(v: number | null, decimals = 2): string {
   if (v == null) return "—";
@@ -99,7 +101,7 @@ export function SupplierPremium({ data, canViewPrices }: SupplierPremiumProps) {
   const header = (
     <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
       <div className="min-w-0">
-        <h3 className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide">
+        <h3 className="flex items-center gap-1 text-[length:var(--bw-fs-11)] font-semibold uppercase tracking-wide">
           Premium &amp; discount
           <DictionaryPopover
             label={SUPPLIER_DICTIONARY.premium.label}
@@ -107,7 +109,7 @@ export function SupplierPremium({ data, canViewPrices }: SupplierPremiumProps) {
             entry={SUPPLIER_DICTIONARY.premium.dictionary}
           />
         </h3>
-        <p className="text-[11px] leading-relaxed text-muted-foreground">
+        <p className="text-[length:var(--bw-fs-11)] leading-relaxed text-muted-foreground">
           What we paid each supplier in {data.year}, against the market price of
           the months <strong className="font-medium text-foreground">they</strong>{" "}
           sold in. To the right of the line is above market.
@@ -115,7 +117,7 @@ export function SupplierPremium({ data, canViewPrices }: SupplierPremiumProps) {
       </div>
       {canViewPrices && data.totalAvgPrice != null && (
         <span
-          className="shrink-0 font-mono text-[10.5px] text-muted-foreground"
+          className="shrink-0 font-mono text-[length:var(--bw-fs-105)] text-muted-foreground"
           title="The whole year's weighted market price. It is context, NOT the baseline each row is measured against — a seller who only turned up in a dear month is compared with that month, not with the year."
         >
           year ₱{money(data.totalAvgPrice)}/kg
@@ -130,10 +132,10 @@ export function SupplierPremium({ data, canViewPrices }: SupplierPremiumProps) {
         {header}
         <div className="flex flex-col items-center justify-center gap-2 rounded-lg border bg-card px-6 py-10 text-center">
           <Lock className="size-5 text-muted-foreground" aria-hidden />
-          <p className="text-sm font-medium">
+          <p className="text-[length:var(--bw-fs-14)] leading-[var(--bw-lh-sm)] font-medium">
             ₱ figures are restricted for your role
           </p>
-          <p className="max-w-[440px] text-xs leading-relaxed text-muted-foreground">
+          <p className="max-w-[440px] text-[length:var(--bw-fs-12)] leading-relaxed text-muted-foreground">
             Prices and premiums are withheld server-side for the Production
             role, so nothing was sent to this browser. The volume, share and
             participation half of the supplier room above is live.
@@ -147,7 +149,7 @@ export function SupplierPremium({ data, canViewPrices }: SupplierPremiumProps) {
     return (
       <section className="flex flex-col gap-2">
         {header}
-        <div className="rounded-lg border bg-card px-4 py-8 text-center text-xs text-muted-foreground">
+        <div className="rounded-lg border bg-card px-4 py-8 text-center text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] text-muted-foreground">
           No supplier has priced kilos in {data.year}, so there is nothing to
           compare against the market.
         </div>
@@ -155,7 +157,7 @@ export function SupplierPremium({ data, canViewPrices }: SupplierPremiumProps) {
     );
   }
 
-  const minWidth = W_NAME + W_PRICE + W_BAR + W_PREMIUM + W_KG;
+  const minWidth = `calc(${W_NAME} + ${W_PRICE} + ${W_BAR} + ${W_PREMIUM} + ${W_KG})`;
 
   return (
     <section className="flex flex-col gap-2">
@@ -163,7 +165,7 @@ export function SupplierPremium({ data, canViewPrices }: SupplierPremiumProps) {
 
       <div className="overflow-x-auto rounded-lg border bg-card">
         <table
-          className="table-fixed text-xs"
+          className="table-fixed text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)]"
           style={{
             width: "max-content",
             minWidth,
@@ -179,7 +181,7 @@ export function SupplierPremium({ data, canViewPrices }: SupplierPremiumProps) {
             <col style={{ width: W_KG }} />
           </colgroup>
           <thead>
-            <tr className="h-7 border-b">
+            <tr className="h-[var(--an-h-7)] border-b">
               {[
                 ["Supplier", "text-left"],
                 ["₱/kg paid", "text-right"],
@@ -191,7 +193,7 @@ export function SupplierPremium({ data, canViewPrices }: SupplierPremiumProps) {
                   key={label}
                   scope="col"
                   className={cn(
-                    "border-b bg-muted px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground",
+                    "border-b bg-muted px-2 py-1 text-[length:var(--bw-fs-10)] font-medium uppercase tracking-wide text-muted-foreground",
                     align,
                   )}
                 >
@@ -207,17 +209,17 @@ export function SupplierPremium({ data, canViewPrices }: SupplierPremiumProps) {
               return (
                 <tr
                   key={r.supplier}
-                  className="h-8 border-b transition-all duration-150 last:border-0 hover:bg-muted/30"
+                  className="h-[var(--an-h-8)] border-b transition-all duration-150 last:border-0 hover:bg-muted/30"
                   title={`${r.supplier} · ₱${money(r.avgPrice)}/kg over ${r.pricedKg.toLocaleString("en-US", { maximumFractionDigits: 0 })} priced kg · ${signedMoney(r.premium)}/kg against the market average. Weighted across their months by priced kilos — never an average of the monthly premiums.`}
                 >
                   <td className="px-2 py-1">
-                    <span className="block truncate text-[11px] font-medium">
+                    <span className="block truncate text-[length:var(--bw-fs-11)] font-medium">
                       {r.supplier}
                     </span>
                   </td>
                   <td className="px-2 py-1">
-                    <div className="flex items-baseline justify-between gap-1 font-mono text-[11px] tabular-nums">
-                      <span className="shrink-0 text-[9.5px] text-muted-foreground">
+                    <div className="flex items-baseline justify-between gap-1 font-mono text-[length:var(--bw-fs-11)] tabular-nums">
+                      <span className="shrink-0 text-[length:var(--bw-fs-95)] text-muted-foreground">
                         ₱
                       </span>
                       <span className="truncate">{money(r.avgPrice)}</span>
@@ -247,14 +249,14 @@ export function SupplierPremium({ data, canViewPrices }: SupplierPremiumProps) {
                     </div>
                   </td>
                   <td className="px-2 py-1 text-right">
-                    <span className="font-mono text-[11px] tabular-nums">
+                    <span className="font-mono text-[length:var(--bw-fs-11)] tabular-nums">
                       {signedMoney(r.premium)}
                     </span>
                   </td>
                   <td className="px-2 py-1 text-right">
-                    <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+                    <span className="font-mono text-[length:var(--bw-fs-11)] text-muted-foreground tabular-nums">
                       {t1(r.pricedKg)}
-                      <span className="ml-0.5 text-[9.5px]">t</span>
+                      <span className="ml-0.5 text-[length:var(--bw-fs-95)]">t</span>
                     </span>
                   </td>
                 </tr>
@@ -262,29 +264,29 @@ export function SupplierPremium({ data, canViewPrices }: SupplierPremiumProps) {
             })}
           </tbody>
           <tfoot>
-            <tr className="h-8 border-t bg-muted/30">
+            <tr className="h-[var(--an-h-8)] border-t bg-muted/30">
               <th
                 scope="row"
                 title="The only average this column allows: each supplier's premium weighted by the kilos it speaks for. It comes to zero because the market price IS the kilo-weighted average of these prices — an unweighted mean of the same column reads −₱2.52 for March 2026 and means nothing at all."
-                className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
+                className="px-2 py-1 text-left text-[length:var(--bw-fs-11)] font-semibold uppercase tracking-wide text-muted-foreground"
               >
                 Weighted
               </th>
               <td className="px-2 py-1" />
               <td className="px-2 py-1 text-center">
-                <span className="text-[9.5px] text-muted-foreground">
+                <span className="text-[length:var(--bw-fs-95)] text-muted-foreground">
                   weighted by priced kg
                 </span>
               </td>
               <td className="px-2 py-1 text-right">
-                <span className="font-mono text-xs font-semibold tabular-nums">
+                <span className="font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] font-semibold tabular-nums">
                   {signedMoney(weightedAll)}
                 </span>
               </td>
               <td className="px-2 py-1 text-right">
-                <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+                <span className="font-mono text-[length:var(--bw-fs-11)] text-muted-foreground tabular-nums">
                   {t1(data.totalPricedKg)}
-                  <span className="ml-0.5 text-[9.5px]">t</span>
+                  <span className="ml-0.5 text-[length:var(--bw-fs-95)]">t</span>
                 </span>
               </td>
             </tr>
@@ -292,7 +294,7 @@ export function SupplierPremium({ data, canViewPrices }: SupplierPremiumProps) {
         </table>
       </div>
 
-      <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+      <p className="text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
         <strong className="font-medium text-foreground">
           Each row is measured against its OWN months.
         </strong>{" "}

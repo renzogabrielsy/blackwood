@@ -96,9 +96,15 @@ import { MetricInfo, dictionaryTitle } from "./metric-info";
 // and nothing truncates. A period cell prints at most "1,864.1" plus two marks
 // at 14 px mono (~74 px) inside 16 px of padding — 116 fits with room, and the
 // summary column is wider because it also carries "All time".
-const W_NAME = 232;
-const W_PERIOD = 116;
-const W_TOTAL = 128;
+//
+// OWNER FEEDBACK R3 (2026-09-02) — these are now CSS VARIABLES, not numbers.
+// The big-screen scale bumps the type ~1.19x above 1920 px, and a width left
+// behind would clip a header — exactly the failure R1 re-measured every width
+// to avoid. Declaring both in `globals.css` means the two can only move
+// together. Big values: 232 -> 276, 116 -> 138, 128 -> 152.
+const W_NAME = "var(--an-w-name)";
+const W_PERIOD = "var(--an-w-period)";
+const W_TOTAL = "var(--an-w-total)";
 
 /**
  * Big magnitudes are printed COMPACT in a period cell and exactly in the hover.
@@ -172,13 +178,13 @@ function ChangeLine({
 
   return (
     <>
-      <div className="mt-1 h-4 truncate text-right font-mono text-[11px] leading-4 tabular-nums">
+      <div className="mt-1 h-[var(--an-h-4)] truncate text-right font-mono text-[length:var(--bw-fs-11)] leading-[var(--bw-lh-4)] tabular-nums">
         {cell.delta ? (
           <span
             title={`${deltaWord} change`}
             className={directionCls(cell.delta.value)}
           >
-            <span aria-hidden className="mr-0.5 text-[9px]">
+            <span aria-hidden className="mr-0.5 text-[length:var(--bw-fs-9)]">
               {directionGlyph(cell.delta.value)}
             </span>
             {fmtChange(cell.delta, spec)}
@@ -187,11 +193,11 @@ function ChangeLine({
           <span aria-hidden>&nbsp;</span>
         )}
       </div>
-      <div className="mt-0.5 flex h-[15px] justify-end">
+      <div className="mt-0.5 flex h-[var(--an-h-15)] justify-end">
         {secondary ? (
           <span
             title={secondary.title}
-            className="inline-flex items-center rounded border border-border/70 px-1 font-mono text-[10px] leading-[13px] text-muted-foreground tabular-nums"
+            className="inline-flex items-center rounded border border-border/70 px-1 font-mono text-[length:var(--bw-fs-10)] leading-[var(--bw-lh-13)] text-muted-foreground tabular-nums"
           >
             <span className="mr-0.5 opacity-70">{secondary.label}</span>
             {fmtChange(secondary.change, spec)}
@@ -229,7 +235,7 @@ function CellMarks({
   const ownMark = cell.annotation?.mark;
   if (!cell.holed && !cell.estimated && !ownMark) return null;
   return (
-    <span className="flex shrink-0 items-baseline gap-px text-[11px] leading-none">
+    <span className="flex shrink-0 items-baseline gap-px text-[length:var(--bw-fs-11)] leading-none">
       {cell.estimated && (
         <span
           title={estimateTitle(coveragePct)}
@@ -305,12 +311,12 @@ function ValueCell({
             : (ann?.title ?? BLANK_TITLE[reason])
         }
       >
-        <div className="flex h-5 items-center justify-end gap-1 font-mono text-sm text-muted-foreground/60">
+        <div className="flex h-[var(--an-h-5)] items-center justify-end gap-1 font-mono text-[length:var(--bw-fs-14)] leading-[var(--bw-lh-sm)] text-muted-foreground/60">
           {reason === "restricted" && <Lock className="size-3" aria-hidden />}
           {ann?.mark && (
             <span
               aria-hidden
-              className="text-[11px] leading-none text-amber-600 dark:text-amber-400"
+              className="text-[length:var(--bw-fs-11)] leading-none text-amber-600 dark:text-amber-400"
             >
               {ann.mark}
             </span>
@@ -318,7 +324,7 @@ function ValueCell({
           <span>{alt ? fmtMetricValue(spec, alt.value) : "—"}</span>
         </div>
         {alt && (
-          <div className="mt-0.5 h-4 truncate text-right text-[10px] leading-4 text-muted-foreground">
+          <div className="mt-0.5 h-[var(--an-h-4)] truncate text-right text-[length:var(--bw-fs-10)] leading-[var(--bw-lh-4)] text-muted-foreground">
             {alt.label}
           </div>
         )}
@@ -348,19 +354,19 @@ function ValueCell({
     >
       {/* Accounting format for ₱: glyph pinned left, number pinned right. */}
       {spec.unit === "php_per_kg" || spec.unit === "php" ? (
-        <div className="flex h-5 items-baseline justify-between gap-1 font-mono text-sm tabular-nums">
-          <span className="shrink-0 text-[11px] text-muted-foreground">₱</span>
+        <div className="flex h-[var(--an-h-5)] items-baseline justify-between gap-1 font-mono text-[length:var(--bw-fs-14)] leading-[var(--bw-lh-sm)] tabular-nums">
+          <span className="shrink-0 text-[length:var(--bw-fs-11)] text-muted-foreground">₱</span>
           <span className="flex min-w-0 items-baseline gap-0.5">
             <span className="truncate font-medium">{shown}</span>
             {marks}
           </span>
         </div>
       ) : (
-        <div className="flex h-5 items-baseline justify-end gap-1 font-mono text-sm tabular-nums">
+        <div className="flex h-[var(--an-h-5)] items-baseline justify-end gap-1 font-mono text-[length:var(--bw-fs-14)] leading-[var(--bw-lh-sm)] tabular-nums">
           <span className="truncate font-medium">
             {shown}
             {spec.unit === "pct" && (
-              <span className="ml-px text-[11px] text-muted-foreground">%</span>
+              <span className="ml-px text-[length:var(--bw-fs-11)] text-muted-foreground">%</span>
             )}
           </span>
           {marks}
@@ -414,7 +420,10 @@ export function AnalyticsMatrix({
   sections: only,
 }: AnalyticsMatrixProps) {
   const deltaWord = DELTA_LABEL[matrix.granularity];
-  const minWidth = W_NAME + matrix.periods.length * W_PERIOD + W_TOTAL;
+  // The sum of the colgroup IS the table's minWidth ("never crush, always
+  // scroll"). It is a `calc()` rather than an addition now that the widths are
+  // variables, so it re-resolves at the breakpoint with no JavaScript.
+  const minWidth = `calc(${W_NAME} + ${matrix.periods.length} * ${W_PERIOD} + ${W_TOTAL})`;
 
   const sections = React.useMemo(
     () => groupBySection(matrix.rows, only),
@@ -453,8 +462,12 @@ export function AnalyticsMatrix({
     return () => ro.disconnect();
   }, []);
 
+  // Clamped in CSS rather than in JS: `minWidth` is a `calc()` string now, so
+  // the smaller of "the visible frame" and "the table's own width" is a
+  // `min()` — the same semantics, resolved at the same breakpoint as the
+  // widths it clamps against.
   const panelWidth =
-    frameWidth == null ? undefined : Math.min(frameWidth, minWidth);
+    frameWidth == null ? undefined : `min(${frameWidth}px, ${minWidth})`;
 
   /** Fed-price coverage per COLUMN, for the `~` hover only.
    *
@@ -498,7 +511,7 @@ export function AnalyticsMatrix({
     // would send them looking for a bug.
     const everythingHidden = matrix.windowPeriods.length > 0;
     return (
-      <div className="rounded-lg border bg-card px-4 py-10 text-center text-xs text-muted-foreground">
+      <div className="rounded-lg border bg-card px-4 py-10 text-center text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] text-muted-foreground">
         {everythingHidden
           ? `Every column is switched off. Open the Columns filter above and turn one back on — all ${matrix.windowPeriods.length} are still there.`
           : "No months recorded in this period."}
@@ -511,7 +524,7 @@ export function AnalyticsMatrix({
   return (
     <div ref={scrollerRef} className="overflow-x-auto rounded-lg border bg-card">
       <table
-        className="table-fixed text-sm"
+        className="table-fixed text-[length:var(--bw-fs-14)] leading-[var(--bw-lh-sm)]"
         style={{ width: "max-content", minWidth, borderCollapse: "separate", borderSpacing: 0 }}
       >
         <colgroup>
@@ -523,11 +536,11 @@ export function AnalyticsMatrix({
         </colgroup>
 
         <thead>
-          <tr className="h-9 border-b">
+          <tr className="h-[var(--an-h-9)] border-b">
             {/* Sticky-left AND opaque — it overlaps scrolling cells. */}
             <th
               scope="col"
-              className="frozen-col frozen-edge border-b bg-muted px-2 py-1 text-left text-[11.5px] font-medium uppercase tracking-wide text-muted-foreground"
+              className="frozen-col frozen-edge border-b bg-muted px-2 py-1 text-left text-[length:var(--bw-fs-115)] font-medium uppercase tracking-wide text-muted-foreground"
               style={{ left: 0 }}
             >
               Metric
@@ -538,7 +551,7 @@ export function AnalyticsMatrix({
                 scope="col"
                 title={p.fullLabel + (p.isPartial ? " · in progress" : "")}
                 className={cn(
-                  "border-b border-l bg-muted px-2 py-1 text-right text-[11.5px] font-medium uppercase tracking-wide text-muted-foreground",
+                  "border-b border-l bg-muted px-2 py-1 text-right text-[length:var(--bw-fs-115)] font-medium uppercase tracking-wide text-muted-foreground",
                   p.isPartial && "text-foreground/70",
                 )}
               >
@@ -553,7 +566,7 @@ export function AnalyticsMatrix({
             <th
               scope="col"
               title={matrix.totalFullLabel}
-              className="border-b border-l bg-muted px-2 py-1 text-right text-[11.5px] font-semibold uppercase tracking-wide text-foreground/80"
+              className="border-b border-l bg-muted px-2 py-1 text-right text-[length:var(--bw-fs-115)] font-semibold uppercase tracking-wide text-foreground/80"
             >
               {matrix.totalLabel}
             </th>
@@ -634,7 +647,7 @@ function SectionBand({
   span: number;
 }) {
   return (
-    <tr id={id} className="h-7 scroll-mt-24 border-b bg-muted/40">
+    <tr id={id} className="h-[var(--an-h-7)] scroll-mt-24 border-b bg-muted/40">
       {/* The accent is a real LEFT BORDER here, not `.bw-accent-rule`.
           `.frozen-edge` already owns this cell's `box-shadow` (the inset right
           border that kills the frozen↔scroll seam) and is deliberately
@@ -644,7 +657,7 @@ function SectionBand({
       <th
         scope="colgroup"
         title={hint}
-        className="frozen-col frozen-edge border-b bg-muted py-0.5 pl-2 pr-2 text-left text-[11px] font-semibold uppercase tracking-[0.08em]"
+        className="frozen-col frozen-edge border-b bg-muted py-0.5 pl-2 pr-2 text-left text-[length:var(--bw-fs-11)] font-semibold uppercase tracking-[0.08em]"
         style={{
           left: 0,
           color: accent,
@@ -654,7 +667,7 @@ function SectionBand({
         {label}
       </th>
       <td colSpan={span} className="border-b border-l px-2 py-0.5">
-        <span className="block truncate text-[11px] leading-4 text-muted-foreground/80">
+        <span className="block truncate text-[length:var(--bw-fs-11)] leading-[var(--bw-lh-4)] text-muted-foreground/80">
           {hint}
         </span>
       </td>
@@ -687,7 +700,7 @@ function MatrixRowView({
   return (
     <tr
       className={cn(
-        "group h-[62px] border-b transition-all duration-150",
+        "group h-[var(--an-h-62)] border-b transition-all duration-150",
         selected ? "bg-muted/50" : "hover:bg-muted/30",
       )}
     >
@@ -719,7 +732,7 @@ function MatrixRowView({
             <span className="min-w-0">
               <span
                 className={cn(
-                  "block truncate text-[13px] font-medium leading-[17px]",
+                  "block truncate text-[length:var(--bw-fs-13)] font-medium leading-[var(--bw-lh-17)]",
                   // A ₱ row wears its band's accent on the LABEL only — a
                   // quiet way to say "this one is money" without colouring a
                   // single figure. Direction tints below are separate.
@@ -733,7 +746,7 @@ function MatrixRowView({
               >
                 {spec.label}
               </span>
-              <span className="block truncate text-[11px] leading-4 text-muted-foreground">
+              <span className="block truncate text-[length:var(--bw-fs-11)] leading-[var(--bw-lh-4)] text-muted-foreground">
                 {normalised ? `${spec.sublabel} / working day` : spec.sublabel}
               </span>
             </span>
@@ -741,7 +754,7 @@ function MatrixRowView({
           <MetricInfo spec={spec} className="mt-0.5" />
         </div>
         {row.restricted && (
-          <span className="mt-1 inline-flex items-center gap-1 rounded border border-border/70 px-1 text-[10px] leading-[14px] text-muted-foreground">
+          <span className="mt-1 inline-flex items-center gap-1 rounded border border-border/70 px-1 text-[length:var(--bw-fs-10)] leading-[var(--bw-lh-14)] text-muted-foreground">
             <Lock className="size-2.5" aria-hidden />
             Restricted
           </span>
