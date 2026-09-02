@@ -16,6 +16,47 @@ export const PESO = '₱';
 export const EMDASH = '—';
 
 /**
+ * Identity of a SAVED blend proposal, for the printed / exported document.
+ *
+ * A live what-if has no identity — it is a question, asked once. A saved version has a
+ * title, a remark, a version number and the moment the DATABASE computed its numbers,
+ * and a printout that omits them cannot be told apart from a printout of a different
+ * version of the same blend. `computedAt` is deliberately the SNAPSHOT's timestamp, not
+ * `new Date()`: the document says when the yard looked like this, not when someone hit
+ * Print.
+ *
+ * Every field is optional and an absent meta renders exactly the pre-existing document,
+ * so the live modal's output is unchanged.
+ */
+export interface BlendDocMeta {
+  title?: string | null;
+  /** The proposal-level REMARK. */
+  notes?: string | null;
+  versionNo?: number | null;
+  /** ISO timestamp from the snapshot — when the numbers were true. */
+  computedAt?: string | null;
+}
+
+/** `v3 · as proposed 2026-09-02` — the saved-version line, or '' when not saved. */
+export function blendVersionLine(meta?: BlendDocMeta | null): string {
+  if (!meta) return '';
+  const parts: string[] = [];
+  if (meta.versionNo != null) parts.push(`v${meta.versionNo}`);
+  const asOf = blendComputedDate(meta.computedAt);
+  if (asOf) parts.push(`as proposed ${asOf}`);
+  return parts.join(' · ');
+}
+
+/** `yyyy-MM-dd` from an ISO timestamp, or '' when absent/unparseable. */
+export function blendComputedDate(computedAt?: string | null): string {
+  if (!computedAt) return '';
+  const d = new Date(computedAt);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/**
  * Escape text destined for a print HTML string. Batch codes, block locs, supplier names,
  * destinations and free-text notes are user-provided and MUST be escaped before
  * interpolation so a stray `<`, `&`, or `"` can't break the generated markup.

@@ -1,15 +1,42 @@
 'use client';
 
-import { useState, useMemo, useCallback, useEffect, type CSSProperties } from 'react';
-import { Calculator, Check, Layers, X, Eye, EyeOff } from 'lucide-react';
+import { useState, useMemo, useCallback, useEffect, useRef, type CSSProperties } from 'react';
+import { Calculator, Check, Layers, X, Eye, EyeOff, History, Save, Loader2, Pencil } from 'lucide-react';
+import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { errorToast } from '@/lib/toast';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Textarea } from '@/components/ui/textarea';
+import { Button } from '@/components/ui/button';
 import { WAREHOUSES, STANDARD_WAREHOUSES } from './constants';
-import type { BlockData, BlockingSupplierMap } from './types';
-import { buildBlendProposal, type BlendProposal } from './actions';
+import type {
+  BlockData,
+  BlockingSupplierMap,
+  BlendProposalSummary,
+  BlendProposalVersionSummary,
+  SavedBlendProposal,
+  BlendProposalSaveResult,
+} from './types';
+import {
+  buildBlendProposal,
+  saveBlendProposal,
+  updateBlendProposalHeader,
+  archiveBlendProposal,
+  restoreBlendProposal,
+  fetchBlendProposalList,
+  type BlendProposal,
+} from './actions';
 import { BlockingSupplierSearch, type ActiveSupplierSummary } from './supplier-search';
 import { BlockingDetailPanel, type BlockingDetailNavTarget } from '../_shared/blocking-detail-panel';
-import { BlendProposalDialog } from '../_shared/blend-proposal-dialog';
+import { BlendProposalDialog, SaveNewPopover, type BlendSavedContext } from '../_shared/blend-proposal-dialog';
+import { BlendProposalsDialog } from '../_shared/blend-proposals-dialog';
+import {
+  resolveBlendBlocks,
+  describeBlendUnresolved,
+  compareBlendSnapshots,
+  type BlendComparison,
+  type BlendResolution,
+} from '@/lib/blocking/blend-diff';
 import { useTableSettings } from '@/components/providers/table-settings';
 import { getLabHighlightText } from '@/types/table-settings';
 import type { LabMetric, LabHighlightSpec } from '@/types/table-settings';
@@ -339,10 +366,136 @@ interface BlockingGridProps {
   supplierFilter?: string | null;
   /** Pick/clear the supplier filter — the route writes it to the URL. */
   onSupplierFilterChange?: (key: string | null) => void;
+  /**
+   * The SAVED proposal being viewed, driven from `?proposal=<id>` by the standalone
+   * route — the same pattern as `?block=` and `?supplier=`. Non-null opens the blend
+   * dialog in history mode.
+   */
+  proposalId?: string | null;
+  /**
+   * The version that `?proposal=`/`?v=` resolved to. The ROUTE resolves it (it owns the
+   * params, exactly as it owns `?block=` and the supplier map), so the grid renders a
+   * saved proposal rather than going and finding one.
+   */
+  savedProposal?: SavedBlendProposal | null;
+  /** Every version of that proposal — the rail. */
+  savedVersions?: BlendProposalVersionSummary[];
+  /** True while the route is resolving the params into a version. */
+  savedLoading?: boolean;
+  /** Write both params at once (pass `null` to close the saved viewer). */
+  onProposalLinkChange?: (proposalId: string | null, versionNo?: number | null) => void;
 }
 
 /** Stable empty map so an unwired host doesn't churn identity every render. */
 const EMPTY_SUPPLIER_MAP: BlockingSupplierMap = { suppliers: [], byBlock: {} };
+/** Same, for the version rail. */
+const EMPTY_VERSIONS: BlendProposalVersionSummary[] = [];
+
+// ─── Blend proposal EDITING context (the "Modify" session) ────────────────────
+//
+// Set when the operator presses Modify on a saved version. It is what turns the
+// floating bar's "Build Proposal" into "Save as v(N+1)", and it carries the
+// compare-and-set token (`expectedVersionNo`) the save RPC re-checks inside its own
+// UPDATE — so a version someone else appended while this edit was open is REFUSED,
+// never overwritten.
+interface BlendEditingContext {
+  proposalId: string;
+  title: string;
+  notes: string | null;
+  /** The proposal's CURRENT version when Modify started — the compare-and-set token. */
+  expectedVersionNo: number;
+  /** The version the operator was actually looking at (shown on the pill). */
+  fromVersionNo: number;
+  /** How the version's block list resolved against the live grid, for the bar's notice. */
+  resolution: BlendResolution;
+}
+
+/** Turn a save refusal into something a human can act on. */
+function describeSaveRefusal(res: Extract<BlendProposalSaveResult, { ok: false }>): string {
+  if (res.reason === 'stale') {
+    return `${res.message} Someone appended v${res.currentVersionNo ?? '?'} while this edit was open — reopen the proposal and redo the change so nothing of theirs is lost.`;
+  }
+  if (res.reason === 'unknown_block' && res.blocks?.length) {
+    return `${res.message} (${res.blocks.join(', ')})`;
+  }
+  return res.message;
+}
+
+// ─── Save-as-next-version popover (the change note) ───────────────────────────
+
+function SaveVersionPopover({
+  versionNo,
+  busy,
+  disabled,
+  onSave,
+}: {
+  /** The version this save would CREATE. */
+  versionNo: number;
+  busy: boolean;
+  disabled: boolean;
+  onSave: (changeNote: string) => Promise<boolean>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [note, setNote] = useState('');
+
+  // Cleared on OPEN (an event), never from an effect — a stale note from the previous
+  // version would be the most misleading thing this popover could carry.
+  function handleOpenChange(next: boolean) {
+    if (next) setNote('');
+    setOpen(next);
+  }
+
+  async function submit() {
+    if (busy) return;
+    const ok = await onSave(note.trim());
+    if (ok) setOpen(false);
+  }
+
+  return (
+    <Popover open={open} onOpenChange={handleOpenChange}>
+      <PopoverTrigger asChild>
+        <button
+          disabled={disabled || busy}
+          data-blend-save-version
+          className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary text-primary-foreground
+                     font-semibold hover:bg-primary/90 transition-all duration-150 cursor-pointer
+                     disabled:opacity-40 disabled:pointer-events-none"
+          title={`Append version ${versionNo} to this proposal`}
+        >
+          {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+          Save as v{versionNo}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="center" side="top" sideOffset={8} className="w-80 bg-popover/95 backdrop-blur-lg p-3">
+        <div className="space-y-2.5">
+          <div className="text-xs font-semibold text-foreground">Save as v{versionNo}</div>
+          <p className="text-[11px] text-muted-foreground leading-snug">
+            Versions are append-only &mdash; v{versionNo - 1} is never changed. A note here is what makes the history
+            readable a month from now.
+          </p>
+          <Textarea
+            autoFocus
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            rows={2}
+            placeholder="e.g. swapped A-3A for A-5B, MC too high"
+            className="text-xs min-h-[48px] resize-none"
+            aria-label="Change note"
+          />
+          <div className="flex items-center justify-end gap-1.5">
+            <Button type="button" variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="button" size="sm" className="h-7 text-xs" disabled={busy} onClick={submit}>
+              {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+              Save v{versionNo}
+            </Button>
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 export function BlockingGrid({
   data,
@@ -353,6 +506,11 @@ export function BlockingGrid({
   supplierMap = EMPTY_SUPPLIER_MAP,
   supplierFilter = null,
   onSupplierFilterChange,
+  proposalId = null,
+  savedProposal = null,
+  savedVersions = EMPTY_VERSIONS,
+  savedLoading = false,
+  onProposalLinkChange,
 }: BlockingGridProps) {
   const isControlled = controlledLocKey !== undefined && onSelectBlock !== undefined;
   const [internalLocKey, setInternalLocKey] = useState<string | null>(null);
@@ -424,13 +582,61 @@ export function BlockingGrid({
   const [proposalLoading, setProposalLoading] = useState(false);
   const [proposal, setProposal] = useState<BlendProposal | null>(null);
 
+  // ── Blend Proposal HISTORY (saved, versioned blends) ──
+  // The list is fetched ONCE with archived rows included and filtered client-side: it is
+  // small, the header badge has to count the live ones anyway, and a row you just
+  // archived should not vanish behind a network round-trip.
+  const [proposals, setProposals] = useState<BlendProposalSummary[]>([]);
+  const [proposalsLoading, setProposalsLoading] = useState(false);
+  const [proposalsOpen, setProposalsOpen] = useState(false);
+  const [listBusyId, setListBusyId] = useState<string | null>(null);
+  // Writes the grid itself makes (header patch, archive/restore) — the READ's in-flight
+  // flag arrives as `savedLoading` from the route.
+  const [headerBusy, setHeaderBusy] = useState(false);
+  // A comparison belongs to ONE version, so it is STORED WITH the version it describes
+  // and read back only for that version. Derivation, not an effect that resets state —
+  // there is no frame in which a stale comparison could be painted against new numbers.
+  const [comparisonState, setComparisonState] = useState<{ key: string; value: BlendComparison } | null>(null);
+  const [compareLoading, setCompareLoading] = useState(false);
+  const [editing, setEditing] = useState<BlendEditingContext | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  // The URL writer lives in a ref, NOT in the deep-link effect's deps: the route rebuilds
+  // that callback whenever any search param changes, so depending on it would re-fetch the
+  // proposal every time an unrelated param moved.
+  const proposalLinkRef = useRef(onProposalLinkChange);
+  useEffect(() => {
+    proposalLinkRef.current = onProposalLinkChange;
+  }, [onProposalLinkChange]);
+
+  const loadProposals = useCallback(async () => {
+    setProposalsLoading(true);
+    try {
+      // `fetchBlendProposalList` degrades to [] and logs on failure by contract — the
+      // Blocking page never goes down because the proposals list did.
+      setProposals(await fetchBlendProposalList({ includeArchived: true }));
+    } finally {
+      setProposalsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadProposals();
+  }, [loadProposals]);
+
+  /** Non-archived proposals — what the header badge counts. */
+  const liveProposalCount = useMemo(() => proposals.filter((p) => !p.isArchived).length, [proposals]);
+
   const clearBlend = useCallback(() => setBlendSelection(new Set()), []);
 
   const handleToggleBlendMode = useCallback(() => {
     setBlendMode((prev) => {
       const next = !prev;
-      // Leaving blend mode clears any in-progress selection.
-      if (!next) setBlendSelection(new Set());
+      // Leaving blend mode clears any in-progress selection AND any Modify session.
+      if (!next) {
+        setBlendSelection(new Set());
+        setEditing(null);
+      }
       return next;
     });
   }, []);
@@ -494,6 +700,298 @@ export function BlockingGrid({
       }
     },
     [blendSelection],
+  );
+
+  const comparisonKey = savedProposal ? `${savedProposal.proposal_id}:${savedProposal.version_no}` : null;
+  const comparison =
+    comparisonState && comparisonKey && comparisonState.key === comparisonKey ? comparisonState.value : null;
+
+  /** The list row backing the open proposal — the source of `rowVersion` and status. */
+  const savedSummary = useMemo(
+    () => (savedProposal ? (proposals.find((p) => p.id === savedProposal.proposal_id) ?? null) : null),
+    [savedProposal, proposals],
+  );
+
+  const openProposal = useCallback((id: string, versionNo?: number | null) => {
+    setProposalsOpen(false);
+    proposalLinkRef.current?.(id, versionNo ?? null);
+  }, []);
+
+  // ── Save a FRESH blend as a new proposal ──
+  const handleSaveNewProposal = useCallback(
+    async ({ title, notes }: { title: string; notes: string }) => {
+      const locs = Array.from(blendSelection);
+      if (locs.length === 0) {
+        errorToast('Nothing to save', { description: 'Select at least one block before saving a proposal.' });
+        return false;
+      }
+      setSaving(true);
+      try {
+        const res = await saveBlendProposal({ title, notes: notes || null, blockLocs: locs });
+        if (!res.ok) {
+          errorToast('Could not save the proposal', { description: describeSaveRefusal(res) });
+          return false;
+        }
+        toast.success(`Saved “${title}” as v${res.versionNo}`);
+        await loadProposals();
+        // Hand the modal over to the SAVED viewer without closing it: the live dialog
+        // steps aside (`proposalOpen` false) and the URL param takes over. The blend
+        // selection is deliberately left alone — the operator is still in blend mode.
+        setProposalOpen(false);
+        setEditing(null);
+        proposalLinkRef.current?.(res.proposalId, res.versionNo);
+        return true;
+      } finally {
+        setSaving(false);
+      }
+    },
+    [blendSelection, loadProposals],
+  );
+
+  // ── Append the next version of the proposal being modified ──
+  const handleSaveVersion = useCallback(
+    async (changeNote: string) => {
+      if (!editing) return false;
+      const locs = Array.from(blendSelection);
+      if (locs.length === 0) {
+        errorToast('Nothing to save', { description: 'A version must contain at least one block.' });
+        return false;
+      }
+      setSaving(true);
+      try {
+        const res = await saveBlendProposal({
+          proposalId: editing.proposalId,
+          title: editing.title,
+          blockLocs: locs,
+          expectedVersionNo: editing.expectedVersionNo,
+          changeNote: changeNote || null,
+        });
+        if (!res.ok) {
+          errorToast('Could not save this version', { description: describeSaveRefusal(res) });
+          return false;
+        }
+        if (res.unchanged) {
+          // Identical blend → the RPC wrote no row. Stay in the edit session; there is
+          // nothing to navigate to and nothing was lost.
+          toast(`Identical to v${res.versionNo} — nothing saved`, {
+            description: 'Change the blocks to create a new version.',
+          });
+          return true;
+        }
+        toast.success(`Saved v${res.versionNo} of “${editing.title}”`);
+        await loadProposals();
+        setEditing(null);
+        setBlendSelection(new Set());
+        proposalLinkRef.current?.(editing.proposalId, res.versionNo);
+        return true;
+      } finally {
+        setSaving(false);
+      }
+    },
+    [editing, blendSelection, loadProposals],
+  );
+
+  // ── Save the modified selection as a SEPARATE proposal (a fork by hand) ──
+  const handleSaveAsNewFromEdit = useCallback(
+    async ({ title, notes }: { title: string; notes: string }) => {
+      const ok = await handleSaveNewProposal({ title, notes });
+      if (ok) setEditing(null);
+      return ok;
+    },
+    [handleSaveNewProposal],
+  );
+
+  // ── Modify: re-select the saved blocks on the grid, BY BATCH IDENTITY ──
+  // `block_loc` is reused when a pile empties, so seeding by address alone would
+  // silently re-propose different charcoal under the same name. `data` is the live
+  // grid map and already carries `batch_id` + `batch_code`.
+  const handleModifyProposal = useCallback(() => {
+    if (!savedProposal) return;
+    const res = resolveBlendBlocks(
+      savedProposal.blocks.map((b) => ({
+        block_loc: b.block_loc,
+        batch_code: b.batch_code,
+        batch_id: b.batch_id ?? null,
+      })),
+      data,
+    );
+
+    setBlendMode(true);
+    setBlendSelection(new Set(res.resolved));
+    setEditing({
+      proposalId: savedProposal.proposal_id,
+      title: savedProposal.title,
+      notes: savedProposal.notes,
+      expectedVersionNo: savedSummary?.currentVersionNo ?? savedProposal.version_no,
+      fromVersionNo: savedProposal.version_no,
+      resolution: res,
+    });
+    setProposalOpen(false);
+    proposalLinkRef.current?.(null);
+
+    if (res.resolved.length === 0 && res.total > 0) {
+      errorToast('None of those blocks still hold the proposed batch', {
+        description:
+          'Every block in this version has been emptied or refilled since it was saved. Pick blocks on the grid to build the new version.',
+      });
+    }
+  }, [savedProposal, savedSummary, data]);
+
+  // ── Compare with today (read-only; the snapshot is never touched) ──
+  const handleCompareWithToday = useCallback(async () => {
+    if (!savedProposal) return;
+    const locs = savedProposal.blocks.map((b) => b.block_loc);
+    setCompareLoading(true);
+    try {
+      const today = await buildBlendProposal(locs);
+      // The LIVE what-if carries no `batch_id`, so identity for "this block changed
+      // hands" comes from the grid map.
+      const idByLoc: Record<string, string | undefined> = {};
+      for (const loc of locs) idByLoc[loc] = data[loc]?.batch_id;
+      setComparisonState({
+        key: `${savedProposal.proposal_id}:${savedProposal.version_no}`,
+        value: compareBlendSnapshots(savedProposal, today, idByLoc),
+      });
+    } catch (err) {
+      errorToast('Could not compare with today', {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setCompareLoading(false);
+    }
+  }, [savedProposal, data]);
+
+  const handleCloseCompare = useCallback(() => setComparisonState(null), []);
+
+  // ── Header patch (title / remark / status) — compare-and-set on `row_version` ──
+  const handleSaveHeader = useCallback(
+    async (patch: { title: string; notes: string | null; status: BlendProposalSummary['status']; fed_on: string | null }) => {
+      if (!savedProposal || !savedSummary) {
+        errorToast('Could not edit this proposal', { description: 'Reload the proposals list and try again.' });
+        return false;
+      }
+      setHeaderBusy(true);
+      try {
+        const res = await updateBlendProposalHeader(savedSummary.id, savedSummary.rowVersion, patch);
+        if (!res.ok) {
+          errorToast('Could not update the proposal', { description: res.message });
+          return false;
+        }
+        toast.success('Proposal updated');
+        // The route re-resolves the version on its own schedule; the LIST is what the
+        // header reads from (title, remark, status, row_version), so refreshing it is
+        // what makes the change visible — and it also hands back the new token.
+        await loadProposals();
+        return true;
+      } finally {
+        setHeaderBusy(false);
+      }
+    },
+    [savedProposal, savedSummary, loadProposals],
+  );
+
+  // ── Archive / restore. There is no hard delete in this feature, anywhere. ──
+  const toggleArchive = useCallback(
+    async (summary: BlendProposalSummary) => {
+      const restoring = summary.isArchived;
+      const res = restoring
+        ? await restoreBlendProposal(summary.id, summary.rowVersion)
+        : await archiveBlendProposal(summary.id, summary.rowVersion);
+      if (!res.ok) {
+        errorToast(restoring ? 'Could not restore the proposal' : 'Could not archive the proposal', {
+          description: res.message,
+        });
+        return;
+      }
+      toast.success(restoring ? 'Proposal restored' : 'Proposal archived — nothing was deleted');
+      await loadProposals();
+    },
+    [loadProposals],
+  );
+
+  const handleArchiveToggle = useCallback(async () => {
+    if (!savedSummary) {
+      errorToast('Could not change this proposal', { description: 'Reload the proposals list and try again.' });
+      return;
+    }
+    setHeaderBusy(true);
+    try {
+      await toggleArchive(savedSummary);
+    } finally {
+      setHeaderBusy(false);
+    }
+  }, [savedSummary, toggleArchive]);
+
+  const handleRestoreFromList = useCallback(
+    async (summary: BlendProposalSummary) => {
+      setListBusyId(summary.id);
+      try {
+        await toggleArchive(summary);
+      } finally {
+        setListBusyId(null);
+      }
+    },
+    [toggleArchive],
+  );
+
+  const handleSelectVersion = useCallback(
+    (versionNo: number) => {
+      if (!savedProposal) return;
+      proposalLinkRef.current?.(savedProposal.proposal_id, versionNo);
+    },
+    [savedProposal],
+  );
+
+  // ── What the dialog renders: a saved version when `?proposal=` is set, else the
+  //    live what-if. ONE dialog, two modes. ──
+  const savedContext: BlendSavedContext | null =
+    proposalId && savedProposal
+      ? {
+          // Title + remark come from the LIST row when we have it: the header patch
+          // writes there and `loadProposals()` re-reads it, so an edit is visible
+          // immediately. The version's own copy is the fallback (and what a printout
+          // records) but it is frozen at save time.
+          proposal: savedSummary
+            ? { ...savedProposal, title: savedSummary.title, notes: savedSummary.notes }
+            : savedProposal,
+          versions: savedVersions,
+          currentVersionNo: savedSummary?.currentVersionNo ?? savedProposal.version_no,
+          status: savedSummary?.status ?? 'draft',
+          fedOn: savedSummary?.fedOn ?? null,
+          isArchived: savedSummary?.isArchived ?? false,
+          busy: savedLoading || headerBusy,
+          onSelectVersion: handleSelectVersion,
+          onModify: handleModifyProposal,
+          onCompare: handleCompareWithToday,
+          onCloseCompare: handleCloseCompare,
+          comparison,
+          compareLoading,
+          onSaveHeader: handleSaveHeader,
+          onArchiveToggle: handleArchiveToggle,
+        }
+      : null;
+
+  const dialogOpen = !!proposalId || proposalOpen;
+  const dialogProposal: BlendProposal | null = proposalId ? savedProposal : proposal;
+  const dialogLoading = proposalId ? savedLoading : proposalLoading;
+
+  const handleDialogOpenChange = useCallback(
+    (open: boolean) => {
+      if (open) return;
+      if (proposalId) {
+        setComparisonState(null);
+        proposalLinkRef.current?.(null);
+        return;
+      }
+      handleProposalOpenChange(false);
+    },
+    [proposalId, handleProposalOpenChange],
+  );
+
+  /** "2 of 8 blocks no longer hold the proposed batch: A-3A, B-7B" — or nothing. */
+  const editingNotice = useMemo(
+    () => (editing ? describeBlendUnresolved(editing.resolution) : null),
+    [editing],
   );
 
   const global = useMemo(
@@ -849,6 +1347,33 @@ export function BlockingGrid({
           </button>
         )}
 
+        {/* ── Saved proposals (history) ── */}
+        {/* PESO-FREE: the list view carries no ₱ column and none is derivable, so this
+            is safe for every role including Production. Prices live only inside a
+            version snapshot, fetched through the gated `fetchBlendProposalVersion`. */}
+        <button
+          onClick={() => setProposalsOpen(true)}
+          data-blend-proposals-button
+          className={cn(
+            'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold max-sm:shrink-0',
+            'border border-border bg-muted text-muted-foreground',
+            'hover:bg-accent hover:text-foreground transition-all duration-150 cursor-pointer',
+          )}
+          title="Open saved blend proposals and their version history"
+        >
+          <History className="w-3.5 h-3.5" />
+          <span className={SHORT.tallOnly}>Proposals</span>
+          <span className={SHORT.shortOnly}>Saved</span>
+          <span
+            className={cn(
+              'ml-0.5 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full text-[9px] font-bold',
+              'bg-border text-muted-foreground',
+            )}
+          >
+            {proposalsLoading && proposals.length === 0 ? '…' : liveProposalCount}
+          </span>
+        </button>
+
         {/* ── Blend Proposal toggle (top-right) ── */}
         <button
           onClick={handleToggleBlendMode}
@@ -907,48 +1432,118 @@ export function BlockingGrid({
       />
 
       {/* ── Blend Proposal floating action bar ── */}
-      {blendMode && blendSelection.size > 0 && (
+      {/* Also shown with an EMPTY selection while a Modify session is open: that is
+          exactly the state where the operator most needs to see why (every proposed
+          block changed hands) and how to get out of it. */}
+      {blendMode && (blendSelection.size > 0 || !!editing) && (
         <div
           data-blend-action-bar
-          className="animate-fade-up fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3
-                     rounded-full bg-background/95 px-4 py-2 text-xs font-medium shadow-lg border
-                     backdrop-blur supports-backdrop-filter:bg-background/60"
+          className={cn(
+            'animate-fade-up fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-1.5',
+            'bg-background/95 px-4 py-2 text-xs font-medium shadow-lg border max-w-[calc(100vw-2rem)]',
+            'backdrop-blur supports-backdrop-filter:bg-background/60',
+            editing ? 'rounded-2xl' : 'rounded-full',
+          )}
         >
-          <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-            <Check className="w-3.5 h-3.5 text-primary" />
-            <span className="font-mono font-semibold text-foreground">{blendSelection.size}</span>
-            block{blendSelection.size === 1 ? '' : 's'} selected
-          </span>
-          <span className="text-border">|</span>
-          <button
-            onClick={handleBuildProposal}
-            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary text-primary-foreground
-                       font-semibold hover:bg-primary/90 transition-all duration-150 cursor-pointer"
-          >
-            <Calculator className="w-3.5 h-3.5" />
-            Build Proposal
-          </button>
-          <button
-            onClick={clearBlend}
-            className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-muted-foreground
-                       hover:text-foreground hover:bg-muted transition-all duration-150 cursor-pointer"
-          >
-            <X className="w-3 h-3" />
-            Clear
-          </button>
+          {/* ── Modify session banner ── */}
+          {editing && (
+            <div className="flex items-center gap-2 flex-wrap justify-center">
+              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-primary/40 bg-primary/10 text-[11px]">
+                <Pencil className="w-3 h-3 text-primary" />
+                <span className="text-muted-foreground">Editing:</span>
+                <span className="font-semibold text-foreground max-w-[220px] truncate" title={editing.title}>
+                  {editing.title}
+                </span>
+                <span className="font-mono text-muted-foreground">v{editing.fromVersionNo}</span>
+                <button
+                  onClick={() => setEditing(null)}
+                  className="ml-0.5 text-muted-foreground hover:text-foreground transition-colors duration-150 cursor-pointer"
+                  title="Stop editing this proposal (the selection stays)"
+                  aria-label="Cancel editing this proposal"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+              {editingNotice && (
+                <span className="text-[11px] text-amber-500 max-w-[520px] text-center">{editingNotice}</span>
+              )}
+            </div>
+          )}
+
+          {/* ── Actions ── */}
+          <div className="flex items-center gap-3 flex-wrap justify-center">
+            <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+              <Check className="w-3.5 h-3.5 text-primary" />
+              <span className="font-mono font-semibold text-foreground">{blendSelection.size}</span>
+              block{blendSelection.size === 1 ? '' : 's'} selected
+            </span>
+            <span className="text-border">|</span>
+            <button
+              onClick={handleBuildProposal}
+              disabled={blendSelection.size === 0}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary text-primary-foreground
+                         font-semibold hover:bg-primary/90 transition-all duration-150 cursor-pointer
+                         disabled:opacity-40 disabled:pointer-events-none"
+            >
+              <Calculator className="w-3.5 h-3.5" />
+              Build Proposal
+            </button>
+
+            {editing && (
+              <>
+                <SaveVersionPopover
+                  versionNo={editing.expectedVersionNo + 1}
+                  busy={saving}
+                  disabled={blendSelection.size === 0}
+                  onSave={handleSaveVersion}
+                />
+                <SaveNewPopover
+                  defaultTitle={`${editing.title} (copy)`}
+                  busy={saving}
+                  onSave={handleSaveAsNewFromEdit}
+                  label="Save as new"
+                  triggerTitle="Save this selection as a separate proposal, leaving the original untouched"
+                />
+              </>
+            )}
+
+            <button
+              onClick={clearBlend}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-muted-foreground
+                         hover:text-foreground hover:bg-muted transition-all duration-150 cursor-pointer"
+            >
+              <X className="w-3 h-3" />
+              Clear
+            </button>
+          </div>
         </div>
       )}
 
-      {/* ── Blend Proposal result modal ── */}
+      {/* ── Blend Proposal modal — LIVE what-if or a SAVED version, one component ── */}
       {/* `showPrices` is the client display preference; the dialog ANDs it with the
           server `proposal.can_view_prices` so the toggle can hide but never reveal. */}
       <BlendProposalDialog
-        open={proposalOpen}
-        onOpenChange={handleProposalOpenChange}
-        proposal={proposal}
-        loading={proposalLoading}
+        open={dialogOpen}
+        onOpenChange={handleDialogOpenChange}
+        proposal={dialogProposal}
+        loading={dialogLoading}
         onRemoveBlock={handleRemoveBlendBlock}
         showPrices={showPrices}
+        saved={savedContext}
+        onSaveNew={handleSaveNewProposal}
+        saving={saving}
+      />
+
+      {/* ── Saved proposals list ── */}
+      <BlendProposalsDialog
+        open={proposalsOpen}
+        onOpenChange={setProposalsOpen}
+        proposals={proposals}
+        loading={proposalsLoading}
+        onOpenProposal={openProposal}
+        onRestore={handleRestoreFromList}
+        onRefresh={loadProposals}
+        busyId={listBusyId}
       />
     </div>
   );

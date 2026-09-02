@@ -1,9 +1,11 @@
 # Blend Proposal History — saved, versioned blends on the Blocking page
 
-> Status: **PLAN, not built.** Written 2026-09-02 from Renzo's brief. Nothing in the database
-> or the app has changed for this yet. Read `app/(app)/inventory/blocking/CONTEXT.md` first;
-> the current Blend Proposal feature (mode toggle → multi-select → `buildBlendProposal` →
-> `BlendProposalDialog` with Print + PDF) is the thing this plan extends.
+> Status: **BUILT.** Data layer 2026-09-02 (migration `20260902160452_blend_proposal_history`,
+> commit `4c64f5f`); UI 2026-09-03. All three goals ship: history of every proposal, modify with
+> version tracking, all of it inside the Blocking page as pop-ups. The authority on how it works
+> is now `app/(app)/inventory/blocking/CONTEXT.md` → **Blend Proposal HISTORY — DATA LAYER** and
+> **— UI**; this file is kept as the record of intent. What shipped vs what was planned is at the
+> bottom (**§7**).
 
 ## 0. The brief, verbatim intent
 
@@ -129,3 +131,55 @@ Every error path uses `errorToast()` (persistent + Copy). Nothing animates in th
 3. **UI pass 2 — modify + compare**: Modify seeding by `batch_id` with the "no longer holds" notice, Save as vN+1 with change note, stale-refusal toast, Compare with today. A pure `lib/blocking/blend-diff.ts` (set difference of blocks, signed deltas — presentation arithmetic, no aggregation) pinned by a `scripts/verify-blend-diff.ts`.
 
 Estimated size: one migration (~300 lines SQL), ~150 lines of actions, ~600 lines of UI touching `blocking-grid.tsx`, `_shared/blend-proposal-dialog.tsx` and one new `_shared/blend-proposals-dialog.tsx`, plus docs.
+
+## 7. What shipped (2026-09-03), and where it differs from §4
+
+**Files.** `lib/blocking/blend-diff.ts` (pure) + `scripts/verify-blend-diff.ts` (23 assertions);
+`app/(app)/inventory/_shared/blend-proposals-dialog.tsx` (new list dialog); saved mode added to
+`_shared/blend-proposal-dialog.tsx`; `BlendDocMeta` + `blendVersionLine` + `blendComputedDate`
+added to `_shared/print-utils.ts` and threaded through `_shared/blend-proposal-pdf.ts`;
+`blocking-grid.tsx` (Proposals button, list fetch, all writes, the Modify session, Compare);
+`blocking-route-view.tsx` (`?proposal=&v=` + resolving them).
+
+**Renzo's one explicit ask is honoured throughout: every proposal has a TITLE and a REMARK.**
+Both are prompted on the first save, both appear in the list (remark truncated with a tooltip)
+and in the viewer (remark as muted prose under the title), both are editable afterwards through
+the Edit popover, and both ride into the printout and the PDF.
+
+### Differences from the plan, and why
+
+1. **The route resolves `?proposal=&v=`, not the grid** (§4.2 implied the grid would fetch). The
+   route already owns `?block=`, `?supplier=` and the supplier map; making it own this too keeps
+   the grid a component that RENDERS a saved proposal rather than one that goes and finds it,
+   and it is what let the whole Modify path be driven in a browser fixture with no session.
+   The grid still owns the LIST and every write.
+2. **The two params are written together** by one `handleProposalLinkChange(id, versionNo?)`.
+   Writing them separately would let a switch between proposals carry the previous proposal's
+   version number into a request for a version that does not exist on the new one.
+3. **`Rename/Status` became `Edit`** and covers title + remark + status + `fed_on` in one
+   popover, since the remark had to be editable too.
+4. **Compare deltas are NOT colour-coded green/red.** "ASH rose 0.5" is neither good nor bad, and
+   colour would assert a judgement the data does not support. The sign carries direction; colour
+   is reserved for *unknown* (em dash) and *unmoved* (muted zero).
+5. **The floating bar shows even with an EMPTY selection while a Modify session is open** — that
+   is exactly the state (every proposed block changed hands) where the operator most needs to see
+   why and how to get out of it.
+6. **`unchanged:true` keeps the edit session open** rather than navigating. Nothing was written
+   and nothing was lost; there is nowhere to go.
+7. **A `grouped` flag was added to `formatSignedDelta`** so a kilogram delta reads `-55,120`
+   beside a grouped `174,580` instead of `-55120`.
+8. **Archived rows are filtered client-side.** The list is small, the header badge must count the
+   live ones anyway, and a row you just archived should not vanish behind a round-trip.
+9. **Mobile is read-only and SAYS so** (§4.6 asked for this; the note is rendered, not implied).
+
+### Decisions §5 asked Renzo to confirm — shipped as planned, still open to change
+
+`fed` + `fed_on` exist as recorded intent with no join to `rc_out` (5.3); the ×1.30 lives in SQL
+(`fn_blend_production_loss_pct`) and is 30% (5.4); there is no hard delete (5.5); any
+authenticated user can save, with ₱ gated by `canViewPrices()` (5.6). Nothing from 5.7 was built.
+
+### Gates
+
+`npx tsc --noEmit` clean · `npm run lint` 146 problems / 16 errors (baseline, unchanged) ·
+`npm run build` compiled · `npx tsx scripts/verify-blend-diff.ts` 23/23 · `npm run test:e2e`
+57 passed · browser at 1512 + 375 in light and dark.
