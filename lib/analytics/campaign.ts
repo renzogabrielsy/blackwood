@@ -56,8 +56,15 @@ export function campaignSeq(batch: string): number {
   return i === -1 ? 99 : i;
 }
 
-/** Stable identity for one campaign, used as a checklist key. */
-export function campaignKey(c: CampaignCost): string {
+/**
+ * Stable identity for one campaign, used as a checklist key.
+ *
+ * R7 widened the parameter to "anything that carries a campaign label", because
+ * the merged campaign table's row is a PAIR of view rows rather than a
+ * `CampaignCost`. The key itself is unchanged, which is what keeps every
+ * `?bhide=` link shared before the merge resolving.
+ */
+export function campaignKey(c: { campaignLabel: string }): string {
   return c.campaignLabel;
 }
 

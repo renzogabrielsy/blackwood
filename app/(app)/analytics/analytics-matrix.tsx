@@ -450,6 +450,19 @@ export interface AnalyticsMatrixProps<U> {
   onPrintSection?(section: MetricSection, orderedKeys: readonly MetricKey[]): void;
   /** The band currently being printed, so its button can say so. */
   printingSection?: MetricSection | null;
+  /**
+   * R7 — extra `<tr>`s appended after every band: today the campaign table's
+   * `Blocks closed / priced` coverage line, which the panel this table replaced
+   * carried as a footer row of its own.
+   *
+   * It is a NODE rather than a spec because the caller is the only thing that
+   * knows what the line says — it is not a metric, it has no rollup, no history
+   * and no expand, and giving it a fake one so it could be a row would have put
+   * a coverage note into the callout gate and the group print. The caller
+   * builds it from `matrix.periods`, so it can never have a different number of
+   * cells than the columns beside it.
+   */
+  footer?: React.ReactNode;
 }
 
 export function AnalyticsMatrix<U>({
@@ -463,6 +476,7 @@ export function AnalyticsMatrix<U>({
   coverageByPeriod,
   onPrintSection,
   printingSection,
+  footer,
 }: AnalyticsMatrixProps<U>) {
   const deltaWord = DELTA_LABEL[matrix.granularity];
   // The sum of the colgroup IS the table's minWidth ("never crush, always
@@ -609,6 +623,7 @@ export function AnalyticsMatrix<U>({
               printing={printingSection === section.key}
             />
           ))}
+          {footer}
         </tbody>
       </table>
     </div>

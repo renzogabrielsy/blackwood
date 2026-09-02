@@ -119,7 +119,8 @@ import {
   type Granularity,
 } from "@/lib/analytics/matrix";
 import { fmtCompact, unitGlyphFor, unitSuffix } from "@/lib/analytics/format";
-import type { AnalyticsMonth, ProductionBatchRow } from "@/lib/analytics/types";
+import type { AnalyticsMonth } from "@/lib/analytics/types";
+import type { CampaignMatrixRow } from "@/lib/analytics/campaign-matrix";
 import type { MetricSpecOf } from "@/lib/analytics/metrics";
 
 /**
@@ -212,15 +213,16 @@ function paddedDomain(values: number[]): [number, number] | undefined {
  *   • **YEAR granularity** — a 3-year trailing average over 7 points smooths
  *     away the only signal there is, and an always-empty series would still
  *     claim a legend entry.
- *   • **A PAIRED row** (Block price vs True cost of a fed kilo) — four lines in
- *     one chart reads as noise, so the comparison line takes the slot.
+ *   • **A PAIRED row** (Net flow, which draws both halves of its own
+ *     subtraction) — four lines in one chart reads as noise, so the comparison
+ *     lines take the slot.
  *
  * Where this returns false there is no average to switch off, so the control is
  * not rendered either. A toggle for a line that cannot exist is a control that
  * lies about what the page can do.
  */
 function canDrawAvg(spec: AnySpec, granularity: Granularity): boolean {
-  return granularity !== "Y" && !spec.pair;
+  return granularity !== "Y" && !spec.pairs?.length;
 }
 
 /**
@@ -325,7 +327,7 @@ export function ChartToggle({
 function MetricTrendChart({
   spec,
   history,
-  pairHistory,
+  pairHistories,
   overlay,
   granularity,
   showAvg,
@@ -333,8 +335,12 @@ function MetricTrendChart({
 }: {
   spec: AnySpec;
   history: readonly HistoryPoint[];
-  /** The comparison series, folded by the SAME rollup rules. Null when none. */
-  pairHistory: readonly HistoryPoint[] | null;
+  /**
+   * The comparison series, folded by the SAME rollup rules. Null when the row
+   * declares none. R7 — a LIST, because Net flow draws both halves of its own
+   * subtraction (`RC IN, all arrivals` and `RC OUT, all destinations`).
+   */
+  pairHistories: readonly (readonly HistoryPoint[])[] | null;
   /**
    * R4 — the optional SECONDARY-AXIS series (today: market price over purchase
    * volume). It arrives as a folded `MatrixRow` history, so it is the same
@@ -368,26 +374,43 @@ function MetricTrendChart({
   const noun = bucketNounFor(granularity);
   const avgLabel = `3-${noun} avg`;
   const unit = unitSuffix(spec.unit);
-  const pair = spec.pair ?? null;
+  /**
+   * The declared companion series, paired with the histories the fold produced
+   * for them. Zipped by INDEX, which is safe because both come from the same
+   * `spec.pairs` array in the same order — the fold maps it one for one.
+   */
+  const pairs = (spec.pairs ?? []).map((p, i) => ({
+    ...p,
+    dataKey: `pair${i}`,
+    history: pairHistories?.[i] ?? [],
+  }));
 
   const shown = history.filter((h) => h.displayed);
   const first = shown[0]?.label;
   const last = shown[shown.length - 1]?.label;
 
-  // The pair rides on the SAME point objects, keyed by period, so recharts
-  // draws two lines over one axis rather than two charts side by side — the
+  // The pairs ride on the SAME point objects, keyed by period, so recharts
+  // draws every line over one axis rather than as charts side by side — the
   // gap between them IS the fact, and two charts would hide it.
-  const pairByKey = new Map(
-    (pairHistory ?? []).map((p) => [p.periodKey, p.value] as const),
+  const pairByKey = pairs.map(
+    (p) => new Map(p.history.map((h) => [h.periodKey, h.value] as const)),
   );
   const overlayByKey = new Map(
     (overlay?.history ?? []).map((p) => [p.periodKey, p.value] as const),
   );
-  const data = history.map((h) => ({
-    ...h,
-    pair: pair ? (pairByKey.get(h.periodKey) ?? null) : null,
-    overlay: overlay ? (overlayByKey.get(h.periodKey) ?? null) : null,
-  }));
+  const data = history.map((h) => {
+    const point: Record<string, unknown> = {
+      ...h,
+      overlay: overlay ? (overlayByKey.get(h.periodKey) ?? null) : null,
+    };
+    pairs.forEach((p, i) => {
+      point[p.dataKey] = pairByKey[i].get(h.periodKey) ?? null;
+    });
+    return point as HistoryPoint & Record<string, number | null>;
+  });
+
+  /** `pair0` → its declaration, for the tooltip and the legend. */
+  const pairByDataKey = new Map(pairs.map((p) => [p.dataKey, p] as const));
 
   // A unique gradient id per chart. Two expands can be mounted at once (the
   // top matrix and the production room), and a duplicated SVG `id` makes the
@@ -395,7 +418,7 @@ function MetricTrendChart({
   const gradientId = React.useId().replace(/:/g, "");
 
   const values = data
-    .flatMap((h) => [h.value, h.pair])
+    .flatMap((h) => [h.value, ...pairs.map((p) => h[p.dataKey] ?? null)])
     .filter((v): v is number => v != null);
   const overlayValues = data
     .map((h) => h.overlay)
@@ -479,9 +502,7 @@ function MetricTrendChart({
                     value == null ? "—" : `${fmtExact(spec, Number(value))} ${unit}`,
                     name === "avg"
                       ? avgLabel
-                      : name === "pair"
-                        ? (pair?.label ?? "")
-                        : spec.label,
+                      : (pairByDataKey.get(String(name))?.label ?? spec.label),
                   ]
             }
             labelFormatter={(label, payload) =>
@@ -493,11 +514,9 @@ function MetricTrendChart({
             formatter={(v) =>
               v === "avg"
                 ? avgLabel
-                : v === "pair"
-                  ? (pair?.label ?? "")
-                  : v === "overlay"
-                    ? `${overlay?.spec.label ?? ""} (right)`
-                    : spec.label
+                : v === "overlay"
+                  ? `${overlay?.spec.label ?? ""} (right)`
+                  : (pairByDataKey.get(String(v))?.label ?? spec.label)
             }
           />
           {/* The displayed window, shaded — so the columns above and the whole
@@ -540,22 +559,23 @@ function MetricTrendChart({
               connectNulls={false}
             />
           )}
-          {/* The COMPARISON line. Dashed, so which series is the row's own is
+          {/* The COMPARISON lines. Dashed, so which series is the row's own is
               never in doubt, and drawn after it so the gap reads as depth
-              below the headline figure rather than as two rival series. */}
-          {pair && (
+              below the headline figure rather than as rival series. */}
+          {pairs.map((p) => (
             <Line
+              key={p.dataKey}
               type="monotone"
-              dataKey="pair"
-              name="pair"
-              stroke={pair.color}
+              dataKey={p.dataKey}
+              name={p.dataKey}
+              stroke={p.color}
               strokeWidth={1.75}
               strokeDasharray="4 3"
               dot={false}
               isAnimationActive={false}
               connectNulls={false}
             />
-          )}
+          ))}
           {/* The trailing mean. `canDrawAvg` owns WHEN it is possible (never at
               YEAR granularity, never on a paired chart — see that function);
               `showAvg` is the reader's own switch on top of it. */}
@@ -761,63 +781,12 @@ function StockValueSplit({ month }: { month: AnalyticsMonth }) {
   );
 }
 
-/** The 60/120-day bands, plus the resiko kept deliberately outside them. */
-function AgingSplit({ month }: { month: AnalyticsMonth }) {
-  const open = month.openKg ?? 0;
-  const over120 = month.kgOver120d ?? 0;
-  const over60 = Math.max((month.kgOver60d ?? 0) - over120, 0);
-  const fresh = Math.max(open - (month.kgOver60d ?? 0), 0);
-  const items: RailItem[] = open <= 0 ? [] : [
-    {
-      key: "fresh",
-      label: "Under 60 days",
-      value: (fresh / 1000).toLocaleString("en-US", { maximumFractionDigits: 1 }),
-      unit: "t",
-      sharePct: open > 0 ? (fresh / open) * 100 : 0,
-    },
-    {
-      key: "mid",
-      label: "60 to 120 days",
-      value: (over60 / 1000).toLocaleString("en-US", { maximumFractionDigits: 1 }),
-      unit: "t",
-      sharePct: open > 0 ? (over60 / open) * 100 : 0,
-    },
-    {
-      key: "old",
-      label: "Over 120 days",
-      meta: `${month.batchesOver120d ?? 0} piles`,
-      value: (over120 / 1000).toLocaleString("en-US", { maximumFractionDigits: 1 }),
-      unit: "t",
-      sharePct: open > 0 ? (over120 / open) * 100 : 0,
-      title: "The share that is quietly losing weight while the money stays spent.",
-    },
-  ];
-  return (
-    <div className="flex flex-col gap-2">
-      <BreakdownRail items={items} emptyText="No open stock." maxHeight={130} />
-      <p className="px-3 pb-1 text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
-        Closed blocks are kept OUT of all of this. Their{" "}
-        <span className="font-mono">
-          {((month.closedResidueKg ?? 0) / 1000).toLocaleString("en-US", {
-            maximumFractionDigits: 1,
-          })}{" "}
-          t
-        </span>{" "}
-        of leftover weight across {month.closedResidueBatches ?? 0} blocks is the
-        charcoal that evaporated —{" "}
-        <strong className="font-semibold">loss, not stock anyone can use</strong>{" "}
-        — and counting it made the yard read 416 days old with a six-year-old pile
-        in it, against 387 days once it is set aside. The oldest OPEN pile is{" "}
-        <span className="font-mono">
-          {month.oldestAgeDays == null
-            ? "—"
-            : Math.round(month.oldestAgeDays).toLocaleString("en-US")}
-        </span>{" "}
-        days.
-      </p>
-    </div>
-  );
-}
+// ── OWNER FEEDBACK R7 — `AgingSplit` WAS HERE ─────────────────────────────
+// It was the side rail of the two aging rows, and R7 retired those rows. A
+// rail nothing can open is dead code, not a spare — the same call R4 made when
+// it deleted `CoverageSplit` and `ClosedBlocksSplit` with the rows they
+// explained. `view_analytics_aging_eom` is untouched and every field it feeds
+// still crosses the wire; only the panel that drew them is gone.
 
 /**
  * P4 — WHY A ZERO DOWNTIME HOUR IS NOT A PERFECT MONTH, as counts rather than
@@ -992,36 +961,32 @@ export function MonthSideRail({
       </DrilldownSection>
     );
   }
-  if (spec.key === "stock_age" || spec.key === "over_120d") {
-    return (
-      <DrilldownSection
-        title="How the yard is aged"
-        subtitle={subtitle}
-        bodyClassName="p-0"
-      >
-        <AgingSplit month={month} />
-      </DrilldownSection>
-    );
-  }
   return null;
 }
 
 /**
- * The Production band's rails, on the BATCH clock.
+ * The campaign table's rails, on the BATCH clock.
  *
  * `DowntimeSplit` and `PowerSplit` are the SAME components the calendar band
  * used, unchanged: they were narrowed to the exact fields they read
  * (`DowntimeRecord`, `PowerRecord`), and a `ProductionBatchRow` carries those
  * fields under the same names because it is the same fact on a different clock.
  * One panel, not two that would drift.
+ *
+ * R7 — it takes the MERGED row and reaches into its plant half, so the two rows
+ * that have a rail keep it now that they share a table with the money rows.
+ * None of the eight money rows has one: the sentence a blank owes them is the
+ * coverage line at the foot of the table, which is a row rather than a rail
+ * precisely so it is visible without opening anything.
  */
 export function BatchSideRail({
   spec,
-  batch,
+  campaign,
 }: {
   spec: AnySpec;
-  batch: ProductionBatchRow | null;
+  campaign: CampaignMatrixRow | null;
 }): React.ReactElement | null {
+  const batch = campaign?.batch ?? null;
   if (!batch) return null;
   if (spec.key === "downtime_hours") {
     return (
@@ -1267,7 +1232,7 @@ export function MetricExpand<U>({
         : overlayRow.history
       : null;
     if (!isFiltered) {
-      return { history: row.history, pair: row.pairHistory, overlay };
+      return { history: row.history, pairs: row.pairHistories, overlay };
     }
     const values = row.history.map((h) => (keep(h) ? h.value : null));
     const history: HistoryPoint[] = [];
@@ -1281,12 +1246,14 @@ export function MetricExpand<U>({
     }
     return {
       history,
-      pair: row.pairHistory ? row.pairHistory.filter(keep) : null,
+      pairs: row.pairHistories
+        ? row.pairHistories.map((p) => p.filter(keep))
+        : null,
       overlay,
     };
   }, [
     row.history,
-    row.pairHistory,
+    row.pairHistories,
     overlayRow,
     hiddenYears,
     isFiltered,
@@ -1606,7 +1573,7 @@ export function MetricExpand<U>({
               <MetricTrendChart
                 spec={spec}
                 history={view.history}
-                pairHistory={view.pair}
+                pairHistories={view.pairs}
                 overlay={
                   overlayRow && showOverlay && view.overlay
                     ? { spec: overlayRow.metric, history: view.overlay }
@@ -1620,9 +1587,16 @@ export function MetricExpand<U>({
                     : undefined
                 }
               />
-              {spec.pair && (
+              {/* R7 — one paragraph for however many companion lines the row
+                  declares. A pair with an empty note contributes nothing, so a
+                  two-line row can explain both in one sentence rather than in
+                  two half-sentences under the chart. */}
+              {(spec.pairs ?? []).some((p) => p.note) && (
                 <p className="px-1 pb-1 pt-1.5 text-[length:var(--bw-fs-12)] leading-relaxed text-muted-foreground">
-                  {spec.pair.note}
+                  {(spec.pairs ?? [])
+                    .map((p) => p.note)
+                    .filter(Boolean)
+                    .join(" ")}
                 </p>
               )}
               {/* The honesty line the filter owes. Hiding a year changes what

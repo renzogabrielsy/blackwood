@@ -341,11 +341,14 @@ export interface MatrixRow<U = AnalyticsMonth> {
   /** One per period of the FULL axis — what the row expand charts and what a record is judged against. */
   history: HistoryPoint[];
   /**
-   * The COMPARISON series (`MetricSpec.pair`), folded through the same
-   * rollup machinery over the same periods, or null when the row has none.
-   * Same aggregation on both sides is what makes it a comparison.
+   * The COMPARISON series (`MetricSpec.pairs`), each folded through the same
+   * rollup machinery over the same periods, or null when the row declares
+   * none. Same aggregation on every side is what makes it a comparison.
+   *
+   * R7 made it a LIST: Net flow declares two, because it is a subtraction and
+   * both of its halves are worth drawing beside it.
    */
-  pairHistory: HistoryPoint[] | null;
+  pairHistories: HistoryPoint[][] | null;
   /** The row is ₱-bearing and this viewer may not see ₱. */
   restricted: boolean;
 }
@@ -926,41 +929,43 @@ export function assembleMatrix<U>(
     // The comparison series, folded through the SAME rollup rules over the
     // SAME periods. No rolling mean: two trend lines plus two smoothed ones
     // is four series in a 260px chart, which reads as noise.
-    const pairHistory: HistoryPoint[] | null = spec.pair
-      ? all.map((p) => {
-          const raw = rawValue(
-            {
-              rollup: spec.rollup,
-              read: spec.pair!.read,
-              numerator: spec.pair!.numerator,
-              denominator: spec.pair!.denominator,
-              price: spec.price,
-              perWorkingDay: spec.perWorkingDay,
-              estimated: spec.estimated,
-              dependsOn: spec.dependsOn,
-            },
-            p,
-            {
-              canViewPrices: opts.canViewPrices,
-              perWorkingDay: opts.perWorkingDay,
-            },
-            rules,
-          );
-          return {
-            periodKey: p.key,
-            label: pointLabel(p),
-            fullLabel: p.fullLabel,
-            year: p.year,
-            value: raw.value,
-            isPartial: p.isPartial,
-            avg: null,
-            displayed: shownKeys.has(p.key),
-            annotation: null,
-            // A comparison line is context for the row's own series; it is
-            // never itself the subject of a headline.
-            calloutable: false,
-          };
-        })
+    const pairHistories: HistoryPoint[][] | null = spec.pairs?.length
+      ? spec.pairs.map((pair) =>
+          all.map((p) => {
+            const raw = rawValue(
+              {
+                rollup: spec.rollup,
+                read: pair.read,
+                numerator: pair.numerator,
+                denominator: pair.denominator,
+                price: spec.price,
+                perWorkingDay: spec.perWorkingDay,
+                estimated: spec.estimated,
+                dependsOn: spec.dependsOn,
+              },
+              p,
+              {
+                canViewPrices: opts.canViewPrices,
+                perWorkingDay: opts.perWorkingDay,
+              },
+              rules,
+            );
+            return {
+              periodKey: p.key,
+              label: pointLabel(p),
+              fullLabel: p.fullLabel,
+              year: p.year,
+              value: raw.value,
+              isPartial: p.isPartial,
+              avg: null,
+              displayed: shownKeys.has(p.key),
+              annotation: null,
+              // A comparison line is context for the row's own series; it is
+              // never itself the subject of a headline.
+              calloutable: false,
+            };
+          }),
+        )
       : null;
 
     const rollOpts = {
@@ -1008,7 +1013,7 @@ export function assembleMatrix<U>(
       cells,
       total,
       history,
-      pairHistory,
+      pairHistories,
       restricted: spec.price && !opts.canViewPrices,
     };
   });

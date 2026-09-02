@@ -1,8 +1,9 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// THE IN-PAGE ANCHOR ROW — four destinations for a page that runs several
-// screens. (Five until owner feedback R4 dissolved the Money band; see below.)
+// THE IN-PAGE ANCHOR ROW — three destinations for a page that runs several
+// screens. (Five until R4 dissolved the Money band; four until R7 merged the
+// campaign panel and the production band into one table. See below.)
 //
 // P4 completes the page, and completion is what makes it long: the matrix's two
 // bands, the campaign panel, the supplier room, the production room and the
@@ -60,20 +61,16 @@ export const ANALYTICS_NAV: readonly AnalyticsNavItem[] = [
   // "money is redundant, most of it is analyzable in the by-production-batch
   // section." The campaign panel below is where the cost questions now live —
   // on the clock the plant actually runs on rather than the calendar's.
+  // OWNER FEEDBACK R7: **there is no separate Production anchor any more.** The
+  // campaign panel and the production band were merged into ONE table — same
+  // axis, same columns, same checklist, and Produced and Yield printed twice —
+  // so a second anchor would name a section that no longer exists. The one
+  // below covers both, and the grade mix that sits under them.
   {
     id: "section-campaigns",
     label: "Campaigns",
-    title: "The production-batch basis — one column per campaign, including the cost of storage time.",
-  },
-  // OWNER FEEDBACK R5: Production moved ABOVE Suppliers, and the anchors moved
-  // with it — an anchor row that does not match the page's own order is worse
-  // than no anchor row. The reason is item 8: the campaign checklist now
-  // decides which MONTHS the production band covers, so the control and the
-  // thing it controls are adjacent. See `analytics-view.tsx`.
-  {
-    id: "section-production",
-    label: "Production",
-    title: "What the plant made, how long it stood still, what it burned, and the grade mix — for the months the selected batches ran in.",
+    title:
+      "One column per production batch: what it fed, what that charcoal cost, what the plant made from it, what it burned doing so, and the grade mix.",
   },
   {
     id: "section-suppliers",

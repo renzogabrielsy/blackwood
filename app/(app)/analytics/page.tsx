@@ -23,7 +23,7 @@ import { getAnalyticsData } from "@/lib/analytics/queries";
 import type { AnalyticsData } from "@/lib/analytics/types";
 import type { ComparisonMode, Granularity } from "@/lib/analytics/matrix";
 import { METRIC_BY_KEY, type MetricKey } from "@/lib/analytics/metrics";
-import { BATCH_METRIC_BY_KEY } from "@/lib/analytics/production-batch";
+import { CAMPAIGN_METRIC_BY_KEY } from "@/lib/analytics/campaign-matrix";
 import { AnalyticsView } from "./analytics-view";
 import { AnalyticsError } from "./analytics-error";
 import { parseHidden } from "@/lib/analytics/period-selection";
@@ -88,21 +88,47 @@ function resolveDictionary(raw: Param): boolean {
 }
 
 /**
- * R6 — BOTH registries are consulted, because the page now has two clocks.
+ * R7 — the keys R7 retired, and the live row each one's question moved to.
  *
- * The RC Inventory rows are read against calendar months and the Production
- * rows against production batches, so they live in two registries rather than
- * one — but a `?metric=` deep link names a ROW, not a clock. Checking both is
- * what keeps every existing link resolving, including the four the Home Digest
- * drill-downs carry and any link to a production row shared before this round.
- * A key belongs to exactly one of the two, so there is nothing to disambiguate.
+ * `rc_in_total` and `rc_out` were the yard's two undifferentiated totals, and
+ * R7 replaced them with rows that say what they MEAN (Purchase volume · Usage).
+ * **Both series are still drawn** — as the two companion lines inside the Net
+ * flow row's expand — so a link that named either of them opens exactly where
+ * its data now lives. That is a redirect to the same numbers, not a
+ * substitution of a different figure for them.
+ *
+ * The two aging keys have no such home: `stock_age` and `over_120d` were
+ * removed at Renzo's request and nothing on the page carries them any more, so
+ * they resolve to nothing rather than to an arbitrary neighbour. A link that
+ * opens no row still renders the whole page correctly.
+ *
+ * This map exists rather than an edit to the four Home Digest drill-down hrefs
+ * because links shared out of this page over the last two days name these keys
+ * too, and only one of the two fixes catches those.
+ */
+const RETIRED_METRIC_ALIASES: Readonly<Record<string, MetricKey>> = {
+  rc_in_total: "net_flow",
+  rc_out: "net_flow",
+};
+
+/**
+ * R6 — BOTH registries are consulted, because the page has two clocks.
+ *
+ * The RC Inventory rows are read against calendar months and the campaign rows
+ * against production batches, so they live in two registries rather than one —
+ * but a `?metric=` deep link names a ROW, not a clock. Checking both is what
+ * keeps every existing link resolving, including the four the Home Digest
+ * drill-downs carry. A key belongs to exactly one of the two, so there is
+ * nothing to disambiguate.
  */
 function resolveMetric(raw: Param): MetricKey | null {
   const v = first(raw);
   if (!v) return null;
+  const aliased = RETIRED_METRIC_ALIASES[v] ?? v;
   const known =
-    METRIC_BY_KEY.has(v as MetricKey) || BATCH_METRIC_BY_KEY.has(v);
-  return known ? (v as MetricKey) : null;
+    METRIC_BY_KEY.has(aliased as MetricKey) ||
+    CAMPAIGN_METRIC_BY_KEY.has(aliased);
+  return known ? (aliased as MetricKey) : null;
 }
 
 export default async function AnalyticsPage({

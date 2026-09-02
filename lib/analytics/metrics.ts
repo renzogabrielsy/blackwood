@@ -39,7 +39,7 @@
 import type { AnalyticsMonth } from "./types";
 
 /**
- * The ten RC Inventory rows + the eight production rows, in display order.
+ * The seven RC Inventory rows + the sixteen campaign rows, in display order.
  *
  * ── OWNER FEEDBACK ROUND 1 (2026-09-01) — FOUR ROWS RETIRED ─────────────
  * Renzo read the live page and cut `sundry_reentry`, `runway`,
@@ -74,33 +74,66 @@ import type { AnalyticsMonth } from "./types";
  *     and never did.
  *   • `yield_rate` — **moved into Production**, beside the output it divides,
  *     and joined by its complement `process_loss`.
+ *
+ * ── OWNER FEEDBACK R7 (2026-09-02) — PURCHASE / USAGE, AND ONE CAMPAIGN TABLE ─
+ * Renzo: *"rc in and out currently encompasses everything regardless of
+ * destination. I much prefer if we specify it to just purchase volume and usage
+ * volume."* So:
+ *
+ *   • `rc_in_total` · `rc_out` — **RETIRED AS ROWS.** They were the yard's two
+ *     undifferentiated totals: everything that arrived (bought, sun-dried
+ *     returns and re-cooks alike) and everything that left (plant feed AND
+ *     sundry pulls). The two rows that survive say what they MEAN — Purchase
+ *     volume (market deliveries) and the new Usage (destination MAIN only).
+ *     **Neither series is lost**: both are drawn, on the yard clock, inside the
+ *     Net flow row's expand, which is the one row that is genuinely about the
+ *     yard's gross movement. `page.tsx::resolveMetric` aliases both retired keys
+ *     to `net_flow` so every link ever shared still opens where they live.
+ *   • `stock_age` · `over_120d` — **RETIRED AS ROWS.** Renzo does not read
+ *     them. `view_analytics_aging_eom` is untouched and `openKg` (Ending
+ *     inventory) still reads it, so nothing left the payload or the database.
+ *   • The eight production rows R6 put on the batch clock now share ONE table
+ *     with the campaign panel's own rows (`lib/analytics/campaign-matrix.ts`),
+ *     so the whole band is `campaigns` rather than `production`.
  */
 export type MetricKey =
   | "market_price"
   | "purchase_volume"
+  /** R7 — charcoal FED, destination MAIN only, on the calendar month. */
+  | "usage_volume"
   | "active_suppliers"
-  | "rc_in_total"
-  | "rc_out"
   | "net_flow"
   | "ending_inventory"
   | "inventory_value"
-  | "stock_age"
-  | "over_120d"
-  // ── P4, the production layer ──────────────────────────────────────
+  // ── The CAMPAIGN band (R7) — the merged batch table ────────────────
+  // Three of these keys are deliberately the ones R4 retired
+  // (`delivered_fed_price`, `closed_blocks`) or renamed around, so a link
+  // shared before R4 opens the row that now carries its question.
+  | "fed_kg"
+  | "delivered_fed_price"
+  | "true_fed_price"
+  | "storage_uplift"
+  | "weight_lost"
+  | "closed_blocks"
   | "production_output"
   | "production_per_day"
   | "yield_rate"
   | "process_loss"
+  | "php_per_produced_delivered"
+  | "php_per_produced_true"
   | "downtime_hours"
   | "power_kwh"
   | "power_intensity"
   | "sacks_counted";
 
 /**
- * The visual bands of the matrix. Two since R4 dissolved the money band —
- * purely presentational, nothing about a rollup depends on it.
+ * The visual bands of the matrix. Two — and since R7 the second one is
+ * `campaigns`, because the production rows and the campaign-cost rows are ONE
+ * table on ONE clock. Purely presentational; nothing about a rollup depends on
+ * it. (It IS the `useRowOrder` scope, so the merged table gets a fresh saved
+ * order rather than inheriting either of the two tables it replaced.)
  */
-export type MetricSection = "flow" | "production";
+export type MetricSection = "flow" | "campaigns";
 
 /**
  * The five reading blocks of the page and the accent each one wears.
@@ -142,15 +175,21 @@ export const SECTIONS: readonly {
     key: "flow",
     label: "RC Inventory",
     hint:
-      "What moved through the yard, what is left standing in it, what that stock cost and how old it is.",
+      "What we bought, what the plant used, what the yard did net, and what is left standing in it.",
     accent: SECTION_ACCENT.flow,
   },
   {
-    key: "production",
-    label: "Production",
+    // OWNER FEEDBACK R7: the campaign panel and the Production band are ONE
+    // table. Renzo: *"It doesn't make sense for it to be separated and have
+    // redundant metrics… better to reference all of that in one table."* They
+    // were already on the same clock and the same spine after R6 — Produced and
+    // Yield literally appeared twice — so the merge removes a duplicate rather
+    // than inventing a join.
+    key: "campaigns",
+    label: "By production batch",
     hint:
-      "What the plant made, how long it stood still, and what it burned doing it. No ₱ anywhere in this band.",
-    accent: SECTION_ACCENT.production,
+      "One column per campaign: what it fed, what that charcoal cost, what the plant made from it and what it burned doing so.",
+    accent: SECTION_ACCENT.campaigns,
   },
 ];
 
@@ -237,12 +276,20 @@ export interface MetricAnnotation {
 }
 
 /**
- * A SECOND series drawn over the same row in its expand — the comparison
- * line a two-sided fact owes its reader (delivered vs true ₱/kg).
+ * A COMPANION series drawn over the same row in its expand — the comparison
+ * line a many-sided fact owes its reader.
  *
  * It carries its own rollup pair because a comparison line that aggregates
  * differently from the line it is compared against is not a comparison.
  * Both halves are SQL figures; nothing here re-derives a monthly number.
+ *
+ * ── R7: A ROW MAY DECLARE MORE THAN ONE ──────────────────────────────────
+ * `MetricSpec.pairs` is a LIST. Net flow is the reason: it is a subtraction,
+ * and R7 retired the two rows that used to print its halves, so the honest
+ * place for `RC IN, all arrivals` and `RC OUT, all destinations` is beside the
+ * net bars they are the difference of. One companion could not say that, and
+ * two independent mechanisms would have folded the two halves under different
+ * rules than the row itself.
  */
 export interface MetricPairOf<U> {
   label: string;
@@ -351,8 +398,11 @@ export interface MetricSpecOf<U> {
    * prevent — the same argument `rawValue` already applies to `estimated`.
    */
   annotate?(units: readonly U[]): MetricAnnotation | null;
-  /** The comparison line drawn beside this row in its expand, if it has one. */
-  pair?: MetricPairOf<U>;
+  /**
+   * R7 — the comparison lines drawn beside this row in its expand, if it has
+   * any. A LIST rather than one, because Net flow needs both of its halves.
+   */
+  pairs?: readonly MetricPairOf<U>[];
   dictionary: MetricDictionaryEntry;
 }
 
@@ -380,10 +430,10 @@ function t(kg: number | null | undefined): number | null {
  * RC INVENTORY — what moved, what is left standing, what it cost and how old
  * it is. Section assigned below.
  *
- * The last two rows (`stock_age`, `over_120d`) arrived here in owner feedback
- * R4 from the dissolved money band. They read `view_analytics_aging_eom`,
- * which is ₱-FREE by construction, so moving them changed no gate: the whole
- * aging story stays visible to the Production role exactly as it was.
+ * R4 moved the two aging rows here from the dissolved money band and **R7
+ * retired them** — Renzo does not read them. Nothing else about this band's
+ * gate changed: `view_analytics_aging_eom` is ₱-FREE by construction and is
+ * still what `Ending inventory` reads.
  */
 const FLOW_METRICS: readonly Omit<MetricSpec, "section">[] = [
   {
@@ -436,6 +486,51 @@ const FLOW_METRICS: readonly Omit<MetricSpec, "section">[] = [
     },
   },
   {
+    // ── OWNER FEEDBACK R7 — THE ROW THAT REPLACED "RC OUT" ────────────────
+    // Renzo: *"rc in and out currently encompasses everything regardless of
+    // destination. I much prefer if we specify it to just purchase volume and
+    // usage volume."* Purchase volume was already the market-only half of RC IN
+    // total; this is the MAIN-only half of RC OUT, and the pair now reads as
+    // one thought — what we bought, and what the plant actually used.
+    //
+    // It reads `view_analytics_cost_monthly.fed_kg`, which is
+    // `view_rc_movement_month_price.total_fed` verbatim and has been
+    // destination-MAIN-only since L-047 (migration 20260902071050). It is NOT
+    // `view_analytics_flow_monthly.out_kg`, which is the yard's OUT clock and
+    // still counts sundry pulls — that series survives, on the row it belongs
+    // to, inside the Net flow expand below.
+    //
+    // **This is the CALENDAR month.** The campaign table's own `Charcoal fed`
+    // row is the same MAIN-only kilos on the BATCH clock, so the two are
+    // deliberately different numbers for any month a campaign straddled, and
+    // both dictionaries say which clock they are on.
+    key: "usage_volume",
+    label: "Usage",
+    sublabel: "tonnes fed",
+    unit: "tonnes",
+    rollup: "sum",
+    read: (m) => t(m.fedKg),
+    deltaMode: "pct",
+    perWorkingDay: true,
+    price: false,
+    chart: "bar",
+    color: "var(--chart-1)",
+    avgColor: "var(--chart-3)",
+    decimals: 1,
+    dependsOn: ["outflow"],
+    dictionary: {
+      definition:
+        "How much charcoal the plant actually consumed that month — fed into the tank, destination MAIN.",
+      basis: "Every feeding into the plant that month, added up.",
+      exclusions:
+        "Sundry pulls. Charcoal taken out of a block to be sun-dried left the pile but never reached the plant, and it comes back later as a delivery — counting it as usage would book the same kilos as consumption twice. Before September 2026 every 'fed' figure on this platform summed both, which read January 2026 as 1,048.9 t against a true 836.3 t.",
+      rollup: "Quarters and years are plain sums of their months.",
+      source: "view_analytics_cost_monthly.fed_kg",
+      caveat:
+        "Measured on the CALENDAR month. The campaign table below prints the same kilos on the batch clock, where a campaign straddles month boundaries — so the two are different numbers on purpose, not a discrepancy. Feedings were only written down from January 2024; earlier months are blank, never zero.",
+    },
+  },
+  {
     key: "active_suppliers",
     label: "Active suppliers",
     sublabel: "sellers",
@@ -462,55 +557,17 @@ const FLOW_METRICS: readonly Omit<MetricSpec, "section">[] = [
       source: "view_analytics_rcin_monthly.active_suppliers",
     },
   },
-  {
-    key: "rc_in_total",
-    label: "RC IN total",
-    sublabel: "tonnes",
-    unit: "tonnes",
-    rollup: "sum",
-    read: (m) => t(m.inKg),
-    deltaMode: "pct",
-    perWorkingDay: true,
-    price: false,
-    chart: "bar",
-    color: "var(--chart-2)",
-    avgColor: "var(--chart-3)",
-    decimals: 1,
-    dictionary: {
-      definition:
-        "Everything that rolled through the gate — bought, returned from drying and re-cooked alike.",
-      basis: "Every delivery's weight for the month, added up.",
-      exclusions:
-        "Nothing. The yard does not care who owned the kilos; Purchase volume is the row that does.",
-      rollup: "Quarters and years are plain sums of their months.",
-      source: "view_analytics_flow_monthly.in_kg",
-    },
-  },
-  {
-    key: "rc_out",
-    label: "RC OUT",
-    sublabel: "tonnes fed",
-    unit: "tonnes",
-    rollup: "sum",
-    read: (m) => t(m.outKg),
-    deltaMode: "pct",
-    perWorkingDay: true,
-    price: false,
-    chart: "bar",
-    color: "var(--chart-1)",
-    avgColor: "var(--chart-3)",
-    decimals: 1,
-    dependsOn: ["outflow"],
-    dictionary: {
-      definition: "Everything fed to the plant that month.",
-      basis: "Every feeding's weight, added up.",
-      exclusions: "Nothing.",
-      rollup: "Quarters and years are plain sums of their months.",
-      source: "view_analytics_flow_monthly.out_kg",
-      caveat:
-        "Feedings were only written down from January 2024. Earlier months are blank, never zero — a zero would sum into a year as if the plant had fed nothing.",
-    },
-  },
+  // ── OWNER FEEDBACK R7 — `rc_in_total` and `rc_out` WERE HERE ────────────
+  // Two undifferentiated yard totals: everything that arrived (bought,
+  // sun-dried returns and re-cooks alike) and everything that left (plant feed
+  // AND sundry pulls). Renzo asked for rows that say what they MEAN, so the
+  // pair above — Purchase volume and Usage — replaced them.
+  //
+  // **NEITHER SERIES WAS DELETED.** Both are declared as the Net flow row's own
+  // `pairs` immediately below, drawn beside the net bars they are the
+  // difference of, folded through the SAME rollup machinery as the row itself.
+  // Nothing changed in SQL and nothing left the payload: `inKg` and `outKg`
+  // still cross the wire and are still what the net is built from.
   {
     key: "net_flow",
     label: "Net flow",
@@ -527,14 +584,47 @@ const FLOW_METRICS: readonly Omit<MetricSpec, "section">[] = [
     avgColor: "var(--chart-4)",
     decimals: 1,
     dependsOn: ["outflow"],
+    // ── R7 ITEM 2 — THE TWO HALVES OF THE SUBTRACTION, DRAWN ──────────────
+    // Renzo: *"It makes much more sense there to show the actual overall net
+    // flow by basing off of the rc in and out data."* This row is the ONE row
+    // on the page that is genuinely about the yard's gross movement — it counts
+    // every arrival and every departure whatever its destination — so it is
+    // where the two retired totals belong, as the lines the bars are the
+    // difference of rather than as two more rows saying it again.
+    //
+    // They are LABELLED for what they actually count, which is the whole point
+    // of the round: "all arrivals" and "all destinations", so nobody reads the
+    // out line as plant feed. Both fold through this row's own rollup (`sum`)
+    // and its own per-working-day option, so the identity in − out = net holds
+    // in every column of the chart, not only in a month.
+    pairs: [
+      {
+        label: "RC IN, all arrivals",
+        color: "var(--chart-2)",
+        read: (m) => t(m.inKg),
+        numerator: () => null,
+        denominator: () => null,
+        note: "The two lines are the halves of the bars: everything that came through the gate — bought, returned from sun-drying and re-cooked alike — and everything that physically left a pile, plant feed and sundry pulls together. Purchase volume above narrows the first to what we actually BOUGHT, and Usage narrows the second to what actually reached the plant.",
+      },
+      {
+        label: "RC OUT, all destinations",
+        color: "var(--chart-1)",
+        read: (m) => t(m.outKg),
+        numerator: () => null,
+        denominator: () => null,
+        note: "",
+      },
+    ],
     dictionary: {
       definition:
         "Did the pile grow or shrink. Positive means we built stock; negative means we ate into it.",
-      basis: "Everything in, minus everything fed.",
-      exclusions: "Nothing.",
+      basis:
+        "Everything in, minus everything out — every arrival whatever its origin, every departure whatever its destination. Both halves are drawn as lines over the bars in this row's expand.",
+      exclusions: "Nothing. This is the yard's gross movement, deliberately.",
       rollup: "Quarters and years are plain sums of their months.",
       source: "view_analytics_flow_monthly.net_kg",
-      caveat: "Blank before January 2024 — half the subtraction did not exist yet.",
+      caveat:
+        "Blank before January 2024 — half the subtraction did not exist yet. It is NOT Purchase volume minus Usage: those two rows each narrow their half to a meaning (bought / actually fed), and subtracting them would be a figure with no physical referent.",
     },
   },
   {
@@ -648,59 +738,13 @@ const FLOW_METRICS: readonly Omit<MetricSpec, "section">[] = [
         "Measured over a slightly wider set of piles than the row above — closed-block residue is still in it, 8.19% of the valued money today. Being a ratio, that shifts the figure far less than it shifted the ₱ total this row replaced. The expand prints the valued and unvalued kilos and the ₱ total behind it.",
     },
   },
-  // ── The two aging rows, moved here from the dissolved money band (R4) ──
-  {
-    key: "stock_age",
-    label: "Avg stock age",
-    sublabel: "days, open piles",
-    unit: "days",
-    rollup: "periodEnd",
-    read: (m) => m.wtdAgeDays,
-    deltaMode: "abs",
-    perWorkingDay: false,
-    price: false,
-    chart: "line",
-    color: "var(--chart-5)",
-    avgColor: "var(--chart-3)",
-    decimals: 1,
-    dictionary: {
-      definition:
-        "How old the charcoal standing in the yard was at month-end, averaged by weight — a big fresh pile pulls it down, a small old one barely moves it.",
-      basis:
-        "Each pile takes the weighted average delivery date of everything tipped into it, and its whole remaining balance carries that one age.",
-      exclusions:
-        "Closed blocks and negative balances. A closed block's logged remainder is evaporated weight, not stock; counting it made the yard read 416 days old instead of 387.",
-      rollup: "A quarter or a year shows the month-end figure. An age is a state, not a sum.",
-      source: "view_analytics_aging_eom.wtd_age_days",
-      caveat:
-        "No first-in-first-out, and none is possible: the feeding records say which PILE kilos left, never which truckload. Deliveries into one pile land days apart, so the error is small against ages in the hundreds of days.",
-    },
-  },
-  {
-    key: "over_120d",
-    label: "Stock over 120 days",
-    sublabel: "% of open kg",
-    unit: "pct",
-    rollup: "periodEnd",
-    read: (m) => m.pctOver120d,
-    deltaMode: "abs",
-    perWorkingDay: false,
-    price: false,
-    chart: "line",
-    color: "var(--chart-1)",
-    avgColor: "var(--chart-4)",
-    decimals: 1,
-    dictionary: {
-      definition:
-        "How much of the yard sat in piles older than four months — the share that is quietly losing weight.",
-      basis: "Kilos in open piles over 120 days ÷ all kilos in open piles, at month-end.",
-      exclusions: "Same as average stock age: closed-block residue and negative balances.",
-      rollup: "A quarter or a year shows the month-end figure. A share is not additive.",
-      source: "view_analytics_aging_eom.pct_over_120d",
-      caveat:
-        "120 days is a reading line, not a policy — nothing turns amber because of it. The 60-day figure and the oldest pile are in the expand.",
-    },
-  },
+  // ── OWNER FEEDBACK R7 — `stock_age` and `over_120d` WERE HERE ──────────
+  // R4 moved them into this band from the dissolved money band; R7 removes
+  // the ROWS, because Renzo does not read them. Only the rows went, exactly as
+  // in R1 and R4: `view_analytics_aging_eom` is untouched, every field still
+  // crosses the wire, and `Ending inventory` above still reads that view's
+  // `open_kg` — so the aging story is still what decides the yard's headline
+  // stock figure, it simply no longer has two rows of its own.
 ] as const;
 
 /**
@@ -708,7 +752,8 @@ const FLOW_METRICS: readonly Omit<MetricSpec, "section">[] = [
  * construction so a row can never be filed under the wrong band by hand.
  *
  * ── OWNER FEEDBACK R6 (2026-09-02): THE PRODUCTION ROWS ARE NOT HERE ───────
- * They moved, whole, to `lib/analytics/production-batch.ts`, because the band
+ * They moved, whole, to what is now `lib/analytics/campaign-matrix.ts` (R7
+ * merged that file with the campaign panel's own rows), because the band
  * moved to the PRODUCTION-BATCH clock and a campaign is not a month. This is
  * the R4 argument taken one step further: R4 retired the calendar MONEY rows
  * because the campaign was the right clock for a cost; R6 retires the calendar
