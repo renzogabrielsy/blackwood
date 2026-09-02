@@ -49,10 +49,15 @@ export type RcMovementMatrixColumn = {
   avgFedPrice: number | null;
   // ── ACTUAL FED ₱/kg (view_rc_movement_block_actual_price, 2026-08-07) ──
   // The cost of a kilogram that ACTUALLY reached the plant: the block's whole
-  // delivered VALUE divided by the kg ever fed out of it. Higher than
+  // delivered VALUE divided by the kg ever fed INTO THE PLANT TANK out of it
+  // (rc_out.destination = 'MAIN' only, since 2026-09-02). Higher than
   // avgFedPrice because the block loses weight while the money spent does not.
-  /** actual_fed_php_kg — NULL (never 0) when the block is OPEN or has any unpriced
-   *  delivery. Render NULL as BLANK; never `?? 0`, never a dash that reads as a value. */
+  /** actual_fed_php_kg — NULL (never 0) when the block is OPEN, has any unpriced
+   *  delivery, or has ANY SUNDRY OUTFLOW (2026-09-02: the money left with the
+   *  sun-dried charcoal and returns inside a different batch, so no honest
+   *  per-kilo answer exists from this block alone — the view exposes out_php_kg
+   *  as the computable partial).
+   *  Render NULL as BLANK; never `?? 0`, never a dash that reads as a value. */
   actualFedPrice: number | null;
   /** batches.status = 'CLOSED' per the view (why a blank actual price is blank). */
   isClosed: boolean;
@@ -62,7 +67,10 @@ export type RcMovementMatrixColumn = {
   /** uplift_php_kg — actual − delivered (₱/kg). Legitimately 0 or NEGATIVE on ~27% of
    *  closed blocks (fed exactly / more than delivered). NOT an error state — no red. */
   upliftPhpKg: number | null;
-  /** delivered_kg − total_fed_kg. Only means "lost" once the block is closed. */
+  /** delivered_kg − total_out_kg (EVERY rc_out row, both destinations — a sundry
+   *  pull left the pile, so it is subtracted before loss is named, and this figure
+   *  is numerically unchanged by the 2026-09-02 fed/out split).
+   *  Only means "lost" once the block is closed. */
   weightLostKg: number | null;
   /** loss_pct — a FRACTION (×100 at render), same convention as campaignYieldPct. */
   lossPct: number | null;

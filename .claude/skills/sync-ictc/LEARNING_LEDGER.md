@@ -1063,3 +1063,78 @@ typecheck clean, 848/848 vitest, parity clean (58 registered deviations, 0 fail)
 deployed** — merging to `main` ships the app, not `workers/sync/`.
 
 ---
+
+## L-047 — A COLUMN NAMED "FED" WAS SUMMING EVERY OUTFLOW (2026-09-02)
+
+**Renzo caught it on the live RC Movement screen:** "Charcoal fed" for JANUARY 2026 read
+**1,048.9 t** against the **829.3 t** on his own RC MONTHLY workbook. He was right, and the
+cause was one word doing two jobs.
+
+`rc_out.destination` has exactly two values — measured over all 2,186 rows, 0 NULL and 0
+other: **MAIN** (2,108 rows / 22,589,264 kg / 2024-01-01…2026-08-28), charcoal fed into the
+plant tank, and **SUNDRY** (78 rows / 552,629 kg / 2026-01-17…2026-04-23), charcoal pulled
+OUT of a block to be sun-dried. A sundry pull never reaches the plant on that trip; it comes
+back weeks later as a **sundry re-entry DELIVERY**, which `fn_delivery_class` already
+(correctly, L-Phase-1) refuses to count as a purchase. **The same kilos the analytics layer
+was careful not to count as an arrival were being counted as plant feed on the way out.**
+
+**The lesson is about NAMING, and it is the mirror of L-042.** There, an operator's shorthand
+was mistaken for malformed input. Here, a column called `fed_kg` was assumed to mean "fed"
+when its SQL said `sum(weight_kg)` over an rc_out row set that had grown a second meaning.
+Nobody changed the view when `destination` gained SUNDRY in January 2026 — the name kept
+telling everyone it was right for eight months. **When a table gains a discriminator column,
+every aggregate over that table becomes a question that must be re-asked, and the ones whose
+NAMES already answered it are the dangerous ones.**
+
+**THE FIX IS THREE CLOCKS, and every rc_out-derived view now names its clock in the DB
+`COMMENT`.** FED = `destination = 'MAIN'` (what the plant consumed). OUT = every rc_out row
+(what left the block). BALANCE = `deliveries − OUT` (what is still there). Fifteen views were
+`CREATE OR REPLACE`d — never DROP + CREATE, because three carry a `service_role` grant (L-044)
+— with new columns appended at the END so no consumer's column shape moved (`tsc` clean,
+`npm run build` clean, zero client edits; the regenerated `types/supabase.ts` diff is 27
+insertions and 0 deletions, which is itself the proof).
+
+**A SUNDRY PULL IS NOT EVAPORATION, SO IT MUST NEVER LAND IN A LOSS FIGURE — and the naive
+fix would have put it there.** `weight_lost_kg` was `delivered − total_fed_kg` back when
+`total_fed_kg` meant all outflow. Narrowing that column to MAIN *without moving the loss
+formula to the OUT clock* would have re-labelled 552,629 kg of sun-drying as shrinkage.
+It now reads `delivered − total_out_kg`: **measured, 0 of 531 blocks moved, and `close_date`
+0 of 531.** The February-2026 negative `closed_blocks_loss_pct` of −0.001022 that CLAUDE.md
+records is still exactly −0.001022 — the cheapest possible proof that loss was untouched.
+
+**AND ONE PLACE WHERE THE HONEST ANSWER IS NULL.** `actual_fed_php_kg` divides a block's
+whole delivered money by its fed kilos. For a block with sundry outflow, MAIN-only kilos
+**overstate** (JAN-26-BLK8 would read ~4.3×) and all-outflow kilos **understate the very
+uplift the statistic exists to show** — and neither is knowable from this block, because the
+money physically leaves with the charcoal and returns inside a *different* batch. So it is
+NULL, never 0, with `has_sundry_outflow` / `sundry_kg` explaining the blank and `out_php_kg`
+as the computable partial — the `priced_delivered_php_kg` idiom, third outing. Measured cost:
+**17 of 462 closed blocks, 16 of which fed the plant nothing at all** (their old "actual fed
+price" was a price per kilo *sun-dried*).
+
+**SCOPE PROVEN BY REPLAY, not by inspection.** Each old definition was re-run inline and
+diffed against the new view: **4 of 31 calendar months** and **3 of 31 campaigns** changed,
+and the deltas sum to **exactly 552,629 kg — every SUNDRY kilogram and not one more**.
+JANUARY 2026 campaign yield 65.56% → **82.23%**; MARCH 69.80% → **84.47%**; APRIL 71.63% →
+**83.50%** — three campaigns that had been publishing a yield ~15 points below a plant that
+otherwise runs 79–84%.
+
+**WHAT THE FIX DID NOT EXPLAIN, reported rather than assumed.** After the correction, a
+date-by-date replay of Renzo's seven 2026 RC MONTHLY tabs (171 date rows) leaves **four**
+residual dates: 2026-01-27 (+7,000 kg, `JAN-26-BLK8`), 2026-02-12 (+17,540 kg,
+`FEB-26-FEED4`), 2026-03-24 (+3,754 kg, `NOV-25-BLK16`) and a net-zero 2026-04-30
+campaign-tag boundary (APRIL +7,183 / MAY −7,183). JUNE and JULY reconcile to the kilogram.
+**All three non-zero residuals are MAIN rows remarked `CLOSED`** — consistent with a closing
+sweep that his FED column does not count, but the cause is **not asserted** and **no data was
+changed** ("LIKELY, not definitely"). His own JUNE tab also carries a `2026-03-12` typo for
+`2026-06-12` (±63,923 kg, self-cancelling).
+
+**Provenance:** 2026-09-02, branch `fix/fed-excludes-sundry`. Migration
+`20260902071050_fed_excludes_sundry_destination.sql` — 15 `CREATE OR REPLACE VIEW` + 15
+`COMMENT ON VIEW`, zero DML. The file's 15 comment md5s were checked equal to
+`obj_description` in the live DB, so the repo file is a faithful record of what ran. Gates:
+`tsc --noEmit` clean, `npm run build` clean, `verify-worker-view-grants` 4 views / 0 findings,
+grants and `security_invoker=true` preserved on all 15, `batches.current_weight` re-derived
+from base tables across 715 batches with max gap **0.00 kg**, and
+`aging_eom.open_kg + closed_residue_kg = inventory_eom.positive_balance_kg` still exact on
+**75/75** months.

@@ -2989,6 +2989,7 @@ export type Database = {
           blocks_fed: number | null
           blocks_in_price: number | null
           blocks_open: number | null
+          blocks_with_sundry: number | null
           campaign_fed_kg_excluded: number | null
           campaign_fed_kg_included: number | null
           campaign_fed_kg_included_pct: number | null
@@ -3007,11 +3008,13 @@ export type Database = {
           is_fully_covered: boolean | null
           last_fed_date: string | null
           loss_pct: number | null
+          out_kg: number | null
           php_per_produced_kg_delivered: number | null
           php_per_produced_kg_true: number | null
           process_loss_kg: number | null
           produced_kg: number | null
           production_batch: string | null
+          sundry_kg: number | null
           uplift_php_kg: number | null
           weight_lost_kg: number | null
           yield_pct: number | null
@@ -3029,10 +3032,13 @@ export type Database = {
           closed_blocks_loss_pct: number | null
           closed_blocks_lost_kg: number | null
           closed_blocks_no_delivery: number | null
+          closed_blocks_out_kg: number | null
           closed_blocks_priced_fed_kg: number | null
+          closed_blocks_sundry_kg: number | null
           closed_blocks_true_php_kg: number | null
           closed_blocks_unpriced: number | null
           closed_blocks_uplift_php_kg: number | null
+          closed_blocks_with_sundry: number | null
           delivered_php_kg_fed: number | null
           delivered_php_kg_fed_covered: number | null
           fed_kg: number | null
@@ -3833,15 +3839,18 @@ export type Database = {
           block_loc: string | null
           closed_today: boolean | null
           cum_fed: number | null
+          cum_out: number | null
           date: string | null
           deliveries_total: number | null
           fed_today: number | null
           feed_day_n: number | null
+          out_today: number | null
           pct_loss: number | null
           php_per_kg: number | null
           php_total: number | null
           start_balance: number | null
           status: string | null
+          sundry_today: number | null
           supplier: string | null
         }
         Relationships: [
@@ -3910,16 +3919,23 @@ export type Database = {
           delivery_count: number | null
           feed_count: number | null
           first_fed_date: string | null
+          first_main_fed_date: string | null
+          has_sundry_outflow: boolean | null
           has_unpriced_delivery: boolean | null
           is_closed: boolean | null
           is_fully_priced: boolean | null
           last_fed_date: string | null
+          last_main_fed_date: string | null
           loss_pct: number | null
+          main_feed_count: number | null
+          out_php_kg: number | null
           priced_delivered_kg: number | null
           priced_delivered_php_kg: number | null
           priced_delivery_count: number | null
           status: Database["public"]["Enums"]["batch_status"] | null
+          sundry_kg: number | null
           total_fed_kg: number | null
+          total_out_kg: number | null
           unpriced_delivered_kg: number | null
           unpriced_delivery_count: number | null
           uplift_pct: number | null
@@ -3937,6 +3953,8 @@ export type Database = {
           blocks_fed: number | null
           blocks_in_price: number | null
           blocks_open: number | null
+          blocks_sundry_kg: number | null
+          blocks_with_sundry: number | null
           campaign_fed_kg: number | null
           campaign_fed_kg_closed: number | null
           campaign_fed_kg_excluded: number | null
@@ -3965,6 +3983,7 @@ export type Database = {
           date: string | null
           fed_kg: number | null
           production_batch: string | null
+          sundry_kg: number | null
         }
         Relationships: [
           {
@@ -4041,11 +4060,14 @@ export type Database = {
           fed_share_of_delivered: number | null
           feed_count: number | null
           first_fed_date: string | null
+          has_sundry_outflow: boolean | null
           has_unpriced_delivery: boolean | null
           last_fed_date: string | null
+          out_kg_to_date: number | null
           priced_delivered_php_kg: number | null
           production_batch: string | null
           status: Database["public"]["Enums"]["batch_status"] | null
+          sundry_kg: number | null
           unpriced_delivery_count: number | null
         }
         Relationships: [
@@ -4099,7 +4121,10 @@ export type Database = {
           feed_days: number | null
           max_date: string | null
           min_date: string | null
+          out_days: number | null
+          out_kg: number | null
           production_batch: string | null
+          sundry_kg: number | null
           total_fed: number | null
         }
         Relationships: []
@@ -4210,7 +4235,9 @@ export type Database = {
           close_date: string | null
           feed_count: number | null
           first_fed_date: string | null
+          sundry_kg: number | null
           total_fed_kg: number | null
+          total_out_kg: number | null
           total_value: number | null
         }
         Relationships: []

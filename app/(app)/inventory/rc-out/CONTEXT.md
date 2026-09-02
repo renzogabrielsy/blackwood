@@ -3,6 +3,8 @@
 ## Purpose
 Tracks raw charcoal consumption/depletion from batches. Excel-like grid input with virtual scroll table, computed pricing columns, and batch code resolution. All data loaded upfront with client-side filtering.
 
+> **Closed-blocks summary — `total_fed_kg` narrowed to `destination = 'MAIN'` (2026-09-02, migration `20260902071050_fed_excludes_sundry_destination`).** `view_rc_out_closed_blocks.total_fed_kg` used to sum every `rc_out` row, including SUNDRY pulls (charcoal taken out of a block to be sun-dried, which never reached the plant). It now counts plant feed only, and the view gained **`total_out_kg`** and **`sundry_kg`**. `total_value` and `avg_price` are **unchanged** and stay OUT-based. **Known display consequence, not a bug:** 16 closed blocks whose only outflow was SUNDRY now read **`total_fed_kg = 0`** beside a real `total_value` — the "Total Fed (kg)" column in `components/rc-out-table.tsx` / `rc-out-cards-mobile.tsx` shows 0 for them. Surfacing `sundry_kg` beside it is an open UI follow-up.
+
 > **Domain Module (Charcoal Tenant):** This module is domain-specific — it belongs to the charcoal plant operations layer, not the platform layer. Business logic, schema references, and terminology here are intentionally charcoal-specific. When adapters are built for the dashboard widgets, they will extract data from these tables — but widgets themselves will never import from this module.
 
 ## Files

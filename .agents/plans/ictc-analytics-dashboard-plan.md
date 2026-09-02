@@ -1,5 +1,16 @@
 # ICTC Owner Analytics — planning document (FINALIZED 2026-09-01, build not started)
 
+> **POST-BUILD CORRECTION — 2026-09-02, migration `20260902071050_fed_excludes_sundry_destination`.**
+> The plan's decision (4) got the DELIVERY side of sundry exactly right (`fn_delivery_class`
+> keeps sundry re-entries out of market purchase volume and price). It missed the **rc_out**
+> side: `destination` is `MAIN` (fed to the plant) or `SUNDRY` (pulled out to be sun-dried),
+> and every "fed" view summed both — so the same sun-dried charcoal that the plan correctly
+> refused to count as a purchase on the way IN was being counted as plant feed on the way OUT.
+> JANUARY 2026 read 1,048,908 kg fed against a true 836,328 kg; its yield read 65.56% against
+> a true 82.23%. Fixed in SQL across 15 views; balance / yard-flow figures are untouched.
+> **Generalised rule for any future KPI on this page: a population rule has to be stated on
+> BOTH sides of a flow — what came in, and what went out — or half of it leaks back.**
+
 > **Renzo's decisions (2026-09-01):** (1) New `/analytics` page. (2) Cost KPIs BOTH bases —
 > calendar months for market KPIs, production batches for cost/yield, side by side, labeled.
 > (3) ALL FOUR snapshot KPI families in (value ₱ · age+watchlist · runway · counts/utilization)

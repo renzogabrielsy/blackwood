@@ -17,6 +17,25 @@
 > authority** wherever they disagree, and each superseded passage carries a pointer to
 > it. Read that section before trusting a row list or an anchor list above.
 >
+> **DATA CORRECTION — "FED" NOW EXCLUDES SUNDRY PULLS, 2026-09-02 (migration
+> `20260902071050_fed_excludes_sundry_destination`). ⚠ NO UI CODE CHANGED, BUT THE
+> NUMBERS ON THIS PAGE MOVED.** `rc_out.destination` is `MAIN` (fed into the plant tank)
+> or `SUNDRY` (pulled out to be sun-dried and returned later as a sundry re-entry
+> delivery). Every "fed" view summed both, so **JANUARY 2026 read 1,048,908 kg of
+> Charcoal fed against a true 836,328 kg**, and its campaign yield read **65.56% where it
+> is really 82.23%**. Fixed in SQL only: `view_analytics_cost_monthly` and
+> `view_analytics_batch_cost` (and the RC-Movement views they read) now ride the FED clock,
+> **coverage denominators included**. Four calendar months (2026-01 … 2026-04) and three
+> campaigns (JANUARY / MARCH / APRIL 2026) changed; the deltas sum to exactly the
+> 552,629 kg of SUNDRY outflow. **Unchanged on purpose:** every kg on the `RC Inventory`
+> band — `in_kg` / `out_kg` / `working_days` / `runway_days` / month-end stock / aging /
+> the watchlist — because those are BALANCE and yard-flow figures and a sundry pull really
+> did leave the pile. Two shapes to know when reading the page: `php_per_produced_kg_true`
+> is now **NULL for JANUARY 2026** (it drew from one block with sundry outflow, whose true
+> fed price is unknowable — `blocks_in_price` reads 28 of 29), and `blocks_fed` fell for
+> JAN/MAR/APR because blocks a campaign only *sun-dried* from are no longer counted as fed.
+> Every figure quoted elsewhere in this file for those four months is **pre-correction**.
+>
 > **OWNER FEEDBACK ROUND 5 APPLIED — 2026-09-02. ⚠ THIS ROUND RE-ORDERED THE PAGE
 > AND REMOVED TWO SURFACES.** The **callout strip is unmounted**, the supplier
 > premium and supplier matrix **footnote paragraphs are gone**, **Production now sits
