@@ -5,8 +5,9 @@ import { Calculator, Check, Layers, X, Eye, EyeOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { errorToast } from '@/lib/toast';
 import { WAREHOUSES, STANDARD_WAREHOUSES } from './constants';
-import type { BlockData } from './types';
+import type { BlockData, BlockingSupplierMap } from './types';
 import { buildBlendProposal, type BlendProposal } from './actions';
+import { BlockingSupplierSearch, type ActiveSupplierSummary } from './supplier-search';
 import { BlockingDetailPanel, type BlockingDetailNavTarget } from '../_shared/blocking-detail-panel';
 import { BlendProposalDialog } from '../_shared/blend-proposal-dialog';
 import { useTableSettings } from '@/components/providers/table-settings';
@@ -262,6 +263,37 @@ function computeSpotlight(
   return 'dimmed';
 }
 
+/**
+ * Supplier spotlight — mutually exclusive with the status/lab one above, so when a
+ * supplier is active it decides EVERY cell's class.
+ *
+ * GREEN (`spotlight-supplier-all`) when the block is entirely that supplier, ORANGE
+ * (`spotlight-supplier-some`) when it holds them alongside others, and the shared
+ * `spotlight-dimmed` for everything else — occupied or empty. The ALL/SOME test is
+ * the view's own `supplierCount`; never `shares.length`.
+ */
+function getSupplierSpotlightClass(
+  supplierKey: string | null,
+  byBlock: BlockingSupplierMap['byBlock'],
+  locKey: string,
+): string | null {
+  if (!supplierKey) return null;
+  const bucket = byBlock[locKey];
+  if (!bucket) return 'spotlight-dimmed';
+  if (!bucket.shares.some((s) => s.supplierKey === supplierKey)) return 'spotlight-dimmed';
+  return bucket.supplierCount === 1 ? 'spotlight-supplier-all' : 'spotlight-supplier-some';
+}
+
+/** "ORNALES 62% · PAQUIBOT 38%" — the block's supplier mix, for the cell tooltip. */
+function formatSupplierMix(
+  byBlock: BlockingSupplierMap['byBlock'],
+  locKey: string,
+): string | undefined {
+  const bucket = byBlock[locKey];
+  if (!bucket || bucket.shares.length === 0) return undefined;
+  return bucket.shares.map((s) => `${s.supplierDisplay} ${Math.round(s.sharePct)}%`).join(' · ');
+}
+
 function getSpotlightClass(match: SpotlightMatch, statusFilter: StatusFilter): string {
   if (match === 'none') return '';
   if (match === 'dimmed') return 'spotlight-dimmed';
@@ -298,7 +330,19 @@ interface BlockingGridProps {
    * panel falls back to its `window` CustomEvent → InventoryTabProvider tab switch.
    */
   onNavigateToBatch?: (target: BlockingDetailNavTarget) => void;
+  /**
+   * Supplier search payload (`fetchBlockingSupplierMap`). Optional so a host that has
+   * not wired it yet still renders — the search bar simply has nothing to suggest.
+   */
+  supplierMap?: BlockingSupplierMap;
+  /** Active supplier KEY, driven from `?supplier=` by the standalone route. */
+  supplierFilter?: string | null;
+  /** Pick/clear the supplier filter — the route writes it to the URL. */
+  onSupplierFilterChange?: (key: string | null) => void;
 }
+
+/** Stable empty map so an unwired host doesn't churn identity every render. */
+const EMPTY_SUPPLIER_MAP: BlockingSupplierMap = { suppliers: [], byBlock: {} };
 
 export function BlockingGrid({
   data,
@@ -306,12 +350,43 @@ export function BlockingGrid({
   selectedLocKey: controlledLocKey,
   onSelectBlock,
   onNavigateToBatch,
+  supplierMap = EMPTY_SUPPLIER_MAP,
+  supplierFilter = null,
+  onSupplierFilterChange,
 }: BlockingGridProps) {
   const isControlled = controlledLocKey !== undefined && onSelectBlock !== undefined;
   const [internalLocKey, setInternalLocKey] = useState<string | null>(null);
   const selectedLocKey = isControlled ? controlledLocKey! : internalLocKey;
   const [activeWarehouses, setActiveWarehouses] = useState<Set<string>>(() => makeDefaultActive());
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
+
+  // ── Supplier search ──
+  // The active supplier resolves against the map, so a stale/unknown `?supplier=` key
+  // simply highlights nothing instead of dimming the whole grid. The two counts are a
+  // count of map ENTRIES — no kg is aggregated here; every number came out of SQL.
+  const activeSupplier: ActiveSupplierSummary | null = useMemo(() => {
+    if (!supplierFilter) return null;
+    const entry = supplierMap.suppliers.find((s) => s.key === supplierFilter);
+    if (!entry) return null;
+    let allCount = 0;
+    let someCount = 0;
+    for (const bucket of Object.values(supplierMap.byBlock)) {
+      if (!bucket.shares.some((s) => s.supplierKey === supplierFilter)) continue;
+      // THE all/some rule: the view's own supplier_count_in_block.
+      if (bucket.supplierCount === 1) allCount++;
+      else someCount++;
+    }
+    return {
+      key: entry.key,
+      display: entry.display,
+      blockCount: allCount + someCount,
+      allCount,
+      someCount,
+    };
+  }, [supplierFilter, supplierMap]);
+
+  const supplierKey = activeSupplier?.key ?? null;
+
   const { settings } = useTableSettings();
   const labHighlights = settings.labHighlights;
 
@@ -493,12 +568,39 @@ export function BlockingGrid({
     setActiveWarehouses(makeDefaultActive());
   };
 
+  // ── The two spotlights are MUTUALLY EXCLUSIVE (kept simple + predictable) ──
+  // Picking a supplier resets the status filter to ALL; clicking any status/lab chip
+  // clears the supplier. Only one spotlight vocabulary is ever on screen at a time.
   const handleToggleStatus = (filter: StatusFilter) => {
+    if (supplierKey) onSupplierFilterChange?.(null);
     setStatusFilter((prev) => (prev === filter ? 'ALL' : filter));
   };
 
+  const handleSupplierSelect = useCallback(
+    (key: string | null) => {
+      onSupplierFilterChange?.(key);
+      if (key) setStatusFilter('ALL');
+    },
+    [onSupplierFilterChange],
+  );
+
   return (
     <div className={cn('flex flex-col gap-3 px-4 py-3', SHORT.page)}>
+      {/* ── Supplier search — PHONE placement (below sm) ──
+          Its own full-width row ABOVE the sticky header. It cannot live inside the
+          header there: the mobile header is a `flex-nowrap overflow-x-auto` strip, and
+          `overflow-x: auto` computes overflow-y to auto as well — which would clip the
+          suggestion panel inside a scrolling box. Desktop keeps it in the chip row
+          (below), where the header wraps and never clips. */}
+      <div className="sm:hidden">
+        <BlockingSupplierSearch
+          suppliers={supplierMap.suppliers}
+          active={activeSupplier}
+          onSelect={handleSupplierSelect}
+          className="w-full"
+        />
+      </div>
+
       {/* ── Global Summary Header (sticky) ──
           Desktop (sm+, tall): the original wrapping, space-between cluster row.
           Below sm: a single horizontal-scroll strip (no wrap) so the many filter/
@@ -514,6 +616,16 @@ export function BlockingGrid({
           SHORT.header,
         )}
       >
+        {/* ── Supplier search — DESKTOP placement (sm+) ──
+            Leftmost cluster of the chip row: it is a text entry, so it reads as the
+            start of the filter row rather than an afterthought after the stats. */}
+        <BlockingSupplierSearch
+          suppliers={supplierMap.suppliers}
+          active={activeSupplier}
+          onSelect={handleSupplierSelect}
+          className="max-sm:hidden w-[230px] [@media(max-height:500px)]:w-[170px]"
+        />
+
         {/* Warehouse filter chips */}
         <div className={cn('flex items-center gap-1.5 max-sm:shrink-0', SHORT.clusterGap)}>
           <button
@@ -780,6 +892,8 @@ export function BlockingGrid({
           labHighlights={labHighlights}
           blendMode={blendMode}
           blendSelection={blendSelection}
+          supplierKey={supplierKey}
+          supplierByBlock={supplierMap.byBlock}
         />
       ))}
 
@@ -853,9 +967,12 @@ interface WarehouseSectionProps {
   labHighlights: Record<LabMetric, LabHighlightSpec>;
   blendMode: boolean;
   blendSelection: Set<string>;
+  /** Active supplier key, or null. When set it OVERRIDES the status spotlight. */
+  supplierKey: string | null;
+  supplierByBlock: BlockingSupplierMap['byBlock'];
 }
 
-function WarehouseSection({ whseKey, selectedLocKey, onCellClick, statusFilter, onToggleStatus, data, canViewPrices, labHighlights, blendMode, blendSelection }: WarehouseSectionProps) {
+function WarehouseSection({ whseKey, selectedLocKey, onCellClick, statusFilter, onToggleStatus, data, canViewPrices, labHighlights, blendMode, blendSelection, supplierKey, supplierByBlock }: WarehouseSectionProps) {
   const whse = WAREHOUSES[whseKey];
   const stats = getWarehouseStats(whseKey, data);
   const utilPct = parseFloat(stats.utilization);
@@ -1033,6 +1150,8 @@ function WarehouseSection({ whseKey, selectedLocKey, onCellClick, statusFilter, 
               labHighlights={labHighlights}
               blendMode={blendMode}
               blendSelection={blendSelection}
+              supplierKey={supplierKey}
+              supplierByBlock={supplierByBlock}
             />
           ))}
         </div>
@@ -1073,9 +1192,11 @@ interface WarehouseRowProps {
   labHighlights: Record<LabMetric, LabHighlightSpec>;
   blendMode: boolean;
   blendSelection: Set<string>;
+  supplierKey: string | null;
+  supplierByBlock: BlockingSupplierMap['byBlock'];
 }
 
-function WarehouseRow({ whseKey, row, cols, colStart, selectedLocKey, onCellClick, statusFilter, data, canViewPrices, labHighlights, blendMode, blendSelection }: WarehouseRowProps) {
+function WarehouseRow({ whseKey, row, cols, colStart, selectedLocKey, onCellClick, statusFilter, data, canViewPrices, labHighlights, blendMode, blendSelection, supplierKey, supplierByBlock }: WarehouseRowProps) {
   return (
     <>
       {/* Row label — frozen-left on mobile so the row letter stays pinned while
@@ -1092,6 +1213,9 @@ function WarehouseRow({ whseKey, row, cols, colStart, selectedLocKey, onCellClic
         const col = colStart + i;
         const locKey = `${whseKey}-${col}${row}`;
         const blockData = data[locKey];
+        // A supplier search takes over the spotlight entirely (the two are mutually
+        // exclusive, so `statusFilter` is already ALL — this is belt-and-braces).
+        const supplierClass = getSupplierSpotlightClass(supplierKey, supplierByBlock, locKey);
 
         if (blockData) {
           // view_blocking_grid only emits STORED/IN-USE/SUNDRYING/SUNDRIED batches, so the
@@ -1099,7 +1223,7 @@ function WarehouseRow({ whseKey, row, cols, colStart, selectedLocKey, onCellClic
           // Movement panel) narrows safely to CellStatus here.
           const cellStatus = blockData.status as CellStatus;
           const spotlight = computeSpotlight(statusFilter, cellStatus, blockData, labHighlights);
-          const spotlightClass = getSpotlightClass(spotlight, statusFilter);
+          const spotlightClass = supplierClass ?? getSpotlightClass(spotlight, statusFilter);
 
           return (
             <OccupiedCell
@@ -1109,6 +1233,7 @@ function WarehouseRow({ whseKey, row, cols, colStart, selectedLocKey, onCellClic
               isSelected={selectedLocKey === locKey}
               onClick={() => onCellClick(locKey)}
               spotlightClass={spotlightClass}
+              supplierMix={formatSupplierMix(supplierByBlock, locKey)}
               canViewPrices={canViewPrices}
               labHighlights={labHighlights}
               blendMode={blendMode}
@@ -1118,7 +1243,9 @@ function WarehouseRow({ whseKey, row, cols, colStart, selectedLocKey, onCellClic
         }
 
         const spotlight = computeSpotlight(statusFilter, 'EMPTY', undefined, labHighlights);
-        const spotlightClass = getSpotlightClass(spotlight, statusFilter);
+        // An empty slot can never hold the searched supplier — it dims like any other
+        // non-match while a supplier is active.
+        const spotlightClass = supplierClass ?? getSpotlightClass(spotlight, statusFilter);
 
         return (
           <EmptyCell
@@ -1146,9 +1273,11 @@ interface OccupiedCellProps {
   blendMode: boolean;
   /** True when this cell is in the blend selection set. */
   blendSelected: boolean;
+  /** "ORNALES 62% · PAQUIBOT 38%" — native-title supplier mix, undefined when unknown. */
+  supplierMix?: string;
 }
 
-function OccupiedCell({ locKey, data, isSelected, onClick, spotlightClass, canViewPrices, labHighlights, blendMode, blendSelected }: OccupiedCellProps) {
+function OccupiedCell({ locKey, data, isSelected, onClick, spotlightClass, canViewPrices, labHighlights, blendMode, blendSelected, supplierMix }: OccupiedCellProps) {
   const balanceTextClass = getBalanceTextClass(data.balance, data.total_in);
   const balancePct = data.total_in > 0 ? (data.balance / data.total_in) * 100 : 0;
   const isCritical = balancePct < 10;
@@ -1169,6 +1298,7 @@ function OccupiedCell({ locKey, data, isSelected, onClick, spotlightClass, canVi
         spotlightClass,
       )}
       onClick={onClick}
+      title={supplierMix}
       role={blendMode ? 'checkbox' : undefined}
       aria-checked={blendMode ? blendSelected : undefined}
     >

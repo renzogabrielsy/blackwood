@@ -4,8 +4,8 @@ import { useCallback, useEffect, useOptimistic, useRef, useState, useTransition 
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { BlockingGrid } from './blocking-grid';
-import { fetchBlockingGridData } from './actions';
-import type { BlockingGridData } from './types';
+import { fetchBlockingGridData, fetchBlockingSupplierMap } from './actions';
+import type { BlockingGridData, BlockingSupplierMap } from './types';
 import type { BlockingDetailNavTarget } from '../_shared/blocking-detail-panel';
 
 /**
@@ -25,12 +25,16 @@ import type { BlockingDetailNavTarget } from '../_shared/blocking-detail-panel';
  * the optimistic value to the URL's once the navigation settles, so Back/refresh and
  * an abandoned navigation both stay correct.
  */
+/** Stable empty map — used before the fetch lands and when the read fails. */
+const EMPTY_SUPPLIER_MAP: BlockingSupplierMap = { suppliers: [], byBlock: {} };
+
 export function BlockingRouteView() {
     const router = useRouter();
     const pathname = usePathname();
     const searchParams = useSearchParams();
 
     const [data, setData] = useState<BlockingGridData | null>(null);
+    const [supplierMap, setSupplierMap] = useState<BlockingSupplierMap>(EMPTY_SUPPLIER_MAP);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(false);
     const hasFetchedRef = useRef(false);
@@ -39,12 +43,20 @@ export function BlockingRouteView() {
         setLoading(true);
         setError(false);
         try {
-            const result = await fetchBlockingGridData();
+            // PARALLEL — the supplier map is an independent read of a different view;
+            // serializing it would add its round-trip to the grid's time-to-paint.
+            const [result, suppliers] = await Promise.all([
+                fetchBlockingGridData(),
+                fetchBlockingSupplierMap(),
+            ]);
             // The action returns empty blocks on failure — treat no-data as an error.
             if (Object.keys(result.blocks).length === 0) {
                 setError(true);
             } else {
                 setData(result);
+                // A failed supplier read returns an empty map by contract — the grid
+                // still works, the search just has nothing to suggest. Never fatal.
+                setSupplierMap(suppliers);
                 hasFetchedRef.current = true;
             }
         } catch {
@@ -76,6 +88,27 @@ export function BlockingRouteView() {
             });
         },
         [router, pathname, searchParams, setOptimisticBlock],
+    );
+
+    // ── URL-driven supplier spotlight (`?supplier=<canonical key>`) ──
+    // Same shape as `?block=` above, and for the same reason: this route is dynamic, so
+    // a bare `router.replace` would leave the grid un-highlighted for the length of a
+    // server round-trip after the operator hits Enter. Deep-linkable + refresh-safe.
+    const urlSupplier = searchParams.get('supplier');
+    const [selectedSupplier, setOptimisticSupplier] = useOptimistic(urlSupplier);
+
+    const handleSupplierChange = useCallback(
+        (supplier: string | null) => {
+            const params = new URLSearchParams(searchParams.toString());
+            if (supplier) params.set('supplier', supplier);
+            else params.delete('supplier');
+            const qs = params.toString();
+            startTransition(() => {
+                setOptimisticSupplier(supplier);
+                router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+            });
+        },
+        [router, pathname, searchParams, setOptimisticSupplier],
     );
 
     // Toggle semantics: clicking the open block clears it; clicking another switches.
@@ -130,6 +163,9 @@ export function BlockingRouteView() {
                 selectedLocKey={selectedBlock}
                 onSelectBlock={handleSelectBlock}
                 onNavigateToBatch={handleNavigateToBatch}
+                supplierMap={supplierMap}
+                supplierFilter={selectedSupplier}
+                onSupplierFilterChange={handleSupplierChange}
             />
         </div>
     );
