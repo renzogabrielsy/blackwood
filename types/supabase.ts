@@ -264,6 +264,13 @@ export type Database = {
             foreignKeyName: "fk_batch_code"
             columns: ["batch_code"]
             isOneToOne: false
+            referencedRelation: "view_blocking_block_suppliers"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
             referencedRelation: "view_blocking_grid"
             referencedColumns: ["batch_code"]
           },
@@ -1320,6 +1327,13 @@ export type Database = {
             columns: ["batch_id"]
             isOneToOne: false
             referencedRelation: "view_analytics_aging_watchlist"
+            referencedColumns: ["batch_id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_blocking_block_suppliers"
             referencedColumns: ["batch_id"]
           },
           {
@@ -3239,6 +3253,21 @@ export type Database = {
         }
         Relationships: []
       }
+      view_blocking_block_suppliers: {
+        Row: {
+          batch_code: string | null
+          batch_id: string | null
+          block_loc: string | null
+          block_total_in_kg: number | null
+          delivery_count: number | null
+          kg: number | null
+          share_pct: number | null
+          supplier_count_in_block: number | null
+          supplier_display: string | null
+          supplier_key: string | null
+        }
+        Relationships: []
+      }
       view_blocking_grid: {
         Row: {
           avg_ash: number | null
@@ -3294,6 +3323,13 @@ export type Database = {
             columns: ["batch_code"]
             isOneToOne: false
             referencedRelation: "view_analytics_aging_watchlist"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_blocking_block_suppliers"
             referencedColumns: ["batch_code"]
           },
           {
@@ -3682,6 +3718,13 @@ export type Database = {
             foreignKeyName: "fk_batch_code"
             columns: ["batch_code"]
             isOneToOne: false
+            referencedRelation: "view_blocking_block_suppliers"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
             referencedRelation: "view_blocking_grid"
             referencedColumns: ["batch_code"]
           },
@@ -3832,6 +3875,13 @@ export type Database = {
             foreignKeyName: "fk_batch_code"
             columns: ["batch_code"]
             isOneToOne: false
+            referencedRelation: "view_blocking_block_suppliers"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
             referencedRelation: "view_blocking_grid"
             referencedColumns: ["batch_code"]
           },
@@ -3914,6 +3964,13 @@ export type Database = {
             columns: ["batch_id"]
             isOneToOne: false
             referencedRelation: "view_analytics_aging_watchlist"
+            referencedColumns: ["batch_id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_blocking_block_suppliers"
             referencedColumns: ["batch_id"]
           },
           {
@@ -4052,6 +4109,13 @@ export type Database = {
             foreignKeyName: "usage_batch_id_fkey"
             columns: ["batch_id"]
             isOneToOne: false
+            referencedRelation: "view_blocking_block_suppliers"
+            referencedColumns: ["batch_id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
             referencedRelation: "view_blocking_grid"
             referencedColumns: ["batch_id"]
           },
@@ -4131,6 +4195,13 @@ export type Database = {
             columns: ["batch_id"]
             isOneToOne: false
             referencedRelation: "view_analytics_aging_watchlist"
+            referencedColumns: ["batch_id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_blocking_block_suppliers"
             referencedColumns: ["batch_id"]
           },
           {
@@ -4346,6 +4417,13 @@ export type Database = {
             columns: ["batch_code"]
             isOneToOne: false
             referencedRelation: "view_analytics_aging_watchlist"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_blocking_block_suppliers"
             referencedColumns: ["batch_code"]
           },
           {
@@ -4840,12 +4918,12 @@ export type Tables<
   DefaultSchemaTableNameOrOptions extends
     | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
         DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -4869,11 +4947,11 @@ export type TablesInsert<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -4894,11 +4972,11 @@ export type TablesUpdate<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -4919,11 +4997,11 @@ export type Enums<
   DefaultSchemaEnumNameOrOptions extends
     | keyof DefaultSchema["Enums"]
     | { schema: keyof DatabaseWithoutInternals },
-  EnumName extends DefaultSchemaEnumNameOrOptions extends {
+  EnumName extends (DefaultSchemaEnumNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaEnumNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -4936,11 +5014,11 @@ export type CompositeTypes<
   PublicCompositeTypeNameOrOptions extends
     | keyof DefaultSchema["CompositeTypes"]
     | { schema: keyof DatabaseWithoutInternals },
-  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
+  CompositeTypeName extends (PublicCompositeTypeNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
-    : never = never,
+    : never) = never,
 > = PublicCompositeTypeNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
