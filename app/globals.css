@@ -611,6 +611,30 @@ input[type=number] {
   box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.6), 0 0 16px rgba(245, 158, 11, 0.35);
 }
 
+/* ─── Supplier Spotlight System ───
+   Driven by the Blocking supplier search (`?supplier=`), mutually exclusive with
+   the status/lab spotlight above. GREEN = the whole block is that one supplier
+   (`view_blocking_block_suppliers.supplier_count_in_block = 1`); ORANGE = the
+   block holds that supplier alongside others. Everything else reuses the shared
+   `.spotlight-dimmed`. Same box-shadow technique as every other spotlight — no
+   animation, cells are never animated. */
+
+.spotlight-supplier-all {
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.55), 0 0 12px rgba(16, 185, 129, 0.28);
+  transition: opacity 150ms ease, box-shadow 150ms ease;
+}
+:is(.dark) .spotlight-supplier-all {
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.65), 0 0 16px rgba(16, 185, 129, 0.4);
+}
+
+.spotlight-supplier-some {
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.55), 0 0 12px rgba(249, 115, 22, 0.28);
+  transition: opacity 150ms ease, box-shadow 150ms ease;
+}
+:is(.dark) .spotlight-supplier-some {
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.65), 0 0 16px rgba(249, 115, 22, 0.4);
+}
+
 /* ─── Frozen Panes (sticky rows/columns) ─────────────────────────────────────
    CANONICAL technique for tables that freeze left columns and/or the header row
    while the rest scrolls. A frozen surface sits ON TOP of scrolling content, so

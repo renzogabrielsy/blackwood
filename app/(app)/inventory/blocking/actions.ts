@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
 import { getUserRole, roleCanViewPrices, canViewPrices as canViewPricesGate } from '@/lib/auth';
-import type { BlockingGridData, BlockingDetailData, FullDeliveryRecord, BlockDataForBatch, BlockData } from './types';
+import type { BlockingGridData, BlockingDetailData, FullDeliveryRecord, BlockDataForBatch, BlockData, BlockingSupplierMap, BlockSupplierShare } from './types';
 
 // ─── Blend Proposal ──────────────────────────────────────────────────────────
 // A read-only "what-if": the user selects multiple warehouse blocks; this layer
@@ -96,6 +96,101 @@ export async function fetchBlockingGridData(): Promise<BlockingGridData> {
     return { blocks, canViewPrices };
   } catch (err) {
     console.error('[Blocking] fetchBlockingGridData failed:', err);
+    return empty;
+  }
+}
+
+/**
+ * WHO filled each block on the grid — the data layer for the Blocking supplier search.
+ *
+ * Reads `view_blocking_block_suppliers` ONCE and folds it into a lookup the grid can
+ * consult per cell. The view is scoped to exactly the blocks `view_blocking_grid`
+ * shows, so the two can never disagree about what is on screen.
+ *
+ * NO AGGREGATION HAPPENS HERE. Every kilogram, share and count is computed in SQL
+ * (`kg`, `share_pct`, `supplier_count_in_block`, `block_total_in_kg`); this function
+ * only groups rows into the map. In particular the ALL-vs-SOME test is the view's own
+ * `supplier_count_in_block` — never `shares.length`.
+ *
+ * NOT PRICE-GATED, deliberately: the view carries no ₱ column and none derivable, so
+ * this payload is safe for every role including Production.
+ */
+export async function fetchBlockingSupplierMap(): Promise<BlockingSupplierMap> {
+  const empty: BlockingSupplierMap = { suppliers: [], byBlock: {} };
+
+  try {
+    const supabase = await createClient();
+
+    const { data: rows, error } = await supabase
+      .from('view_blocking_block_suppliers')
+      .select('block_loc, supplier_key, supplier_display, kg, share_pct, delivery_count, supplier_count_in_block');
+
+    if (error) {
+      console.error('[Blocking] view_blocking_block_suppliers query error:', error);
+      return empty;
+    }
+    if (!rows || rows.length === 0) {
+      console.warn('[Blocking] view_blocking_block_suppliers returned no rows');
+      return empty;
+    }
+    // PostgREST caps an unpaged read at 1000 rows. Measured 2026-09-02: 202 rows for
+    // 170 occupied blocks — far under it. Say so loudly if that ever stops being true.
+    if (rows.length >= 1000) {
+      console.warn('[Blocking] supplier map hit the PostgREST 1000-row cap — results are truncated');
+    }
+
+    const byBlock: BlockingSupplierMap['byBlock'] = {};
+    // key -> rollup for the autosuggest list
+    const totals = new Map<string, { key: string; display: string; blockCount: number; totalKg: number }>();
+
+    for (const row of rows) {
+      const blockLoc = row.block_loc;
+      const key = row.supplier_key;
+      if (!blockLoc || !key) continue;
+
+      const display = row.supplier_display ?? key;
+      const kg = Number(row.kg ?? 0);
+
+      const share: BlockSupplierShare = {
+        supplierKey: key,
+        supplierDisplay: display,
+        kg,
+        sharePct: Number(row.share_pct ?? 0),
+        deliveryCount: Number(row.delivery_count ?? 0),
+      };
+
+      const bucket = byBlock[blockLoc];
+      if (bucket) {
+        bucket.shares.push(share);
+      } else {
+        byBlock[blockLoc] = {
+          // SQL's count, not shares.length — see the doc comment.
+          supplierCount: Number(row.supplier_count_in_block ?? 1),
+          shares: [share],
+        };
+      }
+
+      const rollup = totals.get(key);
+      if (rollup) {
+        rollup.blockCount += 1;
+        rollup.totalKg += kg;
+      } else {
+        totals.set(key, { key, display, blockCount: 1, totalKg: kg });
+      }
+    }
+
+    // Biggest contributor first within a block — the UI reads the top one as "mostly".
+    for (const bucket of Object.values(byBlock)) {
+      bucket.shares.sort((a, b) => b.kg - a.kg || a.supplierKey.localeCompare(b.supplierKey));
+    }
+
+    const suppliers = Array.from(totals.values()).sort(
+      (a, b) => b.blockCount - a.blockCount || a.key.localeCompare(b.key),
+    );
+
+    return { suppliers, byBlock };
+  } catch (err) {
+    console.error('[Blocking] fetchBlockingSupplierMap failed:', err);
     return empty;
   }
 }

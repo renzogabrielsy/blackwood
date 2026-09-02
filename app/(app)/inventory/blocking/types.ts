@@ -95,6 +95,43 @@ export interface BlockingDetailData {
   avg_cost: number | null;  // batch avg_cost, role-gated
 }
 
+// ─── Supplier search ─────────────────────────────────────────────────────────
+// Who filled each block on the grid, so the operator can search a supplier and see
+// every block that is ALL theirs vs only SOME theirs. Sourced entirely from
+// `view_blocking_block_suppliers` — every sum, share and count comes out of SQL;
+// the action only groups the rows into the map below. NO ₱ anywhere in this shape,
+// by construction: the view carries no peso column and none derivable, so the
+// supplier search needs no `canViewPrices()` gate.
+
+/** One supplier's contribution to one block. */
+export interface BlockSupplierShare {
+  /** Canonical identity from `public.canonical_supplier()` — match searches on this. */
+  supplierKey: string;
+  /** A representative raw spelling, for display only. */
+  supplierDisplay: string;
+  /** Kilograms that supplier delivered into the block. */
+  kg: number;
+  /** That supplier's share of the block's delivered kg, 0-100 (a PERCENT). */
+  sharePct: number;
+  /** How many delivery rows those kilograms arrived on. */
+  deliveryCount: number;
+}
+
+/**
+ * The whole supplier picture for the Blocking grid, in one payload.
+ *
+ * ALL vs SOME: a block is entirely one supplier when `supplierCount === 1`
+ * (highlight green) and mixed when `supplierCount > 1` (highlight orange). That
+ * count comes straight from the view's `supplier_count_in_block` — never re-derive
+ * it from `shares.length`.
+ */
+export interface BlockingSupplierMap {
+  /** Every supplier present on the grid — the autosuggest list, ranked by reach. */
+  suppliers: Array<{ key: string; display: string; blockCount: number; totalKg: number }>;
+  /** Per block_loc: how many suppliers filled it, and their individual shares. */
+  byBlock: Record<string, { supplierCount: number; shares: BlockSupplierShare[] }>;
+}
+
 // Blend Proposal types (`BlendProposal`, `BlendProposalBlock`) live in `actions.ts`
 // alongside the `buildBlendProposal` server action that produces them — import them
 // from there. They are co-located with the action because the action is their sole
