@@ -17,22 +17,19 @@
 // anyone." Every entry therefore states four things explicitly — what it
 // counts, what it EXCLUDES, what basis it is on, and how it rolls up.
 //
-// **Phase 2 adds eight MONEY rows** whose copy is derived the same way,
-// from the COMMENTs in `20260901124822_analytics_phase2_money_layer.sql`.
-// Three P2 conventions are load-bearing and are obeyed here rather than
-// re-litigated per component:
+// **OWNER FEEDBACK R4 (2026-09-02) dissolved the MONEY band.** Phase 2 put
+// eight calendar-basis money rows here; five are retired and three moved to
+// the block that owns their question (see `MetricKey` below for the map and
+// the reasoning). The `MetricSpec.estimated` machinery those rows used is
+// deliberately LEFT IN PLACE — no row declares it today, and the day one
+// does, the `~` mark, its hover and the callout gate all still work.
 //
-//   1. **NULL is never 0.** A true ₱/kg with no fully-priced closed block
-//      reads blank, and the row's dictionary says why.
-//   2. **A coverage-short month shows the `_covered` figure, marked as an
-//      ESTIMATE.** `view_rc_movement_month_price` prices fed kilos through
-//      each fed batch's deliveries, so a batch with no delivery rows drags
-//      the published price DOWN by exactly the share of untraceable kilos
-//      (2024-03 is 98.4% untraceable and reads ₱0.30 against a real ~₱19).
-//      Every money row therefore READS the covered figure — which is
-//      byte-identical to the published one at 100% coverage — and declares
-//      `estimated()` so the cell can mark itself.
-//   3. **Percent vs fraction.** `yield_pct` and `loss_pct` are FRACTIONS in
+// Two conventions from that era are still load-bearing and are obeyed here
+// rather than re-litigated per component:
+//
+//   1. **NULL is never 0.** A figure with no sound denominator reads blank,
+//      and the row's dictionary says why.
+//   2. **Percent vs fraction.** `yield_pct` and `loss_pct` are FRACTIONS in
 //      SQL; `pct_over_120d` is already a PERCENT. The `read` functions are
 //      the ONE place the ×100 happens.
 //
@@ -42,8 +39,7 @@
 import type { AnalyticsMonth } from "./types";
 
 /**
- * The eight volume rows + the eight money rows + the six production rows, in
- * display order.
+ * The ten RC Inventory rows + the eight production rows, in display order.
  *
  * ── OWNER FEEDBACK ROUND 1 (2026-09-01) — FOUR ROWS RETIRED ─────────────
  * Renzo read the live page and cut `sundry_reentry`, `runway`,
@@ -55,6 +51,29 @@ import type { AnalyticsMonth } from "./types";
  * supplier room's ↩ column. Nothing in SQL changed.
  *
  * `active_suppliers` was on that list and Renzo put it back — it stays.
+ *
+ * ── OWNER FEEDBACK ROUND 4 (2026-09-02) — THE MONEY SECTION IS DISSOLVED ─
+ * Renzo: *"money is redundant, most of it is analyzable in the by-production
+ * batch section."* He is right, and the reason is a CLOCK, not a duplication:
+ * the money band's Block price was the CALENDAR-month basis of the very figure
+ * the campaign panel already publishes on the CAMPAIGN basis — the same fact
+ * read against two different clocks, and a campaign is the clock the plant
+ * actually runs on (AUGUST closed and SEPTEMBER opened on 2026-08-29). Where a
+ * money row survived, it moved to the block that owns its question:
+ *
+ *   • `delivered_fed_price` (Block price) · `php_per_produced` ·
+ *     `closed_true_price` — **RETIRED.** The campaign panel carries BOTH bases
+ *     (block price and true price, ₱ per produced kg on both), so nothing is
+ *     lost. Every underlying field still crosses the wire, exactly as the R1
+ *     retirements did; no view and no column changed.
+ *   • `closed_blocks` · `closed_loss` — **moved to the campaign panel**, where
+ *     "blocks closed" and "weight lost" are per-campaign facts rather than
+ *     per-calendar-month ones.
+ *   • `stock_age` · `over_120d` — **moved into RC Inventory**, which is where
+ *     a reader already is when they ask how old the yard is. They carry no ₱
+ *     and never did.
+ *   • `yield_rate` — **moved into Production**, beside the output it divides,
+ *     and joined by its complement `process_loss`.
  */
 export type MetricKey =
   | "market_price"
@@ -65,29 +84,23 @@ export type MetricKey =
   | "net_flow"
   | "ending_inventory"
   | "inventory_value"
-  // ── P2, the money layer ──────────────────────────────────────────
-  | "delivered_fed_price"
-  | "php_per_produced"
-  | "yield_rate"
-  | "closed_blocks"
-  | "closed_loss"
-  | "closed_true_price"
   | "stock_age"
   | "over_120d"
   // ── P4, the production layer ──────────────────────────────────────
   | "production_output"
   | "production_per_day"
+  | "yield_rate"
+  | "process_loss"
   | "downtime_hours"
   | "power_kwh"
   | "power_intensity"
   | "sacks_counted";
 
 /**
- * The visual bands of the matrix. Twenty rows in one undifferentiated
- * stack is a wall; two named groups is a page. Purely presentational —
- * nothing about a rollup depends on it.
+ * The visual bands of the matrix. Two since R4 dissolved the money band —
+ * purely presentational, nothing about a rollup depends on it.
  */
-export type MetricSection = "flow" | "money" | "production";
+export type MetricSection = "flow" | "production";
 
 /**
  * The five reading blocks of the page and the accent each one wears.
@@ -122,17 +135,15 @@ export const SECTIONS: readonly {
   accent: string;
 }[] = [
   {
+    // OWNER FEEDBACK R4: "Volume & stock" is now **RC Inventory**, and it
+    // absorbed the two aging rows. The block answers one question end to end —
+    // what came in, what went out, what is standing in the yard and how old it
+    // is — which is what makes the name a description rather than a label.
     key: "flow",
-    label: "Volume & stock",
-    hint: "What moved through the yard, and what was left standing in it.",
-    accent: SECTION_ACCENT.flow,
-  },
-  {
-    key: "money",
-    label: "Money",
+    label: "RC Inventory",
     hint:
-      "What the charcoal we fed cost — on arrival, and again after the weight it lost sitting. Calendar months; the campaign view is the panel below.",
-    accent: SECTION_ACCENT.money,
+      "What moved through the yard, what is left standing in it, what that stock cost and how old it is.",
+    accent: SECTION_ACCENT.flow,
   },
   {
     key: "production",
@@ -331,33 +342,20 @@ function pct(fraction: number | null | undefined): number | null {
   return fraction == null ? null : fraction * 100;
 }
 
-/** `a × b`, null if either side is missing. Used to rebuild a rollup numerator. */
-function mul(a: number | null | undefined, b: number | null | undefined): number | null {
-  return a == null || b == null ? null : a * b;
-}
-
-/**
- * A money row's own monthly figure is ALWAYS the coverage-adjusted one.
- *
- * At 100% coverage `delivered_php_kg_fed_covered` is byte-identical to the
- * published `delivered_php_kg_fed` (checked across all 75 months), so this
- * is not a second definition — it is the same definition, made honest on
- * the seven months where the published one is silently understated.
- */
-function coveredFedValue(m: AnalyticsMonth): number | null {
-  return mul(m.deliveredPhpKgFedCovered, m.fedKg);
-}
-
-/** Coverage is short, so what the cell shows is an extrapolation. */
-function coverageShort(m: AnalyticsMonth): boolean {
-  return m.fedPriceCoveragePct != null && m.fedPriceCoveragePct < 100;
-}
 
 // ---------------------------------------------------------------------
 // The registry
 // ---------------------------------------------------------------------
 
-/** P1 — what moved and what was left standing. Section assigned below. */
+/**
+ * RC INVENTORY — what moved, what is left standing, what it cost and how old
+ * it is. Section assigned below.
+ *
+ * The last two rows (`stock_age`, `over_120d`) arrived here in owner feedback
+ * R4 from the dissolved money band. They read `view_analytics_aging_eom`,
+ * which is ₱-FREE by construction, so moving them changed no gate: the whole
+ * aging story stays visible to the Production role exactly as it was.
+ */
 const FLOW_METRICS: readonly Omit<MetricSpec, "section">[] = [
   {
     key: "market_price",
@@ -569,249 +567,56 @@ const FLOW_METRICS: readonly Omit<MetricSpec, "section">[] = [
     },
   },
   {
+    // ── OWNER FEEDBACK R4: a WEIGHTED AVERAGE, not a total ───────────────
+    // Renzo asked for the average unit cost of the stock on hand instead of
+    // the ₱ total. The total was a magnitude that moved mostly because the
+    // YARD moved — a big month of deliveries lifts it whatever prices did —
+    // so it answered "how much charcoal do we have" a second time rather than
+    // "what is it worth per kilo", which is the question the row above it does
+    // NOT answer. The average is the figure that moves when PRICE moves.
+    //
+    // `avg_unit_cost_php_kg` is the view's OWN column (`ending_value_php ÷
+    // valued_kg`), so nothing here divides two published figures and invents a
+    // third definition of what a kilo cost — the exact thing `avg_cost` was
+    // narrowed to prevent (BUG-018 / L-039). The key is unchanged, so every
+    // `?metric=inventory_value` deep link still resolves.
     key: "inventory_value",
-    label: "Inventory value",
-    sublabel: "₱ at cost",
-    unit: "php",
+    label: "Stock avg cost",
+    sublabel: "₱/kg on hand",
+    unit: "php_per_kg",
     rollup: "periodEnd",
-    read: (m) => m.endingValuePhp,
+    read: (m) => m.avgUnitCostPhpKg,
     deltaMode: "pct",
     perWorkingDay: false,
     price: true,
-    chart: "bar",
+    chart: "line",
     color: "var(--chart-4)",
     avgColor: "var(--chart-3)",
-    decimals: 0,
+    decimals: 2,
     dictionary: {
       definition:
-        "What the charcoal on hand had COST us at month-end — not what it would fetch.",
+        "What the average kilo standing in the yard had COST us at month-end — not what it would fetch.",
       basis:
-        "Each pile's remaining kilos priced at that pile's own average purchase cost, added up over every pile with a positive balance.",
+        "Every valued pile's remaining kilos at that pile's own weighted purchase cost, divided by those kilos. A weighted average, never the mean of the piles' prices.",
       exclusions:
-        "It does not include the extra cost of charcoal that shrank while it sat — that is the True ₱/kg row. Piles with a negative balance are out.",
-      rollup: "The month-end value. A stock value is not additive.",
-      source: "view_analytics_inventory_eom.ending_value_php",
+        "Piles with a negative balance, and kilos with no price at all — an unpriced truckload is in neither half rather than counted as free. It does not carry the extra cost of charcoal that shrank while it sat; that is the campaign panel's true price.",
+      rollup: "The month-end figure. An average cost is a state, not a sum.",
+      source: "view_analytics_inventory_eom.avg_unit_cost_php_kg",
       // ── THE ONE PLACE THE TWO STOCK ROWS DO NOT AGREE, SAID OUT LOUD ──
       // The Ending inventory row above moved to the OPEN-PILES basis in owner
-      // feedback R1; this row still values every POSITIVE balance, closed
+      // feedback R1; this row is measured over every POSITIVE balance, closed
       // blocks included, because `view_analytics_inventory_eom` has no notion
       // of a close date at all — it derives balances from `batch_code` deltas
       // and never joins `batches`. Making the two agree is a new SQL column,
-      // not a client-side division, and inventing one here would be a second
-      // definition of what a kilo cost. So the gap is DISCLOSED and measured
-      // rather than papered over.
+      // not a client-side division. The gap is DISCLOSED, not papered over —
+      // and note it matters far LESS to an average than it did to the total it
+      // replaced: residue is 8.19% of the value against a similar share of the
+      // kilos, so it moves a ₱/kg figure barely at all.
       caveat:
-        "This values a slightly wider set of piles than the row above: it still includes closed-block residue, which is 8.19% of the figure today (₱34.75M of ₱424.33M). Read it as the cost of everything still on the books, not of the open piles alone.",
+        "Measured over a slightly wider set of piles than the row above — closed-block residue is still in it, 8.19% of the valued money today. Being a ratio, that shifts the figure far less than it shifted the ₱ total this row replaced. The expand prints the valued and unvalued kilos and the ₱ total behind it.",
     },
   },
-] as const;
-
-/**
- * P2 — THE MONEY LAYER, calendar basis.
- *
- * Every ₱ row here is `price: true`, so the adapter nulls it server-side for
- * a role that may not see pesos and the row renders locked. The two aging
- * rows carry NO peso column and none is derivable from them, so they stay
- * visible for every role including Production — which is the whole reason
- * `view_analytics_aging_eom` was built ₱-free.
- */
-const MONEY_METRICS: readonly Omit<MetricSpec, "section">[] = [
-  {
-    key: "delivered_fed_price",
-    // ── OWNER FEEDBACK R1: renamed. "Delivered ₱/kg fed" was the SQL column
-    // read out loud. Renzo's own words for it: "the price of the charcoal when
-    // it arrived at the block." The key is unchanged, so every `?metric=` deep
-    // link still resolves, and "True price" keeps its name.
-    label: "Block price",
-    sublabel: "₱/kg on arrival",
-    unit: "php_per_kg",
-    rollup: "weighted",
-    read: (m) => m.deliveredPhpKgFedCovered,
-    numerator: coveredFedValue,
-    denominator: (m) => m.fedKg,
-    estimated: coverageShort,
-    deltaMode: "pct",
-    perWorkingDay: false,
-    price: true,
-    chart: "line",
-    color: "var(--chart-4)",
-    avgColor: "var(--chart-3)",
-    decimals: 2,
-    dependsOn: ["outflow"],
-    dictionary: {
-      definition:
-        "The price of the charcoal when it arrived at the block — for the charcoal we actually fed that month.",
-      basis:
-        "Pesos paid for the kilos fed ÷ those kilos. The same figure the RC Movement screen shows, so the two cannot disagree.",
-      exclusions:
-        "Kilos fed out of piles with no delivery record — old pre-system stock, and the misfiled FEEDING # 2 pile. They carry no price, so they are out of both halves rather than counted as free.",
-      rollup: "A quarter or a year is total pesos ÷ total kilos fed, not the mean of the months.",
-      source: "view_analytics_cost_monthly.delivered_php_kg_fed_covered",
-      caveat:
-        "Seven months cannot price everything they fed and are marked ~. March 2024 can price 1.6% of it; August 2026 is 97.3%. Those cells show the price of the kilos we CAN trace, which is the honest answer.",
-    },
-  },
-  {
-    key: "php_per_produced",
-    label: "₱ per produced kg",
-    sublabel: "block-price basis",
-    unit: "php_per_kg",
-    rollup: "weighted",
-    read: (m) => m.phpPerProducedKg ?? m.phpPerProducedKgCovered,
-    numerator: coveredFedValue,
-    denominator: (m) => m.producedKg,
-    estimated: coverageShort,
-    deltaMode: "pct",
-    perWorkingDay: false,
-    price: true,
-    chart: "line",
-    color: "var(--chart-5)",
-    avgColor: "var(--chart-3)",
-    decimals: 2,
-    dependsOn: ["outflow", "production"],
-    dictionary: {
-      definition:
-        "The owner number: what one kilo of finished product cost us in raw charcoal that month.",
-      basis:
-        "The month's charcoal bill ÷ the kilos of product that came out. Same thing as block price ÷ yield — a poor yield makes every produced kilo carry more charcoal.",
-      exclusions:
-        "Charcoal only: no labour, power, bags or depreciation. It is on the BLOCK PRICE, so the weight lost while the charcoal sat is not in here — that is the True ₱/kg row below.",
-      rollup:
-        "A quarter or a year is total charcoal bill ÷ total kilos produced, not the mean of the months.",
-      source: "view_analytics_cost_monthly.php_per_produced_kg",
-      caveat:
-        "Blank before November 2025, when production reporting started. November itself is a part-month and reads absurdly high, so it is kept out of every headline on this page.",
-    },
-  },
-  {
-    key: "yield_rate",
-    label: "Yield",
-    sublabel: "% of fed kilos",
-    unit: "pct",
-    rollup: "weighted",
-    read: (m) => pct(m.yieldPct),
-    // ×100 on the NUMERATOR so the weighted rule stays Σnum ÷ Σden and the
-    // result lands in percent — there is no second scaling step to forget.
-    numerator: (m) => (m.producedKg == null ? null : m.producedKg * 100),
-    denominator: (m) => m.fedKg,
-    deltaMode: "abs",
-    perWorkingDay: false,
-    price: false,
-    chart: "line",
-    color: "var(--chart-2)",
-    avgColor: "var(--chart-4)",
-    decimals: 1,
-    dependsOn: ["outflow", "production"],
-    dictionary: {
-      definition:
-        "How much finished product came out of every hundred kilos of charcoal fed in.",
-      basis:
-        "Kilos produced ÷ kilos fed. The change under a cell is in percentage POINTS, not a percentage of a percentage.",
-      exclusions: "Nothing — every pile and every grade is in it.",
-      rollup: "A quarter or a year is total produced ÷ total fed, not the mean of the months.",
-      source: "view_analytics_cost_monthly.yield_pct",
-      caveat:
-        "Blank before November 2025, never 0% — a zero would roll into a year as if the plant had turned eight thousand tonnes into nothing. November itself is a part-month at 11.9% and is kept out of the headlines.",
-    },
-  },
-  {
-    key: "closed_blocks",
-    label: "Blocks closed",
-    sublabel: "piles finished",
-    unit: "count",
-    rollup: "sum",
-    read: (m) => m.closedBlocksCount,
-    deltaMode: "abs",
-    perWorkingDay: false,
-    price: false,
-    chart: "bar",
-    color: "var(--chart-1)",
-    avgColor: "var(--chart-3)",
-    decimals: 0,
-    dependsOn: ["outflow"],
-    dictionary: {
-      definition: "How many piles were finished off that month — fed down and closed out.",
-      basis:
-        "Blocks whose LAST FEEDING fell in the month. Nothing in the database dates a status change, so the last feeding stands in for the closing date.",
-      exclusions: "A pile still being fed at month-end belongs to no month until it finishes.",
-      rollup: "Quarters and years are plain sums of their months.",
-      source: "view_analytics_cost_monthly.closed_blocks_count",
-      caveat:
-        "The same approximation the RC Movement screen uses, on purpose — so the two screens cannot disagree about which month a block closed in.",
-    },
-  },
-  {
-    key: "closed_loss",
-    label: "Closed-block loss",
-    sublabel: "% of delivered kg",
-    unit: "pct",
-    rollup: "weighted",
-    read: (m) => pct(m.closedBlocksLossPct),
-    numerator: (m) =>
-      m.closedBlocksLostKg == null ? null : m.closedBlocksLostKg * 100,
-    denominator: (m) => m.closedBlocksDeliveredKg,
-    deltaMode: "abs",
-    perWorkingDay: false,
-    price: false,
-    chart: "line",
-    color: "var(--chart-3)",
-    avgColor: "var(--chart-4)",
-    decimals: 2,
-    dependsOn: ["outflow"],
-    dictionary: {
-      definition:
-        "How much weight the piles that closed that month lost while they sat. Charcoal dries out; the money spent on it does not shrink with it.",
-      basis:
-        "Weight lost ÷ weight delivered in, over every block that closed, weighted by size. Never the average of the per-block percentages.",
-      exclusions:
-        "Nothing. Loss is physical and needs no price, so every closed block counts — including ones whose peso figures are missing.",
-      rollup: "A quarter or a year is total kilos lost ÷ total kilos delivered.",
-      source: "view_analytics_cost_monthly.closed_blocks_loss_pct",
-      caveat:
-        "It can go slightly negative — February 2026 reads −0.10%, meaning those blocks fed out a little more than was booked in. Misfiled paperwork, shown as measured rather than clamped to zero.",
-    },
-  },
-  {
-    key: "closed_true_price",
-    label: "True ₱/kg (closed)",
-    sublabel: "after shrinkage",
-    unit: "php_per_kg",
-    rollup: "weighted",
-    read: (m) => m.closedBlocksTruePhpKg,
-    numerator: (m) => mul(m.closedBlocksTruePhpKg, m.closedBlocksPricedFedKg),
-    denominator: (m) => m.closedBlocksPricedFedKg,
-    deltaMode: "pct",
-    perWorkingDay: false,
-    price: true,
-    chart: "line",
-    color: "var(--chart-4)",
-    avgColor: "var(--chart-3)",
-    decimals: 2,
-    dependsOn: ["outflow"],
-    pair: {
-      label: "Block price (same blocks)",
-      color: "var(--chart-2)",
-      read: (m) => m.closedBlocksDeliveredPhpKg,
-      numerator: (m) =>
-        mul(m.closedBlocksDeliveredPhpKg, m.closedBlocksPricedFedKg),
-      denominator: (m) => m.closedBlocksPricedFedKg,
-      note:
-        "The gap between the two lines IS the cost of letting charcoal sit. Same blocks, same money — the true line divides it by the kilos that reached the plant, the block-price line by the kilos that arrived.",
-    },
-    dictionary: {
-      definition:
-        "What the charcoal in the piles that closed that month really cost by the time it was fed, after paying for the weight that evaporated.",
-      basis:
-        "Every peso spent on those blocks ÷ every kilo that came out of them. The weight shrinks and the money does not, so this always sits above the block price.",
-      exclusions:
-        "A block with even one truckload still awaiting a price is left out ENTIRELY, never valued at part of its money — that would understate the cost and point the opposite way from what this row exists to show. Blocks with no delivery record are out too.",
-      rollup:
-        "A quarter or a year is total pesos ÷ total kilos fed, across its fully-priced closed blocks.",
-      source: "view_analytics_cost_monthly.closed_blocks_true_php_kg",
-      caveat:
-        "Blank, never zero, in a month with no fully-priced closed block. The gap above the block price is pure storage time — July 2026 lost 4.68% of its weight sitting.",
-    },
-  },
+  // ── The two aging rows, moved here from the dissolved money band (R4) ──
   {
     key: "stock_age",
     label: "Avg stock age",
@@ -1050,6 +855,27 @@ function intensityUsable(m: AnalyticsMonth): boolean {
   return m.kwh != null && m.producedKg != null && m.producedKg > 0;
 }
 
+/**
+ * May this month contribute to a YIELD (or process-loss) rollup AT ALL?
+ *
+ * The same predicate as `intensityUsable` above, for the same measured reason,
+ * and it was a real bug found while moving the Yield row into this band in
+ * owner feedback R4. A weighted rollup sums numerator and denominator
+ * INDEPENDENTLY, and the spine carries months with FED kilos and no production
+ * at all — feedings begin 2024-01, production reporting begins 2025-11. A
+ * quarter or a year spanning that boundary put ten months of fed kilos into the
+ * denominator against two months of product in the numerator: **2025 read a
+ * 2.5% yield instead of ~14%**, and the `num.had === 0` guard could not catch
+ * it because two of the twelve months genuinely did report.
+ *
+ * So both halves gate on ONE predicate: a month counts only if it has fed kilos
+ * AND a produced figure to divide them by. `dependsOn` does not do this job —
+ * it decides what a BLANK means, not which months an average may be built from.
+ */
+function yieldUsable(m: AnalyticsMonth): boolean {
+  return m.fedKg != null && m.fedKg > 0 && m.producedKg != null;
+}
+
 const PRODUCTION_METRICS: readonly Omit<MetricSpec, "section">[] = [
   {
     key: "production_output",
@@ -1110,6 +936,92 @@ const PRODUCTION_METRICS: readonly Omit<MetricSpec, "section">[] = [
       source: "view_analytics_production_monthly.produced_per_reported_day",
       caveat:
         "The denominator is PRODUCTION'S own reported days, not days the yard was busy — the yard can take charcoal in on a day the plant does not run. That is also why the per-working-day toggle leaves this whole band alone.",
+    },
+  },
+  // ── Yield and its complement (owner feedback R4) ─────────────────────
+  // Yield arrived here from the dissolved money band. It belongs beside the
+  // output it divides: it is a statement about the PLANT (how much product
+  // came out of what went in), not about what anything cost, and it carries no
+  // ₱ — which is why moving it changed no gate.
+  {
+    key: "yield_rate",
+    label: "Yield",
+    sublabel: "% of fed kilos",
+    unit: "pct",
+    rollup: "weighted",
+    read: (m) => pct(m.yieldPct),
+    // ×100 on the NUMERATOR so the weighted rule stays Σnum ÷ Σden and the
+    // result lands in percent — there is no second scaling step to forget.
+    // BOTH halves gate on `yieldUsable`: see that function for the measured
+    // reason (2025 read 2.5% against a real ~14% before it existed).
+    numerator: (m) =>
+      yieldUsable(m) && m.producedKg != null ? m.producedKg * 100 : null,
+    denominator: (m) => (yieldUsable(m) ? m.fedKg : null),
+    deltaMode: "abs",
+    perWorkingDay: false,
+    price: false,
+    chart: "line",
+    color: "var(--chart-2)",
+    avgColor: "var(--chart-4)",
+    decimals: 1,
+    dependsOn: ["outflow", "production"],
+    dictionary: {
+      definition:
+        "How much finished product came out of every hundred kilos of charcoal fed in.",
+      basis:
+        "Kilos produced ÷ kilos fed. The change under a cell is in percentage POINTS, not a percentage of a percentage.",
+      exclusions:
+        "A month that fed charcoal before production reporting existed is out of BOTH halves — counting its kilos in the denominator alone would have read 2025 as a 2.5% yield.",
+      rollup: "A quarter or a year is total produced ÷ total fed, not the mean of the months.",
+      source: "view_analytics_cost_monthly.yield_pct",
+      caveat:
+        "Blank before November 2025, never 0% — a zero would roll into a year as if the plant had turned eight thousand tonnes into nothing. November itself is a part-month at 11.9% and is kept out of the headlines.",
+    },
+  },
+  {
+    // ── OWNER FEEDBACK R4 — the other side of the same fraction ─────────
+    // Renzo: "what the kilns ate." Yield says what came out; this says what
+    // did not, and the two are the same measurement read from opposite ends.
+    // It is a SEPARATE ROW rather than a hover on the yield row because it is
+    // the number he wants to watch move — a loss going up is the alarming
+    // reading of a yield going down, and a page that only prints the cheerful
+    // half makes the reader do the subtraction.
+    //
+    // `read` is literally `1 − yield`, so the two rows always sum to exactly
+    // 100 in a MONTH cell; the weighted rollup is Σ(fed − produced) ÷ Σ fed,
+    // which is algebraically 1 − Σproduced ÷ Σfed, so they sum to 100 in a
+    // quarter and a year too. Same `yieldUsable` gate on both halves.
+    key: "process_loss",
+    label: "Process loss",
+    sublabel: "% of fed kilos",
+    unit: "pct",
+    rollup: "weighted",
+    read: (m) => (m.yieldPct == null ? null : (1 - m.yieldPct) * 100),
+    numerator: (m) =>
+      yieldUsable(m) && m.fedKg != null && m.producedKg != null
+        ? (m.fedKg - m.producedKg) * 100
+        : null,
+    denominator: (m) => (yieldUsable(m) ? m.fedKg : null),
+    deltaMode: "abs",
+    perWorkingDay: false,
+    price: false,
+    chart: "line",
+    color: "var(--chart-5)",
+    avgColor: "var(--chart-3)",
+    decimals: 1,
+    dependsOn: ["outflow", "production"],
+    dictionary: {
+      definition:
+        "What the kilns ate — the difference between the charcoal fed in and the product that came out.",
+      basis:
+        "Kilos fed minus kilos produced, over kilos fed. Exactly one hundred minus the yield above it, by construction rather than by coincidence.",
+      exclusions:
+        "Same as yield: a month that fed charcoal before production reporting existed is out of both halves.",
+      rollup:
+        "A quarter or a year is total kilos lost ÷ total kilos fed, not the mean of the months. It still adds to exactly 100 with the yield beside it.",
+      source: "view_analytics_cost_monthly.yield_pct (its complement)",
+      caveat:
+        "This is cooking loss, not yard loss. Weight that evaporated while charcoal SAT is a different figure and lives on the campaign panel as Weight lost. The change under a cell is in percentage POINTS.",
     },
   },
   {
@@ -1233,13 +1145,13 @@ const PRODUCTION_METRICS: readonly Omit<MetricSpec, "section">[] = [
 ] as const;
 
 /**
- * THE registry — P1 rows, then P2 money rows, then P4 production rows,
- * section stamped by construction so a row can never be filed under the wrong
- * band by hand.
+ * THE registry — the RC Inventory rows, then the production rows, section
+ * stamped by construction so a row can never be filed under the wrong band by
+ * hand. (The money band between them was dissolved in owner feedback R4; every
+ * field it read still crosses the wire.)
  */
 export const METRICS: readonly MetricSpec[] = [
   ...FLOW_METRICS.map((m): MetricSpec => ({ ...m, section: "flow" })),
-  ...MONEY_METRICS.map((m): MetricSpec => ({ ...m, section: "money" })),
   ...PRODUCTION_METRICS.map((m): MetricSpec => ({ ...m, section: "production" })),
 ];
 

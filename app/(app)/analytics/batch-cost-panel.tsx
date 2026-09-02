@@ -110,8 +110,18 @@ const ROWS: readonly PanelRow[] = [
     price: true,
     value: (c) => c.deliveredPhpKgFed,
     estimated: (c) => c.fedPriceCoveragePct != null && c.fedPriceCoveragePct < 100,
+    // ── OWNER FEEDBACK R4 — THE CALENDAR-VS-BATCH ANSWER, RECORDED ──────
+    // The matrix used to carry a Block price row of its own, and Renzo asked
+    // whether the two were the same number. They are the same FACT on two
+    // different clocks: that row measured a calendar month, this one measures
+    // the campaign. A campaign is what the plant actually runs and it
+    // straddles month boundaries — AUGUST closed and SEPTEMBER opened on
+    // 2026-08-29 — so neither was wrong and neither was redundant of the
+    // other. The calendar row is retired because the campaign is the clock
+    // the question is really asked on, and the sentence below is where that
+    // answer lives now, at the point of use.
     title:
-      "The price of the charcoal when it arrived at the block, for everything this campaign fed. Weighted over the kilos fed, never the mean of the daily prices.",
+      "The price of the charcoal when it arrived at the block, for everything this campaign fed. Weighted over the kilos fed, never the mean of the daily prices. Measured BY BATCH, not by calendar months — a batch can straddle months (AUGUST closed and SEPTEMBER opened on the same day), so this is the same fact the old monthly Money row carried, read on the clock the plant actually runs on.",
   },
   {
     key: "true",
@@ -141,6 +151,11 @@ const ROWS: readonly PanelRow[] = [
     blankTitle: (c) => `${TRUE_PRICE_BLANK} ${coverageSentence(c)}`,
   },
   {
+    // ── OWNER FEEDBACK R4 — the matrix's Closed-block loss row lands here ──
+    // Same measurement, per campaign instead of per calendar month. It was
+    // always the better home: a block closes when its last feeding happens,
+    // and which CAMPAIGN was feeding it is a fact about the plant, while
+    // which MONTH that fell in is an accident of the calendar.
     key: "loss",
     label: "Weight lost",
     sublabel: "% of delivered kg",
@@ -149,7 +164,27 @@ const ROWS: readonly PanelRow[] = [
     price: false,
     value: (c) => (c.lossPct == null ? null : c.lossPct * 100),
     title:
-      "How much weight the blocks this campaign fed lost while they sat, as a share of what was delivered into them. Physical, so it needs no price and uses every block.",
+      "How much weight the blocks this campaign fed lost while they sat, as a share of what was delivered into them. Physical, so it needs no price and uses every block — including ones whose peso figures are missing. It can read slightly negative where a block fed out a little more than was booked in; that is misfiled paperwork, shown as measured rather than clamped to zero.",
+  },
+  {
+    // ── OWNER FEEDBACK R4 — and so does Blocks closed ──────────────────
+    // The coverage line at the foot of this table already carried
+    // `closed/fed · priced`, but it reads as a footnote about confidence
+    // rather than as a figure. Renzo asked for it as a ROW, because "how many
+    // piles did this campaign finish off" is a thing he watches, not a caveat.
+    // Same numbers, promoted; the coverage line stays, because it is the
+    // sentence a blank true price owes its reader.
+    key: "blocks_closed",
+    label: "Blocks closed",
+    sublabel: "piles finished",
+    format: "count",
+    decimals: 0,
+    price: false,
+    value: (c) => c.blocksClosed,
+    title:
+      "How many of the piles this campaign fed have been finished off and closed out. Nothing in the database dates a status change, so a block's LAST FEEDING stands in for its closing date — the same approximation the RC Movement screen uses, on purpose, so the two cannot disagree about which campaign closed a block.",
+    blankTitle: () =>
+      "This campaign has not fed anything yet, so no block can have closed on it.",
   },
   {
     key: "produced",
@@ -354,8 +389,12 @@ export function BatchCostPanel({ campaigns, canViewPrices }: BatchCostPanelProps
               spans calendar months
             </strong>{" "}
             — AUGUST closed and SEPTEMBER opened on the same day. So this
-            answers &ldquo;what did AUGUST the campaign cost&rdquo;, which is a
-            different and also-true answer from the matrix above.
+            answers &ldquo;what did AUGUST the campaign cost&rdquo;, and since
+            owner feedback R4 it is the{" "}
+            <strong className="font-medium text-foreground">only</strong> place
+            that question is answered: the matrix&rsquo;s calendar-month money
+            rows were the same facts on the wrong clock, so they were retired
+            and blocks closed and weight lost moved here.
           </p>
         </div>
         <span className="shrink-0 text-[length:var(--bw-fs-115)] text-muted-foreground">

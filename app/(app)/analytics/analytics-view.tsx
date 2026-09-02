@@ -102,8 +102,12 @@ import { NO_HIDDEN, serializeHidden } from "@/lib/analytics/period-selection";
  * one of them — it is the same fold, rendered by the same component, down in
  * its own section after the supplier room, because the page's reading order is
  * PERIOD → CAMPAIGN → SUPPLIER → PRODUCTION.
+ *
+ * OWNER FEEDBACK R4: this was `["flow", "money"]`. The money band is dissolved
+ * (see `metrics.ts` → `MetricKey`), so the top matrix is the RC Inventory band
+ * alone — which is also why the page's first anchor now names it.
  */
-const TOP_BANDS: readonly MetricSection[] = ["flow", "money"];
+const TOP_BANDS: readonly MetricSection[] = ["flow"];
 
 const GRANULARITIES: { key: Granularity; label: string; title: string }[] = [
   { key: "Y", label: "Y", title: "One column per year, all years" },
@@ -262,6 +266,25 @@ export function AnalyticsView({
     const row = matrix.rows.find((r) => r.metric.key === metric) ?? null;
     return row && row.metric.section !== "production" ? row : null;
   }, [matrix.rows, metric]);
+
+  /**
+   * OWNER FEEDBACK R4 — the series Purchase volume may overlay on a second
+   * axis: the Market price row of the SAME fold.
+   *
+   * Passing the folded row rather than the raw months is the whole point. The
+   * overlaid line is then literally the numbers that row prints — same rollup,
+   * same per-working-day option, same restriction — so the two can no more
+   * disagree than the grade mix can disagree with the production total. It is
+   * `null` for every other metric, and the expand additionally refuses to
+   * render the control when the row is ₱-restricted.
+   */
+  const priceOverlayRow = React.useMemo(
+    () =>
+      metric === "purchase_volume"
+        ? (matrix.rows.find((r) => r.metric.key === "market_price") ?? null)
+        : null,
+    [matrix.rows, metric],
+  );
 
   /** The newest month inside the displayed window — what the split panel describes. */
   const anchorMonth: AnalyticsMonth | null = React.useMemo(() => {
@@ -539,6 +562,7 @@ export function AnalyticsView({
               scopeLabel={printScope}
               asOfDate={data.asOfDate}
               showDictionary={showDictionary}
+              priceOverlay={priceOverlayRow}
               onClose={() => setMetric(null)}
             />
           ) : undefined
@@ -567,6 +591,13 @@ export function AnalyticsView({
           months={data.months}
           year={year}
           canViewPrices={data.canViewPrices}
+          // R4 — the universal module contract. A supplier expand is a module
+          // Renzo may report from, so it gets the same chrome every other
+          // expand has: its own period checklist, an average switch, Print,
+          // and the page's master Definitions switch.
+          showDictionary={showDictionary}
+          printScope={printScope}
+          asOfDate={data.asOfDate}
         />
       </div>
 
@@ -623,10 +654,13 @@ export function AnalyticsView({
             have to guess at: a hidden period is invisible, not absent. */}
         <p>
           The <span className="font-medium text-foreground">Columns</span>{" "}
-          filter chooses which {noun.many} appear; a row expand&rsquo;s{" "}
+          filter chooses which {noun.many} appear and starts with everything
+          checked; an expand&rsquo;s own{" "}
           <span className="font-medium text-foreground">Years</span> filter
-          chooses which years its chart draws. Both start with everything
-          checked, and both{" "}
+          chooses which years its chart draws and starts on the years that
+          actually carry a figure for that row — the empty ones are listed with
+          a <span className="font-mono">0/…</span> count and one click brings
+          them back. Both{" "}
           <strong className="font-semibold">hide without restating</strong>: a
           hidden period stays in the record, every change is still measured
           against the period that really precedes it, and a year-ago chip still
