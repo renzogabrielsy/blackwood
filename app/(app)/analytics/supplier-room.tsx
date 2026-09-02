@@ -90,6 +90,19 @@ export interface SupplierRoomProps {
   /** The year the page's own picker is on. The room follows it. */
   year: number;
   canViewPrices: boolean;
+  /**
+   * R4 — the page's master `Definitions` switch and the print stamps, passed
+   * straight through to the supplier expand.
+   *
+   * This room mounts its OWN expand card (a supplier's panel has to open under
+   * the supplier matrix, not under the KPI matrix at the top), so the page's
+   * controls have to reach it here — otherwise one of the page's three expands
+   * would ignore a switch the other two obey, which is exactly the
+   * inconsistency the universal module contract exists to close.
+   */
+  showDictionary: boolean;
+  printScope: string;
+  asOfDate: string | null;
 }
 
 export function SupplierRoom({
@@ -97,6 +110,9 @@ export function SupplierRoom({
   months,
   year,
   canViewPrices,
+  showDictionary,
+  printScope,
+  asOfDate,
 }: SupplierRoomProps) {
   const [selected, setSelected] = React.useState<string | null>(null);
 
@@ -211,9 +227,17 @@ export function SupplierRoom({
       <SupplierMatrix data={data} selected={selected} onSelect={setSelected}>
         {expanded && (
           <SupplierExpand
+            // Keyed by supplier AND year — a fresh, smart-defaulted month
+            // filter per card, the same discipline the KPI expand's key gives
+            // its year filter. A selection made about one seller must never
+            // silently apply to the next one opened.
+            key={`${expanded.supplier}:${data.year}`}
             row={expanded}
             data={data}
             canViewPrices={canViewPrices}
+            showDictionary={showDictionary}
+            scopeLabel={printScope}
+            asOfDate={asOfDate}
             onClose={() => setSelected(null)}
           />
         )}

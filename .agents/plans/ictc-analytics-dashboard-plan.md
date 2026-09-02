@@ -1034,3 +1034,80 @@ portrait's printable column is 703 px) and squeezes the stats to 164 px.
   `Definitions` off removes both dictionary cards from the top matrix's expand AND from the
   production room's own expand, takes the card from 773 → 611 px, writes `?dict=off`, drops
   the param again when switched back on, and leaves all 44 row `Info` buttons in place.
+
+## 9. OWNER FEEDBACK ROUND 4 APPLIED — 2026-09-02 (ROUND 4 RESTRUCTURE)
+
+Renzo's nine-item list, applied on `feat/analytics-round4`. **This is the round that
+changed the page's SHAPE**, so §4's phase descriptions and §6–§8's row lists describe a
+page that no longer exists in one respect: the MONEY section is gone. The full
+reasoning, the measured verification and the row-by-row map live in
+`app/(app)/analytics/CONTEXT.md` → "Owner feedback round 4 — the restructure"; this
+section records the decisions.
+
+### 9.1 The Money section is dissolved, and the reason is a CLOCK
+
+Renzo: *"money is redundant, most of it is analyzable in the by-production-batch
+section."* Confirmed. The money band's **Block price** was the CALENDAR-month basis of
+the figure the campaign panel already publishes on the **CAMPAIGN** basis — the same fact
+against two different clocks — and a campaign is the clock the plant actually runs on
+(AUGUST closed and SEPTEMBER opened on 2026-08-29). Neither was wrong; the calendar
+reading was the one that could go.
+
+That answer is **recorded at the point of use**, in the campaign panel's Block price row
+hover, not only in a document.
+
+| Row | Fate |
+|---|---|
+| Block price · ₱ per produced kg · True ₱/kg (closed) | **RETIRED** — the campaign panel carries both bases |
+| Blocks closed · Closed-block loss | **→ campaign panel**, as per-campaign rows |
+| Yield | **→ Production**, joined by its complement Process loss |
+| Avg stock age · Stock over 120 days | **→ the volume/stock band, RENAMED "RC Inventory"** |
+
+Twenty-two rows in three bands became **eighteen in two**; the nav went from five anchors
+to four. **Nothing left the database or the payload** — every retired row's field still
+crosses the wire behind the same ₱ gate, exactly as R1's four retirements did, and no
+migration was written. Deep links were checked: none of the four digest drill-downs names
+a retired key.
+
+### 9.2 The plan's "no threshold colouring" rule is still untouched
+
+R4 added a gradient AREA fill under line metrics and a second Y axis for an optional
+price overlay. Both are identity and shape, not judgement: the fill is the series' own
+colour and the overlay is a second series, so nothing on this page still turns a colour
+because a value crossed a number. The rule holds through four rounds.
+
+### 9.3 Two measured corrections this round, both of the same shape
+
+- **Yield's weighted rollup had the `intensityUsable` bug.** Numerator and denominator
+  were summed independently across months where charcoal was fed and no production was
+  reported, so the 2025 column read ~2.3% against a real 14.0%. Both halves now gate on
+  one `yieldUsable` predicate — the same fix P4 applied to power intensity, one row later.
+- **The stat strip and the chart header counted different populations** under labels that
+  both said "months" (45 vs 44 in Renzo's screenshot; 75 vs 33 on RC OUT). Both now print
+  one derived count of periods carrying a figure, taken from the chart's own data.
+
+### 9.4 The universal module contract
+
+*"Each module is something I look at and possibly report."* All three expand surfaces now
+carry the same chrome: a period checklist with the smart default, a stat strip that
+recomputes from it, an average switch, Print, and the page's master `Definitions` switch.
+The supplier expand was the gap and gained all four; `printCard` moved into its own
+module so two cards share one mechanism. The campaign panel is not an expand and did not
+gain the contract — it gained the two rows above.
+
+### 9.5 The R2 "always default to checking all" rule, narrowed
+
+Superseded for the CHART filters only: an expand's checklist opens on the periods that
+carry a figure for that row. The MATRIX column filter is unchanged, because its periods
+come from the zero-filled flow spine and there are no empty ones to hide. Because the
+state is the HIDDEN set, this was a different starting value rather than a different
+mechanism — `All` / `None`, the coverage counts and the reversibility are untouched, and
+the control can never hide every period.
+
+### 9.6 Gates
+
+`npx tsc --noEmit` clean · `npm run lint` 146 problems / 16 errors (unchanged) ·
+`npm run build` clean · `verify-table-core` 84 assertions · `test:e2e` 57 passed ·
+browser-verified in a throwaway harness at `app/dev/table-playground/analytics-r4/`
+(a NEW subdirectory — the committed Blackwood Table playground beside it was not
+touched), since deleted.

@@ -81,6 +81,7 @@
 
 import * as React from "react";
 import {
+  Area,
   Bar,
   CartesianGrid,
   ComposedChart,
@@ -103,6 +104,7 @@ import {
 import { BreakdownRail } from "@/components/digest/drilldown/series-parts";
 import type { RailItem } from "@/components/digest/drilldown/series-parts";
 import { cn } from "@/lib/utils";
+import { printCard } from "./print-card";
 import type { HistoryPoint, MatrixRow, Period } from "@/lib/analytics/matrix";
 import {
   foldSelection,
@@ -207,19 +209,28 @@ function canDrawAvg(spec: MetricSpec, granularity: Granularity): boolean {
  * period checklist already uses) plus a rule in the series' colour, so the
  * control names the exact line it governs. Being a sibling of `Years` it is
  * inside the header's `data-print-hide` span and never reaches paper.
+ *
+ * ── OWNER FEEDBACK R4: generalised and EXPORTED ─────────────────────────────
+ * It was `AvgToggle` and hardcoded the trailing-average copy. R4 adds a second
+ * chart switch (the price overlay on Purchase volume) and gives the supplier
+ * expand its own average line, so the shape is now shared and the SENTENCE is
+ * a required prop: a control that governs a different line owes a different
+ * explanation, and a default sentence here would be wrong on two of the three
+ * call sites rather than merely vague.
  */
-function AvgToggle({
+export function ChartToggle({
   on,
   onChange,
   label,
   color,
-  noun,
+  title,
 }: {
   on: boolean;
   onChange(next: boolean): void;
   label: string;
   color: string;
-  noun: string;
+  /** What switching it does, in words. Always supplied — see the R4 note. */
+  title: string;
 }) {
   return (
     <button
@@ -227,11 +238,7 @@ function AvgToggle({
       role="checkbox"
       aria-checked={on}
       onClick={() => onChange(!on)}
-      title={
-        on
-          ? `Hide the ${label} line. It is a trailing mean over the last three ${noun}s and it breaks at a gap rather than drawing across one — hiding it changes nothing else on the chart, and the printed sheet follows whatever you leave switched on.`
-          : `Draw the ${label} line — a trailing mean over the last three ${noun}s, which breaks at a gap rather than drawing across one.`
-      }
+      title={title}
       className={cn(
         "inline-flex h-[var(--an-h-8)] shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-[length:var(--bw-fs-12)] font-medium leading-[var(--bw-lh-xs)]",
         "transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
@@ -264,10 +271,31 @@ function AvgToggle({
   );
 }
 
+/**
+ * OWNER FEEDBACK R4 — a metric drawn as a LINE is now drawn as a LINE ON AN
+ * AREA: the digest sparkline aesthetic, at full scale.
+ *
+ * Renzo asked for the gradient fill, and the reason it is safe here is the same
+ * reason a price is a line rather than a bar in the first place. A BAR is read
+ * as a length from zero, so its axis must include zero; a LINE is read as a
+ * SHAPE, so it gets `paddedDomain` and the fill runs down to that padded floor
+ * rather than to zero. The fill therefore says "this is the series" — it never
+ * asserts a magnitude the axis does not support.
+ *
+ * **Two rules keep it from obscuring anything.** It is ONE series, not an area
+ * plus a line: a separate `<Area>` and `<Line>` over the same key would claim
+ * two legend entries for one fact, so the `<Area>` carries the stroke itself.
+ * And it is drawn FIRST among the series, under the comparison line and the
+ * trailing average, at a top opacity of 0.28 fading to 0.02 — the gridlines
+ * read through it and neither of the two lines that matter is ever behind it.
+ *
+ * Bars are untouched: Renzo's word was "metrics rendered as lines".
+ */
 function MetricTrendChart({
   spec,
   history,
   pairHistory,
+  overlay,
   granularity,
   showAvg,
   emptyText,
@@ -276,6 +304,16 @@ function MetricTrendChart({
   history: readonly HistoryPoint[];
   /** The comparison series, folded by the SAME rollup rules. Null when none. */
   pairHistory: readonly HistoryPoint[] | null;
+  /**
+   * R4 — the optional SECONDARY-AXIS series (today: market price over purchase
+   * volume). It arrives as a folded `MatrixRow` history, so it is the same
+   * numbers the price row itself prints, and it rides its own right-hand axis
+   * because a ₱/kg and a tonnage share no scale.
+   */
+  overlay: {
+    spec: MetricSpec;
+    history: readonly HistoryPoint[];
+  } | null;
   granularity: Granularity;
   /**
    * OWNER FEEDBACK R3 — draw the trailing average line, or leave it out.
@@ -311,13 +349,25 @@ function MetricTrendChart({
   const pairByKey = new Map(
     (pairHistory ?? []).map((p) => [p.periodKey, p.value] as const),
   );
+  const overlayByKey = new Map(
+    (overlay?.history ?? []).map((p) => [p.periodKey, p.value] as const),
+  );
   const data = history.map((h) => ({
     ...h,
     pair: pair ? (pairByKey.get(h.periodKey) ?? null) : null,
+    overlay: overlay ? (overlayByKey.get(h.periodKey) ?? null) : null,
   }));
+
+  // A unique gradient id per chart. Two expands can be mounted at once (the
+  // top matrix and the production room), and a duplicated SVG `id` makes the
+  // second chart paint with the first one's colour.
+  const gradientId = React.useId().replace(/:/g, "");
 
   const values = data
     .flatMap((h) => [h.value, h.pair])
+    .filter((v): v is number => v != null);
+  const overlayValues = data
+    .map((h) => h.overlay)
     .filter((v): v is number => v != null);
   const crossesZero = values.some((v) => v < 0);
   // A BAR is read as a length from the baseline, so its axis MUST include zero —
@@ -342,6 +392,15 @@ function MetricTrendChart({
     <div className="w-full" style={{ height: CHART_HEIGHT }}>
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={data} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
+          {/* The area's own gradient. Declared even on a bar chart — an unused
+              <defs> paints nothing — so the chart has one shape rather than
+              two conditional ones. */}
+          <defs>
+            <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={spec.color} stopOpacity={0.28} />
+              <stop offset="100%" stopColor={spec.color} stopOpacity={0.02} />
+            </linearGradient>
+          </defs>
           <CartesianGrid stroke="var(--border)" strokeOpacity={0.4} vertical={false} />
           <XAxis
             dataKey="label"
@@ -358,12 +417,42 @@ function MetricTrendChart({
             domain={domain}
             tickFormatter={(v: number) => fmtAxis(spec, v)}
           />
+          {/* R4 — the overlay's OWN axis, on the right. A ₱/kg and a tonnage
+              share no scale, so plotting them against one axis would flatten
+              one of them into the baseline. It is only mounted while the
+              overlay is switched on, so an unused right gutter never eats
+              chart width. */}
+          {overlay && (
+            <YAxis
+              yAxisId="overlay"
+              orientation="right"
+              tick={DRILLDOWN_AXIS_TICK}
+              tickLine={false}
+              axisLine={false}
+              width={52}
+              domain={paddedDomain(overlayValues) ?? ["auto", "auto"]}
+              tickFormatter={(v: number) => fmtAxis(overlay.spec, v)}
+            />
+          )}
           <RTooltip
             {...tip}
-            formatter={(value, name) => [
-              value == null ? "—" : `${fmtExact(spec, Number(value))} ${unit}`,
-              name === "avg" ? avgLabel : name === "pair" ? (pair?.label ?? "") : spec.label,
-            ]}
+            formatter={(value, name) =>
+              name === "overlay"
+                ? [
+                    value == null
+                      ? "—"
+                      : `${fmtExact(overlay!.spec, Number(value))} ${unitSuffix(overlay!.spec.unit)}`,
+                    overlay!.spec.label,
+                  ]
+                : [
+                    value == null ? "—" : `${fmtExact(spec, Number(value))} ${unit}`,
+                    name === "avg"
+                      ? avgLabel
+                      : name === "pair"
+                        ? (pair?.label ?? "")
+                        : spec.label,
+                  ]
+            }
             labelFormatter={(label, payload) =>
               payload?.[0]?.payload?.fullLabel ?? label
             }
@@ -371,7 +460,13 @@ function MetricTrendChart({
           <Legend
             wrapperStyle={{ fontSize: "var(--bw-fs-11)", paddingTop: 4 }}
             formatter={(v) =>
-              v === "avg" ? avgLabel : v === "pair" ? (pair?.label ?? "") : spec.label
+              v === "avg"
+                ? avgLabel
+                : v === "pair"
+                  ? (pair?.label ?? "")
+                  : v === "overlay"
+                    ? `${overlay?.spec.label ?? ""} (right)`
+                    : spec.label
             }
           />
           {/* The displayed window, shaded — so the columns above and the whole
@@ -396,13 +491,20 @@ function MetricTrendChart({
               isAnimationActive={false}
             />
           ) : (
-            <Line
+            // ONE series: the <Area> carries its own stroke, so the chart has
+            // a single legend key rather than an area and a line claiming to
+            // be two things. Drawn before the comparison and average lines, so
+            // the fill can never sit on top of either.
+            <Area
               type="monotone"
               dataKey="value"
               name="value"
               stroke={spec.color}
               strokeWidth={2}
+              fill={`url(#${gradientId})`}
+              fillOpacity={1}
               dot={granularity === "M" ? false : { r: 2.5 }}
+              activeDot={{ r: 3.5 }}
               isAnimationActive={false}
               connectNulls={false}
             />
@@ -433,6 +535,24 @@ function MetricTrendChart({
               name="avg"
               stroke={spec.avgColor}
               strokeWidth={2}
+              dot={false}
+              isAnimationActive={false}
+              connectNulls={false}
+            />
+          )}
+          {/* R4 — the price overlay, LAST, so it sits above the bars it is
+              read against and above the area fill. Dashed for the same reason
+              the comparison line is: which series is the row's own is never in
+              doubt. */}
+          {overlay && (
+            <Line
+              yAxisId="overlay"
+              type="monotone"
+              dataKey="overlay"
+              name="overlay"
+              stroke={overlay.spec.color}
+              strokeWidth={2}
+              strokeDasharray="4 3"
               dot={false}
               isAnimationActive={false}
               connectNulls={false}
@@ -532,101 +652,80 @@ function InventorySplit({ month }: { month: AnalyticsMonth }) {
 }
 
 /**
- * WHY A MONEY ROW'S BLANK IS BLANK, as numbers rather than as a sentence.
+ * WHAT THE STOCK AVERAGE COST IS MEASURED OVER — and where the ₱ TOTAL went.
  *
- * `view_rc_movement_month_price` prices a month's fed kilos through each fed
- * batch's own deliveries, so a batch with no delivery rows at all — old
- * pre-system stock, and the L-042 `FEEDING # 2` phantom — puts KILOS in the
- * denominator and NOTHING in the numerator. The published price is therefore
- * understated by exactly the share of untraceable kilos, which is the thing
- * this rail makes visible.
+ * OWNER FEEDBACK R4. The Inventory value row printed the ₱ total of the yard;
+ * Renzo asked for the weighted average unit cost instead, because the total
+ * moved mostly when the YARD moved and therefore answered "how much charcoal
+ * do we have" a second time. The total is not lost — it is the numerator of
+ * the figure that replaced it, so it belongs here, beside the kilos it was
+ * divided by, rather than as a row of its own.
+ *
+ * The rail is the coverage split, because that is the honest question about an
+ * average: how much of the stock does the price actually speak for? An unpriced
+ * truckload is in NEITHER half (the `avg_cost` narrowing of L-039), so the
+ * unvalued kilos are real charcoal the figure cannot describe.
  */
-function CoverageSplit({ month }: { month: AnalyticsMonth }) {
-  const traceable = month.fedKgPriceTraceable ?? 0;
-  const untraceable = month.fedKgPriceUntraceable ?? 0;
-  const total = traceable + untraceable;
-  // Three zero bars say less than one sentence. When there is nothing to
-  // split, the rail's own empty state is the honest render.
-  const items: RailItem[] = total <= 0 ? [] : [
-    {
-      key: "traceable",
-      label: "Kilos the price can see",
-      value: (traceable / 1000).toLocaleString("en-US", { maximumFractionDigits: 1 }),
-      unit: "t",
-      sharePct: total > 0 ? (traceable / total) * 100 : 0,
-      title: "Fed out of piles that have delivery records, so every kilo carries a price.",
-    },
-    {
-      key: "untraceable",
-      label: "Kilos with no delivery record",
-      value: (untraceable / 1000).toLocaleString("en-US", { maximumFractionDigits: 1 }),
-      unit: "t",
-      sharePct: total > 0 ? (untraceable / total) * 100 : 0,
-      title:
-        "Old pre-system stock, and the misfiled pile the sync could never place. Real charcoal, no price.",
-    },
-  ];
-  return (
-    <div className="flex flex-col gap-2">
-      <BreakdownRail items={items} emptyText="Nothing fed this month." maxHeight={120} />
-      <p className="px-3 pb-1 text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
-        Untraceable kilos drag the raw published price DOWN, because they add
-        weight to the sum and no money.{" "}
-        <strong className="font-semibold">
-          What this page shows is the price of the kilos it CAN trace
-        </strong>{" "}
-        — the honest answer — and any figure resting on less than full coverage
-        is marked <span className="font-mono">~</span> and is never quoted as a
-        record or a biggest move.
-      </p>
-    </div>
-  );
-}
+function StockValueSplit({ month }: { month: AnalyticsMonth }) {
+  const positive = month.positiveBalanceKg ?? 0;
+  const coverage = month.valueCoveragePct;
+  // `valued_kg` is not on the wire, but it IS `positive × coverage%` by the
+  // view's own definition — derived from two published figures for a rail
+  // label, never used as a number anything is computed from.
+  const valued = coverage == null ? positive : (positive * coverage) / 100;
+  const unvalued = Math.max(positive - valued, 0);
+  const t1 = (kg: number) =>
+    (kg / 1000).toLocaleString("en-US", { maximumFractionDigits: 1 });
 
-/** What the closed-block ₱ figures do and do not cover, that month. */
-function ClosedBlocksSplit({ month }: { month: AnalyticsMonth }) {
-  const priced = month.closedBlocksInPrice ?? 0;
-  const unpriced = month.closedBlocksUnpriced ?? 0;
-  const noDelivery = month.closedBlocksNoDelivery ?? 0;
-  const total = priced + unpriced + noDelivery;
-  const items: RailItem[] = total <= 0 ? [] : [
+  const items: RailItem[] = positive <= 0 ? [] : [
     {
-      key: "priced",
-      label: "Closed and fully priced",
-      value: String(priced),
-      unit: "blocks",
-      sharePct: total > 0 ? (priced / total) * 100 : 0,
-      title: "The only blocks the peso figures are measured over.",
-    },
-    {
-      key: "unpriced",
-      label: "Awaiting a price",
-      value: String(unpriced),
-      unit: "blocks",
-      sharePct: total > 0 ? (unpriced / total) * 100 : 0,
+      key: "valued",
+      label: "Kilos the cost speaks for",
+      value: t1(valued),
+      unit: "t",
+      sharePct: (valued / positive) * 100,
       title:
-        "Closed, but at least one truckload has no price yet — left out entirely rather than valued at part of its money.",
+        "Charcoal sitting in piles whose deliveries all carry a price, so every kilo has a cost behind it. These are the only kilos in the average above.",
     },
     {
-      key: "no_delivery",
-      label: "No delivery record",
-      value: String(noDelivery),
-      unit: "blocks",
-      sharePct: total > 0 ? (noDelivery / total) * 100 : 0,
-      title: "Nothing to value at all.",
+      key: "unvalued",
+      label: "Kilos with no price yet",
+      value: t1(unvalued),
+      unit: "t",
+      sharePct: (unvalued / positive) * 100,
+      title:
+        "Real charcoal awaiting a price. It is in NEITHER half of the average rather than counted as free — the same rule that stops an unpriced truckload dragging a batch's cost toward zero.",
     },
   ];
+
   return (
     <div className="flex flex-col gap-2">
-      <BreakdownRail items={items} emptyText="No block closed this month." maxHeight={130} />
-      <p className="px-3 pb-1 text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
-        A block with one truckload still awaiting its price is left out{" "}
-        <strong className="font-semibold">entirely</strong>, never valued at part
-        of its money — a numerator missing pesos against a full denominator would
-        understate the cost and point the exact opposite way from what this row
-        exists to show. The loss percentage has no such restriction: weight is
-        physical, so it uses every closed block.
-      </p>
+      <BreakdownRail items={items} emptyText="No valued stock." maxHeight={120} />
+      <ul className="flex flex-col gap-1.5 px-3 pb-1 text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
+        <li>
+          <strong className="font-semibold text-foreground">
+            The ₱ total behind the average.
+          </strong>{" "}
+          <span className="font-mono">
+            {month.endingValuePhp == null
+              ? "—"
+              : `₱${month.endingValuePhp.toLocaleString("en-US", { maximumFractionDigits: 0 })}`}
+          </span>{" "}
+          over <span className="font-mono">{t1(valued)} t</span>. This used to be
+          a row of its own; it moved here because a total mostly tracks how much
+          charcoal is standing, while the average tracks what it COST.
+        </li>
+        <li>
+          <strong className="font-semibold text-foreground">
+            A wider set of piles than the row above.
+          </strong>{" "}
+          The valuation is measured over every positive balance, closed-block
+          residue included, because the view it comes from has no notion of a
+          close date. Being a ratio, that moves this figure far less than it
+          moved the ₱ total — but it is a different population from Ending
+          inventory, and the page says so rather than implying they match.
+        </li>
+      </ul>
     </div>
   );
 }
@@ -809,17 +908,14 @@ function PowerSplit({ month }: { month: AnalyticsMonth }) {
  * registry because it is a LAYOUT fact about this component — the registry
  * describes numbers, not which pane they sit beside.
  */
-type SidePanel = "coverage" | "closed" | "aging" | "downtime" | "power" | null;
+type SidePanel = "stock_value" | "aging" | "downtime" | "power" | null;
 
 function sidePanelFor(key: MetricSpec["key"]): SidePanel {
   switch (key) {
-    case "delivered_fed_price":
-    case "php_per_produced":
-      return "coverage";
-    case "closed_true_price":
-    case "closed_loss":
-    case "closed_blocks":
-      return "closed";
+    // R4: the coverage and closed-block rails went with the money rows they
+    // explained. This one arrived with the row that replaced Inventory value.
+    case "inventory_value":
+      return "stock_value";
     case "stock_age":
     case "over_120d":
       return "aging";
@@ -831,46 +927,6 @@ function sidePanelFor(key: MetricSpec["key"]): SidePanel {
     default:
       return null;
   }
-}
-
-/**
- * PRINT ONE CARD.
- *
- * `bw-printing` on <body> is what the print stylesheet keys off, and every
- * ancestor from the card up to <body> is tagged `data-print-ancestor` so the
- * sheet can `display: none` everything ELSE rather than merely hide it. That
- * distinction is the whole mechanism — see the block comment on the print
- * rules in `globals.css`: hiding by visibility leaves the page's full height
- * behind and the card lands on page three of a mostly blank document.
- *
- * Both marks come off on `afterprint`, whether the user printed, saved a PDF
- * or cancelled the dialog. The `setTimeout` fallback is there because not every
- * engine fires `afterprint` on a dismissed dialog, and a body left in the
- * printing class would print the wrong thing NEXT time.
- */
-function printCard(card: HTMLElement | null) {
-  if (typeof document === "undefined" || !card) return;
-  const body = document.body;
-
-  const tagged: HTMLElement[] = [];
-  for (
-    let el: HTMLElement | null = card.parentElement;
-    el && el !== document.documentElement;
-    el = el.parentElement
-  ) {
-    el.setAttribute("data-print-ancestor", "");
-    tagged.push(el);
-  }
-
-  const clear = () => {
-    body.classList.remove("bw-printing");
-    for (const el of tagged) el.removeAttribute("data-print-ancestor");
-  };
-
-  body.classList.add("bw-printing");
-  window.addEventListener("afterprint", clear, { once: true });
-  window.setTimeout(clear, 1000);
-  window.print();
 }
 
 export interface MetricExpandProps {
@@ -915,6 +971,25 @@ export interface MetricExpandProps {
    * (both call sites `key` this component by metric).
    */
   showDictionary: boolean;
+  /**
+   * OWNER FEEDBACK R4 — the OPTIONAL secondary series this card may overlay,
+   * as a folded `MatrixRow`.
+   *
+   * Renzo asked for it on Purchase volume only: *"an optional overlay price
+   * toggle, default OFF, drawing the market price line on a secondary axis
+   * over the volume bars."* It arrives as a row of the SAME `buildMatrix` fold
+   * rather than as raw months, which is what makes the overlaid line literally
+   * the Market price row's own numbers — the two can no more disagree than the
+   * grade mix can disagree with the production total.
+   *
+   * **The ₱ gate is structural, not a render-time check.** A restricted row
+   * carries `null` in every cell (the values never left the server), so the
+   * card refuses to render the CONTROL when `row.restricted` is true: a toggle
+   * for a line that would draw nothing is a control that lies about what the
+   * page can do, and worse, it would advertise the existence of a figure the
+   * reader may not have.
+   */
+  priceOverlay?: MatrixRow | null;
   onClose(): void;
 }
 
@@ -930,6 +1005,7 @@ export function MetricExpand({
   scopeLabel,
   asOfDate,
   showDictionary,
+  priceOverlay,
   onClose,
 }: MetricExpandProps) {
   const spec = row.metric;
@@ -939,13 +1015,56 @@ export function MetricExpand({
   const normalised = perWorkingDay && spec.perWorkingDay;
   const sidePanel = sidePanelFor(spec.key);
 
-  // ── THE YEAR CHECKLIST (owner feedback R2) ──────────────────────────────
+  // ── THE YEAR CHECKLIST (R2), WITH SMART DEFAULTS (R4) ───────────────────
   // Session state, keyed to this card, never to the URL — see the block
-  // comment at the top of the file. The state is the HIDDEN set, so the
-  // "always default to all checked" requirement is a property of the shape.
-  const [hiddenYears, setHiddenYears] =
-    React.useState<ReadonlySet<string>>(NO_HIDDEN);
+  // comment at the top of the file. The state is still the HIDDEN set; what
+  // changed in R4 is what that set STARTS as.
+  //
+  // R2 shipped "always default to all checked", and Renzo has now superseded
+  // it for THIS control: *"the Years checklist defaults to checking only years
+  // WITH data for that metric."* Which is the same complaint that produced the
+  // control in the first place, taken one step further — RC OUT is honestly
+  // blank for 2020–2023, and opening its chart with four empty years switched
+  // on means every reader does the same four clicks before they can read it.
+  //
+  // Three properties keep it honest, and they are why this is a DEFAULT rather
+  // than a filter the reader cannot see:
+  //   • it is derived from the row's own history (`withValue === 0`), never
+  //     from a date, so it retires itself the moment a year gets a figure;
+  //   • the empty years are still LISTED, still toggleable, and each says
+  //     `0/12` beside it — the coverage count the control has always shown is
+  //     exactly what makes the default legible rather than mysterious;
+  //   • **it can never hide everything.** If no year carries a figure the card
+  //     opens fully checked, because an empty chart under an empty-state
+  //     sentence the reader did not cause is worse than an empty chart.
+  //
+  // The MATRIX's column filter is deliberately NOT changed: its periods come
+  // from the flow spine, which is complete by construction, so "the ones with
+  // data" and "all of them" are the same set there.
+  const [hiddenYears, setHiddenYears] = React.useState<ReadonlySet<string>>(
+    () => {
+      const byYear = new Map<number, boolean>();
+      for (const h of row.history) {
+        byYear.set(h.year, (byYear.get(h.year) ?? false) || h.value != null);
+      }
+      const empty = [...byYear.entries()]
+        .filter(([, hasValue]) => !hasValue)
+        .map(([y]) => String(y));
+      // Every year empty → hide none. See the third property above.
+      if (empty.length === 0 || empty.length === byYear.size) return NO_HIDDEN;
+      return new Set(empty);
+    },
+  );
   const isFiltered = hiddenYears.size > 0;
+
+  // ── THE PRICE OVERLAY (owner feedback R4) ───────────────────────────────
+  // DEFAULT OFF, as asked. Not rendered at all for a role that may not see
+  // pesos — `row.restricted` is set server-side from the same `canViewPrices()`
+  // that nulled the values, so there is nothing to reveal and nothing to hint
+  // at.
+  const overlayRow =
+    priceOverlay && !priceOverlay.restricted ? priceOverlay : null;
+  const [showOverlay, setShowOverlay] = React.useState(false);
 
   // ── THE TRAILING-AVERAGE SWITCH (owner feedback R3) ─────────────────────
   // DEFAULT ON — today's behaviour, so nobody has to switch anything on to get
@@ -1005,10 +1124,17 @@ export function MetricExpand({
    * have produced exactly that fabricated line.
    */
   const view = React.useMemo(() => {
-    if (!isFiltered) {
-      return { history: row.history, pair: row.pairHistory };
-    }
     const keep = (h: HistoryPoint) => !hiddenYears.has(String(h.year));
+    // The overlay follows the SAME year selection — an overlaid price for a
+    // year whose bars are switched off would draw a line over nothing.
+    const overlay = overlayRow
+      ? isFiltered
+        ? overlayRow.history.filter(keep)
+        : overlayRow.history
+      : null;
+    if (!isFiltered) {
+      return { history: row.history, pair: row.pairHistory, overlay };
+    }
     const values = row.history.map((h) => (keep(h) ? h.value : null));
     const history: HistoryPoint[] = [];
     for (let i = 0; i < row.history.length; i += 1) {
@@ -1022,8 +1148,16 @@ export function MetricExpand({
     return {
       history,
       pair: row.pairHistory ? row.pairHistory.filter(keep) : null,
+      overlay,
     };
-  }, [row.history, row.pairHistory, hiddenYears, isFiltered, rollWindow]);
+  }, [
+    row.history,
+    row.pairHistory,
+    overlayRow,
+    hiddenYears,
+    isFiltered,
+    rollWindow,
+  ]);
 
   /**
    * The window figure, re-folded over the selected years through the SAME
@@ -1088,12 +1222,40 @@ export function MetricExpand({
       ? ` Only the ${shownYearCount} year${shownYearCount === 1 ? "" : "s"} you left switched on are considered — this is the highest and lowest of the SELECTION, not of the whole record.`
       : "");
 
+  /**
+   * ── THE STAT-STRIP MISMATCH, FOUND AND FIXED (owner feedback R4) ─────────
+   *
+   * Renzo's screenshot showed the `Selected` stat reading *"4/7 years · 45
+   * months"* beside a chart header reading *"44 settled months"*, and the two
+   * were describing DIFFERENT POPULATIONS under labels that both said
+   * "months".
+   *
+   *   • `SelectionFold.periodCount` was simply `periods.length` — every period
+   *     in the selection, **including the ones that carry no figure at all**.
+   *     On RC OUT with every year on that read 63 or 75 months, against 33
+   *     months in which anything was ever fed. The number under a total that
+   *     says "23,388 t" reading "63 months" invites exactly the wrong division.
+   *   • The chart header counted SETTLED periods, which additionally drops the
+   *     in-progress one — hence 45 against 44.
+   *
+   * Both now print ONE derived count, `withValue`: periods in the selection
+   * that carry a figure. It cannot disagree with the chart because it IS the
+   * chart's data — `view.history` is the exact series the chart is handed —
+   * and it is the honest denominator for the fold beside it. `settled` is
+   * still what the Highest/Lowest population is judged on; that is a different
+   * question and it says so in its own hover.
+   */
+  const withValue = React.useMemo(
+    () => view.history.filter((h) => h.value != null).length,
+    [view.history],
+  );
+
   /** What the chart card's own header says it is drawing. */
   const chartSubtitle = isFiltered
-    ? `${settled.length} settled ${noun}s · ${shownYearCount}/${yearOptions.length} years`
+    ? `${withValue} ${noun}s with a figure · ${shownYearCount}/${yearOptions.length} years`
     : granularity === "Y"
-      ? `${settled.length} settled ${noun}s`
-      : `${settled.length} settled ${noun}s · shaded band is the window above`;
+      ? `${withValue} ${noun}s with a figure`
+      : `${withValue} ${noun}s with a figure · shaded band is the window above`;
 
   /** The years, spelled out — for the printed sheet and the card's own note. */
   const selectedYearsNote = isFiltered
@@ -1204,8 +1366,11 @@ export function MetricExpand({
                     : fmtExact(spec, selectionFold.value)
                 }
                 unit={selectionFold.value == null ? undefined : unit}
-                sub={`${shownYearCount} of ${yearOptions.length} years · ${selectionFold.periodCount} ${noun}s`}
-                title={`Folded over the years you left switched on, by this row's own rule — ${spec.dictionary.rollup} It is never an average of the points on the chart.`}
+                // R4 — `withValue`, the SAME count the chart header prints, so
+                // the strip and the chart can never appear to disagree. See
+                // the block comment on `withValue`.
+                sub={`${shownYearCount} of ${yearOptions.length} years · ${withValue} ${noun}s with a figure`}
+                title={`Folded over the years you left switched on, by this row's own rule — ${spec.dictionary.rollup} It is never an average of the points on the chart. The ${noun} count is how many carry a figure; ${selectionFold.periodCount} ${noun}s are in the selection in all.`}
               />
             ) : (
               <DrilldownStat
@@ -1251,17 +1416,37 @@ export function MetricExpand({
               subtitle={chartSubtitle}
               action={
                 // `data-print-hide` — a control is not part of the report.
-                <span className="flex items-center gap-1.5" data-print-hide>
+                <span className="flex flex-wrap items-center justify-end gap-1.5" data-print-hide>
+                  {/* R4 — the price overlay. Purchase volume only, default
+                      OFF, and absent entirely for a role that may not see a
+                      peso (see `priceOverlay` on the props). */}
+                  {overlayRow && (
+                    <ChartToggle
+                      on={showOverlay}
+                      onChange={setShowOverlay}
+                      label="Overlay price"
+                      color={overlayRow.metric.color}
+                      title={
+                        showOverlay
+                          ? `Hide the ${overlayRow.metric.label} line. It rides its own axis on the right, because a ₱/kg and a tonnage share no scale — it is the same figure that row publishes, not a second calculation.`
+                          : `Draw the ${overlayRow.metric.label} line over these bars, on its own axis to the right. It is the very figure that row publishes, folded by the same rule, so the two can never disagree.`
+                      }
+                    />
+                  )}
                   {/* Only where a trailing average can exist at all — see
                       `canDrawAvg`. A switch for a line the chart would never
                       draw is a control that lies about what the page can do. */}
                   {avgAvailable && (
-                    <AvgToggle
+                    <ChartToggle
                       on={showAvg}
                       onChange={setShowAvg}
                       label={`3-${noun} avg`}
                       color={spec.avgColor}
-                      noun={noun}
+                      title={
+                        showAvg
+                          ? `Hide the 3-${noun} avg line. It is a trailing mean over the last three ${noun}s and it breaks at a gap rather than drawing across one — hiding it changes nothing else on the chart, and the printed sheet follows whatever you leave switched on.`
+                          : `Draw the 3-${noun} avg line — a trailing mean over the last three ${noun}s, which breaks at a gap rather than drawing across one.`
+                      }
                     />
                   )}
                   <PeriodFilter
@@ -1271,7 +1456,10 @@ export function MetricExpand({
                     options={yearOptions}
                     hidden={hiddenYears}
                     onChange={setHiddenYears}
-                    title={`Choose which years this chart draws. Every year is on by default. Hiding one removes its points and its share of the figures above — it never changes what a remaining ${noun} says, and a rolling average breaks at the gap rather than drawing across it.`}
+                    // R4 — the copy follows the smart default. Saying "every
+                    // year is on by default" beside a control that opens with
+                    // four years off would be the page contradicting itself.
+                    title={`Choose which years this chart draws. It opens with the years that actually carry a figure for this row — the rest are listed with a 0/… count and one click brings them back. Hiding a year removes its points and its share of the figures above; it never changes what a remaining ${noun} says, and a rolling average breaks at the gap rather than drawing across it.`}
                   />
                 </span>
               }
@@ -1281,6 +1469,11 @@ export function MetricExpand({
                 spec={spec}
                 history={view.history}
                 pairHistory={view.pair}
+                overlay={
+                  overlayRow && showOverlay && view.overlay
+                    ? { spec: overlayRow.metric, history: view.overlay }
+                    : null
+                }
                 granularity={granularity}
                 showAvg={showAvg}
                 emptyText={
@@ -1302,7 +1495,10 @@ export function MetricExpand({
                   <span className="font-medium text-foreground">
                     {selectedYearsNote}
                   </span>
-                  . Hidden years are still in the record and still stand behind
+                  . This card opens on the years that carry a figure for this
+                  row; the rest are one click away in{" "}
+                  <span className="font-medium text-foreground">Years</span>.
+                  Hidden years are still in the record and still stand behind
                   every comparison — a change is measured against the period
                   that really precedes it, on screen or not.
                   {/* Only claimed while the line is actually drawn — a sentence
@@ -1357,23 +1553,13 @@ export function MetricExpand({
               </DrilldownSection>
             )}
 
-            {sidePanel === "coverage" && anchorMonth && (
+            {sidePanel === "stock_value" && anchorMonth && (
               <DrilldownSection
-                title="What the price can speak for"
+                title="What the average is measured over"
                 subtitle={anchorMonth.monthStart.slice(0, 7)}
                 bodyClassName="p-0"
               >
-                <CoverageSplit month={anchorMonth} />
-              </DrilldownSection>
-            )}
-
-            {sidePanel === "closed" && anchorMonth && (
-              <DrilldownSection
-                title="Blocks that closed"
-                subtitle={anchorMonth.monthStart.slice(0, 7)}
-                bodyClassName="p-0"
-              >
-                <ClosedBlocksSplit month={anchorMonth} />
+                <StockValueSplit month={anchorMonth} />
               </DrilldownSection>
             )}
 

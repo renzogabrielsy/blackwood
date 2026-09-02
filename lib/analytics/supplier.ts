@@ -99,6 +99,17 @@ export interface SupplierCell {
   coveragePct: number | null;
   /** ₱ GATED. */
   avgPrice: number | null;
+  /**
+   * ₱ GATED — Σ pesos on their priced kilos that month.
+   *
+   * Carried since owner feedback R4 so the expand's month checklist can re-fold
+   * a price over a SUBSET of months as Σ pesos ÷ Σ priced kilos. Reconstructing
+   * it as `avgPrice × pricedKg` would have been almost right and quietly
+   * lossy — the published total is what the year row already sums, so a
+   * selection folds through the same numbers rather than through a rounding of
+   * them.
+   */
+  phpTotal: number | null;
   /** ₱ GATED. Weighted rollups ONLY — see `weightedPremiumPhpKg`. */
   premium: number | null;
   /** ₱ GATED — the month's own market price, the premium's baseline. */
@@ -300,6 +311,7 @@ export function buildSupplierYear(
           pricedKg: hasKg ? r.pricedKg : null,
           coveragePct: hasKg ? r.priceCoveragePct : null,
           avgPrice: r.avgPricePhpKg,
+          phpTotal: r.phpTotal,
           premium: r.premiumPhpKg,
           monthPrice: r.monthAvgPricePhpKg,
           sundryKg: (r.sundryOriginKg ?? 0) > 0 ? r.sundryOriginKg : null,
@@ -390,6 +402,99 @@ export function buildSupplierYear(
       top3Names: sellers.slice(0, 3).map((r) => r.supplier),
       suppliersToHalf: half,
     },
+  };
+}
+
+/**
+ * ONE supplier's figures over an arbitrary SUBSET of the year's months —
+ * owner feedback R4's universal module contract.
+ *
+ * Every expand on the page now carries a period checklist, and a checklist
+ * that filtered only the chart while the stat strip above it kept describing
+ * the whole year would be the exact dishonesty the KPI expand's `foldSelection`
+ * was built to avoid: "Highest over three chosen years" is a different claim
+ * from "Highest on record", and so is "₱/kg paid" over four chosen months.
+ *
+ * **Every rule the year row obeys is obeyed here, because it is the same
+ * arithmetic over a shorter list.** The price is Σ pesos ÷ Σ priced kilos and
+ * never the mean of the monthly prices; the premium goes through
+ * `weightedPremiumPhpKg`, the only function allowed to touch that column; the
+ * share's denominator is the P1-published market kilos of the SELECTED months,
+ * so a four-month share is a share of those four months rather than of the
+ * year. And `sundryOriginKg` stays out of all of it.
+ */
+export interface SupplierSelection {
+  /** How many of the year's month columns are switched on. */
+  monthCount: number;
+  /** Of those, how many the supplier actually did something in. */
+  activeMonths: number;
+  kg: number;
+  deliveries: number;
+  pricedKg: number;
+  /** PERCENT 0-100. */
+  coveragePct: number | null;
+  /** ₱ GATED — Σ pesos ÷ Σ priced kilos over the selection. */
+  avgPrice: number | null;
+  /** ₱ GATED — weighted by priced kilos, the only aggregation allowed. */
+  premium: number | null;
+  /** Their kilos ÷ the SELECTED months' market kilos. */
+  sharePct: number | null;
+  /** TRACEABILITY. Never in `kg`, never in `sharePct`. */
+  sundryKg: number;
+  sundryDeliveries: number;
+}
+
+export function foldSupplierSelection(
+  row: SupplierRow,
+  months: readonly SupplierMonthColumn[],
+  hidden: ReadonlySet<string>,
+): SupplierSelection {
+  let kg = 0;
+  let deliveries = 0;
+  let pricedKg = 0;
+  let phpTotal = 0;
+  let hasPhp = false;
+  let sundryKg = 0;
+  let sundryDeliveries = 0;
+  let activeMonths = 0;
+  let monthCount = 0;
+  let marketKg = 0;
+  const premiumParts: { premiumPhpKg: number | null; pricedKg: number | null }[] =
+    [];
+
+  months.forEach((m, i) => {
+    if (hidden.has(m.monthStart)) return;
+    monthCount += 1;
+    marketKg += m.marketKg ?? 0;
+    const cell = row.cells[i];
+    if (!cell) return;
+    if (cell.kg != null && cell.kg > 0) {
+      kg += cell.kg;
+      activeMonths += 1;
+    }
+    deliveries += cell.deliveryCount ?? 0;
+    pricedKg += cell.pricedKg ?? 0;
+    if (cell.phpTotal != null) {
+      phpTotal += cell.phpTotal;
+      hasPhp = true;
+    }
+    sundryKg += cell.sundryKg ?? 0;
+    sundryDeliveries += cell.sundryDeliveryCount ?? 0;
+    premiumParts.push({ premiumPhpKg: cell.premium, pricedKg: cell.pricedKg });
+  });
+
+  return {
+    monthCount,
+    activeMonths,
+    kg,
+    deliveries,
+    pricedKg,
+    coveragePct: kg > 0 ? (100 * pricedKg) / kg : null,
+    avgPrice: hasPhp && pricedKg > 0 ? phpTotal / pricedKg : null,
+    premium: weightedPremiumPhpKg(premiumParts),
+    sharePct: marketKg > 0 && kg > 0 ? (100 * kg) / marketKg : null,
+    sundryKg,
+    sundryDeliveries,
   };
 }
 

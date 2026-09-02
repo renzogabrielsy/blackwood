@@ -1,8 +1,8 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// THE IN-PAGE ANCHOR ROW — five destinations for a page that runs several
-// screens.
+// THE IN-PAGE ANCHOR ROW — four destinations for a page that runs several
+// screens. (Five until owner feedback R4 dissolved the Money band; see below.)
 //
 // P4 completes the page, and completion is what makes it long: the matrix's two
 // bands, the campaign panel, the supplier room, the production room and the
@@ -30,9 +30,8 @@
 //    scroll listener, no measurement on every frame.
 //
 // The anchors are the section elements themselves (`scroll-mt-24` clears this
-// bar) — two of them are `<tr>` band rows INSIDE the matrix table, which is
-// deliberate: "Overview" and "Money" are bands of one table, not blocks of
-// their own, and pointing at the table twice would be a lie about its shape.
+// bar) — the first is a `<tr>` band row INSIDE the matrix table, which is
+// deliberate: "RC Inventory" is a band of that table, not a block of its own.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as React from "react";
@@ -48,16 +47,19 @@ export interface AnalyticsNavItem {
 
 export const ANALYTICS_NAV: readonly AnalyticsNavItem[] = [
   {
+    // OWNER FEEDBACK R4: "Overview" named a position on the page rather than a
+    // subject. The band it points at now answers one question end to end —
+    // what came in, what went out, what is standing in the yard, what it cost
+    // per kilo and how old it is — so the anchor says that.
     id: "band-flow",
-    label: "Overview",
-    title: "Volume and stock — what moved through the yard and what was left standing in it.",
-  },
-  {
-    id: "band-money",
-    label: "Money",
+    label: "RC Inventory",
     title:
-      "What the charcoal we fed actually cost, on arrival and again after the weight it lost while it sat.",
+      "What moved through the yard, what is left standing in it, what that stock cost per kilo and how old it is.",
   },
+  // OWNER FEEDBACK R4: the **Money** anchor is gone with its band. Renzo:
+  // "money is redundant, most of it is analyzable in the by-production-batch
+  // section." The campaign panel below is where the cost questions now live —
+  // on the clock the plant actually runs on rather than the calendar's.
   {
     id: "section-campaigns",
     label: "Campaigns",

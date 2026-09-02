@@ -8,6 +8,14 @@
 > **OWNER FEEDBACK ROUND 2 APPLIED — 2026-09-02.** One feature: **the period filter** —
 > a checklist on the matrix columns and a second one on each row expand's history chart.
 > See **"Owner feedback round 2 — the period filter"** near the end of this file.
+>
+> **OWNER FEEDBACK ROUND 4 APPLIED — 2026-09-02. ⚠ THIS ROUND RESTRUCTURED THE PAGE.**
+> The **Money section is dissolved** and the matrix is now TWO bands, `RC Inventory`
+> and `Production`, across **eighteen** rows rather than twenty-two. Several statements
+> further down this file describe the five-anchor, three-band page that existed before
+> it; **the section "Owner feedback round 4 — the restructure" at the end is the
+> authority** wherever they disagree, and each superseded passage carries a pointer to
+> it. Read that section before trusting a row list or an anchor list above.
 
 ## Purpose
 The **month-on-month room**. `/` (the Home Digest) answers *"what happened today"*; this
@@ -24,8 +32,8 @@ wants to know WHO moved it, and a tab would hide exactly that. Production comes 
 because it is where the yard's kilos stop being charcoal and start being product — after
 the blocks that are about buying and holding it.
 
-**A slim sticky anchor row** (`analytics-nav.tsx`) sits above the controls: Overview ·
-Money · Campaigns · Suppliers · Production.
+**A slim sticky anchor row** (`analytics-nav.tsx`) sits above the controls: **RC Inventory ·
+Campaigns · Suppliers · Production** (four since R4 dissolved the Money band).
 
 Renzo, 2026-09-01: *"a tool where I can monitor daily the KPIs we want to observe month on
 month… This is a custom Dashboard FOR ME. For MY brain."* Plan:
@@ -46,6 +54,7 @@ layer**; **P3, the supplier room**; **P4, the production matrix — the page is 
 | `analytics-view.tsx` | **Client shell.** Owns the view controls (year `Select`, Y/Q/M toggle, **Compare chip toggle**, per-working-day `Switch`, the R2 `Columns` checklist and the **R3 master `Definitions` switch**), the anchor row, the live block-utilization chip, the callout strip, the matrix, **the campaign panel, the supplier room, the production room** and the restatement footer. Calls `buildMatrix()` in a `useMemo`. It renders `AnalyticsMatrix` for the `flow` + `money` bands only, and passes the expand panel INTO it; the `production` band is rendered by `production-room.tsx` from the SAME fold. |
 | `analytics-matrix.tsx` | **The matrix table** — a bespoke dense table (see "Why not the Blackwood Table"). Frozen KPI-name column, explicit `<colgroup>` widths, `width: max-content` inside `overflow-x-auto`, a trailing summary column, **section bands** (anchor targets, `id="band-<key>"`, wearing the section accent as a left border), an optional `sections` filter so the component can be mounted twice, the `~` / `·` / `⚠` cell marks, the green/red direction tint, and **the in-place expand row** (`colSpan` over every column, panel `sticky left-0` at the scroller's measured width). |
 | `analytics-nav.tsx` | **The in-page anchor row.** Sticky (`top-0 z-40`), glass, **five** links, active section observed with an `IntersectionObserver` and claimed instantly on click. A flow element, so pinning it shifts nothing. |
+| `print-card.ts` | **R4 — the print mechanism, extracted.** `printCard(el)` tags every ancestor `data-print-ancestor`, adds `bw-printing` to `<body>` and calls `window.print()`, clearing both on `afterprint` with a 1 s fallback. It lived inside `metric-expand.tsx` until the supplier expand needed it too; two copies of something this fiddly would drift the first time one was touched. A plain module, not `"use client"` — it is imported only by client components and touches the DOM at CALL time. |
 | `metric-expand.tsx` | **The row expand** (+ R3: `canDrawAvg` and the `AvgToggle` beside `Years`, and the dictionary blocks behind the page's `Definitions` switch), rendered IN PLACE inside the matrix, in a full-width row directly beneath the row that was clicked. Stat strip + full-history chart (bar or line, **plus the dashed comparison line where a row declares a pair**) + one of six side rails (inventory split · price coverage · closed blocks · aging bands · downtime · power) + the dictionary spelled out + **a Print button** that prints just this card. Reuses `DrilldownSection` / `DrilldownStat` / `BreakdownRail` / `DRILLDOWN_AXIS_TICK` / `drilldownTooltipChrome` from the drill-down chassis. |
 | `metric-info.tsx` | **The dictionary** at the point of use — an `Info` button with the whole entry as a native `title` (hover) and a `Popover` card (click). `DictionaryPopover` is the ONE card and takes any `MetricDictionaryEntry`; `MetricInfo` is the matrix row's wrapper over it (`METRICS[].dictionary`) and the supplier room passes `SUPPLIER_DICTIONARY` entries into the same component, so a metric and a supplier figure can never explain themselves in two layouts. |
 | `batch-cost-panel.tsx` | **P2 — the BATCH basis.** One column per production campaign, nine rows (fed · delivered ₱/kg · true ₱/kg · **cost of storage time** · weight lost · produced · yield · ₱/produced kg on both bases) plus a `blocks closed / priced` coverage line. Frozen row-label column, opens scrolled to the newest campaign. |
@@ -57,7 +66,7 @@ layer**; **P3, the supplier room**; **P4, the production matrix — the page is 
 | `supplier-expand.tsx` | **P3 — one supplier's year.** Five stats, a bars + premium-line chart, a month-by-month share rail, and the returns note. |
 | `production-room.tsx` | **P4 — the PRODUCTION axis.** The section shell: the year chips (made · top grade · reported days · power), the dictionary strip, the production band of the shared matrix, its expand, and the grade mix. No ₱ anywhere, so nothing in it is gated. |
 | `production-grades.tsx` | **P4 — grade × month tonnage.** Frozen grade column, tonnes + share-of-month per cell, a YTD column, and a `Σ made` footer row that prints the Production output row's own figure — with the tie CHECKED, not assumed. |
-| `period-filter.tsx` | **R2 — THE checklist popover, written once, mounted twice.** The matrix's period columns and a row expand's chart years. Trigger + `All` / `None` + a dense scrollable list of `role="checkbox"` buttons; Radix Popover gives Esc and focus-return for free. Its state is the set of **hidden** keys, never the selected ones — which is what makes "always default to all checked" a property of the shape. |
+| `period-filter.tsx` | **R2 — THE checklist popover, written once, mounted twice.** The matrix's period columns and a row expand's chart years. Trigger + `All` / `None` + a dense scrollable list of `role="checkbox"` buttons; Radix Popover gives Esc and focus-return for free. Its state is the set of **hidden** keys, never the selected ones. **R4 changed what that set STARTS as, and only on the chart filters:** a matrix COLUMN filter still opens with everything checked (its periods come from the complete flow spine, so "all" and "the ones with data" are the same set), while an EXPAND's filter opens on the periods that actually carry a figure for that row. The hidden-set shape is what made both defaults expressible without a second mechanism. |
 | `analytics-error.tsx` | Persistent, copyable load-failure banner (the project's HARD RULE applies to every error surface, not only toasts). |
 
 ### The shared library (`lib/analytics/`)
@@ -107,7 +116,14 @@ and a month-on-month matrix that could not reach 2024 would not be the thing tha
 asked for. The supplier read is the largest, so it carries a `truncated` flag and the room
 says so when it trips.
 
-### The twenty-two rows, and the rollup rule each one ships with
+### The rows, and the rollup rule each one ships with
+
+> ⚠ **SUPERSEDED IN PART BY R4.** This section describes twenty-two rows in three
+> bands. There are now **eighteen in two**: five money rows were retired, two moved
+> to the campaign panel, two moved into RC Inventory, Yield moved into Production
+> and Process loss was added. The tables below are still correct about every rollup
+> rule and every caveat of a row that SURVIVED; for what moved where and why, read
+> "Owner feedback round 4 — the restructure" at the end.
 
 **Four rows were retired in owner feedback R1** — Sundry re-entry, Runway, Active batches
 and Working days. Renzo does not act on any of them and twelve rows in one band was a
@@ -531,10 +547,11 @@ misquote a month later. Verified by emulating the real print rules in the browse
 lands at `top: 0`, the on-screen header and the Print/Close controls are gone, and the whole
 report fits one 697 px-tall sheet.
 
-**Section bands.** Twenty rows in one undifferentiated stack is a wall, so `groupBySection`
-splits them into `Volume & stock`, `Money` and `Production` (declared on
-`MetricSpec.section`, ordered by `SECTIONS`), and takes an optional `only` list so the same
-component can render the first two bands at the top and the third in the production room.
+**Section bands.** Rows in one undifferentiated stack are a wall, so `groupBySection`
+splits them by `MetricSpec.section`, ordered by `SECTIONS`, and takes an optional `only`
+list so the same component can render the top band(s) at the top and the production band
+in the production room. **Since R4 there are TWO bands — `RC Inventory` and `Production`**
+(it was `Volume & stock` · `Money` · `Production`; see the R4 section at the end).
 The band's label cell is `.frozen-col` like every other cell in that column — a band that
 scrolled away would leave the rows under it unlabelled exactly when the reader is furthest
 from the header — and it carries the anchor `id`.
@@ -651,18 +668,17 @@ Widths: grade **168px**, each month **84px**, the YTD column **112px**; `minWidt
 sum. Same frozen-column discipline as the two matrices above (measured: `position: sticky`,
 `left: 0`, `z-index: 10`, a fully OPAQUE background in both themes, no backdrop-filter).
 
-### The anchor row (P4)
-`analytics-nav.tsx` — five links, `sticky top-0 z-40`, the canonical glass pattern
+### The anchor row (P4, narrowed to four in R4)
+`analytics-nav.tsx` — **four** links, `sticky top-0 z-40`, the canonical glass pattern
 (`bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60`), legal here
 because it floats over empty page background rather than over scrolling table cells (which
 are opaque, above). **z-40 and not 30**: the frozen-pane scale tops out at 30
 (`.frozen-corner`) and a sticky table corner shares the root stacking context with this bar,
 so at equal z the later element in the DOM would win.
 
-Two of the five anchors are the matrix's own **band rows** (`id="band-flow"`,
-`id="band-money"`), which is deliberate: Overview and Money are bands of one table, not
-blocks of their own, and pointing at the same table twice would be a lie about its shape.
-Every target carries `scroll-mt-24` to clear the bar. **No layout shift** — sticky never
+The FIRST anchor is the matrix's own **band row** (`id="band-flow"`), which is deliberate:
+RC Inventory is a band of that table, not a block of its own. (It was two — `band-money`
+went with the Money band in R4.) Every target carries `scroll-mt-24` to clear the bar. **No layout shift** — sticky never
 removes an element from flow (measured: document height identical pinned and unpinned), and
 the active state is a background change only, never a weight change or an added glyph. The
 active section is OBSERVED with an `IntersectionObserver` over the real anchors and claimed
@@ -709,6 +725,15 @@ somebody has to remember and becomes a property of the shape: an absent param an
 set **cannot** mean "nothing is selected", they can only mean "everything is". It also
 gives the URL param its spelling — `?hide=` is simply dropped when nothing is hidden, so
 the default view has a clean address and the param's presence always means something.
+
+> **R4 superseded the DEFAULT for the chart filters — and the shape is why it cost
+> nothing.** Renzo asked an expand's checklist to open on the years that actually
+> carry a figure. Because the state is the hidden set, that is a different STARTING
+> VALUE and not a different mechanism: `All` / `None` are untouched, the empty years
+> are still listed with their `0/12` coverage count, and one click brings any of them
+> back. **The matrix COLUMN filter still defaults to everything checked** — its
+> periods come from the complete flow spine, so there are no empty ones to hide.
+> Detail and the two safety properties are in the R4 section at the end.
 
 ### The URL param, and why only ONE of the two filters is in it
 `?hide=<comma-joined period keys>`, resolved server-side by `parseHidden` exactly like
@@ -1052,6 +1077,222 @@ The trailing column folds the whole displayed window through **the row's own rol
 `All time` in Y view. Its comparison chip is the SAME fold over the prior year, because a
 summary column has no "previous column" in view. A single "add the row up" column would
 have been wrong on five of the twelve rows.
+
+## Owner feedback round 4 — the restructure, 2026-09-02
+
+Renzo's nine-item list, applied. **This is the round that changed the page's SHAPE**, so
+where anything above disagrees with this section, this section is the authority.
+
+| # | Asked for | Where it landed |
+|---|---|---|
+| 1 | Chart year filters default to the years WITH data | `metric-expand.tsx` + `supplier-expand.tsx` — a lazy initial hidden set, derived from the row's own history |
+| 2 | Line metrics → line + gradient area | `metric-expand.tsx` → `MetricTrendChart`; bars untouched |
+| 3 | Every expand behaves identically | The supplier expand gained a period checklist, an average switch, Print and the master dictionary; a real stat-strip mismatch was found and fixed |
+| 4 | Optional price overlay on Purchase volume | `MetricExpandProps.priceOverlay`, default OFF, absent for a restricted role |
+| 5 | Inventory value → weighted average unit cost | `metrics.ts` → `inventory_value` reads `avg_unit_cost_php_kg`; the ₱ total moved into the expand's rail |
+| 6 | **Dissolve the Money section** | `MetricKey`, `MetricSection`, `SECTIONS`, the nav, the campaign panel — see below |
+| 7 | Production gains Yield and Process loss | `metrics.ts` → `PRODUCTION_METRICS` |
+
+### The calendar-vs-batch answer, and where it is recorded
+
+Renzo: *"money is redundant, most of it is analyzable in the by-production-batch
+section."* Confirmed, and the reason is a **CLOCK, not a duplication**: the money band's
+**Block price** was the CALENDAR-month basis of the very figure the campaign panel
+already publishes on the **CAMPAIGN** basis — the same fact read against two different
+clocks. A campaign is the clock the plant actually runs on (AUGUST closed and SEPTEMBER
+opened on 2026-08-29), so the calendar reading was the one that could go.
+
+**That answer is now recorded at the point of use**, in the `title` of the campaign
+panel's Block price row (`batch-cost-panel.tsx`), in as many words: *"Measured BY BATCH,
+not by calendar months — a batch can straddle months… the same fact the old monthly Money
+row carried, read on the clock the plant actually runs on."* It is in the row's hover
+rather than only in this file because a reader meeting the panel for the first time is
+exactly the person who asks the question.
+
+### Where the eight money rows went
+
+| Row | Fate |
+|---|---|
+| Block price (`delivered_fed_price`) | **RETIRED** — the campaign panel's own Block price row is the same fact on the right clock |
+| ₱ per produced kg (`php_per_produced`) | **RETIRED** — the campaign panel carries it on BOTH bases (block price and true) |
+| True ₱/kg closed (`closed_true_price`) | **RETIRED** — likewise, as `True ₱/kg fed` |
+| Blocks closed (`closed_blocks`) | **→ campaign panel**, as a new row reading `CampaignCost.blocksClosed` |
+| Closed-block loss (`closed_loss`) | **→ campaign panel**, where the existing `Weight lost` row (`lossPct`) already was it per campaign |
+| Yield (`yield_rate`) | **→ Production band** |
+| Avg stock age (`stock_age`) | **→ RC Inventory band** |
+| Stock over 120 days (`over_120d`) | **→ RC Inventory band** |
+
+**Nothing was dropped from the database and nothing was dropped from the payload.** Every
+retired row's field still crosses the wire, still nulled by the same ₱ gate, exactly as
+the four rows R1 retired do — `AnalyticsMonth` is unchanged, `queries.ts` is unchanged,
+and no migration was written. The `MetricSpec.estimated` machinery (the `~` mark, its
+hover, the callout gate) is also left in place with no row declaring it today.
+
+**The two rails that explained the retired rows went with them** — `CoverageSplit` and
+`ClosedBlocksSplit` in `metric-expand.tsx`. Keeping a rail nothing can open is dead code,
+not a spare.
+
+**Deep links survive.** The four digest drill-downs point at `market_price`, `net_flow`,
+`rc_in_total`, `rc_out` and `purchase_volume` — checked, and not one of them names a
+retired key. `inventory_value` also keeps its key despite the row being renamed, so a
+link to it still resolves.
+
+### A measured bug found while moving Yield: `yieldUsable`
+
+A weighted rollup sums numerator and denominator INDEPENDENTLY, and the spine carries
+months with fed kilos and **no production at all** (feedings begin 2024-01, production
+reporting 2025-11). Yield's numerator was `producedKg × 100` and its denominator was
+`fedKg` with no shared gate, so a quarter or a year spanning that boundary put ten
+months of fed kilos into the denominator against two months of product in the numerator.
+`dependsOn` could not save it and neither could the `num.had === 0` guard, because two
+of the twelve months genuinely did report.
+
+**This is the `intensityUsable` shape exactly**, one row later. Both halves of Yield and
+of the new Process loss now gate on `yieldUsable(m)` — a month counts only if it has fed
+kilos AND a produced figure. **Measured in the harness: the 2025 year column read the
+correct 14.0% rather than the ~2.3% the ungated fold produced.**
+
+**Process loss is `1 − yield`, and the complementarity is structural.** Its `read` is
+literally `(1 − yieldPct) × 100`, so a month cell always sums to exactly 100 with the row
+above it; its weighted rollup is `Σ(fed − produced) ÷ Σ fed`, which is algebraically
+`1 − Σproduced ÷ Σfed`, so a quarter and a year do too. Measured: 14.0% + 86.0% = 100.0%
+in every cell and in the summary column. It is a separate ROW rather than a hover on
+Yield because a loss going up is the alarming reading of a yield going down, and a page
+that prints only the cheerful half makes the reader do the subtraction.
+
+### The stat-strip mismatch, found and closed
+
+Renzo's screenshot showed an expand's `Selected` stat reading *"4/7 years · 45 months"*
+beside a chart header reading *"44 settled months"*. They were **describing different
+populations under labels that both said "months"**:
+
+- `SelectionFold.periodCount` was `periods.length` — every period in the selection,
+  **including ones carrying no figure at all**. On RC OUT with every year switched on it
+  read 75 against 33 months in which anything was ever fed. A count like that under a
+  total reading "23,388 t" invites exactly the wrong division.
+- The chart header counted SETTLED periods, which additionally drops the in-progress
+  one — hence 45 against 44.
+
+Both now print ONE derived value, `withValue` = periods in the selection that carry a
+figure. **It cannot disagree with the chart because it IS the chart's data** (`view.history`
+is the series the chart is handed). Measured on RC OUT: the stat says `33 months with a
+figure`, the header says `33 months with a figure`, and the chart draws **33 bars**.
+`settled` still governs the Highest/Lowest population — a different question, and its own
+hover says so.
+
+### Smart year defaults — three properties that keep them honest
+
+1. **derived, never dated** — a year is hidden when `withValue === 0` on that row's own
+   history, so the default retires itself the moment a year gets a figure;
+2. **visible and reversible** — the empty years are still listed, still toggleable, and
+   each carries the `0/12` coverage count the control has always shown. The control's
+   hover, the card's own note and the page footer all say the card opens this way;
+3. **it can never hide everything** — a row with no figure in any year opens FULLY
+   CHECKED, because an empty chart under an empty-state sentence the reader did not cause
+   is worse than an empty chart.
+
+Measured: RC OUT opens `3 of 7 years` (2024–2026), 2020–2023 hidden. The **matrix column
+filter is deliberately unchanged** — its periods come from the zero-filled flow spine, so
+"all" and "the ones with data" are the same set there.
+
+### Area charts
+
+A metric whose `chart` is `line` is drawn as a single `<Area>` carrying its own stroke —
+**not** an area plus a line, which would claim two legend entries for one fact. Gradient
+`0.28 → 0.02` in the series' own colour, with a `React.useId()` gradient id because two
+expands can be mounted at once (the top matrix and the production room) and a duplicated
+SVG `id` makes the second chart paint with the first one's fill.
+
+**It cannot obscure anything, and that is ordering rather than luck.** The area is the
+FIRST series child, so the comparison line, the trailing average and the price overlay are
+all painted after it — verified with `compareDocumentPosition`. And the fill running to a
+padded floor rather than to zero is safe for the same reason a price is a line and not a
+bar in the first place: a line is read as a shape, so `paddedDomain` already governs its
+axis. **Bars are untouched.**
+
+### The price overlay (Purchase volume only)
+
+`MetricExpandProps.priceOverlay` takes the Market price row **of the same
+`buildMatrix` fold** rather than raw months, which is what makes the overlaid line
+literally the numbers that row prints — same rollup, same per-working-day option, same
+restriction. It rides its own right-hand `YAxis` (a ₱/kg and a tonnage share no scale),
+dashed, drawn last, and the axis is only mounted while the toggle is on so an unused
+gutter never eats chart width.
+
+**The ₱ gate is structural.** A restricted row carries `null` in every cell because the
+values never left the server, so the card renders no CONTROL at all — verified: for a
+restricted role the toggle is absent, Market price and Stock avg cost are the two locked
+rows, and **zero `₱<digits>` sequences appear anywhere on the page**.
+
+### Stock avg cost
+
+`inventory_value` keeps its key (deep links) and becomes **Stock avg cost · ₱/kg on
+hand**, reading `view_analytics_inventory_eom.avg_unit_cost_php_kg` — the view's OWN
+column, so nothing divides two published figures and invents a third definition of what a
+kilo cost. It is a `periodEnd` rollup and a LINE (hence an area), and it is still
+₱-gated.
+
+The ₱ total is **not lost**: it is the numerator of the figure that replaced it, so it
+moved into the expand's new `StockValueSplit` rail beside the kilos it is divided by,
+with the valued/unvalued split that is the honest question about an average. The
+population caveat is kept and restated — closed-block residue is still in the valuation,
+which is 8.19% of the money — with the note that **being a ratio, that moves this figure
+far less than it moved the total it replaced.**
+
+### The universal module contract
+
+Renzo: *"each module is something I look at and possibly report."* Audited, the supplier
+expand was short four things and now has them, so all three expand surfaces (KPI matrix,
+production room, supplier room) carry: a **period checklist** with the smart default, a
+**stat strip that recomputes from it**, an **average switch**, **Print**, and the page's
+**master `Definitions` switch**.
+
+- The supplier card's axis is one year of MONTHS, so its checklist filters months
+  (`foldSupplierSelection` in `lib/analytics/supplier.ts`). Every rule the year row obeys
+  is obeyed there because it is the same arithmetic over a shorter list: the price is
+  Σ pesos ÷ Σ priced kilos, the premium goes through `weightedPremiumPhpKg`, and **the
+  share's denominator narrows with the selection** so a four-month share is a share of
+  those four months. `SupplierCell` gained `phpTotal` for that fold — reconstructing it
+  as `avgPrice × pricedKg` would have been almost right and quietly lossy.
+- `printCard` moved out of `metric-expand.tsx` into **`app/(app)/analytics/print-card.ts`**
+  so two cards share one mechanism rather than two copies that would drift.
+- `AvgToggle` became the exported **`ChartToggle`** with the explanatory sentence as a
+  REQUIRED prop: three call sites govern three different lines, and a default sentence
+  would be wrong on two of them rather than merely vague.
+- `SupplierRoom` gained `showDictionary` / `printScope` / `asOfDate`, threaded from the
+  shell — it mounts its own expand, so without that one of the page's three expands would
+  ignore a switch the other two obey.
+- Measured on the sparse seller BRIX: `Months filter — 2 of 9 months shown`, all five
+  stats carry `· selected`, 2 bars drawn, Print present, one dictionary block pair that
+  the page-level switch removes and restores (with `?dict=off` round-tripping).
+
+**The campaign panel is NOT an expand and did not gain the contract** — it has no
+per-column detail card. It gained the two rows above and the calendar-vs-batch answer.
+
+### Verified in the browser (throwaway harness, since deleted)
+
+The harness mounted the REAL `AnalyticsView` in the REAL shell class over synthetic data,
+at `app/dev/table-playground/analytics-r4/` — a NEW subdirectory beside the committed
+Blackwood Table playground, which was not touched and is still there.
+
+- **Restructure**: nav reads `RC Inventory · Campaigns · Suppliers · Production`; bands
+  are `band-flow: RC Inventory` and `band-production: Production` only; RC Inventory
+  carries Ending inventory, Stock avg cost, Avg stock age, Stock over 120 days; the
+  campaign panel carries Weight lost and Blocks closed; Production carries Yield and
+  Process loss; **no callout names a retired row**.
+- **Smart defaults**: RC OUT opens 3/7 years; stat strip, chart header and drawn bars all
+  read 33.
+- **Area charts**: gradient stops 0.28/0.02, one legend entry for the series, the average
+  line drawn after the area — at **1512 light** (container 1280, `--an-chart: 260px`,
+  `--bw-fs-14: .875rem`) and **2560 dark** (container 1760, 340px, 17px), zero horizontal
+  document overflow at both, and at 375 px.
+- **Overlay**: off by default; on → 2 Y axes and `Market price (right)` in the legend;
+  **restricted role → no toggle, no ₱ value anywhere**.
+- **Yield weighting**: the 2025 year column reads 14.0%, not the ungated ~2.3%; Yield +
+  Process loss = 100.0% in every cell and in the summary column.
+- **Print**: `@page { size: a4 landscape; margin: 12mm }`, card at `top: 0 / left: 0`,
+  on-screen header and both `data-print-hide` control groups `display: none`, scale pinned
+  small on paper, paper-only title and restatement lines present.
 
 ## Dependencies
 
