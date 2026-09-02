@@ -26,6 +26,7 @@ import type { BlendProposal } from '../blocking/actions';
 // them WITHOUT pulling jsPDF into the bundle. Re-exported here for back-compat + the
 // node/test path.
 import { sanitizeLabel, composeBlendPdfFilename } from './blend-proposal-filename';
+import { blendVersionLine, type BlendDocMeta } from './print-utils';
 
 export { sanitizeLabel, composeBlendPdfFilename };
 
@@ -67,18 +68,24 @@ const LAB_KEYS: { key: keyof BlendProposal['weighted']; label: string }[] = [
  * with the server `can_view_prices` gate — hide-only, defaults to `true`. When false, the
  * PDF carries NO ₱ anywhere (per-block PHP/KG column, raw price, product cost, formula).
  */
-export function buildBlendPdf(proposal: BlendProposal, showPricesPref = true, date: Date = new Date()): jsPDF {
+export function buildBlendPdf(
+  proposal: BlendProposal,
+  showPricesPref = true,
+  date: Date = new Date(),
+  meta?: BlendDocMeta | null,
+): jsPDF {
   const showPrices = proposal.can_view_prices && showPricesPref && proposal.raw_price_per_kg !== null;
 
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
   const marginX = 40;
   let y = 48;
 
-  // ── Title ──
+  // ── Title — the proposal's own name when it has one, else the generic heading ──
+  const heading = (meta?.title ?? '').trim() || 'Blend Proposal';
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(18);
   doc.setTextColor(0, 0, 0);
-  doc.text('Blend Proposal', marginX, y);
+  doc.text(heading, marginX, y);
 
   // ── Subtitle: date + block count + combined balance ──
   y += 18;
@@ -89,6 +96,29 @@ export function buildBlendPdf(proposal: BlendProposal, showPricesPref = true, da
     proposal.block_count === 1 ? '' : 's'
   }  -  ${fmtKg(proposal.total_balance)} kg combined balance`;
   doc.text(subtitle, marginX, y);
+
+  // ── Saved-version line: `v3 - as proposed 2026-09-02` ──
+  // The snapshot's OWN date, never the print clock: the document says when the yard
+  // looked like this. Absent for a live what-if, which prints exactly as before.
+  const versionLine = blendVersionLine(meta).replace(/ · /g, ' - ');
+  if (versionLine) {
+    y += 13;
+    doc.setFontSize(9);
+    doc.text(versionLine, marginX, y);
+  }
+
+  // ── The REMARK, wrapped ──
+  const remark = (meta?.notes ?? '').trim();
+  if (remark) {
+    y += 13;
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(9);
+    const lines = doc.splitTextToSize(remark, 760) as string[];
+    doc.text(lines, marginX, y);
+    y += (lines.length - 1) * 11;
+    doc.setFont('helvetica', 'normal');
+  }
+
   y += 18;
 
   // ── Summary ──
@@ -231,11 +261,16 @@ export function buildBlendPdf(proposal: BlendProposal, showPricesPref = true, da
  * `showPricesPref` is the client display preference (hide-only, ANDed with the server
  * gate inside `buildBlendPdf`). When false the saved PDF carries NO ₱.
  */
-export function downloadBlendPdf(proposal: BlendProposal, label: string, showPricesPref = true): void {
+export function downloadBlendPdf(
+  proposal: BlendProposal,
+  label: string,
+  showPricesPref = true,
+  meta?: BlendDocMeta | null,
+): void {
   const filename = composeBlendPdfFilename(label);
   if (!filename) {
     throw new Error('A label is required to name the PDF.');
   }
-  const doc = buildBlendPdf(proposal, showPricesPref);
+  const doc = buildBlendPdf(proposal, showPricesPref, new Date(), meta);
   doc.save(filename);
 }

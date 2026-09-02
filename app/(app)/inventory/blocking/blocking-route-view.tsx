@@ -4,8 +4,19 @@ import { useCallback, useEffect, useOptimistic, useRef, useState, useTransition 
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { BlockingGrid } from './blocking-grid';
-import { fetchBlockingGridData, fetchBlockingSupplierMap } from './actions';
-import type { BlockingGridData, BlockingSupplierMap } from './types';
+import {
+    fetchBlockingGridData,
+    fetchBlockingSupplierMap,
+    fetchBlendProposalVersion,
+    fetchBlendProposalVersions,
+} from './actions';
+import type {
+    BlockingGridData,
+    BlockingSupplierMap,
+    BlendProposalVersionSummary,
+    SavedBlendProposal,
+} from './types';
+import { errorToast } from '@/lib/toast';
 import type { BlockingDetailNavTarget } from '../_shared/blocking-detail-panel';
 
 /**
@@ -111,6 +122,90 @@ export function BlockingRouteView() {
         [router, pathname, searchParams, setOptimisticSupplier],
     );
 
+    // ── URL-driven SAVED blend proposal (`?proposal=<id>&v=<n>`) ──
+    // Same shape again, with one difference: `proposal` and `v` are written TOGETHER, so
+    // switching proposals can never leave a version number from the previous one behind
+    // (which would ask the server for a version that does not exist on this proposal).
+    const urlProposal = searchParams.get('proposal');
+    const urlVersionRaw = searchParams.get('v');
+    const [selectedProposal, setOptimisticProposal] = useOptimistic(urlProposal);
+    const [selectedVersion, setOptimisticVersion] = useOptimistic(urlVersionRaw);
+
+    const handleProposalLinkChange = useCallback(
+        (proposalId: string | null, versionNo?: number | null) => {
+            const params = new URLSearchParams(searchParams.toString());
+            if (proposalId) params.set('proposal', proposalId);
+            else params.delete('proposal');
+            if (proposalId && versionNo != null) params.set('v', String(versionNo));
+            else params.delete('v');
+            const qs = params.toString();
+            startTransition(() => {
+                setOptimisticProposal(proposalId);
+                setOptimisticVersion(proposalId && versionNo != null ? String(versionNo) : null);
+                router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+            });
+        },
+        [router, pathname, searchParams, setOptimisticProposal, setOptimisticVersion],
+    );
+
+    // A junk `?v=` is treated as ABSENT (open the current version instead) rather than as
+    // version 0 — a deep link someone hand-edited should still show something.
+    const parsedVersion = selectedVersion === null ? null : Number.parseInt(selectedVersion, 10);
+    const proposalVersion =
+        parsedVersion !== null && Number.isFinite(parsedVersion) && parsedVersion > 0 ? parsedVersion : null;
+
+    // ── Resolving `?proposal=&v=` into a saved version ──
+    // The route owns the params, so the route owns turning them into data — the same
+    // division `?block=` and the supplier map already follow. It keeps the grid a
+    // component that RENDERS a saved proposal rather than one that goes and finds it.
+    const [savedProposal, setSavedProposal] = useState<SavedBlendProposal | null>(null);
+    const [savedVersions, setSavedVersions] = useState<BlendProposalVersionSummary[]>([]);
+    const [savedLoading, setSavedLoading] = useState(false);
+
+    // The writer lives in a ref, NOT in the effect's deps: it is rebuilt whenever ANY
+    // search param moves, so depending on it would refetch the proposal every time an
+    // unrelated param changed.
+    const proposalLinkRef = useRef(handleProposalLinkChange);
+    useEffect(() => {
+        proposalLinkRef.current = handleProposalLinkChange;
+    }, [handleProposalLinkChange]);
+
+    useEffect(() => {
+        if (!selectedProposal) {
+            setSavedProposal(null);
+            setSavedVersions([]);
+            return;
+        }
+        let cancelled = false;
+        (async () => {
+            setSavedLoading(true);
+            try {
+                // Versions first: they are the rail AND the fallback when `?v=` is absent.
+                const versions = await fetchBlendProposalVersions(selectedProposal);
+                if (cancelled) return;
+                const target =
+                    proposalVersion ??
+                    versions.find((v) => v.isCurrent)?.versionNo ??
+                    (versions.length ? Math.max(...versions.map((v) => v.versionNo)) : 1);
+                // THE ONE price-bearing read in the feature — gated server-side.
+                const res = await fetchBlendProposalVersion(selectedProposal, target);
+                if (cancelled) return;
+                if (!res.ok) {
+                    errorToast('Could not open that proposal', { description: res.message });
+                    proposalLinkRef.current(null);
+                    return;
+                }
+                setSavedVersions(versions);
+                setSavedProposal(res.proposal);
+            } finally {
+                if (!cancelled) setSavedLoading(false);
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [selectedProposal, proposalVersion]);
+
     // Toggle semantics: clicking the open block clears it; clicking another switches.
     const handleSelectBlock = useCallback(
         (locKey: string) => {
@@ -166,6 +261,11 @@ export function BlockingRouteView() {
                 supplierMap={supplierMap}
                 supplierFilter={selectedSupplier}
                 onSupplierFilterChange={handleSupplierChange}
+                proposalId={selectedProposal}
+                savedProposal={savedProposal}
+                savedVersions={savedVersions}
+                savedLoading={savedLoading}
+                onProposalLinkChange={handleProposalLinkChange}
             />
         </div>
     );
