@@ -20,6 +20,7 @@ Captures incoming raw charcoal deliveries. Dense Excel-like grid with paste supp
 | `paste-utils.ts` | 47 | Column mapping and cell value cleaning (imports `parseExcelDate` from `@/lib/paste-utils`) |
 | `delivery-grid-v2.tsx` | ~800 | RC IN on the **Blackwood Table** (`?grid=v2`) — the second, EDITABLE rendering built beside the live table. See the dedicated section at the bottom of this file. |
 | `rc-in-grid-v2-save.ts` | ~450 | **PURE** edit + save model for `delivery-grid-v2.tsx` — the field vocabulary, canonical cell text, the per-field verdict, the whole-row payload builders and the lab-panel assembly. No React, no Supabase, no server actions. Asserted by `scripts/verify-rc-in-grid.ts` (33 assertions). |
+| `components/delivery-search.tsx` | ~190 | **NEW (2026-09-02).** The v2 grid's `?search=` box — the live table's control, rebuilt as its SIBLING rather than extracted from it. Exports `DeliverySearch`, `DELIVERY_SEARCH_DEBOUNCE_MS` (300) and `DELIVERY_SEARCH_PLACEHOLDER`. Mounted only by `delivery-grid-v2.tsx`; `delivery-master-table.tsx` is untouched. See the search section at the bottom of this file. |
 | `components/DeliveryHistoryDialog.tsx` | 561 | Delivery history + audit trail dialog |
 | `components/audit-shared.tsx` | 87 | Shared audit display utilities |
 | ~~`edit/[auditLogId]/`~~ | — | **Moved** to `app/(app)/edit/[auditLogId]/` (standalone route outside inventory layout) |
@@ -243,7 +244,64 @@ A SECOND rendering of the same `DeliveryHistoryRow[]` `page.tsx` already fetches
 
 **Month group headings** are rendered through `renderChromeRow` (label · delivery count · kg · ₱), with a real blank spacer row at each month boundary. The sticky totals rule-off is ALWAYS shown, where the live table shows its TOTALS footer only when a filter is active.
 
-**Still not built:** search, the year dropdown + month strip (`DeliverySheetFooter`), the STATE/Supplier/LOC header filters and their `?sx=`/`?sup=`/`?loc=`/`?m=` URL persistence, the "All Years" auto-switch and pre-filter date restore, the Columns popover, the Settings dialog, the density toggle, Delete / Refresh, row-selection mode, the row context menu, `DeliveryHistoryDialog`, `TrueWeightPopover` (the Σ deduction marker), the `?editBatch=` deep link, expanded-mode annotations, per-column bold/italic/underline, and the mobile card layer. Because there is no month filter, **v2 shows the whole `?year=` scope at once** while the live table opens on the current month. Where a behaviour is not built this file renders NOTHING rather than a control that looks alive and does nothing.
+### The SEARCH box (2026-09-02) — `components/delivery-search.tsx`
+
+Renzo: *"The new v2 table doesn't have that same search bar found in the original table we
+made for it. Migrate/copy that feature into our new current v2 table. It's very very
+useful."* It is now the first control in the v2 strip, ahead of the `grid=v2` badge's prose.
+
+**It is a NEW FILE, not an extraction, and that was a decision.** The brief allowed lifting
+the live control into a component shared by both tables *only if the lift were pure*.
+It is not: the live control carries a `{filteredData.length} found` badge counting
+CLIENT-side filtered rows (a concept the v2 grid does not have), and it has neither a clear
+(×) affordance nor an Escape handler — both of which this pass adds. Any one of those makes
+the change behavioural, and `delivery-master-table.tsx` is production and is **still not
+edited by one character**. So the live table stands exactly as it was and this is its
+sibling: the things that matter are reproduced verbatim, and the two additions write the
+same param the same way.
+
+**Reproduced verbatim from the live control:** the placeholder
+(`Search supplier, batch, truck...`), the lucide `Search` icon and its position, the
+**300 ms** debounce, and `createQueryString` — a full copy of the current query with only
+`search` set or deleted.
+
+| Behaviour | Where it is decided |
+|---|---|
+| **The query** | `page.tsx` — `?search=` swaps the year-bounded fetch for an `ilike` across **supplier · batch_code · truck_plate · block_loc**. Unchanged by this pass. |
+| **All Years** | `page.tsx` too. A search drops the date bound and `shownYear` resolves to `PERIOD_ALL`, so the picker goes inert and reads *All years*. **The control never touches `?year=`** — the live table does not either — so the year in the URL is carried across untouched by `createQueryString` and comes back into force the moment the search clears. There is no "restore" to write, because nothing was thrown away. |
+| **The status line** | `delivery-grid-v2.tsx` — the SAME slot that prints `{period} · N rows`, so the count never moves. Under a search it reads the live table's sentence verbatim: *Found **6** results for "**ORNALES**" in **All Years***. |
+| **Clear** | A `×` inside the input (right edge), shown only when the box has text. It bypasses the debounce and pushes immediately, then re-focuses the box. |
+| **Escape** | Bound on the **input only**, never on the document, so Escape inside the sheet still means *revert this cell*. A non-empty box clears; an empty one blurs. `stopPropagation` so nothing else sees it. |
+| **No `/`, no Cmd/Ctrl+K** | The live table binds neither, so neither is bound here. The Blackwood Table's keyboard space is the sheet's — a printable character types over the active cell — and a global `/` would steal it. |
+
+**THE URL IS THE ONLY CHANNEL, and there must never be a second one.** No client-side
+predicate filters the returned rows. A local "matches" would be a second definition of the
+server's `ilike`, and the day the two disagree the sheet hides a row the server
+deliberately found.
+
+**Two guards that were already there and still hold:** blank draft rows are off under a
+search (`showDrafts`), which through `drafts.enabled` also switches off
+paste-grows-the-sheet — a search is a CUT of history and a new delivery does not belong at
+the end of a cut; and **Save does not navigate**, it is `router.refresh()`, so a save made
+while a search is active leaves the search exactly where it was (measured: Save enables
+under a search, `?search=` untouched). `activeSearch` is now read ONCE at the top of the
+component and shared by the draft rule, the status line and the empty state, so no two of
+them can disagree about whether a search is in force.
+
+Two small implementation notes. The component carries **its own `React.Suspense`
+boundary** (`useSearchParams`), the same shape `PeriodPicker` uses, with the control at
+rest as the fallback so the strip never reflows. A `pushedRef` remembers the last value
+handed to `router.push`, so the debounce and the × cannot push the same query twice while a
+navigation is in flight — one gesture, one history entry. It is marked `data-grid-chrome`;
+the strip is a sibling of the table rather than a descendant, so no keystroke here reaches
+the sheet today, and the marker is what keeps that true if the strip ever moves into a
+toolbar slot. `router.push` passes `{ scroll: false }` — the rows are replaced in place, and
+a sheet that jumps to the top mid-keystroke is one you cannot read while typing.
+
+**Empty state under a search** says *No deliveries match "X" in any year.* rather than
+naming the period, because under a search the period is not why the sheet is empty.
+
+**Still not built:** the year dropdown + month strip (`DeliverySheetFooter`), the STATE/Supplier/LOC header filters and their `?sx=`/`?sup=`/`?loc=`/`?m=` URL persistence, the "All Years" auto-switch and pre-filter date restore, the Columns popover, the Settings dialog, the density toggle, Delete / Refresh, row-selection mode, the row context menu, `DeliveryHistoryDialog`, `TrueWeightPopover` (the Σ deduction marker), the `?editBatch=` deep link, expanded-mode annotations, per-column bold/italic/underline, and the mobile card layer. Because there is no month filter, **v2 shows the whole `?year=` scope at once** while the live table opens on the current month. Where a behaviour is not built this file renders NOTHING rather than a control that looks alive and does nothing.
 
 ## See Also
 - [Blackwood Table — the universal table module](../../../../lib/table/CONTEXT.md) — the port (`ColumnSpec` / `RowKind.occupies` / `TableSettings`), the React half, and the `?grid=v2` recipe `delivery-grid-v2.tsx` follows.

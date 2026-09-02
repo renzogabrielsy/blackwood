@@ -51,6 +51,7 @@ import {
 import { cn } from '@/lib/utils';
 
 import { bulkUpdateDeliveries, submitBulkDeliveries } from './actions';
+import { DeliverySearch } from './components/delivery-search';
 import {
     LAB_DECIMALS,
     LAB_FIELDS,
@@ -823,9 +824,17 @@ export function DeliveryGridV2(props: DeliveryGridV2Props) {
     const rowHeight = settings.densityMode === 'expanded' ? 48 : 32;
     const kinds = React.useMemo(() => buildKinds(rowHeight), [rowHeight]);
 
+    /**
+     * The `?search=` the SERVER acted on — never the text in the box, which is still being
+     * typed. ONE reading, shared by the draft rule below, the strip's status line and the
+     * empty state, so no two of them can disagree about whether a search is in force.
+     */
+    const activeSearch = props.search ?? '';
+
     // The blank rows exist only where a blank row MEANS something. A search is a CUT of
-    // history and a new delivery does not belong at the end of a cut.
-    const showDrafts = ctx.canEdit && !(props.search ?? '').trim();
+    // history and a new delivery does not belong at the end of a cut. This also switches
+    // off paste-grows-the-sheet, via `drafts.enabled` on the table below.
+    const showDrafts = ctx.canEdit && !activeSearch.trim();
     const [draftIds, setDraftIds] = React.useState<string[]>(() => makeDraftIds(DEFAULT_DRAFT_ROWS));
 
     const { items, months, grand } = React.useMemo(
@@ -1149,15 +1158,39 @@ export function DeliveryGridV2(props: DeliveryGridV2Props) {
                 <span className="rounded-sm border border-amber-500/40 px-1 font-medium text-amber-600 dark:text-amber-400">
                     grid=v2
                 </span>
+                {/* The search box — the live table's control, the live table's `?search=`.
+                    It writes ONE param and nothing else; the rows it returns are the
+                    server's `ilike` across supplier · batch · truck · block, so there is
+                    no client-side predicate that could disagree with it. */}
+                <DeliverySearch search={props.search} />
+
                 <span>
-                    RC IN on the Blackwood Table — typing, saving, new rows, the Year + Month picker above, the
-                    right-click menu, the selection summary and column resize are live; the toolbar, filters,
-                    the row menu, delete and cell autocomplete are not built yet.{' '}
+                    RC IN on the Blackwood Table — typing, saving, new rows, search, the Year + Month picker
+                    above, the right-click menu, the selection summary and column resize are live; the rest of
+                    the toolbar, the column filters, the row menu, delete and cell autocomplete are not built
+                    yet.{' '}
                     <strong className="font-semibold">Classic</strong> above returns to the live table.
                 </span>
-                <span className="font-mono tabular-nums">
-                    {periodLabel} · {grand.count} row{grand.count === 1 ? '' : 's'}
-                </span>
+
+                {/* The row summary — the SAME slot either way, so the sheet's count never
+                    moves. Under a search it is the live table's sentence verbatim, and it
+                    says **All Years** because a search drops the date bound in `page.tsx`
+                    and spans every year (the `?year=` in the URL is untouched and returns
+                    the moment the search clears). */}
+                {activeSearch ? (
+                    <span className="font-mono tabular-nums">
+                        Found <span className="font-semibold text-foreground">{grand.count}</span> result
+                        {grand.count === 1 ? '' : 's'} for &ldquo;
+                        <span className="font-semibold text-foreground">{activeSearch}</span>&rdquo; in{' '}
+                        <span className="font-semibold text-foreground">
+                            {periodYear === PERIOD_ALL ? 'All Years' : periodYear}
+                        </span>
+                    </span>
+                ) : (
+                    <span className="font-mono tabular-nums">
+                        {periodLabel} · {grand.count} row{grand.count === 1 ? '' : 's'}
+                    </span>
+                )}
 
                 {/* The blank rows' seeded date, SAID OUT LOUD. A `format` runs against the
                     stored row and a blank row has none, so a muted per-row default has
@@ -1226,10 +1259,15 @@ export function DeliveryGridV2(props: DeliveryGridV2Props) {
                 rowClassFor={rowClassFor}
                 renderChromeRow={renderChromeRow}
                 summaryRows={summaryRows}
-                // The period is NAMED in the empty state. "No deliveries" over a sheet
-                // that is empty only because a month was picked reads as missing data;
-                // "No deliveries in July 2026" reads as an answer.
-                emptyMessage={`No deliveries in ${periodLabel}.`}
+                // The reason the sheet is empty is NAMED. "No deliveries" over a sheet that
+                // is empty only because a month was picked — or because a search matched
+                // nothing — reads as missing data; naming the period, or the term that was
+                // searched for, reads as an answer.
+                emptyMessage={
+                    activeSearch
+                        ? `No deliveries match “${activeSearch}” in any year.`
+                        : `No deliveries in ${periodLabel}.`
+                }
                 className="min-h-0 flex-1"
             />
 
