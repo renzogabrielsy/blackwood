@@ -14,7 +14,7 @@ Physical warehouse grid visualization — the digital equivalent of the Excel bl
 |---|---|
 | `types.ts` | Shared interfaces: **`BlockSupplierShare`** (`{ supplierKey; supplierDisplay; kg; sharePct; deliveryCount }` — one supplier's contribution to one block) and **`BlockingSupplierMap`** (`{ suppliers: Array<{ key; display; blockCount; totalKg }>; byBlock: Record<block_loc, { supplierCount; shares: BlockSupplierShare[] }> }` — the supplier-search payload; `supplierCount` is the VIEW's `supplier_count_in_block`, never `shares.length`, and the whole shape carries NO ₱). Plus `BlockData` (single cell data; `status` is the widened `BlockStatus` = the 4 styled statuses **or** any string, so the RC Movement panel can render a historical CLOSED/FEED batch), `BlockStatus`, `BlockingGridData` (full grid payload with aggregates), `BlockDataForBatch` (`{ blockData: BlockData \| null; canViewPrices }` — return of `fetchBlockDataForBatch`), `DeliveryHistoryRecord` (includes `id`, `mc`, `bd_astm`, `ash`, `cost_basis`), `UsageHistoryRecord`, `BlockingDetailData` (detail panel payload), `FullDeliveryRecord` (full delivery for edit dialog; **`cost_basis: number \| null`** — `null` when role-gated/withheld for non-price-viewers). **Stays in `blocking/`** (tenant domain types); the shell-agnostic detail panel in `_shared/` imports these via `../blocking/types`. |
 | `constants.ts` | `WarehouseConfig` interface (`cols`, `colStart`, `rows`), `WAREHOUSES` constant (A/B/C/D + PCA/PCB), and `STANDARD_WAREHOUSES` (`['A','B','C','D']` — the 220-slot baseline). `colStart` lets PCA/PCB render columns 15-17 with correct labels and `locKey` math |
-| `actions.ts` | Server actions (all price gating now via the canonical `roleCanViewPrices(role)` / `canViewPrices()` from `@/lib/auth` — DUP-2 replaced the former inline `role !== 'Production'` compares): `fetchBlockingGridData()` (queries `view_blocking_grid`, returns grid data with role-gated PHP/KG), **`fetchBlockingSupplierMap(): Promise<BlockingSupplierMap>`** (the supplier-search data layer — reads `view_blocking_block_suppliers` ONCE and folds it into `{ suppliers, byBlock }`; **does NO aggregation** — every kg, share and count comes out of SQL, and the ALL/SOME test is the view's `supplier_count_in_block`; **NOT price-gated on purpose** — the view carries no ₱ column and none derivable, so the payload is safe for Production; failures return an empty map and log, never throw), `fetchBlockingDetail(batchCode, batchId)` (fetches delivery + usage history with delivery IDs + lab results (mc/bd_astm/ash), batch notes, and avg_cost for a specific batch), **`fetchBlockDataForBatch(batchId)`** (batch-accurate `BlockData` header summary for ONE batch_id — queries `batches` + `deliveries` + `rc_out`, **no status/loc filter**, weighted-avg php+lab and `balance = total_in − total_out`, role-gated php; used by the **RC Movement matrix** so it can open the panel for a historical/closed batch that `view_blocking_grid` omits), `fetchSingleDelivery(deliveryId)` (fetches full delivery record for edit dialog and info dialog; **`cost_basis` is role-gated** — resolves the effective role via `getUserRole()` and only includes it for `roleCanViewPrices(role)`, else returns `cost_basis: null` so a Production user never receives the price through the panel's edit/info path; `FullDeliveryRecord.cost_basis` is therefore `number \| null`), `updateBlockNotes(batchId, notes)` (updates `batches.notes`, calls `revalidatePath('/inventory')`), **`buildBlendProposal(blockLocs: string[]): Promise<BlendProposal>`** (Blend Proposal mode — given selected block_locs, queries `view_blocking_grid` for the per-block passthrough rows + calls the `fn_blend_proposal` SQL RPC for the balance-weighted lab/price aggregation; TS does only the ×1.30 product-cost markup; **price-gated via `canViewPrices()`** — nulls `php_kg`/`raw_price_per_kg`/`product_cost_per_kg` and sets `can_view_prices: false` for Production BEFORE returning). **Exports the `BlendProposal` + `BlendProposalBlock` interfaces** (co-located with the action — consumer seam is `import { BlendProposal } from '.../blocking/actions'`) |
+| `actions.ts` | Server actions (all price gating now via the canonical `roleCanViewPrices(role)` / `canViewPrices()` from `@/lib/auth` — DUP-2 replaced the former inline `role !== 'Production'` compares): `fetchBlockingGridData()` (queries `view_blocking_grid`, returns grid data with role-gated PHP/KG), **`fetchBlockingSupplierMap(): Promise<BlockingSupplierMap>`** (the supplier-search data layer — reads `view_blocking_block_suppliers` ONCE and folds it into `{ suppliers, byBlock }`; **does NO aggregation** — every kg, share and count comes out of SQL, and the ALL/SOME test is the view's `supplier_count_in_block`; **NOT price-gated on purpose** — the view carries no ₱ column and none derivable, so the payload is safe for Production; failures return an empty map and log, never throw), `fetchBlockingDetail(batchCode, batchId)` (fetches delivery + usage history with delivery IDs + lab results (mc/bd_astm/ash), batch notes, and avg_cost for a specific batch), **`fetchBlockDataForBatch(batchId)`** (batch-accurate `BlockData` header summary for ONE batch_id — queries `batches` + `deliveries` + `rc_out`, **no status/loc filter**, weighted-avg php+lab and `balance = total_in − total_out`, role-gated php; used by the **RC Movement matrix** so it can open the panel for a historical/closed batch that `view_blocking_grid` omits), `fetchSingleDelivery(deliveryId)` (fetches full delivery record for edit dialog and info dialog; **`cost_basis` is role-gated** — resolves the effective role via `getUserRole()` and only includes it for `roleCanViewPrices(role)`, else returns `cost_basis: null` so a Production user never receives the price through the panel's edit/info path; `FullDeliveryRecord.cost_basis` is therefore `number \| null`), `updateBlockNotes(batchId, notes)` (updates `batches.notes`, calls `revalidatePath('/inventory')`), **`buildBlendProposal(blockLocs: string[]): Promise<BlendProposal>`** (Blend Proposal mode — given selected block_locs, queries `view_blocking_grid` for the per-block passthrough rows + calls the `fn_blend_proposal` SQL RPC for the balance-weighted lab/price aggregation; TS does only the ×1.30 product-cost markup; **price-gated via `canViewPrices()`** — nulls `php_kg`/`raw_price_per_kg`/`product_cost_per_kg` and sets `can_view_prices: false` for Production BEFORE returning). **Exports the `BlendProposal` + `BlendProposalBlock` interfaces** (co-located with the action — consumer seam is `import { BlendProposal } from '.../blocking/actions'`). **2026-09-02 — the ×1.30 markup no longer lives here**: `buildBlendProposal` reads `production_loss_pct` from the SQL `fn_blend_production_loss_pct()` RPC (same `Promise.all`, no added latency) so the live what-if and a SAVED snapshot can never disagree about it; output is byte-identical (`raw * (1 + 30/100) === raw * 1.3` verified in IEEE-754). **Also adds the seven BLEND PROPOSAL HISTORY actions** — `saveBlendProposal`, `updateBlendProposalHeader`, `archiveBlendProposal`, `restoreBlendProposal`, `fetchBlendProposalList`, `fetchBlendProposalVersions`, `fetchBlendProposalVersion` — see **Data → Blend Proposal HISTORY** below |
 | `page.tsx` | **Standalone route entry (`/inventory/blocking`).** Server component — renders `<BlockingRouteView>` inside a `<Suspense>` (the route view uses `useSearchParams`). Replaced the old "Coming soon" stub. |
 | `blocking-route-view.tsx` | **NEW. Standalone-route host.** Client component owning the grid fetch / loading / error / Retry (repurposed from the deleted `blocking-lazy-tab`) — which now runs `fetchBlockingGridData()` and **`fetchBlockingSupplierMap()` in ONE `Promise.all`** (independent reads of two views; serializing would add the supplier round-trip to time-to-paint, and a failed supplier read returns an empty map by contract so it is never fatal) — the `?block=` URL selection (read via `useSearchParams`, toggled via `router.replace`), and the `onNavigateToBatch` wiring (`router.push('/inventory?tab=deliveries\|usage&search=…&editBatch=…&editView=deliveries\|usage')` — **`editView` discriminates which always-mounted table consumes `editBatch`**, see the editView deep-link contract under Key Behaviors). SHELL-AGNOSTIC — does NOT use `useInventoryTab`. Renders `<BlockingGrid>` controlled. |
 | `supplier-search.tsx` | **NEW. The supplier search bar** (`BlockingSupplierSearch` + the `ActiveSupplierSummary` interface it takes). A **cmdk combobox** (shadcn `Command`/`CommandInput`/`CommandList`/`CommandItem`) whose suggestion list is an **absolutely-positioned panel, NOT a `Popover`** — the input stays the focus target, so nothing fights the sticky header for focus and no trap is created. Keyboard-first: typing filters, ↑/↓ moves, **Enter picks the highlighted suggestion**, and **Escape steps BACK one rung at a time** (clear the query → close the list → return to the chip); the Escape handler `stopPropagation`s so stepping back through the search never also closes the detail panel (which listens on the document). Filtering is a **case-insensitive SUBSTRING** match via a custom `filter` prop — deliberately not cmdk's fuzzy scorer — over a value that carries BOTH the canonical key and the display spelling, with a prefix hit outranking a mid-string one. Each suggestion reads `<display>` + a muted `N blocks · X t`. With a supplier active the bar renders an **emerald chip** — `Ornales · 9 blocks (all 5 · some 4)` — whose label re-opens the search and whose `×` clears the filter. Presentational only: it owns no filter state (the grid/route do) and does no aggregation. |
@@ -90,6 +90,123 @@ Physical warehouse grid visualization — the digital equivalent of the Excel bl
 **BlockData fields:**
 - `batch_code`, `batch_id`, `status` (`BlockStatus` — the 4 grid-styled statuses 'STORED' | 'IN-USE' | 'SUNDRYING' | 'SUNDRIED', widened to also accept any string so the RC Movement panel can show a historical CLOSED/FEED batch; the grid narrows it back to `CellStatus` via a safe cast since `view_blocking_grid` only emits the 4), `balance`, `total_in`, `php`
 - Lab results: `mc`, `ash`, `bd_astm`, `bd_jis`, `grit`, `vm`, `fc`
+
+### Blend Proposal HISTORY — DATA LAYER (2026-09-02, migration `20260902160452_blend_proposal_history`)
+
+> **Backend only.** The tables, RPCs, views, server actions and types below are LIVE; the UI
+> (a Proposals dialog, a version rail, Modify, Compare-with-today) is a later pass. Nothing on
+> the Blocking page calls these yet. Plan: `.agents/plans/blend-proposal-history-plan.md`.
+
+**THE ONE FACT THAT SHAPES IT.** A proposal is a statement about the yard *on a particular day*.
+Balances fall as charcoal is fed, a `block_loc` is reused when a batch empties, lab averages move
+as deliveries land. So a version stores **BOTH**: `blocks` (the block list keyed by **`batch_id`** —
+the modifiable half, and the identity a later Modify resolves against) and `snapshot` (what the
+DATABASE computed at save time — the immutable half, what was actually proposed).
+
+**Tables**
+- **`public.blend_proposals`** — the mutable header: `id`, `title` (NOT NULL, non-blank CHECK),
+  **`notes` (THE REMARK — Renzo's explicit requirement: every proposal carries a title AND a
+  remark; optional in value, first-class in the model, present in both read models and editable
+  through the header patch)**, `status` (`draft | planned | fed`), `fed_on`,
+  `current_version_no` (the compare-and-set token for APPENDING), `row_version` (the
+  compare-and-set token for HEADER edits, bumped by `tr_blend_proposals_touch` →
+  `fn_touch_blend_proposal`), soft `archived_at`/`archived_by`, `created_at`/`created_by`
+  (**no `ON DELETE` clause** — a profile that authored a plan cannot be deleted out from under
+  it), `updated_at`/`updated_by`. A CHECK ties `status = 'fed'` **if and only if** `fed_on IS NOT
+  NULL`, so the label and the date can never disagree.
+- **`public.blend_proposal_versions`** — APPEND-ONLY history: `proposal_id` (FK **ON DELETE
+  RESTRICT**), `version_no` (UNIQUE with `proposal_id`), `blocks`, `snapshot`, `snapshot_hash`,
+  `change_note`, `parent_version_no`, `created_at`/`created_by`. **TWO INDEPENDENT LOCKS** (the
+  `sync_finding_acks` idiom): no UPDATE/DELETE privilege for any client role, **and** RLS with
+  SELECT + INSERT policies and **no update or delete policy at all** — so a future blanket
+  `GRANT … ON ALL TABLES IN SCHEMA public` still cannot rewrite history. The INSERT policy is
+  `WITH CHECK (created_by = auth.uid())`, so authorship is verified by the database.
+- **No hard delete anywhere** — no delete RPC, no DELETE grant, no DELETE policy on either table.
+  Archive/restore is the only removal, and the pair ships together because a soft delete you
+  cannot undo is not reversibility.
+- `service_role` holds **nothing** on either table (the sync worker neither reads nor writes them).
+
+**The snapshot is computed in SQL, never accepted from a client.** `fn_blend_proposal_snapshot`
+builds it from `view_blocking_grid` + `fn_blend_proposal()`, lifting every weighted average
+**verbatim** so a saved version can never disagree with the live modal. Its shape is exactly the
+TypeScript `BlendProposal` interface plus `blocks[].batch_id` and `computed_at`;
+`can_view_prices` is deliberately NOT stored (it is a fact about the READER, set per call by the
+action). **`fn_blend_production_loss_pct()` now owns the ×1.30 markup** — the constant moved out
+of TypeScript because the stored product cost has to be the number the operator saw;
+`buildBlendProposal` reads it back in the same `Promise.all` as its other two queries, so there
+is ONE definition and no added latency.
+
+**`snapshot_hash` — the idempotency key, and it CANNOT contain a ₱.** `fn_blend_snapshot_hash`
+builds a canonical object by **explicit allowlist**, so `php_kg`, `raw_price_per_kg` and
+`product_cost_per_kg` are structurally absent rather than filtered out (a runtime guard on the
+KEY NAMES — never on the data, so a batch code can't trip it — raises if a money key ever gets
+added). Numbers round to 6 dp so an upstream scale change can't masquerade as a changed blend,
+and `computed_at` is excluded so the clock alone never invents a version. **Stated consequence:
+a change to PRICE ALONE writes no new version** — a version is identified by which blocks were
+proposed and what physical/lab state they were in, not by what they cost.
+
+**RPCs** (all SECURITY INVOKER, `SET search_path = public`, EXECUTE revoked from `PUBLIC` + `anon`,
+granted to `authenticated` — the audience is every signed-in user, the same as building a proposal
+today; ₱ is gated by `canViewPrices()` at the action, not by role here). **A business refusal is
+returned as jsonb `{ok:false, reason, message}` written for a human — never a raise.**
+- **`fn_save_blend_proposal(p_title, p_block_locs, p_proposal_id, p_expected_version_no, p_change_note, p_notes)`**
+  — creates header + v1, or appends `current_version_no + 1` **with the guard inside the UPDATE's
+  own WHERE** (never read-then-write). Refuses a blank title, an empty block list, a `block_loc`
+  not on the grid (**naming it**), an archived proposal, and a stale or missing version token.
+  An identical re-save returns `unchanged:true` and writes no row. `title` and a non-null `notes`
+  ride along on an append so a "Save as v4" that also fixed a typo doesn't silently drop the rename.
+- **`fn_update_blend_proposal_header(p_id, p_expected_row_version, p_patch)`** — allowlist
+  `title, status, fed_on, notes`; a key outside it refuses the WHOLE call; compare-and-set on
+  `row_version` in the same statement; `fed` requires `fed_on`, any other status clears it.
+- **`fn_archive_blend_proposal(p_id, p_expected_row_version)` / `fn_restore_blend_proposal(...)`**
+  — soft only; archiving something already archived is a no-op, not an error.
+
+**Views** (`security_invoker`, `authenticated` SELECT only, `anon` REVOKEd, **no `service_role`**)
+- **`view_blend_proposal_list`** — one row per proposal (archived included; filter `is_archived`),
+  joined to its CURRENT version: `title`, **`notes`**, `status`, `fed_on`, `current_version_no`,
+  `row_version`, `version_count`, `block_count`, `total_balance_kg`, `w_mc`/`w_ash`/`w_bd_astm`,
+  the current version's change note + timestamps, and both author names.
+- **`view_blend_proposal_versions`** — one row per version (the rail): `is_current`, block count,
+  balance, **all seven** weighted lab stats, `change_note`, `parent_version_no`, `snapshot_hash`,
+  author.
+- **NEITHER VIEW CARRIES A ₱ COLUMN and none is derivable** (asserted: 0 columns match
+  `php|price|cost|peso|amount`), so the proposals list and the version rail are safe for every
+  role including Production. Prices live only inside a version's `snapshot`.
+
+**Server actions** (in `actions.ts`) — `saveBlendProposal({proposalId?, title, notes?, blockLocs,
+expectedVersionNo?, changeNote?})`, `updateBlendProposalHeader(id, expectedRowVersion, patch)`,
+`archiveBlendProposal(id, expectedRowVersion?)`, `restoreBlendProposal(id, expectedRowVersion?)`,
+`fetchBlendProposalList({includeArchived})`, `fetchBlendProposalVersions(proposalId)`,
+`fetchBlendProposalVersion(proposalId, versionNo)`. The read actions degrade to `[]` and log on
+failure (the `fetchBlockingSupplierMap` posture); the writers return `{ok:false, message}` shapes
+meant for `errorToast()` and never throw for a business refusal.
+**`fetchBlendProposalVersion` is the ONE price-bearing read in the feature**: it nulls
+`raw_price_per_kg`, `product_cost_per_kg` and **every** `blocks[].php_kg` and sets
+`can_view_prices:false` BEFORE the payload leaves the server when `!canViewPrices()` — exactly
+what `buildBlendProposal` already does, so the existing dialog renders a saved version with zero
+new gating code.
+
+**Types** (in `types.ts`) — `BlendProposalStatus`, `BlendProposalSummary`,
+`BlendProposalVersionSummary`, **`SavedBlendProposal`** (= `BlendProposal & { proposal_id,
+version_no, title, notes, change_note, created_at, created_by_name, computed_at }`), plus the
+result unions `BlendProposalSaveResult`, `BlendProposalWriteResult`, `BlendProposalVersionResult`.
+`BlendProposalBlock` gained an **optional** `batch_id?: string | null` — present only on a saved
+version, so the live what-if's JSON is unchanged.
+
+**Proofs (measured 2026-09-02 against the live database).** As `authenticated`: UPDATE and DELETE
+on `blend_proposal_versions` and DELETE on `blend_proposals` all raise **SQLSTATE 42501**
+"permission denied"; an INSERT claiming another profile's `created_by` is refused by the RLS
+policy (also 42501). A 3-block proposal (`A-11A`/`A-11B`/`A-11C`, 208,955.00 kg) saved as v1;
+re-saving the same three in a different order returned `unchanged:true` with the **same hash**
+and the version count stayed **1**. A 2-block save with token 99 returned `stale` naming v1; with
+token 1 it wrote **v2**. The v1 snapshot's `block_count`, `total_balance`, all seven weighted
+stats and `raw_price_per_kg` (₱40.151192840563757759) are **exactly equal** to
+`fn_blend_proposal()` for the same locs, `product_cost_per_kg` = raw × 1.30 exactly, and all
+**3 of 3** per-block rows match `view_blocking_grid` field for field including a NULL-safe
+`php_kg`. Archived → save refused with `reason:'archived'`; restored → the same save wrote **v3**.
+`verify-trigger-grants` and `verify-worker-view-grants` both report **zero findings** (4 views).
+The proof proposal `e1c43dbd-5154-4dcf-b51e-e1ce1fae7f60` ("ZZ TEST — blend proposal history
+proof", 3 versions) was **ARCHIVED, not deleted — there is no delete**.
 
 ## State Management
 

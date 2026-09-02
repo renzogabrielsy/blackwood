@@ -1,3 +1,5 @@
+import type { BlendProposal } from './actions';
+
 /**
  * Block statuses the grid actively styles. A batch opened via the RC Movement matrix
  * may carry a historical status (CLOSED/FEED) — represented as the catch-all string so
@@ -136,3 +138,131 @@ export interface BlockingSupplierMap {
 // alongside the `buildBlendProposal` server action that produces them — import them
 // from there. They are co-located with the action because the action is their sole
 // producer and the agreed consumer seam is `import { … } from '.../blocking/actions'`.
+
+// ─── Blend Proposal HISTORY (saved, versioned blends) ────────────────────────
+// The LIVE what-if (`BlendProposal`) still lives in `actions.ts`. The types below
+// describe SAVED proposals, which is a different thing: a proposal is a statement
+// about the yard on a particular day, so a saved version carries BOTH the block
+// list (modifiable, keyed by batch identity) and the snapshot the database computed
+// at save time (immutable — what was actually proposed).
+//
+// This file imports `BlendProposal` from `actions.ts` type-only (see the import at
+// the top); that circular reference is erased at compile time and keeps ONE
+// definition of the modal's shape.
+
+/** Where a proposal sits in its (deliberately small) lifecycle. */
+export type BlendProposalStatus = 'draft' | 'planned' | 'fed';
+
+/**
+ * One row of the Proposals list — `view_blend_proposal_list`.
+ *
+ * PESO-FREE by construction: the list view carries no ₱ column and none is
+ * derivable, so this payload is safe for every role including Production. Prices
+ * live only inside a version snapshot (`SavedBlendProposal`), which is fetched
+ * through the `canViewPrices()`-gated `fetchBlendProposalVersion`.
+ */
+export interface BlendProposalSummary {
+  id: string;
+  title: string;
+  /** The REMARK — free text, always present in the payload (may be null). */
+  notes: string | null;
+  status: BlendProposalStatus;
+  fedOn: string | null;
+  /** The newest version number — ALSO the compare-and-set token for saving. */
+  currentVersionNo: number;
+  /** The compare-and-set token for header edits (rename / status / archive). */
+  rowVersion: number;
+  versionCount: number;
+  blockCount: number | null;
+  totalBalanceKg: number | null;
+  wMc: number | null;
+  wAsh: number | null;
+  wBdAstm: number | null;
+  currentVersionChangeNote: string | null;
+  currentVersionCreatedAt: string | null;
+  isArchived: boolean;
+  archivedAt: string | null;
+  createdAt: string;
+  createdByName: string | null;
+  updatedAt: string;
+  updatedByName: string | null;
+}
+
+/**
+ * One chip on the version rail — `view_blend_proposal_versions`. Also PESO-FREE.
+ */
+export interface BlendProposalVersionSummary {
+  proposalId: string;
+  versionNo: number;
+  isCurrent: boolean;
+  blockCount: number | null;
+  totalBalanceKg: number | null;
+  wMc: number | null;
+  wAsh: number | null;
+  wBdAstm: number | null;
+  wBdJis: number | null;
+  wGrit: number | null;
+  wVm: number | null;
+  wFc: number | null;
+  changeNote: string | null;
+  parentVersionNo: number | null;
+  computedAt: string | null;
+  createdAt: string;
+  createdByName: string | null;
+}
+
+/**
+ * A saved version, in EXACTLY the shape the existing `BlendProposalDialog` renders,
+ * plus who/when/why. Because it extends `BlendProposal`, the modal needs no new
+ * gating code: `can_view_prices` is set per call by the server action, which nulls
+ * `raw_price_per_kg`, `product_cost_per_kg` and every `blocks[].php_kg` BEFORE the
+ * payload leaves the server — the same thing `buildBlendProposal` already does.
+ *
+ * `blocks[].batch_id` rides on each block (added by the SQL snapshot builder) so a
+ * later "Modify" can re-select by BATCH IDENTITY rather than by block_loc, which is
+ * reused when a batch empties.
+ */
+export type SavedBlendProposal = BlendProposal & {
+  proposal_id: string;
+  version_no: number;
+  title: string;
+  /** The proposal-level REMARK. */
+  notes: string | null;
+  /** Why THIS version differs from the one before it. */
+  change_note: string | null;
+  created_at: string;
+  created_by_name: string | null;
+  /** When the database computed these numbers. */
+  computed_at: string | null;
+};
+
+/** Result of `saveBlendProposal`. A business refusal is data, never a throw. */
+export type BlendProposalSaveResult =
+  | {
+      ok: true;
+      proposalId: string;
+      versionNo: number;
+      rowVersion: number;
+      /** true when the blend was identical to the current version — no row written. */
+      unchanged: boolean;
+      message?: string;
+    }
+  | {
+      ok: false;
+      reason: string;
+      message: string;
+      /** Present on `stale` — what the proposal is actually on now. */
+      currentVersionNo?: number;
+      /** Present on `unknown_block` — the block_locs that are no longer on the grid. */
+      blocks?: string[];
+    };
+
+/** Result of the header patch / archive / restore actions. */
+export type BlendProposalWriteResult =
+  | { ok: true; rowVersion: number | null; unchanged: boolean }
+  | { ok: false; reason: string; message: string; rowVersion?: number | null };
+
+/** Result of `fetchBlendProposalVersion`. */
+export type BlendProposalVersionResult =
+  | { ok: true; proposal: SavedBlendProposal }
+  | { ok: false; message: string };

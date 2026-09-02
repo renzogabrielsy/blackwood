@@ -183,6 +183,137 @@ export type Database = {
         }
         Relationships: []
       }
+      blend_proposal_versions: {
+        Row: {
+          blocks: Json
+          change_note: string | null
+          created_at: string
+          created_by: string
+          id: string
+          parent_version_no: number | null
+          proposal_id: string
+          snapshot: Json
+          snapshot_hash: string
+          version_no: number
+        }
+        Insert: {
+          blocks: Json
+          change_note?: string | null
+          created_at?: string
+          created_by: string
+          id?: string
+          parent_version_no?: number | null
+          proposal_id: string
+          snapshot: Json
+          snapshot_hash: string
+          version_no: number
+        }
+        Update: {
+          blocks?: Json
+          change_note?: string | null
+          created_at?: string
+          created_by?: string
+          id?: string
+          parent_version_no?: number | null
+          proposal_id?: string
+          snapshot?: Json
+          snapshot_hash?: string
+          version_no?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "blend_proposal_versions_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "blend_proposal_versions_proposal_id_fkey"
+            columns: ["proposal_id"]
+            isOneToOne: false
+            referencedRelation: "blend_proposals"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "blend_proposal_versions_proposal_id_fkey"
+            columns: ["proposal_id"]
+            isOneToOne: false
+            referencedRelation: "view_blend_proposal_list"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      blend_proposals: {
+        Row: {
+          archived_at: string | null
+          archived_by: string | null
+          created_at: string
+          created_by: string
+          current_version_no: number
+          fed_on: string | null
+          id: string
+          notes: string | null
+          row_version: number
+          status: string
+          title: string
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          archived_at?: string | null
+          archived_by?: string | null
+          created_at?: string
+          created_by: string
+          current_version_no?: number
+          fed_on?: string | null
+          id?: string
+          notes?: string | null
+          row_version?: number
+          status?: string
+          title: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          archived_at?: string | null
+          archived_by?: string | null
+          created_at?: string
+          created_by?: string
+          current_version_no?: number
+          fed_on?: string | null
+          id?: string
+          notes?: string | null
+          row_version?: number
+          status?: string
+          title?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "blend_proposals_archived_by_fkey"
+            columns: ["archived_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "blend_proposals_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "blend_proposals_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       deliveries: {
         Row: {
           batch_code: string | null
@@ -3253,6 +3384,97 @@ export type Database = {
         }
         Relationships: []
       }
+      view_blend_proposal_list: {
+        Row: {
+          archived_at: string | null
+          block_count: number | null
+          created_at: string | null
+          created_by: string | null
+          created_by_name: string | null
+          current_version_change_note: string | null
+          current_version_computed_at: string | null
+          current_version_created_at: string | null
+          current_version_no: number | null
+          fed_on: string | null
+          id: string | null
+          is_archived: boolean | null
+          notes: string | null
+          row_version: number | null
+          status: string | null
+          title: string | null
+          total_balance_kg: number | null
+          updated_at: string | null
+          updated_by: string | null
+          updated_by_name: string | null
+          version_count: number | null
+          w_ash: number | null
+          w_bd_astm: number | null
+          w_mc: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "blend_proposals_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "blend_proposals_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      view_blend_proposal_versions: {
+        Row: {
+          block_count: number | null
+          change_note: string | null
+          computed_at: string | null
+          created_at: string | null
+          created_by: string | null
+          created_by_name: string | null
+          id: string | null
+          is_current: boolean | null
+          parent_version_no: number | null
+          proposal_id: string | null
+          snapshot_hash: string | null
+          total_balance_kg: number | null
+          version_no: number | null
+          w_ash: number | null
+          w_bd_astm: number | null
+          w_bd_jis: number | null
+          w_fc: number | null
+          w_grit: number | null
+          w_mc: number | null
+          w_vm: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "blend_proposal_versions_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "blend_proposal_versions_proposal_id_fkey"
+            columns: ["proposal_id"]
+            isOneToOne: false
+            referencedRelation: "blend_proposals"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "blend_proposal_versions_proposal_id_fkey"
+            columns: ["proposal_id"]
+            isOneToOne: false
+            referencedRelation: "view_blend_proposal_list"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       view_blocking_block_suppliers: {
         Row: {
           batch_code: string | null
@@ -4772,6 +4994,10 @@ export type Database = {
         }
         Returns: string
       }
+      fn_archive_blend_proposal: {
+        Args: { p_expected_row_version?: number; p_id: string }
+        Returns: Json
+      }
       fn_archive_delivery: {
         Args: {
           p_archive_batch_id?: string
@@ -4791,6 +5017,7 @@ export type Database = {
           unexecutable_callee: string
         }[]
       }
+      fn_blend_production_loss_pct: { Args: never; Returns: number }
       fn_blend_proposal: {
         Args: { p_block_locs: string[] }
         Returns: {
@@ -4806,6 +5033,11 @@ export type Database = {
           w_vm: number
         }[]
       }
+      fn_blend_proposal_snapshot: {
+        Args: { p_block_locs: string[] }
+        Returns: Json
+      }
+      fn_blend_snapshot_hash: { Args: { p_snapshot: Json }; Returns: string }
       fn_bulk_update_deliveries: { Args: { rows: Json }; Returns: undefined }
       fn_bulk_update_usage: { Args: { rows: Json }; Returns: undefined }
       fn_close_batch: { Args: { p_batch_id: string }; Returns: boolean }
@@ -4845,6 +5077,25 @@ export type Database = {
       }
       fn_restore_archived_delivery: {
         Args: { p_archive_id: string }
+        Returns: Json
+      }
+      fn_restore_blend_proposal: {
+        Args: { p_expected_row_version?: number; p_id: string }
+        Returns: Json
+      }
+      fn_save_blend_proposal: {
+        Args: {
+          p_block_locs: string[]
+          p_change_note?: string
+          p_expected_version_no?: number
+          p_notes?: string
+          p_proposal_id?: string
+          p_title: string
+        }
+        Returns: Json
+      }
+      fn_update_blend_proposal_header: {
+        Args: { p_expected_row_version: number; p_id: string; p_patch?: Json }
         Returns: Json
       }
       is_admin: { Args: { user_id: string }; Returns: boolean }
