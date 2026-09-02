@@ -68,15 +68,15 @@ function Chip({
       className="min-w-0 rounded-md border bg-background/40 px-2.5 py-1.5"
       title={title}
     >
-      <div className="truncate text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
+      <div className="truncate text-[length:var(--bw-fs-105)] font-medium uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
       <div className="flex items-baseline gap-1">
-        <span className="truncate font-mono text-[15px] font-semibold tabular-nums">
+        <span className="truncate font-mono text-[length:var(--bw-fs-15)] font-semibold tabular-nums">
           {value}
         </span>
         {sub && (
-          <span className="truncate text-[11px] text-muted-foreground">{sub}</span>
+          <span className="truncate text-[length:var(--bw-fs-11)] text-muted-foreground">{sub}</span>
         )}
       </div>
     </div>
@@ -129,19 +129,19 @@ export function SupplierRoom({
       >
         <div className="min-w-0">
           <h2
-            className="text-[13px] font-semibold uppercase tracking-wide"
+            className="text-[length:var(--bw-fs-13)] font-semibold uppercase tracking-wide"
             style={{ color: SECTION_ACCENT.suppliers }}
           >
             Suppliers
           </h2>
-          <p className="text-xs leading-relaxed text-muted-foreground">
+          <p className="text-[length:var(--bw-fs-12)] leading-relaxed text-muted-foreground">
             Who we actually bought from in {data.year}, what share of the yard
             each one is, and whether we paid them above or below the going rate.
             Sun-drying returns and re-cooks are never counted as a purchase —
             we already paid for those kilos once.
           </p>
         </div>
-        <span className="shrink-0 text-[11.5px] text-muted-foreground">
+        <span className="shrink-0 text-[length:var(--bw-fs-115)] text-muted-foreground">
           {data.totalDeliveries.toLocaleString("en-US")} truckloads ·{" "}
           <span className="font-mono">{t1(data.totalKg)}</span> t
         </span>
@@ -181,7 +181,7 @@ export function SupplierRoom({
         />
       </div>
 
-      <div className="-mt-1 flex items-center gap-1 text-[11.5px] text-muted-foreground">
+      <div className="-mt-1 flex items-center gap-1 text-[length:var(--bw-fs-115)] text-muted-foreground">
         <Users className="size-3 shrink-0" aria-hidden />
         <span>Concentration is dependency, measured — no thresholds applied.</span>
         <DictionaryPopover
@@ -229,7 +229,7 @@ export function SupplierRoom({
         />
       </div>
 
-      <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+      <p className="text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
         A cell is tonnes bought with that supplier&rsquo;s share of the month
         under it; a <span className="font-mono">·</span> means they did nothing
         at all that month. The <span className="font-mono">Σ market</span> row is

@@ -93,7 +93,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { Lock, Printer, X } from "lucide-react";
+import { Check, Lock, Printer, X } from "lucide-react";
 import {
   DRILLDOWN_AXIS_TICK,
   DrilldownSection,
@@ -117,7 +117,11 @@ import type { MetricSpec } from "@/lib/analytics/metrics";
 import { PeriodFilter, type PeriodFilterOption } from "./period-filter";
 import { NO_HIDDEN } from "@/lib/analytics/period-selection";
 
-const CHART_HEIGHT = 260;
+// R3: a CSS variable, not a number. The expand chart is the "see things
+// clearer" payload, so it grows 260 -> 340 px above 1920 px — and because
+// `ResponsiveContainer` is `height="100%"` inside this box, recharts
+// re-measures for free with no `matchMedia` and no hydration seam.
+const CHART_HEIGHT = "var(--an-chart)";
 
 function bucketNounFor(g: Granularity): string {
   return g === "M" ? "month" : g === "Q" ? "quarter" : "year";
@@ -166,11 +170,106 @@ function paddedDomain(values: number[]): [number, number] | undefined {
   ];
 }
 
+/**
+ * Can this chart draw a trailing average AT ALL?
+ *
+ * THE ONE definition, so the toggle and the chart can never disagree about
+ * whether the line exists. Two exclusions, both pre-existing:
+ *
+ *   • **YEAR granularity** — a 3-year trailing average over 7 points smooths
+ *     away the only signal there is, and an always-empty series would still
+ *     claim a legend entry.
+ *   • **A PAIRED row** (Block price vs True cost of a fed kilo) — four lines in
+ *     one chart reads as noise, so the comparison line takes the slot.
+ *
+ * Where this returns false there is no average to switch off, so the control is
+ * not rendered either. A toggle for a line that cannot exist is a control that
+ * lies about what the page can do.
+ */
+function canDrawAvg(spec: MetricSpec, granularity: Granularity): boolean {
+  return granularity !== "Y" && !spec.pair;
+}
+
+/**
+ * OWNER FEEDBACK R3 — the switch for the trailing-average line.
+ *
+ * ── WHY A LABELLED CONTROL BESIDE `Years`, AND NOT A CLICKABLE LEGEND ───────
+ * recharts' `<Legend>` will take an `onClick`, and it was the first idea. Two
+ * things ruled it out. Its hit target is a ~10 px swatch and its own label,
+ * sitting inside the SVG wrapper under the plot — it looks exactly like the
+ * static legend it has always been, so nothing on the page would say it can be
+ * clicked, and a control that has to be discovered by clicking things is not a
+ * control. And it lives INSIDE the print card, which would put a piece of UI
+ * chrome on the paper unless it were separately excluded.
+ *
+ * So: the same shape as the `Years` trigger it sits beside — same height, same
+ * border, same type token — carrying the page's OWN checkbox mark (the one the
+ * period checklist already uses) plus a rule in the series' colour, so the
+ * control names the exact line it governs. Being a sibling of `Years` it is
+ * inside the header's `data-print-hide` span and never reaches paper.
+ */
+function AvgToggle({
+  on,
+  onChange,
+  label,
+  color,
+  noun,
+}: {
+  on: boolean;
+  onChange(next: boolean): void;
+  label: string;
+  color: string;
+  noun: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={on}
+      onClick={() => onChange(!on)}
+      title={
+        on
+          ? `Hide the ${label} line. It is a trailing mean over the last three ${noun}s and it breaks at a gap rather than drawing across one — hiding it changes nothing else on the chart, and the printed sheet follows whatever you leave switched on.`
+          : `Draw the ${label} line — a trailing mean over the last three ${noun}s, which breaks at a gap rather than drawing across one.`
+      }
+      className={cn(
+        "inline-flex h-[var(--an-h-8)] shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-[length:var(--bw-fs-12)] font-medium leading-[var(--bw-lh-xs)]",
+        "transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        on
+          ? "border-border bg-background text-foreground shadow-sm"
+          : "border-border/60 bg-background text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "flex size-3.5 shrink-0 items-center justify-center rounded-[3px] border transition-colors duration-150",
+          on
+            ? "border-primary bg-primary text-primary-foreground"
+            : "border-border bg-background",
+        )}
+      >
+        {on && <Check className="size-2.5" strokeWidth={3} />}
+      </span>
+      {/* The series' own colour, so the label points at ONE line rather than
+          at "the averages" in general. Muted when off — the swatch must not
+          keep advertising a line that is not on the chart. */}
+      <span
+        aria-hidden
+        className="h-[2px] w-3.5 shrink-0 rounded-full transition-opacity duration-150"
+        style={{ background: color, opacity: on ? 1 : 0.35 }}
+      />
+      {label}
+    </button>
+  );
+}
+
 function MetricTrendChart({
   spec,
   history,
   pairHistory,
   granularity,
+  showAvg,
   emptyText,
 }: {
   spec: MetricSpec;
@@ -178,6 +277,16 @@ function MetricTrendChart({
   /** The comparison series, folded by the SAME rollup rules. Null when none. */
   pairHistory: readonly HistoryPoint[] | null;
   granularity: Granularity;
+  /**
+   * OWNER FEEDBACK R3 — draw the trailing average line, or leave it out.
+   *
+   * It is genuinely REMOVED, not hidden: recharts derives the legend from the
+   * children it is given, so dropping the `<Line>` drops its legend entry with
+   * it and the chart reads as one series rather than as one series plus a
+   * blank key. That is also why print needs no rule of its own — the paper
+   * gets whatever the chart was drawing.
+   */
+  showAvg: boolean;
   /**
    * What to say when there is nothing to draw. The default is "nothing was
    * ever recorded"; the year checklist supplies a different sentence, because
@@ -223,7 +332,7 @@ function MetricTrendChart({
 
   if (values.length === 0) {
     return (
-      <p className="px-3 py-12 text-center text-xs text-muted-foreground">
+      <p className="px-3 py-12 text-center text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] text-muted-foreground">
         {emptyText ?? "Nothing recorded for this metric yet."}
       </p>
     );
@@ -260,7 +369,7 @@ function MetricTrendChart({
             }
           />
           <Legend
-            wrapperStyle={{ fontSize: "11px", paddingTop: 4 }}
+            wrapperStyle={{ fontSize: "var(--bw-fs-11)", paddingTop: 4 }}
             formatter={(v) =>
               v === "avg" ? avgLabel : v === "pair" ? (pair?.label ?? "") : spec.label
             }
@@ -314,11 +423,10 @@ function MetricTrendChart({
               connectNulls={false}
             />
           )}
-          {/* No rolling mean at YEAR granularity — a 3-year trailing average
-              over 7 points smooths away the only signal there is, and an
-              always-empty series would still claim a legend entry. A pair
-              chart drops it too: four lines in 260px reads as noise. */}
-          {granularity !== "Y" && !pair && (
+          {/* The trailing mean. `canDrawAvg` owns WHEN it is possible (never at
+              YEAR granularity, never on a paired chart — see that function);
+              `showAvg` is the reader's own switch on top of it. */}
+          {canDrawAvg(spec, granularity) && showAvg && (
             <Line
               type="monotone"
               dataKey="avg"
@@ -385,7 +493,7 @@ function InventorySplit({ month }: { month: AnalyticsMonth }) {
   return (
     <div className="flex flex-col gap-2">
       <BreakdownRail items={items} emptyText="No balances." maxHeight={120} />
-      <ul className="flex flex-col gap-1.5 px-3 pb-1 text-[11.5px] leading-relaxed text-muted-foreground">
+      <ul className="flex flex-col gap-1.5 px-3 pb-1 text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
         <li>
           <strong className="font-semibold text-foreground">
             Resiko is not stock.
@@ -461,7 +569,7 @@ function CoverageSplit({ month }: { month: AnalyticsMonth }) {
   return (
     <div className="flex flex-col gap-2">
       <BreakdownRail items={items} emptyText="Nothing fed this month." maxHeight={120} />
-      <p className="px-3 pb-1 text-[11.5px] leading-relaxed text-muted-foreground">
+      <p className="px-3 pb-1 text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
         Untraceable kilos drag the raw published price DOWN, because they add
         weight to the sum and no money.{" "}
         <strong className="font-semibold">
@@ -511,7 +619,7 @@ function ClosedBlocksSplit({ month }: { month: AnalyticsMonth }) {
   return (
     <div className="flex flex-col gap-2">
       <BreakdownRail items={items} emptyText="No block closed this month." maxHeight={130} />
-      <p className="px-3 pb-1 text-[11.5px] leading-relaxed text-muted-foreground">
+      <p className="px-3 pb-1 text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
         A block with one truckload still awaiting its price is left out{" "}
         <strong className="font-semibold">entirely</strong>, never valued at part
         of its money — a numerator missing pesos against a full denominator would
@@ -557,7 +665,7 @@ function AgingSplit({ month }: { month: AnalyticsMonth }) {
   return (
     <div className="flex flex-col gap-2">
       <BreakdownRail items={items} emptyText="No open stock." maxHeight={130} />
-      <p className="px-3 pb-1 text-[11.5px] leading-relaxed text-muted-foreground">
+      <p className="px-3 pb-1 text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
         Closed blocks are kept OUT of all of this. Their{" "}
         <span className="font-mono">
           {((month.closedResidueKg ?? 0) / 1000).toLocaleString("en-US", {
@@ -627,7 +735,7 @@ function DowntimeSplit({ month }: { month: AnalyticsMonth }) {
   return (
     <div className="flex flex-col gap-2">
       <BreakdownRail items={items} emptyText="No downtime record this month." maxHeight={130} />
-      <p className="px-3 pb-1 text-[11.5px] leading-relaxed text-muted-foreground">
+      <p className="px-3 pb-1 text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
         A downtime total of zero can mean two completely different things.{" "}
         <strong className="font-semibold">
           A shift that named the repair and left the duration blank is real
@@ -676,7 +784,7 @@ function PowerSplit({ month }: { month: AnalyticsMonth }) {
   return (
     <div className="flex flex-col gap-2">
       <BreakdownRail items={items} emptyText="No meter reading this month." maxHeight={120} />
-      <p className="px-3 pb-1 text-[11.5px] leading-relaxed text-muted-foreground">
+      <p className="px-3 pb-1 text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
         The kWh total is published{" "}
         <strong className="font-semibold">exactly as metered</strong> — it is
         the record, and it must agree with the daily power tile on the home
@@ -792,6 +900,21 @@ export interface MetricExpandProps {
   scopeLabel: string;
   /** The newest record date, stamped on the printed sheet. */
   asOfDate: string | null;
+  /**
+   * OWNER FEEDBACK R3 — the page-level `Definitions` switch.
+   *
+   * It governs the two DICTIONARY CARDS at the foot of this panel and nothing
+   * else. The row name's own hover/`Info` popover (`metric-info.tsx`) is
+   * deliberately untouched by it: that is the definition AT THE POINT OF USE,
+   * which is the thing a reader reaches for while scanning a grid, and it costs
+   * no vertical space to leave on. What this hides is the block of prose that
+   * pushes the chart up the screen once you already know what a row means.
+   *
+   * MASTER, not per card: Renzo asked for one switch, and per-card state would
+   * also mean the setting evaporated every time a different row was opened
+   * (both call sites `key` this component by metric).
+   */
+  showDictionary: boolean;
   onClose(): void;
 }
 
@@ -806,6 +929,7 @@ export function MetricExpand({
   perWorkingDay,
   scopeLabel,
   asOfDate,
+  showDictionary,
   onClose,
 }: MetricExpandProps) {
   const spec = row.metric;
@@ -822,6 +946,16 @@ export function MetricExpand({
   const [hiddenYears, setHiddenYears] =
     React.useState<ReadonlySet<string>>(NO_HIDDEN);
   const isFiltered = hiddenYears.size > 0;
+
+  // ── THE TRAILING-AVERAGE SWITCH (owner feedback R3) ─────────────────────
+  // DEFAULT ON — today's behaviour, so nobody has to switch anything on to get
+  // back the page they know. Session state on this card, matched deliberately
+  // to the Years checklist beside it: both are one card's exploration of one
+  // row rather than a description of the page's window, so neither belongs in
+  // an address someone might share. The card is keyed by metric at both call
+  // sites, so opening a different row starts with the line drawn again.
+  const [showAvg, setShowAvg] = React.useState(true);
+  const avgAvailable = canDrawAvg(spec, granularity);
 
   /**
    * One line per year this row's history spans, carrying how much of that year
@@ -980,8 +1114,8 @@ export function MetricExpand({
       {/* Paper only. A printed figure that does not say WHAT it is and WHEN it
           was true is a figure someone will misquote a month from now. */}
       <div className="hidden print:block print:pb-2">
-        <h1 className="text-base font-semibold tracking-tight">{spec.label}</h1>
-        <p className="text-[11px] text-muted-foreground">
+        <h1 className="text-[length:var(--bw-fs-16)] leading-[var(--bw-lh-base)] font-semibold tracking-tight">{spec.label}</h1>
+        <p className="text-[length:var(--bw-fs-11)] text-muted-foreground">
           {normalised ? `${spec.sublabel} / working day` : spec.sublabel} ·{" "}
           {scopeLabel} · {GRANULARITY_LABEL[granularity].toLowerCase()} columns
           {asOfDate ? ` · records through ${asOfDate}` : ""}
@@ -990,7 +1124,7 @@ export function MetricExpand({
             silently omits three years is the exact thing this page's
             restatement policy exists to prevent. */}
         {selectedYearsNote && (
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-[length:var(--bw-fs-11)] text-muted-foreground">
             History filtered to {selectedYearsNote} ({shownYearCount} of{" "}
             {yearOptions.length} years). Hidden years are not restated — every
             change shown is still measured against the period that really
@@ -1001,10 +1135,10 @@ export function MetricExpand({
 
       <header className="flex flex-wrap items-baseline justify-between gap-2 border-b px-3 py-2 print:hidden">
         <div className="min-w-0">
-          <h3 className="truncate text-sm font-semibold tracking-tight">
+          <h3 className="truncate text-[length:var(--bw-fs-14)] leading-[var(--bw-lh-sm)] font-semibold tracking-tight">
             {spec.label}
           </h3>
-          <p className="truncate text-[11.5px] text-muted-foreground">
+          <p className="truncate text-[length:var(--bw-fs-115)] text-muted-foreground">
             {normalised ? `${spec.sublabel} / working day` : spec.sublabel} ·{" "}
             {GRANULARITY_LABEL[granularity].toLowerCase()} history, all records
           </p>
@@ -1014,7 +1148,7 @@ export function MetricExpand({
             type="button"
             onClick={() => printCard(cardRef.current)}
             title="Print just this metric — its chart, its figures and its definition — or save it as a PDF from the print dialog."
-            className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[length:var(--bw-fs-11)] text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <Printer className="size-3" aria-hidden />
             Print
@@ -1022,7 +1156,7 @@ export function MetricExpand({
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[length:var(--bw-fs-11)] text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <X className="size-3" aria-hidden />
             Close
@@ -1033,10 +1167,10 @@ export function MetricExpand({
       {row.restricted ? (
         <div className="flex flex-col items-center justify-center gap-2 px-6 py-14 text-center">
           <Lock className="size-5 text-muted-foreground" aria-hidden />
-          <p className="text-sm font-medium">
+          <p className="text-[length:var(--bw-fs-14)] leading-[var(--bw-lh-sm)] font-medium">
             ₱ figures are restricted for your role
           </p>
-          <p className="max-w-[440px] text-xs leading-relaxed text-muted-foreground">
+          <p className="max-w-[440px] text-[length:var(--bw-fs-12)] leading-relaxed text-muted-foreground">
             Purchase prices and inventory value are withheld server-side for the
             Production role, so nothing was sent to this browser. Every other row
             on this page is live.
@@ -1117,7 +1251,19 @@ export function MetricExpand({
               subtitle={chartSubtitle}
               action={
                 // `data-print-hide` — a control is not part of the report.
-                <span data-print-hide>
+                <span className="flex items-center gap-1.5" data-print-hide>
+                  {/* Only where a trailing average can exist at all — see
+                      `canDrawAvg`. A switch for a line the chart would never
+                      draw is a control that lies about what the page can do. */}
+                  {avgAvailable && (
+                    <AvgToggle
+                      on={showAvg}
+                      onChange={setShowAvg}
+                      label={`3-${noun} avg`}
+                      color={spec.avgColor}
+                      noun={noun}
+                    />
+                  )}
                   <PeriodFilter
                     label="Years"
                     noun="year"
@@ -1136,6 +1282,7 @@ export function MetricExpand({
                 history={view.history}
                 pairHistory={view.pair}
                 granularity={granularity}
+                showAvg={showAvg}
                 emptyText={
                   isFiltered
                     ? "Every year is switched off. Open the Years filter and turn one back on — nothing has been discarded."
@@ -1143,24 +1290,32 @@ export function MetricExpand({
                 }
               />
               {spec.pair && (
-                <p className="px-1 pb-1 pt-1.5 text-xs leading-relaxed text-muted-foreground">
+                <p className="px-1 pb-1 pt-1.5 text-[length:var(--bw-fs-12)] leading-relaxed text-muted-foreground">
                   {spec.pair.note}
                 </p>
               )}
               {/* The honesty line the filter owes. Hiding a year changes what
                   is DRAWN; it never changes what a drawn figure means. */}
               {isFiltered && (
-                <p className="px-1 pb-1 pt-1.5 text-xs leading-relaxed text-muted-foreground">
+                <p className="px-1 pb-1 pt-1.5 text-[length:var(--bw-fs-12)] leading-relaxed text-muted-foreground">
                   Showing{" "}
                   <span className="font-medium text-foreground">
                     {selectedYearsNote}
                   </span>
                   . Hidden years are still in the record and still stand behind
                   every comparison — a change is measured against the period
-                  that really precedes it, on screen or not. The trailing
-                  average is recomputed over what is left and{" "}
-                  <strong className="font-semibold">breaks at the gap</strong>{" "}
-                  rather than drawing across a year you put away.
+                  that really precedes it, on screen or not.
+                  {/* Only claimed while the line is actually drawn — a sentence
+                      describing a series the reader has switched off is a
+                      sentence about something that is not on the chart. */}
+                  {avgAvailable && showAvg && (
+                    <>
+                      {" "}
+                      The trailing average is recomputed over what is left and{" "}
+                      <strong className="font-semibold">breaks at the gap</strong>{" "}
+                      rather than drawing across a year you put away.
+                    </>
+                  )}
                 </p>
               )}
               {/* P4 — the row's OWN caveats, named period by period. The
@@ -1172,11 +1327,11 @@ export function MetricExpand({
                   {annotated.map((h) => (
                     <li
                       key={h.periodKey}
-                      className="flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground"
+                      className="flex items-start gap-1.5 text-[length:var(--bw-fs-12)] leading-relaxed text-muted-foreground"
                     >
                       <span
                         aria-hidden
-                        className="mt-px shrink-0 text-[10px] text-amber-600 dark:text-amber-400"
+                        className="mt-px shrink-0 text-[length:var(--bw-fs-10)] text-amber-600 dark:text-amber-400"
                       >
                         {h.annotation?.mark || "·"}
                       </span>
@@ -1254,48 +1409,57 @@ export function MetricExpand({
           </div>
 
           {/* The dictionary, spelled out — the same copy the row's info button
-              shows, so the two can never drift. */}
+              shows, so the two can never drift.
+              OWNER FEEDBACK R3: behind the page's `Definitions` switch. When it
+              is off these blocks are not RENDERED, so the panel is genuinely
+              shorter (the whole point — they push the chart up the screen) and
+              a printed sheet carries whatever the reader had on screen rather
+              than quietly re-adding two paragraphs they had put away. The row
+              name's own Info popover is unaffected and still explains the
+              figure at the point of use. */}
+          {showDictionary && (
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" data-print-block>
             <div className="rounded-lg border bg-background/40 px-3 py-2">
-              <div className="text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
+              <div className="text-[length:var(--bw-fs-105)] font-medium uppercase tracking-wide text-muted-foreground">
                 What it is
               </div>
-              <p className="mt-1 text-xs leading-relaxed">
+              <p className="mt-1 text-[length:var(--bw-fs-12)] leading-relaxed">
                 {spec.dictionary.definition}
               </p>
-              <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+              <p className="mt-1.5 text-[length:var(--bw-fs-12)] leading-relaxed text-muted-foreground">
                 <span className="font-medium text-foreground">Worked out as: </span>
                 {spec.dictionary.basis}
               </p>
               {spec.dictionary.exclusions && (
-                <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+                <p className="mt-1.5 text-[length:var(--bw-fs-12)] leading-relaxed text-muted-foreground">
                   <span className="font-medium text-foreground">Leaves out: </span>
                   {spec.dictionary.exclusions}
                 </p>
               )}
             </div>
             <div className="rounded-lg border bg-background/40 px-3 py-2">
-              <div className="text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
+              <div className="text-[length:var(--bw-fs-105)] font-medium uppercase tracking-wide text-muted-foreground">
                 Quarter &amp; year columns
               </div>
-              <p className="mt-1 text-xs leading-relaxed">
+              <p className="mt-1 text-[length:var(--bw-fs-12)] leading-relaxed">
                 {spec.dictionary.rollup}
               </p>
               {spec.dictionary.caveat && (
-                <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+                <p className="mt-1.5 text-[length:var(--bw-fs-12)] leading-relaxed text-muted-foreground">
                   <span className="font-medium text-foreground">Worth knowing: </span>
                   {spec.dictionary.caveat}
                 </p>
               )}
-              <p className="mt-1.5 font-mono text-[10px] text-muted-foreground/80">
+              <p className="mt-1.5 font-mono text-[length:var(--bw-fs-10)] text-muted-foreground/80">
                 {spec.dictionary.source}
               </p>
             </div>
           </div>
+          )}
 
           {/* Paper only — the page's own restatement policy, travelling with
               the figure rather than staying behind on the screen. */}
-          <p className="hidden text-[10px] leading-relaxed text-muted-foreground print:block">
+          <p className="hidden text-[length:var(--bw-fs-10)] leading-relaxed text-muted-foreground print:block">
             Figures reflect the underlying records as of{" "}
             {asOfDate ?? "today"}; nothing is snapshotted, so corrections to
             past records restate history (audited). A blank is never a zero.

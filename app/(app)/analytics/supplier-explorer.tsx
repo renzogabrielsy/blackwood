@@ -48,7 +48,8 @@ import type { ExplorerPoint } from "@/lib/analytics/supplier";
 import { SUPPLIER_DICTIONARY } from "@/lib/analytics/supplier";
 import { DictionaryPopover } from "./metric-info";
 
-const CHART_HEIGHT = 260;
+// R3: 260 -> 340 px above 1920 px. See `metric-expand.tsx`.
+const CHART_HEIGHT = "var(--an-chart)";
 
 /** A price against a zero floor reads as flat — lift the minimum off the axis. */
 function paddedDomain(values: number[]): [number, number] | undefined {
@@ -96,7 +97,7 @@ export function SupplierExplorer({
   return (
     <section className="flex flex-col gap-2">
       <header className="min-w-0">
-        <h3 className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide">
+        <h3 className="flex items-center gap-1 text-[length:var(--bw-fs-11)] font-semibold uppercase tracking-wide">
           Price, volume &amp; participation
           <DictionaryPopover
             label={SUPPLIER_DICTIONARY.explorer.label}
@@ -104,7 +105,7 @@ export function SupplierExplorer({
             entry={SUPPLIER_DICTIONARY.explorer.dictionary}
           />
         </h3>
-        <p className="text-[11px] leading-relaxed text-muted-foreground">
+        <p className="text-[length:var(--bw-fs-11)] leading-relaxed text-muted-foreground">
           {canViewPrices
             ? "What charcoal cost, how much of it we bought, and how many different people sold it to us — the same three figures the matrix above publishes, for the selected year. Observational: the chart shows the association and cannot say which way it runs."
             : "How much charcoal we bought and how many different people sold it to us, month by month. The price line is withheld for your role — nothing was sent to this browser."}
@@ -113,7 +114,7 @@ export function SupplierExplorer({
 
       <div className="rounded-lg border bg-card p-2">
         {!hasAnything ? (
-          <p className="px-3 py-12 text-center text-xs text-muted-foreground">
+          <p className="px-3 py-12 text-center text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] text-muted-foreground">
             Nothing was bought in {year}.
           </p>
         ) : (
@@ -193,7 +194,7 @@ export function SupplierExplorer({
                   }
                 />
                 <Legend
-                  wrapperStyle={{ fontSize: "11px", paddingTop: 4 }}
+                  wrapperStyle={{ fontSize: "var(--bw-fs-11)", paddingTop: 4 }}
                   formatter={(v) =>
                     v === "price"
                       ? "Market price (₱/kg, right)"
@@ -246,7 +247,7 @@ export function SupplierExplorer({
 
       {/* The worked example names two real April prices, so it is ₱ and is
           gated like any other ₱ — the point survives without the numbers. */}
-      <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+      <p className="text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
         {showPriceLine
           ? "The supplier line is drawn on its own scale so its SHAPE can be read beside the price — hover a month for the exact count. "
           : ""}

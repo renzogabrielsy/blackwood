@@ -125,7 +125,7 @@ export function PeriodFilter({
           }
           aria-label={`${label} filter — ${shown} of ${total} ${noun}s shown`}
           className={cn(
-            "inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-xs font-medium",
+            "inline-flex h-[var(--an-h-8)] shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] font-medium",
             "transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             filtered
               ? "border-border bg-background text-foreground shadow-sm"
@@ -139,7 +139,7 @@ export function PeriodFilter({
               "12/12" is chrome that trains the eye to ignore the one state
               that matters. */}
           {filtered && (
-            <span className="rounded border border-border/70 px-1 font-mono text-[10px] leading-4 tabular-nums">
+            <span className="rounded border border-border/70 px-1 font-mono text-[length:var(--bw-fs-10)] leading-[var(--bw-lh-4)] tabular-nums">
               {shown}/{total}
             </span>
           )}
@@ -151,10 +151,13 @@ export function PeriodFilter({
         side="bottom"
         sideOffset={6}
         collisionPadding={12}
-        className="max-h-[var(--radix-popover-content-available-height)] w-[min(248px,calc(100vw-2rem))] overflow-hidden p-0"
+        // `bw-analytics` because Radix PORTALS this to <body>, outside the shell div
+        // that carries the page scale — without it the card would keep the :root
+        // (small) sizes while the page behind it grew. (R3, 2026-09-02.)
+        className="bw-analytics max-h-[var(--radix-popover-content-available-height)] w-[min(248px,calc(100vw-2rem))] overflow-hidden p-0"
       >
         <div className="flex items-center justify-between gap-2 border-b px-2.5 py-1.5">
-          <span className="truncate text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          <span className="truncate text-[length:var(--bw-fs-11)] font-medium uppercase tracking-wide text-muted-foreground">
             {label}
           </span>
           <span className="flex shrink-0 items-center gap-1">
@@ -162,7 +165,7 @@ export function PeriodFilter({
               type="button"
               onClick={setAll}
               title={`Show every ${noun}.`}
-              className="cursor-pointer rounded border border-border/70 px-1.5 py-0.5 text-[10.5px] leading-4 text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="cursor-pointer rounded border border-border/70 px-1.5 py-0.5 text-[length:var(--bw-fs-105)] leading-[var(--bw-lh-4)] text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               All
             </button>
@@ -170,7 +173,7 @@ export function PeriodFilter({
               type="button"
               onClick={setNone}
               title={`Hide every ${noun}. Nothing is deleted — turn one back on and it returns unchanged.`}
-              className="cursor-pointer rounded border border-border/70 px-1.5 py-0.5 text-[10.5px] leading-4 text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="cursor-pointer rounded border border-border/70 px-1.5 py-0.5 text-[length:var(--bw-fs-105)] leading-[var(--bw-lh-4)] text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               None
             </button>
@@ -179,7 +182,7 @@ export function PeriodFilter({
 
         <div className="max-h-[248px] overflow-y-auto py-1">
           {options.length === 0 ? (
-            <p className="px-2.5 py-3 text-center text-[11px] text-muted-foreground">
+            <p className="px-2.5 py-3 text-center text-[length:var(--bw-fs-11)] text-muted-foreground">
               Nothing to filter.
             </p>
           ) : (
@@ -194,7 +197,7 @@ export function PeriodFilter({
                   title={o.title}
                   onClick={() => toggle(o.key)}
                   className={cn(
-                    "flex w-full cursor-pointer items-center gap-2 px-2.5 py-1 text-left text-xs",
+                    "flex w-full cursor-pointer items-center gap-2 px-2.5 py-1 text-left text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)]",
                     "transition-colors duration-150 hover:bg-muted/60",
                     "focus:outline-none focus-visible:bg-muted/60 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                   )}
@@ -220,7 +223,7 @@ export function PeriodFilter({
                     {o.label}
                   </span>
                   {o.meta && (
-                    <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
+                    <span className="shrink-0 font-mono text-[length:var(--bw-fs-10)] tabular-nums text-muted-foreground">
                       {o.meta}
                     </span>
                   )}

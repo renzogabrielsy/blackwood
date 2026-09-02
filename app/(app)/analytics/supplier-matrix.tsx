@@ -61,9 +61,11 @@ import { SUPPLIER_DICTIONARY, SUPPLIER_TOP_N } from "@/lib/analytics/supplier";
 import { DictionaryPopover } from "./metric-info";
 
 // Explicit pixel widths — the sum below IS the table's minWidth.
-const W_SUPPLIER = 196;
-const W_MONTH = 92;
-const W_TOTAL = 124;
+// R3: CSS variables, so the widths move with the big-screen type scale.
+// Big values: 196 -> 234, 92 -> 110, 124 -> 148.
+const W_SUPPLIER = "var(--an-w-supplier)";
+const W_MONTH = "var(--an-w-month)";
+const W_TOTAL = "var(--an-w-month-total)";
 
 function t1(kg: number | null): string {
   if (kg == null) return "—";
@@ -123,7 +125,7 @@ function ValueCell({
         className={cn("border-l px-2 py-1", emphasis && "bg-muted/40")}
         title={`${supplier} did nothing at all this month — no purchase and no returning material.`}
       >
-        <div className="flex h-[30px] items-center justify-end font-mono text-xs text-muted-foreground/50">
+        <div className="flex h-[var(--an-h-30)] items-center justify-end font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] text-muted-foreground/50">
           ·
         </div>
       </td>
@@ -137,17 +139,17 @@ function ValueCell({
       className={cn("border-l px-2 py-1", emphasis && "bg-muted/40")}
       title={cellTitle(supplier, cell)}
     >
-      <div className="flex h-[30px] flex-col items-end justify-center">
+      <div className="flex h-[var(--an-h-30)] flex-col items-end justify-center">
         {returnsOnly ? (
           // A returns-only month prints the RETURNED tonnage, in the muted
           // returns treatment, so it can never be mistaken for a purchase.
-          <span className="flex items-center gap-0.5 font-mono text-xs leading-4 text-muted-foreground tabular-nums">
+          <span className="flex items-center gap-0.5 font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-4)] text-muted-foreground tabular-nums">
             <CornerDownLeft className="size-2.5 shrink-0" aria-hidden />
             {t1(cell.sundryKg)}
           </span>
         ) : (
           <>
-            <span className="truncate font-mono text-xs leading-4 tabular-nums">
+            <span className="truncate font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-4)] tabular-nums">
               {t1(cell.kg)}
               {cell.sundryKg != null && (
                 <CornerDownLeft
@@ -156,7 +158,7 @@ function ValueCell({
                 />
               )}
             </span>
-            <span className="truncate font-mono text-[10.5px] leading-4 text-muted-foreground tabular-nums">
+            <span className="truncate font-mono text-[length:var(--bw-fs-105)] leading-[var(--bw-lh-4)] text-muted-foreground tabular-nums">
               {pct1(cell.sharePct) || " "}
             </span>
           </>
@@ -180,7 +182,7 @@ function SupplierRowView({
   return (
     <tr
       className={cn(
-        "group h-[48px] border-b transition-all duration-150",
+        "group h-[var(--an-h-48)] border-b transition-all duration-150",
         selected ? "bg-muted/50" : "hover:bg-muted/30",
       )}
     >
@@ -211,15 +213,15 @@ function SupplierRowView({
               selected && "rotate-90 text-foreground",
             )}
           />
-          <span className="w-[20px] shrink-0 text-right font-mono text-[10.5px] text-muted-foreground tabular-nums">
+          <span className="w-[20px] shrink-0 text-right font-mono text-[length:var(--bw-fs-105)] text-muted-foreground tabular-nums">
             {row.rank ?? "·"}
           </span>
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-[12.5px] font-medium leading-4">
+            <span className="block truncate text-[length:var(--bw-fs-125)] font-medium leading-[var(--bw-lh-4)]">
               {row.supplier}
             </span>
             <span className="flex items-center gap-1">
-              <span className="truncate text-[10.5px] leading-4 text-muted-foreground">
+              <span className="truncate text-[length:var(--bw-fs-105)] leading-[var(--bw-lh-4)] text-muted-foreground">
                 {row.returnsOnly
                   ? "returns only"
                   : `${row.activeMonths} month${row.activeMonths === 1 ? "" : "s"} active`}
@@ -227,7 +229,7 @@ function SupplierRowView({
               {row.sundryKg > 0 && (
                 <span
                   title={`+${t1(row.sundryKg)} t returned from sundry across ${row.sundryDeliveries} deliver${row.sundryDeliveries === 1 ? "y" : "ies"} — our own charcoal coming back after sun-drying. It is never added to what they sold us.`}
-                  className="inline-flex shrink-0 items-center gap-0.5 rounded border border-border/70 px-1 font-mono text-[9px] leading-[13px] text-muted-foreground"
+                  className="inline-flex shrink-0 items-center gap-0.5 rounded border border-border/70 px-1 font-mono text-[length:var(--bw-fs-9)] leading-[var(--bw-lh-13)] text-muted-foreground"
                 >
                   <CornerDownLeft className="size-2" aria-hidden />
                   {t1(row.sundryKg)}t
@@ -251,11 +253,11 @@ function SupplierRowView({
             : `${kgExact(row.kg)} across the year · ${pct1(row.sharePct)} of everything bought · running total to here ${pct1(row.cumulativeSharePct)}`
         }
       >
-        <div className="flex h-[30px] flex-col items-end justify-center">
-          <span className="truncate font-mono text-xs font-semibold leading-4 tabular-nums">
+        <div className="flex h-[var(--an-h-30)] flex-col items-end justify-center">
+          <span className="truncate font-mono text-[length:var(--bw-fs-12)] font-semibold leading-[var(--bw-lh-4)] tabular-nums">
             {row.returnsOnly ? "—" : t1(row.kg)}
           </span>
-          <span className="truncate font-mono text-[10.5px] leading-4 text-muted-foreground tabular-nums">
+          <span className="truncate font-mono text-[length:var(--bw-fs-105)] leading-[var(--bw-lh-4)] text-muted-foreground tabular-nums">
             {pct1(row.sharePct) || " "}
           </span>
         </div>
@@ -320,22 +322,23 @@ export function SupplierMatrix({
 
   if (data.months.length === 0) {
     return (
-      <div className="rounded-lg border bg-card px-4 py-8 text-center text-xs text-muted-foreground">
+      <div className="rounded-lg border bg-card px-4 py-8 text-center text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] text-muted-foreground">
         Nothing was bought in {data.year}.
       </div>
     );
   }
 
-  const minWidth = W_SUPPLIER + data.months.length * W_MONTH + W_TOTAL;
+  const minWidth = `calc(${W_SUPPLIER} + ${data.months.length} * ${W_MONTH} + ${W_TOTAL})`;
+  // Same CSS `min()` clamp as the KPI matrix — see the note there.
   const panelWidth =
-    frameWidth == null ? undefined : Math.min(frameWidth, minWidth);
+    frameWidth == null ? undefined : `min(${frameWidth}px, ${minWidth})`;
   const colCount = data.months.length + 2;
 
   return (
     <div className="flex flex-col gap-2">
       <div ref={scrollerRef} className="overflow-x-auto rounded-lg border bg-card">
         <table
-          className="table-fixed text-xs"
+          className="table-fixed text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)]"
           style={{
             width: "max-content",
             minWidth,
@@ -352,10 +355,10 @@ export function SupplierMatrix({
           </colgroup>
 
           <thead>
-            <tr className="h-9 border-b">
+            <tr className="h-[var(--an-h-9)] border-b">
               <th
                 scope="col"
-                className="frozen-col frozen-edge border-b bg-muted px-2 py-1 text-left align-bottom text-[11.5px] font-medium uppercase tracking-wide text-muted-foreground"
+                className="frozen-col frozen-edge border-b bg-muted px-2 py-1 text-left align-bottom text-[length:var(--bw-fs-115)] font-medium uppercase tracking-wide text-muted-foreground"
                 style={{ left: 0 }}
               >
                 <span className="flex items-center gap-1">
@@ -374,10 +377,10 @@ export function SupplierMatrix({
                   title={`${m.fullLabel} · ${m.marketKg == null ? "no purchases" : kgExact(m.marketKg)} bought from ${m.supplierCount} supplier${m.supplierCount === 1 ? "" : "s"}`}
                   className="border-b border-l bg-muted px-2 py-1 text-right align-bottom"
                 >
-                  <span className="block truncate text-[11.5px] font-medium uppercase tracking-wide text-muted-foreground">
+                  <span className="block truncate text-[length:var(--bw-fs-115)] font-medium uppercase tracking-wide text-muted-foreground">
                     {m.label}
                   </span>
-                  <span className="block truncate font-mono text-[10px] leading-3 text-muted-foreground/70">
+                  <span className="block truncate font-mono text-[length:var(--bw-fs-10)] leading-[var(--bw-lh-3)] text-muted-foreground/70">
                     {m.supplierCount} sellers
                   </span>
                 </th>
@@ -387,10 +390,10 @@ export function SupplierMatrix({
                 title={`Everything bought in ${data.year}, and each supplier's share of it. The year figure is the sum of the months and the share is that sum over the year's market kilos — never an average of monthly percentages.`}
                 className="border-b border-l bg-muted px-2 py-1 text-right align-bottom"
               >
-                <span className="block truncate text-[11.5px] font-medium uppercase tracking-wide text-muted-foreground">
+                <span className="block truncate text-[length:var(--bw-fs-115)] font-medium uppercase tracking-wide text-muted-foreground">
                   {data.year}
                 </span>
-                <span className="block truncate font-mono text-[10px] leading-3 text-muted-foreground/70">
+                <span className="block truncate font-mono text-[length:var(--bw-fs-10)] leading-[var(--bw-lh-3)] text-muted-foreground/70">
                   tonnes · share
                 </span>
               </th>
@@ -424,11 +427,11 @@ export function SupplierMatrix({
             ))}
 
             {/* ── Σ market — P1's OWN figure, not a sum of the column ────── */}
-            <tr className="h-9 border-t bg-muted/30">
+            <tr className="h-[var(--an-h-9)] border-t bg-muted/30">
               <th
                 scope="row"
                 title="Everything the plant bought that month, as the monthly matrix publishes it. This row is not added up from the suppliers above — it is the same figure the Purchase volume row shows, carried through the view's own join, so the two can never drift apart."
-                className="frozen-col frozen-edge bg-muted px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
+                className="frozen-col frozen-edge bg-muted px-2 py-1 text-left text-[length:var(--bw-fs-11)] font-semibold uppercase tracking-wide text-muted-foreground"
                 style={{ left: 0 }}
               >
                 Σ market
@@ -439,7 +442,7 @@ export function SupplierMatrix({
                   className="border-l px-2 py-1 text-right"
                   title={`${m.fullLabel} · ${m.marketKg == null ? "no purchases" : kgExact(m.marketKg)} — the monthly matrix's own Purchase volume figure.`}
                 >
-                  <span className="font-mono text-xs font-semibold tabular-nums">
+                  <span className="font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] font-semibold tabular-nums">
                     {t1(m.marketKg)}
                   </span>
                 </td>
@@ -448,7 +451,7 @@ export function SupplierMatrix({
                 className="border-l bg-muted/40 px-2 py-1 text-right"
                 title={`${kgExact(data.totalKg)} bought in ${data.year}.`}
               >
-                <span className="font-mono text-xs font-semibold tabular-nums">
+                <span className="font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] font-semibold tabular-nums">
                   {t1(data.totalKg)}
                 </span>
               </td>
@@ -463,7 +466,7 @@ export function SupplierMatrix({
             type="button"
             onClick={() => setShowAll((v) => !v)}
             aria-expanded={showAll}
-            className="cursor-pointer rounded text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="cursor-pointer rounded text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] text-muted-foreground transition-colors duration-150 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {showAll
               ? `Show the top ${SUPPLIER_TOP_N} only`

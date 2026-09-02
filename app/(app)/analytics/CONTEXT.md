@@ -42,11 +42,11 @@ layer**; **P3, the supplier room**; **P4, the production matrix — the page is 
 
 | File | Role |
 |------|------|
-| `page.tsx` | **Server Component.** Awaits `getAnalyticsData()`, resolves the OPENING view from `searchParams` (`year` · `g` · `wd` · `metric`) and hands both to the client shell. Owns nothing else — no heading (the navbar owns the title), no aggregation, no gate of its own beyond the adapter's. Fetch inside `try/catch`, render outside it. |
-| `analytics-view.tsx` | **Client shell.** Owns the four view controls (year `Select`, Y/Q/M toggle, **Compare chip toggle**, per-working-day `Switch`), the anchor row, the live block-utilization chip, the callout strip, the matrix, **the campaign panel, the supplier room, the production room** and the restatement footer. Calls `buildMatrix()` in a `useMemo`. It renders `AnalyticsMatrix` for the `flow` + `money` bands only, and passes the expand panel INTO it; the `production` band is rendered by `production-room.tsx` from the SAME fold. |
+| `page.tsx` | **Server Component.** Awaits `getAnalyticsData()`, resolves the OPENING view from `searchParams` (`year` · `g` · `wd` · `cmp` · `hide` · `dict` · `metric`), owns the shell class (`bw-analytics` + the 1920px container relax — R3) and hands both to the client shell. Owns nothing else — no heading (the navbar owns the title), no aggregation, no gate of its own beyond the adapter's. Fetch inside `try/catch`, render outside it. |
+| `analytics-view.tsx` | **Client shell.** Owns the view controls (year `Select`, Y/Q/M toggle, **Compare chip toggle**, per-working-day `Switch`, the R2 `Columns` checklist and the **R3 master `Definitions` switch**), the anchor row, the live block-utilization chip, the callout strip, the matrix, **the campaign panel, the supplier room, the production room** and the restatement footer. Calls `buildMatrix()` in a `useMemo`. It renders `AnalyticsMatrix` for the `flow` + `money` bands only, and passes the expand panel INTO it; the `production` band is rendered by `production-room.tsx` from the SAME fold. |
 | `analytics-matrix.tsx` | **The matrix table** — a bespoke dense table (see "Why not the Blackwood Table"). Frozen KPI-name column, explicit `<colgroup>` widths, `width: max-content` inside `overflow-x-auto`, a trailing summary column, **section bands** (anchor targets, `id="band-<key>"`, wearing the section accent as a left border), an optional `sections` filter so the component can be mounted twice, the `~` / `·` / `⚠` cell marks, the green/red direction tint, and **the in-place expand row** (`colSpan` over every column, panel `sticky left-0` at the scroller's measured width). |
 | `analytics-nav.tsx` | **The in-page anchor row.** Sticky (`top-0 z-40`), glass, **five** links, active section observed with an `IntersectionObserver` and claimed instantly on click. A flow element, so pinning it shifts nothing. |
-| `metric-expand.tsx` | **The row expand**, rendered IN PLACE inside the matrix, in a full-width row directly beneath the row that was clicked. Stat strip + full-history chart (bar or line, **plus the dashed comparison line where a row declares a pair**) + one of six side rails (inventory split · price coverage · closed blocks · aging bands · downtime · power) + the dictionary spelled out + **a Print button** that prints just this card. Reuses `DrilldownSection` / `DrilldownStat` / `BreakdownRail` / `DRILLDOWN_AXIS_TICK` / `drilldownTooltipChrome` from the drill-down chassis. |
+| `metric-expand.tsx` | **The row expand** (+ R3: `canDrawAvg` and the `AvgToggle` beside `Years`, and the dictionary blocks behind the page's `Definitions` switch), rendered IN PLACE inside the matrix, in a full-width row directly beneath the row that was clicked. Stat strip + full-history chart (bar or line, **plus the dashed comparison line where a row declares a pair**) + one of six side rails (inventory split · price coverage · closed blocks · aging bands · downtime · power) + the dictionary spelled out + **a Print button** that prints just this card. Reuses `DrilldownSection` / `DrilldownStat` / `BreakdownRail` / `DRILLDOWN_AXIS_TICK` / `drilldownTooltipChrome` from the drill-down chassis. |
 | `metric-info.tsx` | **The dictionary** at the point of use — an `Info` button with the whole entry as a native `title` (hover) and a `Popover` card (click). `DictionaryPopover` is the ONE card and takes any `MetricDictionaryEntry`; `MetricInfo` is the matrix row's wrapper over it (`METRICS[].dictionary`) and the supplier room passes `SUPPLIER_DICTIONARY` entries into the same component, so a metric and a supplier figure can never explain themselves in two layouts. |
 | `batch-cost-panel.tsx` | **P2 — the BATCH basis.** One column per production campaign, nine rows (fed · delivered ₱/kg · true ₱/kg · **cost of storage time** · weight lost · produced · yield · ₱/produced kg on both bases) plus a `blocks closed / priced` coverage line. Frozen row-label column, opens scrolled to the newest campaign. |
 | `aging-watchlist.tsx` | **UNMOUNTED (owner feedback R1).** Nothing imports it and the adapter no longer reads its view. Kept, compiling, against the `AgingWatchItem` / `AgingWatchlist` types so the block is one read and one JSX element away if it is ever wanted back. |
@@ -431,8 +431,9 @@ from `searchParams` like every other control. Verified across all three granular
 `M` prints `▼−4.6%` + `Y −4.4%` / `Δ −63.8`; `Y` prints `▼−32.0%` + `Δ −6,203.6`.
 
 ### View state
-Year, granularity, the working-day toggle, the comparison chip, the expanded metric and
-(R2) **the hidden period columns (`hide`)** are **React state that writes itself into the
+Year, granularity, the working-day toggle, the comparison chip, the expanded metric,
+(R2) **the hidden period columns (`hide`)** and (R3) **the master `Definitions` switch
+(`dict`)** are **React state that writes itself into the
 URL** with `window.history.replaceState`. The house rule (URL params
 drive filters) exists because a filter changes what the SERVER reads — here nothing does:
 the adapter returns all history in one payload and every control re-slices what the browser
@@ -499,6 +500,10 @@ reported day" (~150 px at 13 px medium), so 232 leaves headroom and nothing trun
 hover-revealed sort/filter siblings, which a bespoke `<th>` does not have. Verified at
 375 px: **zero horizontal document overflow**, every table scrolling inside its own
 wrapper.
+
+**R3 re-derived every one of these a second time, at a second scale** — see "The big-screen
+scale" below. The numbers above are still the ones the page renders below 1920 px; the
+table there is the same set at ~1.19x.
 
 ### Printing one metric (owner feedback R1)
 
@@ -836,6 +841,210 @@ selection.
 
 Until that lands, the two stock rows describe slightly different populations and the
 `inventory_value` dictionary caveat says so with the measured share in it.
+
+## Owner feedback round 3 — the big-screen scale, 2026-09-02
+
+Renzo, after testing on his own two screens: *"Make it more visible on bigger screens. It
+utilizes the space well on my smaller 14-inch MacBook Pro screen, but on my 27-inch 1440p
+monitor it does not really scale well. Text is much smaller. Overall I'd like to see things
+clearer."* Three follow-ons landed in the same round and are documented under it: a switch
+for the trailing-average line, a master switch for the dictionary blocks, and landscape
+print.
+
+### The breakpoint is 1920px, and Tailwind's `2xl` would have been wrong
+A 14-inch MacBook Pro reports a **logical** width of **1512 px** at default scaling and
+**1800 px** in "More Space". Tailwind's `2xl` is **1536 px** — so a `2xl:` bump would have
+fired on the exact laptop Renzo says already reads well, which is the one screen this
+change had to leave alone. 1800 is therefore the highest width that must stay small, and
+**1920** is the next standard desktop step above it: a 2560-wide monitor crosses it with a
+window at 75% of the screen, and a window narrower than 1920 on that monitor is genuinely
+laptop-sized, so the small scale there is correct rather than a miss. ONE step, not a
+ladder — a second breakpoint doubles what has to be verified and there is no third screen
+in evidence. **Measured at the boundary: 1800 → small · 1919 → small · 1920 → big.**
+
+### A CSS-variable ladder, because type and column width may not drift apart
+The geometry is not only type. Four tables carry explicit `<colgroup>` widths whose SUM is
+each table's `minWidth` ("never crush, always scroll"), so a type bump that left the widths
+alone would clip a header — the exact failure R1 re-measured every width to avoid. Both are
+now variables on one container (`.bw-analytics`, declared in `globals.css`), which is what
+makes it impossible for one to move without the other. There is **no JavaScript in it**: no
+`matchMedia`, no hydration seam, and a chart height or a column width is resolved by the
+same media query that resolved the font above it.
+
+**The small scale is declared on `:root`; only the big one is scoped to `.bw-analytics`.**
+Two reasons, both load-bearing. (1) Radix **portals** the year `Select` and both `Popover`s
+to `<body>`, outside the container — had the small values lived only on the class, every
+`var()` inside a popover would have resolved to nothing and the declaration would have been
+dropped at computed-value time. On `:root` the worst case is "renders exactly as today".
+(All three portals also carry `bw-analytics` so they scale WITH the page; the `:root`
+declaration is the net under them, not the mechanism.) (2) The shared drill-down chassis can
+then read the same variables with its own literal as the fallback, so the Home Digest reads
+the number it always did.
+
+**Type — one variable per size that already existed**, so the small scale is reproduced
+exactly rather than approximated by collapsing sizes into a shorter ladder (~1.19x):
+
+| token | small | big | where |
+|---|---|---|---|
+| `--bw-fs-9` | 9 | 11 | direction glyph |
+| `--bw-fs-95` | 9.5 | 11.5 | "today" chip |
+| `--bw-fs-10` | 10 | 12 | comparison chips, rail ordinals, chart axis ticks |
+| `--bw-fs-105` | 10.5 | 12.5 | stat labels, card subtitles |
+| `--bw-fs-11` | 11 | 13 | sublabels, section bands, deltas, chart legend |
+| `--bw-fs-115` | 11.5 | 13.5 | table headers |
+| `--bw-fs-12` (`text-xs`) | .75rem | 14 | body copy, controls, checklist |
+| `--bw-fs-125` | 12.5 | 15 | |
+| `--bw-fs-13` | 13 | 15.5 | KPI row labels |
+| `--bw-fs-14` (`text-sm`) | .875rem | 17 | **cell values** |
+| `--bw-fs-15` | 15 | 18 | |
+| `--bw-fs-16` (`text-base`) | 1rem | 19 | |
+| `--bw-fs-18` (`text-lg`) | 1.125rem | 22 | drill-down stat value |
+
+The four that stand in for a NAMED Tailwind size keep Tailwind's own **rem** units, so the
+small scale stays byte-identical even for a reader who has raised their browser's root font
+size; the rest were px literals in the source and stay px.
+
+**Boxes** move with the line boxes they hold: row 62 → **74**, header row 36 → **42**,
+section band 28 → **33**, value line 20 → **24**, delta line 16 → **19**, controls 32 →
+**38**. **Charts** 260 → **340** (the expand — the "see things clearer" payload) and 220 →
+**290** (supplier expand); `ResponsiveContainer` is `height="100%"` inside those boxes, so
+recharts re-measures for free.
+
+**Widths, re-derived at the big scale** (~1.19x, matching the type):
+
+| Table | ≤1919px | ≥1920px |
+|---|---|---|
+| KPI matrix | 232 / 116 / 128 | **276 / 138 / 152** |
+| Campaign panel | 232 / 128 | **276 / 152** |
+| Supplier matrix | 196 / 92 / 124 | **234 / 110 / 148** |
+| Grade mix | 184 / 92 / 124 | **220 / 110 / 148** |
+| Premium table | 148 / 78 / 196 / 82 / 92 | **176 / 94 / 234 / 98 / 110** |
+
+Each `minWidth` became a `calc()` over those same variables, so "the sum of the colgroup IS
+the minWidth" is now structural rather than re-typed at each scale. The in-place expand's
+clamp became a CSS `min(measuredFrame, thatCalc)` for the same reason — identical
+semantics, resolved at the same breakpoint as the widths it clamps against.
+
+**The container was the other half of the problem.** `max-w-7xl` is 1280 px, so on a 2560 px
+monitor the room rendered inside HALF the screen with empty gutters — most of what "does not
+really scale well" was describing. Above 1920 it relaxes to **1760 px**, sized against the
+widest real object rather than picked for looks: the KPI matrix at the big scale with a
+nine-column year is 276 + 9x138 + 152 = **1670 px**, so at 1760 it finally fits with no
+sideways scroll and the page still leaves real margin.
+
+**Paper is always the small scale, pinned rather than inherited.** A print context evaluates
+width media queries against the PAGE BOX, so `min-width: 1920px` would not match anyway —
+but relying on that is relying on an engine detail. `@media print` re-declares every small
+value, placed AFTER the big block so source order decides. What R1 measured onto a sheet
+keeps landing on a sheet whatever monitor the dialog was opened from.
+
+### The trailing-average switch (R3)
+A labelled checkbox beside the chart card's `Years` filter, **default ON** — today's
+behaviour, so nobody has to switch anything on to get back the page they know.
+
+**Not a clickable recharts legend.** `<Legend>` takes an `onClick` and it was the first
+idea; two things ruled it out. Its hit target is a ~10 px swatch that looks exactly like the
+static legend it has always been, so nothing would say it can be clicked — and a control
+that has to be discovered by clicking things is not a control. And it lives INSIDE the print
+card, which would put chrome on the paper unless separately excluded. The switch instead
+wears the same shape as the `Years` trigger it sits beside (same height, same border, same
+type token), carries the page's OWN checkbox mark and a rule in the series' colour, and
+being a sibling of `Years` is already inside the header's `data-print-hide`.
+
+The line is **genuinely removed, not hidden**: recharts derives the legend from the children
+it is given, so dropping the `<Line>` drops its legend entry with it and the chart reads as
+one series rather than one series plus a blank key. That is also why print needs no rule of
+its own — the paper gets whatever the chart was drawing.
+
+**`canDrawAvg(spec, granularity)` is THE definition of when the line can exist at all** —
+never at YEAR granularity (a 3-year mean over 7 points smooths away the only signal there
+is) and never on the paired Block-price-vs-True-cost chart (four lines is noise). Where it
+returns false the CONTROL is not rendered either: a toggle for a line that cannot exist is a
+control that lies about what the page can do. **The paired chart carried no average before
+this round and still carries none** — checked, not assumed.
+
+Session state per card, matched deliberately to the `Years` filter beside it: both are one
+card's exploration of one row rather than a description of the page's window, so neither
+belongs in an address someone might share, and both start fresh because the card is keyed by
+metric at both call sites.
+
+### The master `Definitions` switch (R3)
+Renzo: *"ability to toggle on and off the 'what it is' sections below the chart (could be a
+master toggle instead)"* — and a master it is, for a reason the per-card version could not
+meet: both matrices key an expand by metric, so a per-card setting would come back on the
+moment a different row was opened, which is exactly when a reader who does not want the
+prose would meet it again.
+
+It sits beside `Per working day` wearing the same `Switch`, because both are one page-level
+boolean that changes how every expand reads and two different shapes would suggest two
+different KINDS of control. It lives in the URL as **`?dict=off`**, spelled only in the
+non-default state (the R2 rule — the default view keeps a clean address and the param's
+presence always means something), and is resolved server-side by `resolveDictionary` like
+every other control. It IS in the URL, unlike the expand's own filters, because it describes
+the whole page: it applies to every expand at once, so a shared link carrying it means the
+same thing to whoever opens it.
+
+It governs the two dictionary CARDS only. **Every row name keeps its own `Info` popover** —
+that is the definition at the point of use, it costs no vertical space, and it is what a
+reader scanning a grid actually reaches for. The blocks are not rendered when it is off, so
+the panel is genuinely shorter (773 → 611 px measured) and a printed sheet carries what was
+on screen rather than quietly re-adding two paragraphs the reader had put away. The
+production room mounts its own `MetricExpand`, so the switch is threaded through
+`ProductionRoom` too — otherwise half the page's expands would ignore it.
+
+### Landscape print (R3)
+`@page { size: A4 landscape; margin: 12mm }`. The right default rather than a preference,
+because the card is a WIDE object: a four-across stat strip, a chart beside a 320 px side
+rail, and a two-column dictionary grid. Measured under the real print rules, landscape keeps
+the chart and rail two-column (`676px 320px`) and the stat strip at 246 px a cell; portrait
+collapses the rail UNDER the chart (`lg:` is 1024 px, portrait's printable column is 703 px)
+and squeezes the stats to 164 px. The margin came down 14 → 12 mm with the rotation because
+landscape is the short dimension vertically and two millimetres are worth more as height.
+`@page` cannot be scoped to a class, so it governs any print of the app — which today means
+exactly this card, the only deliberate print path in the product.
+
+### Verified in the browser (throwaway harness, since deleted)
+The harness mounted the REAL `AnalyticsView` in the REAL shell class over synthetic data,
+outside the authenticated route group, because `/analytics` itself cannot be reached
+headlessly.
+
+- **1512 px is byte-identical to before**, both themes: header 11.5 · row label 13 ·
+  sublabel 11 · value 14 · delta 11 · band 11; widths 232/116/128, 232/128, 196/92/124,
+  148/78/196/82/92, 184/92/124; container 1280; zero horizontal document overflow.
+- **2560 px**: header 13.5 · label 15.5 · sublabel 13 · value 17 · band 13; row box 74,
+  header row 42, band 33, value line 24; container 1760; KPI table **1670 inside a 1710
+  frame — no sideways scroll**; campaign 1644, supplier 1372, grade 1358, premium 712 all
+  inside the frame; chart 340, stat value 22, axis ticks 12; **zero truncated labels** (the
+  two that ellipsised at 1512 both fit); zero horizontal document overflow.
+- **Frozen panes at both scales**: the KPI name column stays `sticky / left: 0 / z-index 10`
+  over a SOLID token and **drifts 0 px** with the periods scrolled 174 and 300 px; the
+  supplier matrix's in-place expand resolves to `min(1710px, calc(...))` = 1372 px and
+  drifts 0 px.
+- **All three portals scale and stay inside the viewport**: the `Columns` popover (items 14,
+  header 13), the row `Info` popover, the year `Select` (option 14).
+- **375 px unchanged**: container 375, small scale, zero horizontal document overflow, every
+  table scrolling inside its own wrapper.
+- **Print, emulated by lifting every `@media print` rule into a live stylesheet**: `@page`
+  reports `a4 landscape / 12mm`; the card lands at `top: 0, left: 0` at the full 1032 px
+  printable width; the on-screen header and both `data-print-hide` controls are
+  `display: none`; the paper-only title and restatement lines are `display: block`; the
+  scale is **pinned small on paper** (`--bw-fs-14: .875rem`, `--an-chart: 260px`). A plain
+  metric (RC OUT) is **0.96 of a page**; with `Definitions` off, Ending inventory is 0.91
+  and Block price 0.73.
+- **Both toggles**: the average line and its legend entry disappear together and come back
+  (`aria-checked` follows); the paired row and YEAR granularity render no control at all;
+  `Definitions` off removes both dictionary cards from the top matrix's expand AND from the
+  production room's own expand, writes `?dict=off`, drops the param again when switched back
+  on, and leaves all 44 row `Info` buttons in place.
+
+### One platform-adjacent change (R3)
+The shared drill-down chassis now reads the ambient type scale **with its own literal as the
+fallback** — `DRILLDOWN_AXIS_TICK.fontSize`, the tooltip chrome, `DrilldownStat`,
+`DrilldownSection`'s header and `BreakdownRail`'s rows. Unset, which is every Home Digest
+surface, each resolves to exactly the value it always had; mounted inside `.bw-analytics` on
+a wide screen, the same component grows with the page. `BreakdownRail.maxHeight` widened from
+`number` to `number | string` so a rail can be sized off the same variable as the chart
+beside it — a plain number still means px, so every existing caller is unchanged.
 
 ### The summary column
 The trailing column folds the whole displayed window through **the row's own rollup rule**

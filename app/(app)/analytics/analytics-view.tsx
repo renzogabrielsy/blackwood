@@ -119,6 +119,7 @@ function syncUrl(next: {
   comparison: ComparisonMode;
   metric: MetricKey | null;
   hidden: ReadonlySet<string>;
+  showDictionary: boolean;
 }) {
   if (typeof window === "undefined") return;
   const url = new URL(window.location.href);
@@ -136,6 +137,10 @@ function syncUrl(next: {
   const hide = serializeHidden(next.hidden);
   if (hide) url.searchParams.set("hide", hide);
   else url.searchParams.delete("hide");
+  // Only the NON-default state is spelled, same as `wd` and `cmp` — see
+  // `resolveDictionary` in `page.tsx`.
+  if (!next.showDictionary) url.searchParams.set("dict", "off");
+  else url.searchParams.delete("dict");
   window.history.replaceState(null, "", url.toString());
 }
 
@@ -154,6 +159,8 @@ export interface AnalyticsViewProps {
   initialMetric: MetricKey | null;
   /** The switched-off period keys from `?hide=`. Empty = every column. */
   initialHidden: ReadonlySet<string>;
+  /** R3 — whether an expand card prints its two dictionary blocks. */
+  initialShowDictionary: boolean;
 }
 
 export function AnalyticsView({
@@ -164,6 +171,7 @@ export function AnalyticsView({
   initialComparison,
   initialMetric,
   initialHidden,
+  initialShowDictionary,
 }: AnalyticsViewProps) {
   const [year, setYear] = React.useState(initialYear);
   const [granularity, setGranularity] =
@@ -183,10 +191,38 @@ export function AnalyticsView({
    */
   const [hidden, setHidden] =
     React.useState<ReadonlySet<string>>(initialHidden ?? NO_HIDDEN);
+  /**
+   * OWNER FEEDBACK R3 — one switch for every expand card's dictionary blocks.
+   *
+   * Renzo asked for "a master toggle instead" of a per-card one, and the shape
+   * settles a question a per-card version could not: both matrices key an
+   * expand by metric, so a per-card setting would reset the moment a different
+   * row was opened, which is exactly the moment a reader who does not want the
+   * prose would meet it again.
+   */
+  const [showDictionary, setShowDictionary] = React.useState(
+    initialShowDictionary,
+  );
 
   React.useEffect(() => {
-    syncUrl({ year, granularity, perWorkingDay, comparison, metric, hidden });
-  }, [year, granularity, perWorkingDay, comparison, metric, hidden]);
+    syncUrl({
+      year,
+      granularity,
+      perWorkingDay,
+      comparison,
+      metric,
+      hidden,
+      showDictionary,
+    });
+  }, [
+    year,
+    granularity,
+    perWorkingDay,
+    comparison,
+    metric,
+    hidden,
+    showDictionary,
+  ]);
 
   const matrix = React.useMemo(
     () =>
@@ -259,7 +295,7 @@ export function AnalyticsView({
       {/* ── Controls ─────────────────────────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <div className="flex items-center gap-2">
-          <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          <span className="text-[length:var(--bw-fs-11)] font-medium uppercase tracking-wide text-muted-foreground">
             Year
           </span>
           <Select
@@ -268,14 +304,16 @@ export function AnalyticsView({
             disabled={granularity === "Y"}
           >
             <SelectTrigger
-              className="h-8 w-[100px] gap-1 border-border/60 bg-background px-2 font-mono text-xs hover:bg-muted/50"
+              className="h-[var(--an-h-8)] w-[100px] gap-1 border-border/60 bg-background px-2 font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] hover:bg-muted/50"
               aria-label="Year"
             >
               <SelectValue />
             </SelectTrigger>
-            <SelectContent>
+            {/* `bw-analytics` — Radix portals the list to <body>, outside the
+                shell div that carries the page scale. (R3, 2026-09-02.) */}
+            <SelectContent className="bw-analytics">
               {data.years.map((y) => (
-                <SelectItem key={y} value={String(y)} className="font-mono text-xs">
+                <SelectItem key={y} value={String(y)} className="font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)]">
                   {y}
                 </SelectItem>
               ))}
@@ -298,7 +336,7 @@ export function AnalyticsView({
                 aria-pressed={active}
                 onClick={() => !active && setGranularity(g.key)}
                 className={cn(
-                  "cursor-pointer rounded px-2.5 py-1 text-xs font-medium transition-colors duration-150",
+                  "cursor-pointer rounded px-2.5 py-1 text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] font-medium transition-colors duration-150",
                   "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                   active
                     ? "bg-background text-foreground shadow-sm"
@@ -332,7 +370,7 @@ export function AnalyticsView({
             decides what rides beside it. */}
         <div className="flex items-center gap-2">
           <span
-            className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground"
+            className="text-[length:var(--bw-fs-11)] font-medium uppercase tracking-wide text-muted-foreground"
             title="The first line under every value is always the change against the previous column. This picks what the small chip beside it shows."
           >
             Compare
@@ -352,7 +390,7 @@ export function AnalyticsView({
                   aria-pressed={active}
                   onClick={() => !active && setComparison(c.key)}
                   className={cn(
-                    "cursor-pointer rounded px-2 py-1 text-xs font-medium transition-colors duration-150",
+                    "cursor-pointer rounded px-2 py-1 text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] font-medium transition-colors duration-150",
                     "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                     active
                       ? "bg-background text-foreground shadow-sm"
@@ -374,7 +412,7 @@ export function AnalyticsView({
           />
           <span
             className={cn(
-              "text-xs transition-colors duration-150",
+              "text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] transition-colors duration-150",
               perWorkingDay ? "font-medium text-foreground" : "text-muted-foreground",
             )}
             title="Divides the volume and consumption rows by the days the site was actually active, so a short month is comparable with a long one. Prices, stock levels and counts are unaffected."
@@ -382,13 +420,48 @@ export function AnalyticsView({
             Per working day
           </span>
           {perWorkingDay && (
-            <span className="rounded border border-border/70 px-1 font-mono text-[10px] leading-4 text-muted-foreground">
+            <span className="rounded border border-border/70 px-1 font-mono text-[length:var(--bw-fs-10)] leading-[var(--bw-lh-4)] text-muted-foreground">
               volumes ÷ working days
             </span>
           )}
         </label>
 
-        <span className="ml-auto flex items-center gap-3 text-[11px] text-muted-foreground">
+        {/* ── The MASTER definitions switch (owner feedback R3) ───────────
+            Renzo: *"ability to toggle on and off the 'what it is' sections
+            below the chart (could be a master toggle instead)"* — and a master
+            it is, for a reason the per-card version could not meet: both
+            matrices key an expand by metric, so a per-card setting would come
+            back on the moment a different row was opened.
+
+            The `Switch` idiom deliberately matches `Per working day` beside
+            it — both are one page-level boolean that changes how every expand
+            reads, and giving them two different shapes would suggest they are
+            two different KINDS of control.
+
+            It governs the two dictionary CARDS inside an expand only. The
+            hover / `Info` popover on each row name is untouched: that is the
+            definition at the point of use, it costs no vertical space, and it
+            is what a reader scanning the grid actually reaches for. */}
+        <label className="flex cursor-pointer select-none items-center gap-2">
+          <Switch
+            checked={showDictionary}
+            onCheckedChange={setShowDictionary}
+            aria-label="Show the definition blocks inside expanded metrics"
+          />
+          <span
+            className={cn(
+              "text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] transition-colors duration-150",
+              showDictionary
+                ? "font-medium text-foreground"
+                : "text-muted-foreground",
+            )}
+            title="Show or hide the two definition blocks at the foot of every expanded metric — what the figure is, and how the quarter and year columns are built. Off, an expanded row is just its figures and its chart. Every row name keeps its own Info button either way, and a printed card carries whatever is on screen."
+          >
+            Definitions
+          </span>
+        </label>
+
+        <span className="ml-auto flex items-center gap-3 text-[length:var(--bw-fs-11)] text-muted-foreground">
           {/* LIVE, never historical — a batch only records where it is NOW, so
               past block occupancy is not reconstructable and is never a row. */}
           {data.utilization && (
@@ -401,7 +474,7 @@ export function AnalyticsView({
                 {data.utilization.occupied}/{data.utilization.total}
               </span>
               blocks occupied
-              <span className="rounded border border-border/70 px-1 text-[9.5px] uppercase tracking-wide">
+              <span className="rounded border border-border/70 px-1 text-[length:var(--bw-fs-95)] uppercase tracking-wide">
                 today
               </span>
             </span>
@@ -429,7 +502,7 @@ export function AnalyticsView({
                   style={{ color: accent }}
                   aria-hidden
                 />
-                <p className="text-xs leading-relaxed text-foreground">{c.text}</p>
+                <p className="text-[length:var(--bw-fs-12)] leading-relaxed text-foreground">{c.text}</p>
               </li>
             );
           })}
@@ -465,6 +538,7 @@ export function AnalyticsView({
               perWorkingDay={perWorkingDay}
               scopeLabel={printScope}
               asOfDate={data.asOfDate}
+              showDictionary={showDictionary}
               onClose={() => setMetric(null)}
             />
           ) : undefined
@@ -515,6 +589,7 @@ export function AnalyticsView({
         comparison={comparison}
         printScope={printScope}
         asOfDate={data.asOfDate}
+        showDictionary={showDictionary}
       />
 
       {/* ── Footer: the restatement policy, printed once, on the page ─────
@@ -523,7 +598,7 @@ export function AnalyticsView({
           a correction to a past record correctly changes a past column. Saying
           so is the difference between a restatement and an unexplained
           discrepancy. */}
-      <footer className="flex flex-col gap-1 border-t pt-3 text-[11px] leading-relaxed text-muted-foreground">
+      <footer className="flex flex-col gap-1 border-t pt-3 text-[length:var(--bw-fs-11)] leading-relaxed text-muted-foreground">
         <p>
           Figures reflect the underlying records as of today; corrections to past
           records restate history (audited).
