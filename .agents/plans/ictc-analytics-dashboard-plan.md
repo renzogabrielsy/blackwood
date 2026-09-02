@@ -1191,3 +1191,174 @@ this band is the one place the CALENDAR clock is still the right one.
 browser-verified in a throwaway harness at `app/dev/table-playground/analytics-r5/`
 (a NEW subdirectory — the committed Blackwood Table playground beside it was not
 touched), since deleted.
+
+---
+
+## 11. THE PRODUCTION BAND MOVES TO THE BATCH CLOCK — 2026-09-02 (DATA LAYER)
+
+**Owner decision, 2026-09-02:** the `/analytics` PRODUCTION band is read on the
+PRODUCTION-BATCH (campaign) clock, so that **its yield equals the campaign panel's BY
+CONSTRUCTION** rather than by coincidence. This section supersedes §10.4 for the data
+layer; the page work is a separate change.
+
+> ### ✅ BATCH-CLOCK DATA LAYER BUILT — 2026-09-02, applied
+> Migration `20260902083625_analytics_production_by_batch_clock`, branch
+> `feat/production-batch-clock`. TWO views:
+> `view_analytics_production_by_batch` (32 rows) and
+> `view_analytics_production_grade_by_batch` (19 rows). Posture identical to P1–P4
+> (`security_invoker`, `authenticated` SELECT only, `anon` REVOKEd, no `service_role`;
+> `verify-worker-view-grants` 4 views / 0 findings). No ₱ column, none derivable.
+> **Nothing was dropped** — `view_analytics_production_monthly` /
+> `_grade_monthly` are untouched and the digest is unaffected. This is a SECOND clock
+> beside the first, exactly the way P2 publishes `view_analytics_cost_monthly` beside
+> `view_analytics_batch_cost`.
+> Full column detail: CLAUDE.md → Views → "THE PRODUCTION BAND ON THE BATCH CLOCK".
+
+### 11.1 §10.4 was right about the constraint and wrong about the conclusion
+
+§10.4 kept the production band on the calendar because *"nothing in the database
+attributes a meter reading to a campaign"*, and therefore refused to split a month across
+batches. The constraint is real and unchanged. What it does **not** imply is that the
+whole band must stay on the calendar — because **only ELECTRICITY has that problem.**
+Everything else on the band is tagged at source: `production_shifts.production_batch`
+comes from MC's own column-H `ENDING`/`STARTING` markers and from the TAB a waste row is
+filed under (L-046), and **250 of 250 shifts carry a non-blank batch**. So tonnage, runs,
+shifts, reported days, downtime and bags are an exact `GROUP BY`, not an estimate.
+
+And electricity is answered without inventing anything, because **the indivisible unit is
+a metered DAY, not a month.** A whole day's reading is credited to exactly one campaign —
+nothing is ever divided — so §10.4's actual objection (a per-batch share of a reading
+never taken per batch) never arises.
+
+### 11.2 The changeover convention, in one sentence
+
+> **A day's metered consumption belongs to the campaign that had most recently STARTED on
+> that day — so on a changeover day the power goes to the INCOMING batch.**
+
+Each campaign owns the half-open span `[its first shift date, the next campaign's first
+shift date)`. Half-open spans over a totally ordered set of start dates are a PARTITION,
+so **the kWh sum is preserved exactly**: no reading lands in two campaigns and none falls
+between them. The 10 start dates are all distinct (measured, 0 ties) and the ordering
+carries `campaign_year`/`production_batch` as tie-breakers, so a future tie degenerates to
+a zero-width span rather than a double count.
+
+**The one hole is stated rather than hidden.** The meters start 2025-03-01 and production
+reporting starts 2025-11-27, so **192 metered days — 561,930.00 kWh — precede the first
+campaign and belong to no campaign on this clock.** They are not silently dropped:
+`kwh_unmapped_pre_campaign` carries that plant-wide figure on EVERY row, so
+`SUM(kwh) + kwh_unmapped_pre_campaign = total metered` is checkable from a single row.
+The calendar view remains where those kilowatt-hours are readable by month.
+
+### 11.3 The one deliberate divergence from `view_analytics_batch_cost`
+
+`produced_kg` is **NULL, never 0**, on a campaign that never reported production.
+`view_analytics_batch_cost` publishes 0 there, because for it that column is a
+DENOMINATOR feeding a money ratio; here it is a HEADLINE an owner reads, and the P4
+calendar sibling already draws the line this way. Measured and fully accounted: of 32
+campaigns the **10 that reported agree with batch_cost EXACTLY (0 mismatches)** and all
+**22 that differ are precisely the never-reported ones** — there is no third case.
+`production_reported` is the boolean that tells them apart, on the row itself.
+
+### 11.4 Proofs (numbers, not claims — run against the live DB 2026-09-02)
+
+- **Grand totals tie across the two clocks.** produced **6,001,592.000 kg** by campaign ==
+  by month == raw `SUM(production_runs.ttl_kg)`, gap 0.000 kg. Downtime
+  **129.546666667 h** both ways, gap 0. Power **913,152.00 + 561,930.00 = 1,475,082.00
+  kWh** == `SUM(kwh)` over the monthly view == all 818 readings, gap 0.00.
+- **Yield and fed are the campaign panel's own columns, byte-equal:** `yield_pct` and
+  `fed_kg` each 0 of 32 mismatches against `view_rc_movement_campaign_yield` AND against
+  `view_analytics_batch_cost`. **JANUARY 2026 reads 82.92%**, the panel's own digit.
+- **Reported days reconcile to the digest:** 221 campaign-days over 214 distinct calendar
+  dates; the digest's production stream reports 214. Surplus 7 == the 7 changeover dates.
+- **The grade split adds back:** Σ grade `kg` == campaign `produced_kg` 10/10, max gap
+  0.0 kg; Σ `share_of_campaign_pct` == 100 on 10/10, deviation exactly 0 (denominator
+  JOINed from the parent — the P3 trick).
+- **The repo file replays to the live views:** re-running the migration file's DDL leaves
+  `md5(pg_get_viewdef)` unchanged (`64418fc6…` / `51bd3224…`).
+
+### 11.5 Gates
+
+`npx tsc --noEmit` clean · `npm run build` clean ·
+`scripts/verify-worker-view-grants.ts` 4 views / 0 findings ·
+`types/supabase.ts` regenerated from the linked project (+48 lines, the two new views).
+
+---
+
+## 12. OWNER FEEDBACK ROUND 6 — THE PAGE LAYER, 2026-09-02
+
+§11 built the batch-clock DATA layer and said the page work was a separate change. This is
+that change, plus a second, unrelated item Renzo raised in the same pass.
+
+> ### ✅ ROUND 6 SHIPPED — 2026-09-02, branch `feat/production-batch-clock`
+> Gates: `npx tsc --noEmit` clean · `npm run lint` 146 problems / 16 errors (the baseline,
+> unmoved) · `npm run build` clean · `scripts/verify-table-core.ts` 84 assertions ·
+> `npx playwright test` 57 passed. Browser-verified in a throwaway harness at
+> `app/dev/table-playground/analytics-r6/`, since deleted.
+
+### 12.1 Item 1 — the PRODUCTION band reads the batch clock
+
+The band's columns were calendar months. They are now campaigns, read from
+`view_analytics_production_by_batch` / `_grade_by_batch`, and driven by the **same
+`?bhide=` checklist** the campaign panel above them already owned.
+
+- **New pure module `lib/analytics/production-batch.ts`** — a SECOND metric registry
+  (`BATCH_METRICS`, `BATCH_METRIC_BY_KEY`, `BATCH_RULES`, `BATCH_GRANULARITY = "B"`,
+  `buildBatchMatrix`) beside `metrics.ts`, because the two read different row shapes on
+  different clocks. Not one row is `price: true` and not one is `perWorkingDay`, and both
+  are structural rather than incidental.
+- **`page.tsx::resolveMetric` consults BOTH registries.** A `?metric=` deep link names a
+  ROW, not a clock, and a key belongs to exactly one of the two — so every link shared
+  before this round still opens, including the four the Home Digest drill-downs carry.
+- **The month-mapping machinery was DELETED, not orphaned.**
+  `lib/analytics/campaign.ts::selectedCampaignMonths` existed only to project a batch
+  selection onto calendar columns, a projection lossy enough to need an on-screen caveat
+  ("a month overlapping a selected and an unselected batch is shown whole"). A column is a
+  batch now, so the caveat has no subject and the helper has no caller. Leaving it exported
+  would have left the calendar clock one import away from returning to the band.
+- **`grade-expand.tsx` moved with it**: `GradeYear` → `GradeSet`, a BATCH checklist with
+  the same smart default, a 3-BATCH trailing mean, share-of-the-batch copy throughout.
+- **`queries.ts` swapped the two reads.** Still nine views; the calendar production pair is
+  untouched in the database and still correct — the digest reads neither of them.
+  Both select lists were checked column-for-column against the regenerated
+  `types/supabase.ts`: 28 and 10 columns, zero missing, zero unused.
+
+**The payoff, verified on screen rather than argued:** the campaign panel's Yield row and
+the band's Yield row print the identical sequence of cells (`—` ×11, then 76.3 · 76.3 ·
+76.4 · 76.5 · 76.5 · 76.6 · 76.6 · 76.7 · 76.8 · `—`). They read the same column through
+the same view, so they cannot disagree.
+
+**The one mapped figure is named where a reader meets it.** The room's own header paragraph
+and the new `PRODUCTION_DICTIONARY.batch_clock` entry both say that tonnage, downtime, days
+and bags are grouped by a batch tag the records already carry, while electricity is
+attributed — a day's power goes to the batch that had most recently STARTED. The 561,930
+pre-campaign kWh are printed as their own sentence rather than left as a silent hole.
+
+### 12.2 Item 2 — the unit sits on the LEFT of a cell
+
+Renzo: *"let the left side of cells be the place where we indicate the unit. If it's money,
+₱/kg; tonnes → T; percent → %. That would make things more clean."*
+
+This is CLAUDE.md's **Currency (Accounting format)** rule generalised from ₱ to every unit.
+`app/(app)/analytics/unit-value.tsx` is the ONE component; `lib/analytics/format.ts`
+gains `UNIT_GLYPH` / `unitGlyphFor()` so the registry decides the glyph exactly as it
+already decides the decimals. `count` is deliberately blank in that table — "12 what?" is a
+per-row question, answered by the spec's own `glyph` (`sellers`, `bags`, `piles`).
+
+Three things that deliberately did NOT change: the **delta and comparison chips** stay
+compact and unitless (they sit in a 15 px line under the value and already carry a
+direction glyph, a sign and a `Y` / `Δ` label); **chart tooltips and hover titles** keep
+their trailing suffix, because those are prose rather than a column, and `unitSuffix()`
+remains the one definition for them; and **every digest tile is byte-identical** —
+`DrilldownStat` gained `unitSide`, defaulting to `"right"`, so only `/analytics` opts in.
+
+### 12.3 What was checked in the browser
+
+Batch columns and the `SEP 2026*` in-progress mark · one `?bhide=` narrowing the panel, the
+band and the grade mix to the same 21 of 33 columns · panel-vs-band yield equality cell by
+cell · never-reported campaigns and the produced-not-fed SEPTEMBER both blank, never zero ·
+MARCH's `696.9k kWh ⚠` at 97.1% beside a suppressed intensity carrying `0.0225 excl. the
+mis-keyed reading` · AUGUST's `0.00 h ⚠` over 22 of 22 reason-only shifts · unit-on-left in
+every table and every stat strip · group print (8 pages, 664×260 charts on a 1040 px sheet)
+and per-metric print (exactly one `data-print-card`) · 1512 / 2560 / 375 at both themes with
+`scrollWidth === clientWidth` at all three and frozen cells carrying no alpha and no
+`backdrop-filter` · and, under `role=production`, every ₱ figure reading `—`.

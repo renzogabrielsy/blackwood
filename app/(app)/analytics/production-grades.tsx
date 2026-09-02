@@ -1,10 +1,17 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// THE GRADE MIX (P4) — grade rows × month columns, tonnes with the share under
-// them. The same cell language as the supplier matrix above it, because it is
-// the same shape of question: one dimension re-cutting a total the page has
-// already published.
+// THE GRADE MIX — grade rows × PRODUCTION-BATCH columns, tonnes with the share
+// under them. The same cell language as the supplier matrix, because it is the
+// same shape of question: one dimension re-cutting a total the page has already
+// published.
+//
+// ── OWNER FEEDBACK R6: THE COLUMNS ARE BATCHES ───────────────────────────────
+// They were calendar months until R6 moved the whole Production band onto the
+// batch clock. The `?bhide=` checklist on the campaign panel now drives these
+// columns DIRECTLY — a column IS a batch — so R5's month-mapping step is
+// retired along with the ambiguity it carried (a month overlapping a selected
+// and an unselected batch had to be shown whole; there is no such month now).
 //
 // Both platform layout rules are obeyed, exactly as the two matrices above:
 //
@@ -28,8 +35,9 @@
 import * as React from "react";
 import { ChevronRight, Printer } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { GradeCell, GradeRow, GradeYear } from "@/lib/analytics/production";
+import type { GradeCell, GradeRow, GradeSet } from "@/lib/analytics/production";
 import { PRODUCTION_DICTIONARY } from "@/lib/analytics/production";
+import { UnitValue } from "./unit-value";
 import { DictionaryPopover } from "./metric-info";
 import { GradeExpand } from "./grade-expand";
 import { GroupPrintPage, GroupPrintStage } from "./group-print";
@@ -38,7 +46,10 @@ import { GroupPrintPage, GroupPrintStage } from "./group-print";
 // R3: CSS variables, so the widths move with the big-screen type scale.
 // Big values: 184 -> 220, 92 -> 110, 124 -> 148.
 const W_GRADE = "var(--an-w-grade)";
-const W_MONTH = "var(--an-w-month)";
+// R6 — a batch column ("AUG 2026") is wider than a month column ("Mar"), so it
+// takes the campaign panel's own width rather than the supplier month's. The
+// two tables sit one above the other and now line up.
+const W_COLUMN = "var(--an-w-campaign)";
 const W_TOTAL = "var(--an-w-month-total)";
 
 /** The two figures may drift by rounding; a real disagreement is a whole kilo. */
@@ -52,9 +63,22 @@ function t1(kg: number | null): string {
   });
 }
 
+/**
+ * The prose form — carries its `%`. Still what the HOVERS say, because a hover
+ * is a sentence.
+ */
 function pct1(v: number | null): string {
   if (v == null) return "";
-  return `${v.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
+  return `${pctNum(v)}%`;
+}
+
+/** R6 — the CELL form: the number alone, because the `%` is pinned left. */
+function pctNum(v: number | null): string {
+  if (v == null) return "";
+  return v.toLocaleString("en-US", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  });
 }
 
 function kgExact(kg: number): string {
@@ -65,12 +89,12 @@ function cellTitle(grade: string, cell: GradeCell): string {
   const parts = [`${grade} · ${cell.fullLabel}`];
   if (cell.kg != null) parts.push(`${kgExact(cell.kg)} made`);
   if (cell.sharePct != null)
-    parts.push(`${pct1(cell.sharePct)} of everything made that month`);
+    parts.push(`${pct1(cell.sharePct)} of everything that batch made`);
   if (cell.runCount != null)
     parts.push(`${cell.runCount} production entr${cell.runCount === 1 ? "y" : "ies"}`);
   parts.push(
     cell.sacks == null
-      ? "No bag count recorded for this grade that month."
+      ? "No bag count recorded for this grade in that batch."
       : `${cell.sacks.toLocaleString("en-US")} bags counted`,
   );
   return parts.join(" · ");
@@ -81,7 +105,7 @@ function ValueCell({ grade, cell }: { grade: string; cell: GradeCell | null }) {
     return (
       <td
         className="border-l px-2 py-1"
-        title={`${grade} was not made in this month.`}
+        title={`${grade} was not made in this batch.`}
       >
         <div className="flex h-[var(--an-h-30)] items-center justify-end font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] text-muted-foreground/50">
           ·
@@ -91,13 +115,23 @@ function ValueCell({ grade, cell }: { grade: string; cell: GradeCell | null }) {
   }
   return (
     <td className="border-l px-2 py-1" title={cellTitle(grade, cell)}>
-      <div className="flex h-[var(--an-h-30)] flex-col items-end justify-center">
-        <span className="truncate font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-4)] tabular-nums">
+      {/* R6 — unit on the LEFT on both lines: tonnes above, the batch share
+          below. Two stacked figures in different units is exactly the case a
+          trailing suffix reads worst in. */}
+      <div className="flex h-[var(--an-h-30)] flex-col justify-center">
+        <UnitValue
+          glyph="T"
+          className="font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-4)] tabular-nums"
+        >
           {t1(cell.kg)}
-        </span>
-        <span className="truncate font-mono text-[length:var(--bw-fs-105)] leading-[var(--bw-lh-4)] text-muted-foreground tabular-nums">
-          {pct1(cell.sharePct) || " "}
-        </span>
+        </UnitValue>
+        <UnitValue
+          glyph={cell.sharePct == null ? "" : "%"}
+          className="font-mono text-[length:var(--bw-fs-105)] leading-[var(--bw-lh-4)] text-muted-foreground tabular-nums"
+          glyphClassName="text-[length:var(--bw-fs-105)]"
+        >
+          {pctNum(cell.sharePct) || " "}
+        </UnitValue>
       </div>
     </td>
   );
@@ -105,12 +139,12 @@ function ValueCell({ grade, cell }: { grade: string; cell: GradeCell | null }) {
 
 function GradeRowView({
   row,
-  months,
+  columns,
   selected,
   onSelect,
 }: {
   row: GradeRow;
-  months: GradeYear["months"];
+  columns: GradeSet["columns"];
   selected: boolean;
   onSelect(grade: string | null): void;
 }) {
@@ -140,7 +174,7 @@ function GradeRowView({
           type="button"
           onClick={() => onSelect(selected ? null : row.grade)}
           aria-expanded={selected}
-          title={`${row.grade} · #${row.rank} by tonnage · ${kgExact(row.kg)} across ${row.activeMonths} month${row.activeMonths === 1 ? "" : "s"} and ${row.runCount} production entr${row.runCount === 1 ? "y" : "ies"}`}
+          title={`${row.grade} · #${row.rank} by tonnage · ${kgExact(row.kg)} across ${row.activeColumns} batch${row.activeColumns === 1 ? "" : "es"} and ${row.runCount} production entr${row.runCount === 1 ? "y" : "ies"}`}
           className="flex w-full min-w-0 cursor-pointer items-center gap-1.5 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <ChevronRight
@@ -158,28 +192,36 @@ function GradeRowView({
               {row.grade}
             </span>
             <span className="block truncate text-[length:var(--bw-fs-105)] leading-[var(--bw-lh-4)] text-muted-foreground">
-              {row.activeMonths} month{row.activeMonths === 1 ? "" : "s"} ·{" "}
+              {row.activeColumns} batch{row.activeColumns === 1 ? "" : "es"} ·{" "}
               {row.runCount} entr{row.runCount === 1 ? "y" : "ies"}
             </span>
           </span>
         </button>
       </th>
 
-      {months.map((m, i) => (
-        <ValueCell key={m.monthStart} grade={row.grade} cell={row.cells[i]} />
+      {columns.map((c, i) => (
+        <ValueCell key={c.key} grade={row.grade} cell={row.cells[i]} />
       ))}
 
       <td
         className="border-l bg-muted/40 px-2 py-1"
-        title={`${kgExact(row.kg)} of ${row.grade} across the year · ${pct1(row.sharePct)} of everything made${row.sacks == null ? " · no bag count recorded for this grade" : ` · ${row.sacks.toLocaleString("en-US")} bags counted`}`}
+        title={`${kgExact(row.kg)} of ${row.grade} across the batches shown · ${pct1(row.sharePct)} of everything made${row.sacks == null ? " · no bag count recorded for this grade" : ` · ${row.sacks.toLocaleString("en-US")} bags counted`}`}
       >
-        <div className="flex h-[var(--an-h-30)] flex-col items-end justify-center">
-          <span className="truncate font-mono text-[length:var(--bw-fs-12)] font-semibold leading-[var(--bw-lh-4)] tabular-nums">
+        <div className="flex h-[var(--an-h-30)] flex-col justify-center">
+          <UnitValue
+            glyph="T"
+            className="font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-4)] tabular-nums"
+            valueClassName="font-semibold"
+          >
             {t1(row.kg)}
-          </span>
-          <span className="truncate font-mono text-[length:var(--bw-fs-105)] leading-[var(--bw-lh-4)] text-muted-foreground tabular-nums">
-            {pct1(row.sharePct) || " "}
-          </span>
+          </UnitValue>
+          <UnitValue
+            glyph={row.sharePct == null ? "" : "%"}
+            className="font-mono text-[length:var(--bw-fs-105)] leading-[var(--bw-lh-4)] text-muted-foreground tabular-nums"
+            glyphClassName="text-[length:var(--bw-fs-105)]"
+          >
+            {pctNum(row.sharePct) || " "}
+          </UnitValue>
         </div>
       </td>
     </tr>
@@ -187,7 +229,7 @@ function GradeRowView({
 }
 
 export interface ProductionGradesProps {
-  data: GradeYear;
+  data: GradeSet;
   /** The read came back at the row cap — the panel says so rather than assuming. */
   truncated: boolean;
   /** R3's master switch, threaded down so this room's expands obey it too. */
@@ -230,8 +272,8 @@ export function ProductionGrades({
     return () => ro.disconnect();
   }, []);
 
-  // A grade selected in one year need not exist in the next, and a batch
-  // filter can take one off the table mid-session.
+  // A grade need not exist in every batch, and the batch filter can take one
+  // off the table mid-session.
   React.useEffect(() => {
     if (selected && !data.rows.some((r) => r.grade === selected)) {
       setSelected(null);
@@ -240,20 +282,20 @@ export function ProductionGrades({
 
   const endPrint = React.useCallback(() => setPrinting(false), []);
 
-  if (data.months.length === 0) {
+  if (data.columns.length === 0) {
     return (
       <div className="rounded-lg border bg-card px-4 py-8 text-center text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] text-muted-foreground">
         {data.filtered
-          ? `No month the selected batches ran in reported production in ${data.year}.`
-          : `Production was not reported in ${data.year}.`}
+          ? "None of the selected batches reported production."
+          : "No production batch has reported production yet."}
       </div>
     );
   }
 
-  const minWidth = `calc(${W_GRADE} + ${data.months.length} * ${W_MONTH} + ${W_TOTAL})`;
+  const minWidth = `calc(${W_GRADE} + ${data.columns.length} * ${W_COLUMN} + ${W_TOTAL})`;
   const panelWidth =
     frameWidth == null ? undefined : `min(${frameWidth}px, ${minWidth})`;
-  const colCount = data.months.length + 2;
+  const colCount = data.columns.length + 2;
   // The tie, CHECKED. Equal by proof today; printed the moment it is not.
   const tieGap = data.totalGradeKg - data.totalKg;
   const tieBroken = Math.abs(tieGap) > TIE_TOLERANCE_KG;
@@ -265,9 +307,9 @@ export function ProductionGrades({
         <p className="text-[length:var(--bw-fs-115)] text-muted-foreground">
           <span className="font-medium text-foreground">Grade mix</span> ·{" "}
           {data.gradeCount} grade{data.gradeCount === 1 ? "" : "s"} across{" "}
-          {data.months.length} month{data.months.length === 1 ? "" : "s"}
-          {data.filtered ? " the selected batches ran in" : ` of ${data.year}`}.
-          Open a grade for its chart.
+          {data.columns.length} production batch
+          {data.columns.length === 1 ? "" : "es"}
+          {data.filtered ? " you selected" : ""}. Open a grade for its chart.
         </p>
         {data.rows.length > 0 && (
           <button
@@ -296,8 +338,8 @@ export function ProductionGrades({
         >
           <colgroup>
             <col style={{ width: W_GRADE }} />
-            {data.months.map((m) => (
-              <col key={m.monthStart} style={{ width: W_MONTH }} />
+            {data.columns.map((c) => (
+              <col key={c.key} style={{ width: W_COLUMN }} />
             ))}
             <col style={{ width: W_TOTAL }} />
           </colgroup>
@@ -318,28 +360,28 @@ export function ProductionGrades({
                   />
                 </span>
               </th>
-              {data.months.map((m) => (
+              {data.columns.map((c) => (
                 <th
-                  key={m.monthStart}
+                  key={c.key}
                   scope="col"
-                  title={`${m.fullLabel} · ${m.producedKg == null ? "nothing reported" : kgExact(m.producedKg)} made across ${m.gradeCount} grade${m.gradeCount === 1 ? "" : "s"}`}
+                  title={`${c.fullLabel} · ${c.producedKg == null ? "nothing reported" : kgExact(c.producedKg)} made across ${c.gradeCount} grade${c.gradeCount === 1 ? "" : "s"}`}
                   className="border-b border-l bg-muted px-2 py-1 text-right align-bottom"
                 >
                   <span className="block truncate text-[length:var(--bw-fs-115)] font-medium uppercase tracking-wide text-muted-foreground">
-                    {m.label}
+                    {c.label}
                   </span>
                   <span className="block truncate font-mono text-[length:var(--bw-fs-10)] leading-[var(--bw-lh-3)] text-muted-foreground/70">
-                    {m.gradeCount} grade{m.gradeCount === 1 ? "" : "s"}
+                    {c.gradeCount} grade{c.gradeCount === 1 ? "" : "s"}
                   </span>
                 </th>
               ))}
               <th
                 scope="col"
-                title={`Everything made in ${data.year}, and each grade's share of it. The year figure is the sum of the months and the share is that sum over the year's produced kilos — never an average of monthly percentages.`}
+                title={`Everything made across the batches shown, and each grade's share of it. The total is the sum of those batches and the share is that sum over their produced kilos — never an average of per-batch percentages.`}
                 className="border-b border-l bg-muted px-2 py-1 text-right align-bottom"
               >
                 <span className="block truncate text-[length:var(--bw-fs-115)] font-medium uppercase tracking-wide text-muted-foreground">
-                  {data.year}
+                  {data.totalLabel}
                 </span>
                 <span className="block truncate font-mono text-[length:var(--bw-fs-10)] leading-[var(--bw-lh-3)] text-muted-foreground/70">
                   tonnes · share
@@ -353,7 +395,7 @@ export function ProductionGrades({
               <React.Fragment key={row.grade}>
                 <GradeRowView
                   row={row}
-                  months={data.months}
+                  columns={data.columns}
                   selected={selected === row.grade}
                   onSelect={setSelected}
                 />
@@ -367,10 +409,10 @@ export function ProductionGrades({
                         style={{ width: panelWidth ?? "100%" }}
                       >
                         <GradeExpand
-                          // Keyed by grade AND year — a fresh, smart-defaulted
-                          // month filter per card, the same discipline every
-                          // other expand on this page keeps.
-                          key={`${row.grade}:${data.year}`}
+                          // Keyed by grade AND the batch selection — a fresh,
+                          // smart-defaulted batch filter per card, the same
+                          // discipline every other expand on this page keeps.
+                          key={`${row.grade}:${data.columns.length}`}
                           row={row}
                           data={data}
                           showDictionary={showDictionary}
@@ -389,30 +431,38 @@ export function ProductionGrades({
             <tr className="h-[var(--an-h-9)] border-t bg-muted/30">
               <th
                 scope="row"
-                title="Everything the plant made that month, as the Production output row above publishes it. This row is not added up from the grades — it is the same figure, so the two can never drift apart."
+                title="Everything the plant made in that batch, as the Production output row above publishes it. This row is not added up from the grades — it is the same figure, so the two can never drift apart."
                 className="frozen-col frozen-edge bg-muted px-2 py-1 text-left text-[length:var(--bw-fs-11)] font-semibold uppercase tracking-wide text-muted-foreground"
                 style={{ left: 0 }}
               >
                 Σ made
               </th>
-              {data.months.map((m) => (
+              {data.columns.map((c) => (
                 <td
-                  key={m.monthStart}
-                  className="border-l px-2 py-1 text-right"
-                  title={`${m.fullLabel} · ${m.producedKg == null ? "nothing reported" : kgExact(m.producedKg)} — the Production output row's own figure.`}
+                  key={c.key}
+                  className="border-l px-2 py-1"
+                  title={`${c.fullLabel} · ${c.producedKg == null ? "nothing reported" : kgExact(c.producedKg)} — the Production output row's own figure.`}
                 >
-                  <span className="font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] font-semibold tabular-nums">
-                    {t1(m.producedKg)}
-                  </span>
+                  <UnitValue
+                    glyph="T"
+                    className="font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] tabular-nums"
+                    valueClassName="font-semibold"
+                  >
+                    {t1(c.producedKg)}
+                  </UnitValue>
                 </td>
               ))}
               <td
-                className="border-l bg-muted/40 px-2 py-1 text-right"
-                title={`${kgExact(data.totalKg)} made in ${data.year}.`}
+                className="border-l bg-muted/40 px-2 py-1"
+                title={`${kgExact(data.totalKg)} made across the batches shown.`}
               >
-                <span className="font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] font-semibold tabular-nums">
+                <UnitValue
+                  glyph="T"
+                  className="font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] tabular-nums"
+                  valueClassName="font-semibold"
+                >
                   {t1(data.totalKg)}
-                </span>
+                </UnitValue>
               </td>
             </tr>
           </tbody>
@@ -420,9 +470,9 @@ export function ProductionGrades({
       </div>
 
       <p className="text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
-        A cell is tonnes of that grade with its share of the month under it; a{" "}
-        <span className="font-mono">·</span> means the grade was not run that
-        month. The <span className="font-mono">Σ made</span> row is the
+        A cell is tonnes of that grade with its share of the batch under it; a{" "}
+        <span className="font-mono">·</span> means the grade was not run in that
+        batch. The <span className="font-mono">Σ made</span> row is the
         Production output row&rsquo;s own figure rather than a sum of the grades
         above it, so the two can never drift apart.
         {tieBroken ? (
@@ -442,7 +492,7 @@ export function ProductionGrades({
           " The grades add to the published total exactly."
         )}
         {data.filtered &&
-          " These columns are the months the batches you selected above ran in; the year figures are folded over those months, not the whole year."}
+          " These columns are the batches you selected above; the total column is folded over those batches, not every batch on record."}
         {truncated &&
           " This read came back at the database row limit, so the grade set may be short of the full one."}
       </p>
@@ -452,8 +502,8 @@ export function ProductionGrades({
       {printing && (
         <GroupPrintStage
           title="Grade mix"
-          subtitle={`${data.year} · ${data.months.length} month${data.months.length === 1 ? "" : "s"}${
-            data.filtered ? " (the selected batches' months)" : ""
+          subtitle={`${data.columns.length} production batch${data.columns.length === 1 ? "" : "es"}${
+            data.filtered ? " (the ones you selected)" : ""
           } · ${scopeLabel}${asOfDate ? ` · records through ${asOfDate}` : ""}`}
           countLabel={`${data.rows.length} grade${data.rows.length === 1 ? "" : "s"}`}
           onDone={endPrint}

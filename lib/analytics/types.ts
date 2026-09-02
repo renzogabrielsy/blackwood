@@ -213,131 +213,178 @@ export interface AnalyticsMonth {
   closedResidueKg: number | null;
   closedResidueBatches: number | null;
 
-  // ── PRODUCTION (view_analytics_production_monthly) — P4 ─────────────
+  // ── THE CALENDAR PRODUCTION BLOCK IS GONE (owner feedback R6) ──────
   //
-  // **NO ₱ COLUMN EXISTS HERE AND NONE IS DERIVABLE.** Production is the one
-  // module of the platform with no money in it, so nothing in this block is
-  // gated and the whole production matrix — tonnage, grades, downtime, power
-  // — is visible to every role including Production. The money that MEETS
-  // production (₱/kg fed, ₱ per produced kg) lives in the P2 block above and
-  // is gated there.
+  // Phase 4 hung twenty-odd production fields off this month: reported days,
+  // downtime, power, bags. R6 moved the whole Production band onto the
+  // PRODUCTION-BATCH clock (`ProductionBatchRow` below), because a campaign is
+  // what the plant actually runs — a changeover day carries TWO batches, so a
+  // calendar month splits one campaign's output across two columns and mixes
+  // two campaigns into one. Leaving the fields here, populated and read by
+  // nothing, would be a second definition of every one of them waiting to
+  // drift, which is the thing this file argues against on every other line.
   //
-  // **`producedKg` is deliberately NOT repeated here.** It already exists in
-  // the P2 block, and the two are literally the same number — both are
-  // `view_rc_movement_yield_monthly.total_produced` (measured: 0 mismatches
-  // across 10 of 10 production months, max gap 0.0 kg). A second field would
-  // be a second definition waiting to drift, so the Production output row
-  // reads the one that is already here.
+  // **Nothing was dropped from SQL.** `view_analytics_production_monthly` and
+  // `view_analytics_production_grade_monthly` are untouched and still feed the
+  // Home Digest; only `/analytics` stopped reading them.
+  //
+  // `producedKg` / `yieldPct` / `processLossKg` above SURVIVE and are still
+  // read — they come from `view_analytics_cost_monthly`, they are what
+  // `productionRecorded` is derived from, and they are the calendar money
+  // layer's own numbers rather than the production layer's.
 
-  /**
-   * Did production report at all this month?
-   *
-   * NOT the same question as `productionRecorded` above, which is derived
-   * from `produced_kg > 0` on the money view. This is the P4 view's own flag
-   * and exists because ITS spine is production months ∪ ELECTRICITY months:
-   * the meters start 2025-03 and production reporting starts 2025-11, so
-   * eight months carry power and no output at all. They are present, flagged
-   * false, with every production figure null rather than 0.
-   */
-  productionReported: boolean;
-  /** Production entries (grade × shift rows) behind the month's tonnage. */
-  productionRunCount: number | null;
-  /** Shifts reported that month. */
-  productionShiftCount: number | null;
-  /**
-   * PRODUCTION'S OWN denominator — days on which production actually
-   * reported. Deliberately NOT `workingDays`: they answer different
-   * questions, and substituting one silently changes what a per-day figure
-   * means.
-   */
-  reportedDays: number | null;
-  /** kg per reported day. The fair way to compare a short month with a long one. */
-  producedPerReportedDay: number | null;
-  /** First day production reported that month — what makes Nov 2025 a 3-day month. */
-  firstReportedDate: string | null;
-  lastReportedDate: string | null;
-
-  /**
-   * Hours lost, folded from the hours+minutes pair exactly the way the Daily
-   * ledger folds it (`view_production_daily.dt_total_hrs`, SELECTed here, not
-   * restated). **Read it WITH the three counts below** — see
-   * `downtimeShiftsReasonOnly`.
-   */
-  downtimeHrs: number | null;
-  /** Shifts that filed a downtime record at all. */
-  downtimeShiftCount: number | null;
-  /** Of those, how many actually put a number on it. */
-  downtimeShiftsWithDuration: number | null;
-  /**
-   * Of those, how many described the work — "cleaned the screens" — and left
-   * the duration at zero. **August 2026 is 23 of 23**, so its 0.00 hours is a
-   * gap in the report, not a flawless month, and the UI may never print that
-   * zero without this count beside it.
-   */
-  downtimeShiftsReasonOnly: number | null;
-
-  /** Metered consumption across every meter — the same figure the digest shows daily. */
-  kwh: number | null;
-  powerDays: number | null;
-  /** Reads 1 from January 2026 on: only the MAIN meter has reported since 2025-12-12. */
-  powerMeterCount: number | null;
-  /**
-   * Readings this month that are provably mis-keyed — a starting reading left
-   * at zero against an end that is still climbing. Structural, not a
-   * hardcoded date: over all 818 readings the rule fires on exactly ONE row
-   * (2026-03-01 / MAIN), which at ×120 publishes 676,944 kWh into a month
-   * whose real consumption is about 20,000.
-   */
-  kwhSuspectReadingCount: number | null;
-  /** The kWh those readings contributed. Subtracted to get the honest figure. */
-  kwhSuspectKwh: number | null;
-  /**
-   * kWh per kilo produced. **NULL — never wrong — on any month containing a
-   * suspect reading**, because a bad reading here does not look wrong, it
-   * looks like a finding: 2026-03 would report 0.7630 against neighbours
-   * reading 0.03, a twenty-fold efficiency collapse that never happened.
-   */
-  kwhPerProducedKg: number | null;
-  /** The same arithmetic with the broken readings removed. 2026-03 reads 0.0219. */
-  kwhPerProducedKgExclSuspect: number | null;
-
-  /**
-   * Bags counted. **NULL, never 0**, on a month where no run recorded any —
-   * not one production run carried a bag count before May 2026, and "we did
-   * not count bags" and "we produced no bags" are different answers.
-   */
-  sacks: number | null;
-  runsWithSacks: number | null;
-  /** PERCENT 0-100. May 2026 reads 2.63 — its 270 bags describe ONE run of 38. */
-  sacksCoveragePct: number | null;
 }
 
 /**
- * ONE (month × grade) row — P4, `view_analytics_production_grade_monthly`.
+ * ONE production CAMPAIGN's plant figures — R6,
+ * `view_analytics_production_by_batch`.
  *
- * `kg` is SELECTed from the same `view_rc_movement_production_monthly` the
- * monthly headline SUMs, so the grade rows are not a second count of the same
- * charcoal — they are the same arithmetic, split. `shareOfMonthPct` takes its
- * denominator by JOINING the monthly production view rather than re-summing,
- * so a grade share and the monthly total cannot drift apart.
+ * ── WHY THIS UNIT AND NOT A MONTH ───────────────────────────────────────
+ * `production_shifts.production_batch` is never the calendar month of the date:
+ * batches run across month boundaries and a changeover day carries two of them
+ * (AUGUST closed and SEPTEMBER opened on 2026-08-29). Every shift, run,
+ * downtime record and waste record in the database ALREADY carries its batch,
+ * taken from the source's own start/end markers, so attributing them to a
+ * campaign is a GROUP BY rather than an estimate — measured, 250 of 250 shifts
+ * carry a non-blank batch, so there is no orphan bucket.
  *
- * ₱-FREE, like every P4 figure. Nothing here is gated.
+ * **`yieldPct` and `fedKg` are SELECTed verbatim from
+ * `view_rc_movement_campaign_yield`** — the very column the campaign panel
+ * reads — which is the whole reason this clock exists: the Production band's
+ * yield and the panel's yield are now the same column and cannot drift.
+ *
+ * **NO ₱ COLUMN EXISTS HERE AND NONE IS DERIVABLE** (the migration asserts it),
+ * so nothing in this shape is gated and the whole band is live for the
+ * Production role. The money that MEETS a campaign lives in `CampaignCost` and
+ * is gated there.
+ *
+ * The field names deliberately MATCH the ones the calendar production block
+ * used to carry, because the two expand side rails (`DowntimeSplit`,
+ * `PowerSplit`) are the same panels reading the same facts on a different
+ * clock — one shape, not two.
  */
-export interface ProductionGradeMonth {
-  /** yyyy-MM-01. */
-  monthStart: string;
-  year: number;
-  /** 1..12 */
-  month: number;
+export interface ProductionBatchRow {
+  /** `AUGUST` — the batch name as the plant writes it. */
+  productionBatch: string;
+  campaignYear: number;
+  /** `AUGUST 2026` — the identity the `?bhide=` checklist keys on. */
+  campaignLabel: string;
+
+  /**
+   * Did production report against this campaign at all?
+   *
+   * 10 of the 32 campaigns did. On the other 22 every production figure is
+   * NULL rather than 0 — "the plant produced nothing" and "nobody was
+   * reporting yet" are different answers, and this is what tells them apart.
+   * Note the campaign COST view publishes 0 there instead, deliberately: for it
+   * that column is a denominator feeding a money ratio, here it is a headline.
+   */
+  productionReported: boolean;
+  firstReportedDate: string | null;
+  lastReportedDate: string | null;
+
+  /** Finished product. NULL, never 0, on a campaign that never reported. */
+  producedKg: number | null;
+  productionRunCount: number | null;
+  productionShiftCount: number | null;
+  /**
+   * Days this campaign reported production — the same rule the home dashboard
+   * uses (a day with at least one production entry), carried across because the
+   * digest's view is keyed on date alone and has no batch to filter by.
+   *
+   * **These counts sum to MORE than the calendar day count, on purpose**: a
+   * changeover day belongs to two campaigns and both really did run that day.
+   * Measured 221 campaign-days over 214 calendar dates — the surplus of 7 is
+   * exactly the seven changeover days.
+   */
+  reportedDays: number | null;
+  producedPerReportedDay: number | null;
+
+  /** Kilos fed — `view_rc_movement_campaign_yield.total_fed`, verbatim. */
+  fedKg: number | null;
+  /** FRACTION (0.8292 = 82.92%) — the campaign panel's OWN column. */
+  yieldPct: number | null;
+
+  /** Hours lost. Read WITH the three counts below — see `downtimeShiftsReasonOnly`. */
+  downtimeHrs: number | null;
+  downtimeShiftCount: number | null;
+  downtimeShiftsWithDuration: number | null;
+  /**
+   * Shifts that named the repair and left the duration at zero. **The AUGUST
+   * 2026 campaign is 22 of 22**, so its 0.00 hours is a gap in the report, not
+   * a flawless campaign. Note the batch clock splits the calendar month's 23
+   * reason-only shifts across JULY (3) and AUGUST (22), because 2026-08-01 is
+   * JULY's closing day — the clock working, not a discrepancy.
+   */
+  downtimeShiftsReasonOnly: number | null;
+
+  /**
+   * Metered consumption, MAPPED by date span rather than tagged: readings carry
+   * a date and no batch, so a day's power goes to the campaign that had most
+   * recently STARTED — **on a changeover day the power goes to the INCOMING
+   * batch**. Half-open intervals over distinct start dates are a partition, so
+   * nothing is double counted and nothing is lost.
+   */
+  kwh: number | null;
+  powerDays: number | null;
+  /** Reads 1 from JANUARY 2026 on: only MAIN has reported since 2025-12-12. */
+  powerMeterCount: number | null;
+  kwhSuspectReadingCount: number | null;
+  kwhSuspectKwh: number | null;
+  /**
+   * The 192 metered days that PRECEDE the first campaign — 561,930 kWh that
+   * belongs to no campaign on this clock. Carried on every row so
+   * `Σ kwh + this = the plant's total metered kWh` is checkable from a single
+   * row, and readable by month in the calendar production view. It is a
+   * DICTIONARY line, never a column: a hole is not a campaign.
+   */
+  kwhUnmappedPreCampaign: number | null;
+  /** NULL — never wrong — on a campaign holding a mis-keyed reading. */
+  kwhPerProducedKg: number | null;
+  /** The same arithmetic with the broken readings removed. MARCH reads 0.0225. */
+  kwhPerProducedKgExclSuspect: number | null;
+
+  /** Bags. NULL, never 0, wherever bags were not being counted. */
+  sacks: number | null;
+  runsWithSacks: number | null;
+  /** PERCENT 0-100. */
+  sacksCoveragePct: number | null;
+}
+
+/** The production band's slice of the payload. */
+export interface ProductionBatchData {
+  /** ALL history, chronological by the month each campaign is NAMED for. 32 rows. */
+  rows: ProductionBatchRow[];
+  /** The read came back at PostgREST's row cap. Measured 32 against 1000. */
+  truncated: boolean;
+}
+
+/**
+ * ONE (campaign × grade) row — R6,
+ * `view_analytics_production_grade_by_batch`.
+ *
+ * `kg` is the same arithmetic the campaign's `producedKg` is — a sum over the
+ * shifts carrying that batch tag — SPLIT by grade, not counted a second time,
+ * and it is proven to add back to the parent on every campaign.
+ * `shareOfCampaignPct` takes its denominator by JOINING the campaign view
+ * rather than re-summing, so a grade share and the campaign headline cannot
+ * drift apart.
+ *
+ * ₱-FREE. Nothing here is gated.
+ */
+export interface ProductionGradeBatch {
+  productionBatch: string;
+  campaignYear: number;
+  /** `AUGUST 2026`. */
+  campaignLabel: string;
   /** `3X50` · `2X6` · `4X8` — the product code as the plant writes it. */
   grade: string;
-  /** Kilos of this grade produced that month. */
   kg: number | null;
   runCount: number | null;
-  /** PERCENT 0-100. The shares of a month always add to 100. */
-  shareOfMonthPct: number | null;
-  /** The month's own published total, carried so one row is self-auditable. */
-  monthProducedKg: number | null;
+  /** PERCENT 0-100. The shares of a campaign always add to 100. */
+  shareOfCampaignPct: number | null;
+  /** The campaign's own published total, carried so one row is self-auditable. */
+  campaignProducedKg: number | null;
   /** NULL (never 0) wherever bags were not being counted. */
   sacks: number | null;
   runsWithSacks: number | null;
@@ -345,10 +392,10 @@ export interface ProductionGradeMonth {
 
 /** The grade mini-matrix's slice of the payload. */
 export interface ProductionGradeData {
-  /** ALL history, ascending by (month, kg desc). 39 rows today. */
-  rows: ProductionGradeMonth[];
+  /** ALL history, by (campaign, kg desc). 19 rows today. */
+  rows: ProductionGradeBatch[];
   /**
-   * The read came back at PostgREST's row cap. Measured 39 rows all-history
+   * The read came back at PostgREST's row cap. Measured 19 rows all-history
    * against a 1000 cap — structural honesty, exactly like the watchlist's and
    * the supplier room's flags, not a live alarm.
    */
@@ -614,6 +661,12 @@ export interface AnalyticsData {
   // is one read and one JSX element rather than a rewrite.
   /** P3 — the supplier room's (month × supplier) rows, all history. */
   suppliers: SupplierData;
-  /** P4 — the (month × grade) rows behind the grade mix, all history. */
+  /**
+   * R6 — the Production band, on the PRODUCTION-BATCH clock. Same order as
+   * `campaigns` (chronological by the month each is NAMED for), so the
+   * `?bhide=` checklist drives the campaign panel and this band from ONE list.
+   */
+  productionBatches: ProductionBatchData;
+  /** R6 — the (campaign × grade) rows behind the grade mix, all history. */
   productionGrades: ProductionGradeData;
 }

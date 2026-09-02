@@ -37,6 +37,7 @@ import { cn } from "@/lib/utils";
 import type { SupplierYear } from "@/lib/analytics/supplier";
 import { SUPPLIER_DICTIONARY, weightedPremiumPhpKg } from "@/lib/analytics/supplier";
 import { DictionaryPopover } from "./metric-info";
+import { UnitValue } from "./unit-value";
 
 // R3: CSS variables, so the widths move with the big-screen type scale.
 // Big values: 148 -> 176, 78 -> 94, 196 -> 234, 82 -> 98, 92 -> 110.
@@ -54,10 +55,26 @@ function money(v: number | null, decimals = 2): string {
   });
 }
 
+/**
+ * The prose form — `+₱1.24`. Still used in the HOVERS, where a sentence is
+ * being written rather than a column being scanned.
+ */
 function signedMoney(v: number | null): string {
   if (v == null) return "—";
   const sign = v > 0 ? "+" : v < 0 ? "−" : "";
   return `${sign}₱${money(Math.abs(v))}`;
+}
+
+/**
+ * R6 — the CELL form: the sign, then the number, and no ₱ at all, because the
+ * ₱/kg now sits pinned to the left of the cell. Two functions rather than one
+ * because a hover and a column want genuinely different strings, and the sign
+ * belongs to the number in both.
+ */
+function signedAmount(v: number | null): string {
+  if (v == null) return "—";
+  const sign = v > 0 ? "+" : v < 0 ? "−" : "";
+  return `${sign}${money(Math.abs(v))}`;
 }
 
 function t1(kg: number): string {
@@ -218,12 +235,13 @@ export function SupplierPremium({ data, canViewPrices }: SupplierPremiumProps) {
                     </span>
                   </td>
                   <td className="px-2 py-1">
-                    <div className="flex items-baseline justify-between gap-1 font-mono text-[length:var(--bw-fs-11)] tabular-nums">
-                      <span className="shrink-0 text-[length:var(--bw-fs-95)] text-muted-foreground">
-                        ₱
-                      </span>
-                      <span className="truncate">{money(r.avgPrice)}</span>
-                    </div>
+                    <UnitValue
+                      glyph="₱/kg"
+                      className="font-mono text-[length:var(--bw-fs-11)] tabular-nums"
+                      glyphClassName="text-[length:var(--bw-fs-95)]"
+                    >
+                      {money(r.avgPrice)}
+                    </UnitValue>
                   </td>
                   <td className="px-2 py-1">
                     {/* The diverging bar. Zero is the centre line; a bar leans
@@ -248,16 +266,26 @@ export function SupplierPremium({ data, canViewPrices }: SupplierPremiumProps) {
                       />
                     </div>
                   </td>
-                  <td className="px-2 py-1 text-right">
-                    <span className="font-mono text-[length:var(--bw-fs-11)] tabular-nums">
-                      {signedMoney(r.premium)}
-                    </span>
+                  <td className="px-2 py-1">
+                    {/* R6 — the premium keeps its SIGN on the number (it is
+                        the whole content of the column) and gains the unit on
+                        the left like every other value on the page. */}
+                    <UnitValue
+                      glyph="₱/kg"
+                      className="font-mono text-[length:var(--bw-fs-11)] tabular-nums"
+                      glyphClassName="text-[length:var(--bw-fs-95)]"
+                    >
+                      {signedAmount(r.premium)}
+                    </UnitValue>
                   </td>
-                  <td className="px-2 py-1 text-right">
-                    <span className="font-mono text-[length:var(--bw-fs-11)] text-muted-foreground tabular-nums">
+                  <td className="px-2 py-1">
+                    <UnitValue
+                      glyph="T"
+                      className="font-mono text-[length:var(--bw-fs-11)] text-muted-foreground tabular-nums"
+                      glyphClassName="text-[length:var(--bw-fs-95)]"
+                    >
                       {t1(r.pricedKg)}
-                      <span className="ml-0.5 text-[length:var(--bw-fs-95)]">t</span>
-                    </span>
+                    </UnitValue>
                   </td>
                 </tr>
               );
@@ -278,16 +306,24 @@ export function SupplierPremium({ data, canViewPrices }: SupplierPremiumProps) {
                   weighted by priced kg
                 </span>
               </td>
-              <td className="px-2 py-1 text-right">
-                <span className="font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] font-semibold tabular-nums">
-                  {signedMoney(weightedAll)}
-                </span>
+              <td className="px-2 py-1">
+                <UnitValue
+                  glyph="₱/kg"
+                  className="font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] tabular-nums"
+                  glyphClassName="text-[length:var(--bw-fs-95)]"
+                  valueClassName="font-semibold"
+                >
+                  {signedAmount(weightedAll)}
+                </UnitValue>
               </td>
-              <td className="px-2 py-1 text-right">
-                <span className="font-mono text-[length:var(--bw-fs-11)] text-muted-foreground tabular-nums">
+              <td className="px-2 py-1">
+                <UnitValue
+                  glyph="T"
+                  className="font-mono text-[length:var(--bw-fs-11)] text-muted-foreground tabular-nums"
+                  glyphClassName="text-[length:var(--bw-fs-95)]"
+                >
                   {t1(data.totalPricedKg)}
-                  <span className="ml-0.5 text-[length:var(--bw-fs-95)]">t</span>
-                </span>
+                </UnitValue>
               </td>
             </tr>
           </tfoot>

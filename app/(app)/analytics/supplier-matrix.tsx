@@ -59,6 +59,7 @@ import type {
 } from "@/lib/analytics/supplier";
 import { SUPPLIER_DICTIONARY, SUPPLIER_TOP_N } from "@/lib/analytics/supplier";
 import { DictionaryPopover } from "./metric-info";
+import { UnitValue } from "./unit-value";
 
 // Explicit pixel widths — the sum below IS the table's minWidth.
 // R3: CSS variables, so the widths move with the big-screen type scale.
@@ -75,9 +76,22 @@ function t1(kg: number | null): string {
   });
 }
 
+/**
+ * The prose form — carries its `%`. Still what the HOVERS say, because a hover
+ * is a sentence.
+ */
 function pct1(v: number | null): string {
   if (v == null) return "";
-  return `${v.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
+  return `${pctNum(v)}%`;
+}
+
+/** R6 — the CELL form: the number alone, because the `%` is pinned left. */
+function pctNum(v: number | null): string {
+  if (v == null) return "";
+  return v.toLocaleString("en-US", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  });
 }
 
 function kgExact(kg: number): string {
@@ -139,28 +153,43 @@ function ValueCell({
       className={cn("border-l px-2 py-1", emphasis && "bg-muted/40")}
       title={cellTitle(supplier, cell)}
     >
-      <div className="flex h-[var(--an-h-30)] flex-col items-end justify-center">
+      {/* R6 — unit on the LEFT: tonnes above, the month share below. The
+          returns mark stays with the NUMBER, because it qualifies the figure
+          rather than naming its unit. */}
+      <div className="flex h-[var(--an-h-30)] flex-col justify-center">
         {returnsOnly ? (
           // A returns-only month prints the RETURNED tonnage, in the muted
           // returns treatment, so it can never be mistaken for a purchase.
-          <span className="flex items-center gap-0.5 font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-4)] text-muted-foreground tabular-nums">
-            <CornerDownLeft className="size-2.5 shrink-0" aria-hidden />
+          <UnitValue
+            glyph="T"
+            className="font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-4)] text-muted-foreground tabular-nums"
+            after={<CornerDownLeft className="size-2.5 shrink-0" aria-hidden />}
+          >
             {t1(cell.sundryKg)}
-          </span>
+          </UnitValue>
         ) : (
           <>
-            <span className="truncate font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-4)] tabular-nums">
+            <UnitValue
+              glyph="T"
+              className="font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-4)] tabular-nums"
+              after={
+                cell.sundryKg != null ? (
+                  <CornerDownLeft
+                    aria-label="also had material return from sun-drying"
+                    className="size-2.5 shrink-0 text-muted-foreground"
+                  />
+                ) : undefined
+              }
+            >
               {t1(cell.kg)}
-              {cell.sundryKg != null && (
-                <CornerDownLeft
-                  aria-label="also had material return from sun-drying"
-                  className="ml-0.5 inline size-2.5 align-baseline text-muted-foreground"
-                />
-              )}
-            </span>
-            <span className="truncate font-mono text-[length:var(--bw-fs-105)] leading-[var(--bw-lh-4)] text-muted-foreground tabular-nums">
-              {pct1(cell.sharePct) || " "}
-            </span>
+            </UnitValue>
+            <UnitValue
+              glyph={cell.sharePct == null ? "" : "%"}
+              className="font-mono text-[length:var(--bw-fs-105)] leading-[var(--bw-lh-4)] text-muted-foreground tabular-nums"
+              glyphClassName="text-[length:var(--bw-fs-105)]"
+            >
+              {pctNum(cell.sharePct) || " "}
+            </UnitValue>
           </>
         )}
       </div>
@@ -255,13 +284,21 @@ function SupplierRowView({
             : `${kgExact(row.kg)} across the year · ${pct1(row.sharePct)} of everything bought · running total to here ${pct1(row.cumulativeSharePct)}`
         }
       >
-        <div className="flex h-[var(--an-h-30)] flex-col items-end justify-center">
-          <span className="truncate font-mono text-[length:var(--bw-fs-12)] font-semibold leading-[var(--bw-lh-4)] tabular-nums">
+        <div className="flex h-[var(--an-h-30)] flex-col justify-center">
+          <UnitValue
+            glyph="T"
+            className="font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-4)] tabular-nums"
+            valueClassName="font-semibold"
+          >
             {row.returnsOnly ? "—" : t1(row.kg)}
-          </span>
-          <span className="truncate font-mono text-[length:var(--bw-fs-105)] leading-[var(--bw-lh-4)] text-muted-foreground tabular-nums">
-            {pct1(row.sharePct) || " "}
-          </span>
+          </UnitValue>
+          <UnitValue
+            glyph={row.sharePct == null ? "" : "%"}
+            className="font-mono text-[length:var(--bw-fs-105)] leading-[var(--bw-lh-4)] text-muted-foreground tabular-nums"
+            glyphClassName="text-[length:var(--bw-fs-105)]"
+          >
+            {pctNum(row.sharePct) || " "}
+          </UnitValue>
         </div>
       </td>
     </tr>
@@ -444,18 +481,26 @@ export function SupplierMatrix({
                   className="border-l px-2 py-1 text-right"
                   title={`${m.fullLabel} · ${m.marketKg == null ? "no purchases" : kgExact(m.marketKg)} — the monthly matrix's own Purchase volume figure.`}
                 >
-                  <span className="font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] font-semibold tabular-nums">
+                  <UnitValue
+                    glyph="T"
+                    className="font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] tabular-nums"
+                    valueClassName="font-semibold"
+                  >
                     {t1(m.marketKg)}
-                  </span>
+                  </UnitValue>
                 </td>
               ))}
               <td
                 className="border-l bg-muted/40 px-2 py-1 text-right"
                 title={`${kgExact(data.totalKg)} bought in ${data.year}.`}
               >
-                <span className="font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] font-semibold tabular-nums">
+                <UnitValue
+                  glyph="T"
+                  className="font-mono text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] tabular-nums"
+                  valueClassName="font-semibold"
+                >
                   {t1(data.totalKg)}
-                </span>
+                </UnitValue>
               </td>
             </tr>
           </tbody>

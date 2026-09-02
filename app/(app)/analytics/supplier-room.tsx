@@ -35,13 +35,24 @@ import {
 } from "@/lib/analytics/supplier";
 import { DictionaryPopover } from "./metric-info";
 import { SupplierMatrix } from "./supplier-matrix";
+import { UnitValue } from "./unit-value";
 import { SupplierPremium } from "./supplier-premium";
 import { SupplierExplorer } from "./supplier-explorer";
 import { SupplierExpand } from "./supplier-expand";
 
+/** The prose form — carries its `%`. Still what the HOVERS say. */
 function pct1(v: number | null): string {
   if (v == null) return "—";
-  return `${v.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
+  return `${pctNum(v)}%`;
+}
+
+/** R6 — the CELL form: the number alone, because the `%` is pinned left. */
+function pctNum(v: number | null): string {
+  if (v == null) return "—";
+  return v.toLocaleString("en-US", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  });
 }
 
 function t1(kg: number): string {
@@ -55,11 +66,14 @@ function t1(kg: number): string {
 function Chip({
   label,
   value,
+  unit,
   sub,
   title,
 }: {
   label: string;
   value: string;
+  /** R6 — the unit glyph, pinned LEFT. Empty for a bare count. */
+  unit?: string;
   sub?: string;
   title?: string;
 }) {
@@ -71,14 +85,20 @@ function Chip({
       <div className="truncate text-[length:var(--bw-fs-105)] font-medium uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
-      <div className="flex items-baseline gap-1">
-        <span className="truncate font-mono text-[length:var(--bw-fs-15)] font-semibold tabular-nums">
-          {value}
-        </span>
-        {sub && (
-          <span className="truncate text-[length:var(--bw-fs-11)] text-muted-foreground">{sub}</span>
-        )}
-      </div>
+      <UnitValue
+        glyph={unit ?? ""}
+        className="font-mono text-[length:var(--bw-fs-15)] tabular-nums"
+        valueClassName="font-semibold"
+        after={
+          sub ? (
+            <span className="truncate text-[length:var(--bw-fs-11)] text-muted-foreground">
+              {sub}
+            </span>
+          ) : undefined
+        }
+      >
+        {value}
+      </UnitValue>
     </div>
   );
 }
@@ -168,31 +188,30 @@ export function SupplierRoom({
         <Chip
           label="Suppliers"
           value={String(c.supplierCount)}
+          unit="sellers"
           sub={data.rows.length > c.supplierCount ? "+ returns only" : undefined}
           title={`How many different sellers delivered to us in ${data.year}. A supplier is the canonical name, so the spelling variants of one seller count once. Names whose only movement was returning sun-dried material are not counted as sellers.`}
         />
         <Chip
           label="Top supplier"
-          value={pct1(c.top1Pct)}
+          value={pctNum(c.top1Pct)}
+          unit={c.top1Pct == null ? undefined : "%"}
           sub={c.top1Name ?? undefined}
           title={`${c.top1Name ?? "—"} supplied ${pct1(c.top1Pct)} of everything bought in ${data.year}. A magnitude, not a verdict — nothing on this page turns amber because a share is high.`}
         />
         <Chip
           label="Top 3"
-          value={pct1(c.top3Pct)}
+          value={pctNum(c.top3Pct)}
+          unit={c.top3Pct == null ? undefined : "%"}
           sub={c.top3Names.join(" · ") || undefined}
           title={`The three biggest sellers together supplied ${pct1(c.top3Pct)} of ${data.year}: ${c.top3Names.join(", ") || "—"}.`}
         />
         <Chip
           label="Half the yard"
           value={c.suppliersToHalf == null ? "—" : String(c.suppliersToHalf)}
-          sub={
-            c.suppliersToHalf == null
-              ? undefined
-              : c.suppliersToHalf === 1
-                ? "supplier"
-                : "suppliers"
-          }
+          // R6 — the left glyph now says "sellers", so the trailing
+          // "supplier"/"suppliers" sub it used to carry is the same word twice.
+          unit={c.suppliersToHalf == null ? undefined : "sellers"}
           title={`How many of the biggest sellers it takes, added together, to reach half the year's kilos.`}
         />
       </div>

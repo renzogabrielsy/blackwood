@@ -45,22 +45,34 @@ import {
   SECTIONS,
   type DeltaMode,
   type MetricAnnotation,
+  type MetricDependency,
   type MetricKey,
   type MetricSection,
-  type MetricSpec,
+  type MetricSpecOf,
 } from "./metrics";
 
 // ---------------------------------------------------------------------
 // The period axis
 // ---------------------------------------------------------------------
 
-/** Month · Quarter · Year — the matrix's column granularity. */
-export type Granularity = "M" | "Q" | "Y";
+/**
+ * Month · Quarter · Year — the matrix's column granularity — **plus `B`, the
+ * PRODUCTION-BATCH clock (owner feedback R6).**
+ *
+ * `B` is not offered by the Y/Q/M toggle and never comes out of `?g=`: it is
+ * the fixed grain of the Production band, whose columns are campaigns rather
+ * than calendar periods. It lives in this union rather than in a parallel type
+ * so that every switch on granularity in this module and in the expand is
+ * forced to answer for it — a bucket noun, a delta word, a rolling window —
+ * instead of a second enum quietly defaulting somewhere.
+ */
+export type Granularity = "M" | "Q" | "Y" | "B";
 
 export const GRANULARITY_LABEL: Record<Granularity, string> = {
   M: "Month",
   Q: "Quarter",
   Y: "Year",
+  B: "Batch",
 };
 
 /** What the period-over-period delta is CALLED at each granularity. */
@@ -68,6 +80,7 @@ export const DELTA_LABEL: Record<Granularity, string> = {
   M: "MoM",
   Q: "QoQ",
   Y: "YoY",
+  B: "batch-on-batch",
 };
 
 const MONTH_SHORT = [
@@ -80,22 +93,73 @@ const MONTH_LONG = [
   "July", "August", "September", "October", "November", "December",
 ];
 
-/** One column of the matrix — a month, a quarter or a year. */
-export interface Period {
-  /** Stable identity: `2026-03` · `2026-Q1` · `2026`. */
+/**
+ * One column of the matrix — a month, a quarter, a year, or (R6) a production
+ * CAMPAIGN.
+ *
+ * `U` is the unit a column is made of. It defaults to `AnalyticsMonth`, so
+ * every calendar call site reads exactly as it did before; the Production band
+ * instantiates it at `ProductionBatchRow` and gets the same folds.
+ *
+ * **`months` keeps its name at `U = AnalyticsMonth` and means "the units this
+ * column is made of" in general.** Renaming it would have touched every rollup
+ * in this file and every caller for no gain in truth — a campaign column is
+ * genuinely "the campaign rows this column folds", which is a list of one.
+ */
+export interface Period<U = AnalyticsMonth> {
+  /** Stable identity: `2026-03` · `2026-Q1` · `2026` · `AUGUST 2026`. */
   key: string;
-  /** Column header — `Mar` · `Q1` · `2026`. */
+  /** Column header — `Mar` · `Q1` · `2026` · `AUG 2026`. */
   label: string;
-  /** Tooltip / chart axis — `March 2026` · `Q1 2026` · `2026`. */
+  /** Tooltip / chart axis — `March 2026` · `Q1 2026` · `2026` · `AUGUST 2026`. */
   fullLabel: string;
   year: number;
-  /** Position WITHIN the year: 1–12 · 1–4 · 1. Pairs a period with its year-ago twin. */
+  /**
+   * Position WITHIN the year: 1–12 · 1–4 · 1 — and, on the batch clock, the
+   * month index of the campaign's NAME. Pairs a period with its year-ago twin,
+   * which is what makes the batch band's YoY chip "the same-named campaign one
+   * year earlier" with no extra machinery.
+   */
   seq: number;
-  /** The months that make it up, ascending. Never empty. */
-  months: AnalyticsMonth[];
-  /** Some constituent month has not finished. A record cannot be claimed on it. */
+  /** The units that make it up, ascending. Never empty. */
+  months: U[];
+  /** Some constituent unit has not finished. A record cannot be claimed on it. */
   isPartial: boolean;
 }
+
+/**
+ * The two things a fold needs to know about a UNIT that a metric spec cannot
+ * say for itself — supplied per clock, so `rawValue` stays one function.
+ *
+ * There are exactly two of them because there are exactly two places the fold
+ * reaches past `MetricSpec.read` into the unit: the per-working-day divisor,
+ * and WHY a blank is blank. Both are properties of the clock rather than of the
+ * row, so neither belongs in the registry.
+ */
+export interface UnitRules<U> {
+  /** The divisor behind the per-working-day toggle. */
+  workingDays(u: U): number;
+  /**
+   * Whether a blank is STRUCTURAL ("the stream did not exist yet") rather than
+   * "nothing happened". The row declares which streams it needs
+   * (`MetricSpec.dependsOn`); the clock decides whether this column had them.
+   */
+  structuralBlank(units: readonly U[], deps: readonly MetricDependency[]): BlankReason;
+}
+
+/** The calendar clock's rules — what every RC Inventory row folds through. */
+export const MONTH_RULES: UnitRules<AnalyticsMonth> = {
+  workingDays: (m) => m.workingDays ?? 0,
+  structuralBlank: (months, deps) => {
+    if (deps.includes("outflow") && months.every((m) => !m.outflowRecorded)) {
+      return "no_outflow";
+    }
+    if (deps.includes("production") && months.every((m) => !m.productionRecorded)) {
+      return "no_production";
+    }
+    return "no_data";
+  },
+};
 
 /**
  * The COMPLETE axis, all history, at one granularity — built once and then
@@ -262,8 +326,8 @@ export interface MatrixCell {
   yoyQuotable: boolean;
 }
 
-export interface MatrixRow {
-  metric: MetricSpec;
+export interface MatrixRow<U = AnalyticsMonth> {
+  metric: MetricSpecOf<U>;
   /** One per DISPLAYED period, in column order. */
   cells: MatrixCell[];
   /**
@@ -324,9 +388,9 @@ interface RawValue {
   blankReason: BlankReason | null;
 }
 
-function sumNonNull(
-  months: readonly AnalyticsMonth[],
-  pick: (m: AnalyticsMonth) => number | null,
+function sumNonNull<U>(
+  months: readonly U[],
+  pick: (m: U) => number | null,
 ): { total: number; had: number; missing: number } {
   let total = 0;
   let had = 0;
@@ -348,8 +412,8 @@ function sumNonNull(
  * guarantees a comparison line aggregates by the SAME rules as the line it
  * is compared against.
  */
-type RollupSpec = Pick<
-  MetricSpec,
+type RollupSpec<U> = Pick<
+  MetricSpecOf<U>,
   | "rollup"
   | "read"
   | "numerator"
@@ -367,10 +431,11 @@ type RollupSpec = Pick<
  * (summed, exactly as the row is summed), which is why the toggle is
  * arithmetically safe on a quarter and a year and not only on a month.
  */
-function rawValue(
-  spec: RollupSpec,
-  period: Period,
+function rawValue<U>(
+  spec: RollupSpec<U>,
+  period: Period<U>,
   opts: { canViewPrices: boolean; perWorkingDay: boolean },
+  rules: UnitRules<U>,
 ): RawValue {
   if (spec.price && !opts.canViewPrices) {
     return { value: null, holed: false, estimated: false, blankReason: "restricted" };
@@ -389,19 +454,8 @@ function rawValue(
    * the row declares which streams it needs rather than this function
    * carrying a list of metric keys that would drift.
    */
-  const blankFor = (): BlankReason => {
-    const deps = spec.dependsOn ?? [];
-    if (deps.includes("outflow") && period.months.every((m) => !m.outflowRecorded)) {
-      return "no_outflow";
-    }
-    if (
-      deps.includes("production") &&
-      period.months.every((m) => !m.productionRecorded)
-    ) {
-      return "no_production";
-    }
-    return "no_data";
-  };
+  const blankFor = (): BlankReason =>
+    rules.structuralBlank(period.months, spec.dependsOn ?? []);
 
   if (spec.rollup === "weighted") {
     const num = sumNonNull(period.months, spec.numerator!);
@@ -454,7 +508,7 @@ function rawValue(
   }
 
   if (opts.perWorkingDay && spec.perWorkingDay) {
-    const days = period.months.reduce((acc, m) => acc + (m.workingDays ?? 0), 0);
+    const days = period.months.reduce((acc, m) => acc + rules.workingDays(m), 0);
     if (days <= 0) {
       return { value: null, holed: missing > 0, estimated, blankReason: "no_data" };
     }
@@ -533,21 +587,21 @@ export interface MatrixOptions {
   hiddenPeriods?: ReadonlySet<string>;
 }
 
-export interface Matrix {
+export interface Matrix<U = AnalyticsMonth> {
   granularity: Granularity;
   /** The columns actually rendered — the window, minus anything switched off. */
-  periods: Period[];
+  periods: Period<U>[];
   /**
    * The window BEFORE the column filter — what the checklist lists, so the
    * control can still offer a period back after it has been hidden.
    */
-  windowPeriods: Period[];
+  windowPeriods: Period<U>[];
   /**
    * The COMPLETE axis at this granularity, all history. What a row expand folds
    * an arbitrary year selection over (`foldSelection`), so the expand's own
    * "Selected" figure comes out of the same rollup machinery as every column.
    */
-  allPeriods: Period[];
+  allPeriods: Period<U>[];
   /** Some column is switched off, so the summary column is a SELECTION. */
   filtered: boolean;
   /**
@@ -555,7 +609,14 @@ export interface Matrix {
    * subset (the expand) cannot fold it under different rules than the grid did.
    */
   foldOptions: { canViewPrices: boolean; perWorkingDay: boolean };
-  rows: MatrixRow[];
+  /**
+   * R6 — the CLOCK's own rules, carried for the same reason `foldOptions` is:
+   * the expand re-folds a selection through `foldSelection`, and folding a
+   * campaign selection under the calendar's blank rules would explain a blank
+   * with the wrong sentence.
+   */
+  rules: UnitRules<U>;
+  rows: MatrixRow<U>[];
   callouts: Callout[];
   /**
    * Header for the trailing summary column — `2026` in M/Q, `All time` in Y,
@@ -588,14 +649,15 @@ export interface SelectionFold {
  * So this is a thin wrapper over the SAME `foldPeriod` + `rawValue` pair the
  * summary column already goes through. No new arithmetic exists here at all.
  */
-export function foldSelection(
-  spec: MetricSpec,
-  periods: readonly Period[],
+export function foldSelection<U>(
+  spec: MetricSpecOf<U>,
+  periods: readonly Period<U>[],
   opts: { canViewPrices: boolean; perWorkingDay: boolean },
+  rules: UnitRules<U>,
 ): SelectionFold | null {
   const folded = foldPeriod(periods, "__selection", "Selected", "Selected periods");
   if (!folded) return null;
-  const raw = rawValue(spec, folded, opts);
+  const raw = rawValue(spec, folded, opts, rules);
   return {
     value: raw.value,
     blankReason: raw.blankReason,
@@ -612,12 +674,12 @@ export function foldSelection(
  * period rather than as its own arithmetic is what guarantees the total obeys
  * each row's declared rollup instead of inventing a thirteenth rule.
  */
-function foldPeriod(
-  periods: readonly Period[],
+function foldPeriod<U>(
+  periods: readonly Period<U>[],
   key: string,
   label: string,
   fullLabel: string,
-): Period | null {
+): Period<U> | null {
   if (periods.length === 0) return null;
   const months = periods.flatMap((p) => p.months);
   if (months.length === 0) return null;
@@ -661,13 +723,13 @@ export const COMPARISON_MODES: readonly {
 ];
 
 /** One visual band of the matrix, with the rows that belong to it. */
-export interface MatrixSection {
+export interface MatrixSection<U = AnalyticsMonth> {
   key: MetricSection;
   label: string;
   hint: string;
   /** The band's accent colour — a CSS var reference, applied as a left rule. */
   accent: string;
-  rows: MatrixRow[];
+  rows: MatrixRow<U>[];
 }
 
 /**
@@ -682,10 +744,10 @@ export interface MatrixSection {
  * against money against volume, and a production record is judged by exactly
  * the same machinery.
  */
-export function groupBySection(
-  rows: readonly MatrixRow[],
+export function groupBySection<U>(
+  rows: readonly MatrixRow<U>[],
   only?: readonly MetricSection[],
-): MatrixSection[] {
+): MatrixSection<U>[] {
   const wanted = only ? new Set(only) : null;
   return SECTIONS.filter((s) => !wanted || wanted.has(s.key))
     .map((s) => ({
@@ -698,13 +760,55 @@ export function groupBySection(
     .filter((s) => s.rows.length > 0);
 }
 
-/** THE fold. One pass, one set of numbers, shared by the grid, the charts and the callouts. */
-export function buildMatrix(
-  months: readonly AnalyticsMonth[],
-  opts: MatrixOptions,
-): Matrix {
-  const all = buildPeriods(months, opts.granularity);
-  const windowPeriods = displayedPeriods(all, opts.granularity, opts.year);
+/**
+ * What `assembleMatrix` needs that is not a `MetricSpec` — one object per
+ * CLOCK, so the fold below is written once (owner feedback R6).
+ */
+export interface MatrixAxis<U> {
+  granularity: Granularity;
+  /** The COMPLETE axis, all history, ascending. */
+  all: Period<U>[];
+  /** The window this view shows, BEFORE the column filter. */
+  windowPeriods: Period<U>[];
+  /** Header + hover for the trailing summary column, given the selection. */
+  totalLabels(shown: readonly Period<U>[], filtered: boolean): {
+    label: string;
+    fullLabel: string;
+  };
+  /**
+   * The like-for-like comparison fold behind the summary column's chip, or
+   * `null` where none is honest. It is a callback rather than a period because
+   * the answer depends on the selection: folding four chosen months against a
+   * full prior twelve would be a restatement wearing a year-ago comparison.
+   */
+  priorTotal(
+    selectedSeq: ReadonlySet<number>,
+    filtered: boolean,
+  ): Period<U> | null;
+}
+
+/**
+ * THE fold, over any clock. One pass, one set of numbers, shared by the grid,
+ * the charts and the callouts.
+ *
+ * R6 split this out of `buildMatrix` so the Production band's campaign columns
+ * go through the identical machinery — same rollup contract, same callout gate,
+ * same delta rules — rather than through a second implementation that would
+ * have drifted. `buildMatrix` below is now the calendar instantiation of it and
+ * behaves exactly as it did.
+ */
+export function assembleMatrix<U>(
+  specs: readonly MetricSpecOf<U>[],
+  axis: MatrixAxis<U>,
+  opts: {
+    canViewPrices: boolean;
+    perWorkingDay: boolean;
+    hiddenPeriods?: ReadonlySet<string>;
+  },
+  rules: UnitRules<U>,
+): Matrix<U> {
+  const all = axis.all;
+  const windowPeriods = axis.windowPeriods;
 
   // ── OWNER FEEDBACK R2 — the column checklist ──────────────────────────
   // Hidden periods leave the COLUMNS and leave the SUMMARY fold. They do not
@@ -726,54 +830,38 @@ export function buildMatrix(
   const yoyIndex = new Map<string, number>();
   for (const p of all) yoyIndex.set(`${p.year}:${p.seq}`, indexByKey.get(p.key)!);
 
-  const rollingWindow = rollingWindowFor(opts.granularity);
+  const rollingWindow = rollingWindowFor(axis.granularity);
 
-  // The trailing summary column, and — for a year-scoped view — the SAME fold
-  // over the year before, so the summary carries an honest year-ago chip
-  // instead of a delta against nothing.
-  const periodPlural =
-    opts.granularity === "M" ? "months" : opts.granularity === "Q" ? "quarters" : "years";
-  const windowLabel = opts.granularity === "Y" ? "All time" : String(opts.year);
-  // A fold over four chosen months is NOT the year to date. When anything is
-  // switched off the column says so in its own header rather than carrying a
-  // year label over a number that is not the year.
-  const totalLabel = filtered ? "Selected" : windowLabel;
-  const totalFullLabel = filtered
-    ? `${shown.length} of ${windowPeriods.length} ${periodPlural} selected` +
-      (opts.granularity === "Y" ? "" : ` · ${opts.year}`)
-    : opts.granularity === "Y"
-      ? "All years"
-      : `${opts.year} · full year`;
+  // The trailing summary column, and — where the clock has one — the SAME fold
+  // over the comparable prior window, so the summary carries an honest
+  // year-ago chip instead of a delta against nothing.
+  const { label: totalLabel, fullLabel: totalFullLabel } = axis.totalLabels(
+    shown,
+    filtered,
+  );
   const totalPeriod = foldPeriod(shown, "__total", totalLabel, totalFullLabel);
   // The summary's comparison chip must compare LIKE WITH LIKE. Folding four
   // selected months against the previous year's full twelve would not be a
   // year-ago comparison, it would be a restatement wearing one — so the prior
   // year is narrowed to the same positions within it.
   const selectedSeq = new Set(shown.map((p) => p.seq));
-  const priorTotalPeriod =
-    opts.granularity === "Y"
-      ? null
-      : foldPeriod(
-          displayedPeriods(all, opts.granularity, opts.year - 1).filter(
-            (p) => !filtered || selectedSeq.has(p.seq),
-          ),
-          "__total_prior",
-          String(opts.year - 1),
-          filtered
-            ? `${opts.year - 1} · the same ${periodPlural}`
-            : `${opts.year - 1} · full year`,
-        );
+  const priorTotalPeriod = axis.priorTotal(selectedSeq, filtered);
 
-  const rows: MatrixRow[] = METRICS.map((spec) => {
+  const rows: MatrixRow<U>[] = specs.map((spec) => {
     const raws = all.map((p) =>
-      rawValue(spec, p, {
-        canViewPrices: opts.canViewPrices,
-        perWorkingDay: opts.perWorkingDay,
-      }),
+      rawValue(
+        spec,
+        p,
+        {
+          canViewPrices: opts.canViewPrices,
+          perWorkingDay: opts.perWorkingDay,
+        },
+        rules,
+      ),
     );
     const values = raws.map((r) => r.value);
 
-    const pointLabel = (p: Period) =>
+    const pointLabel = (p: Period<U>) =>
       p.label === String(p.year) ? p.label : `${p.label} ${String(p.year).slice(2)}`;
 
     // The metric's FIRST period on record. A stream that opened part-way
@@ -812,7 +900,8 @@ export function buildMatrix(
       const i = indexByKey.get(p.key)!;
       const raw = raws[i];
       const prev = i > 0 ? values[i - 1] : null;
-      const yoyIdx = opts.granularity === "Y" ? undefined : yoyIndex.get(`${p.year - 1}:${p.seq}`);
+      const yoyIdx =
+        axis.granularity === "Y" ? undefined : yoyIndex.get(`${p.year - 1}:${p.seq}`);
       return {
         periodKey: p.key,
         value: raw.value,
@@ -855,6 +944,7 @@ export function buildMatrix(
               canViewPrices: opts.canViewPrices,
               perWorkingDay: opts.perWorkingDay,
             },
+            rules,
           );
           return {
             periodKey: p.key,
@@ -877,9 +967,11 @@ export function buildMatrix(
       canViewPrices: opts.canViewPrices,
       perWorkingDay: opts.perWorkingDay,
     };
-    const totalRaw = totalPeriod ? rawValue(spec, totalPeriod, rollOpts) : null;
+    const totalRaw = totalPeriod
+      ? rawValue(spec, totalPeriod, rollOpts, rules)
+      : null;
     const priorTotalRaw = priorTotalPeriod
-      ? rawValue(spec, priorTotalPeriod, rollOpts)
+      ? rawValue(spec, priorTotalPeriod, rollOpts, rules)
       : null;
 
     const total: MatrixCell | null =
@@ -922,7 +1014,7 @@ export function buildMatrix(
   });
 
   return {
-    granularity: opts.granularity,
+    granularity: axis.granularity,
     periods: shown,
     windowPeriods,
     allPeriods: all,
@@ -931,11 +1023,78 @@ export function buildMatrix(
       canViewPrices: opts.canViewPrices,
       perWorkingDay: opts.perWorkingDay,
     },
+    rules,
     rows,
-    callouts: buildCallouts(rows, opts.granularity),
+    callouts: buildCallouts(rows, axis.granularity),
     totalLabel,
     totalFullLabel,
   };
+}
+
+/**
+ * The CALENDAR instantiation — the RC Inventory band, unchanged in behaviour.
+ *
+ * Every label rule that used to live inline in the fold lives here now, which
+ * is where it belongs: "All time" at YEAR granularity and "the same months" on
+ * a filtered prior year are facts about a CALENDAR, and the batch clock answers
+ * both questions differently.
+ */
+export function buildMatrix(
+  months: readonly AnalyticsMonth[],
+  opts: MatrixOptions,
+): Matrix {
+  const all = buildPeriods(months, opts.granularity);
+  const windowPeriods = displayedPeriods(all, opts.granularity, opts.year);
+  const periodPlural =
+    opts.granularity === "M"
+      ? "months"
+      : opts.granularity === "Q"
+        ? "quarters"
+        : "years";
+
+  return assembleMatrix(
+    METRICS,
+    {
+      granularity: opts.granularity,
+      all,
+      windowPeriods,
+      totalLabels: (shown, filtered) => {
+        // A fold over four chosen months is NOT the year to date. When anything
+        // is switched off the column says so in its own header rather than
+        // carrying a year label over a number that is not the year.
+        const windowLabel =
+          opts.granularity === "Y" ? "All time" : String(opts.year);
+        return {
+          label: filtered ? "Selected" : windowLabel,
+          fullLabel: filtered
+            ? `${shown.length} of ${windowPeriods.length} ${periodPlural} selected` +
+              (opts.granularity === "Y" ? "" : ` · ${opts.year}`)
+            : opts.granularity === "Y"
+              ? "All years"
+              : `${opts.year} · full year`,
+        };
+      },
+      priorTotal: (selectedSeq, filtered) =>
+        opts.granularity === "Y"
+          ? null
+          : foldPeriod(
+              displayedPeriods(all, opts.granularity, opts.year - 1).filter(
+                (p) => !filtered || selectedSeq.has(p.seq),
+              ),
+              "__total_prior",
+              String(opts.year - 1),
+              filtered
+                ? `${opts.year - 1} · the same ${periodPlural}`
+                : `${opts.year - 1} · full year`,
+            ),
+    },
+    {
+      canViewPrices: opts.canViewPrices,
+      perWorkingDay: opts.perWorkingDay,
+      hiddenPeriods: opts.hiddenPeriods,
+    },
+    MONTH_RULES,
+  );
 }
 
 // ---------------------------------------------------------------------
@@ -1043,7 +1202,7 @@ function signed(value: number, decimals: number): string {
   })}`;
 }
 
-function plainValue(spec: MetricSpec, v: number): string {
+function plainValue(spec: MetricSpecOf<unknown>, v: number): string {
   const n = v.toLocaleString("en-US", {
     minimumFractionDigits: spec.decimals,
     maximumFractionDigits: spec.decimals,
@@ -1070,12 +1229,18 @@ function plainValue(spec: MetricSpec, v: number): string {
   }
 }
 
-export function buildCallouts(
-  rows: readonly MatrixRow[],
+export function buildCallouts<U>(
+  rows: readonly MatrixRow<U>[],
   granularity: Granularity,
 ): Callout[] {
   const periodNoun =
-    granularity === "M" ? "month" : granularity === "Q" ? "quarter" : "year";
+    granularity === "M"
+      ? "month"
+      : granularity === "Q"
+        ? "quarter"
+        : granularity === "B"
+          ? "batch"
+          : "year";
   const deltaWord = DELTA_LABEL[granularity];
 
   interface Candidate {

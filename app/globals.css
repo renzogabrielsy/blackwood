@@ -1140,8 +1140,9 @@ input[type=number] {
    worth more as height here than as white space.
 
    `@page` cannot be scoped to a class, so this governs any print of the app —
-   which today means exactly this card: the per-metric Print button is the
-   only deliberate print path in the product. */
+   which today means the /analytics print paths (per-metric card, per-group
+   consolidated report, and the campaign panel print — all landscape by
+   design). Any future print surface elsewhere inherits landscape too. */
 @page {
   size: A4 landscape;
   margin: 12mm;

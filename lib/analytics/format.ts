@@ -30,6 +30,55 @@ export function fmtMetricValue(spec: MetricSpec, value: number): string {
   return nf(value, spec.decimals);
 }
 
+/**
+ * ── OWNER FEEDBACK R6 — THE UNIT LIVES ON THE LEFT OF A CELL ────────────────
+ *
+ * Renzo: *"let the left side of cells be the place where we indicate the unit.
+ * If it's money, ₱/kg; tonnes → T; percent → %. That would make things more
+ * clean."*
+ *
+ * This is the project's existing **accounting format** — CLAUDE.md's
+ * `flex justify-between`, glyph pinned left, number pinned right — generalised
+ * from ₱ to every unit on the page. The value is what the eye scans down a
+ * column, so it keeps the right edge and the `tabular-nums` alignment it
+ * already had; the unit stops being a trailing suffix that shifts the digits
+ * around and becomes a fixed marker at a fixed x.
+ *
+ * **One table, one place.** A glyph derived per component would have drifted
+ * the first time a row changed unit; deriving it from `MetricUnit` means the
+ * registry decides, exactly as it already decides the decimals.
+ *
+ * `count` is deliberately BLANK here — "12 what?" is a per-row question
+ * (sellers, bags, piles) and `MetricSpec.glyph` answers it per row. A count
+ * with no declared glyph simply renders as a bare number, which is what a
+ * count has always been.
+ */
+export const UNIT_GLYPH: Record<MetricUnit, string> = {
+  php_per_kg: "₱/kg",
+  php: "₱",
+  tonnes: "T",
+  count: "",
+  days: "d",
+  pct: "%",
+  hours: "h",
+  kwh: "kWh",
+  kwh_per_kg: "kWh/kg",
+};
+
+/**
+ * The glyph one ROW prints on the left of every value cell.
+ *
+ * A row may override the unit's own glyph (`MetricSpec.glyph`), and only the
+ * `count` rows do: `sellers`, `bags`, `piles` — each is a different thing being
+ * counted, and a shared glyph would be wrong on two of the three.
+ */
+export function unitGlyphFor(spec: {
+  unit: MetricUnit;
+  glyph?: string;
+}): string {
+  return spec.glyph ?? UNIT_GLYPH[spec.unit];
+}
+
 /** The unit suffix a chart axis and a tooltip use. */
 export function unitSuffix(unit: MetricUnit): string {
   switch (unit) {

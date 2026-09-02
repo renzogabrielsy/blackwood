@@ -299,6 +299,7 @@ export function DrilldownStat({
   label,
   value,
   unit,
+  unitSide = "right",
   sub,
   tone = "default",
   title,
@@ -306,30 +307,59 @@ export function DrilldownStat({
   label: string;
   value: string;
   unit?: string;
+  /**
+   * Where the unit sits. Defaults to `"right"`, which is every existing caller
+   * and every digest tile — nothing moved.
+   *
+   * `"left"` pins the unit to the left edge and the number to the right, the
+   * project's accounting format (CLAUDE.md → Currency). `/analytics` reads its
+   * stat strips that way so a strip and the table under it announce a unit in
+   * the same place; a tile that stands alone has no column to line up with and
+   * keeps the trailing form.
+   */
+  unitSide?: "left" | "right";
   sub?: string;
   tone?: "default" | "muted" | "up" | "down";
   title?: string;
 }) {
+  const valueEl = (
+    <span
+      className={cn(
+        "truncate font-mono text-[length:var(--bw-fs-18,1.125rem)] font-semibold tabular-nums leading-none",
+        tone === "muted" && "text-muted-foreground",
+        tone === "up" && "text-emerald-700 dark:text-emerald-300",
+        tone === "down" && "text-red-700 dark:text-red-300"
+      )}
+    >
+      {value}
+    </span>
+  );
+  const unitEl = unit ? (
+    <span className="shrink-0 text-[length:var(--bw-fs-105,10.5px)] text-muted-foreground">
+      {unit}
+    </span>
+  ) : null;
   return (
     <div className="min-w-0 rounded-lg border bg-card/60 px-3 py-2" title={title}>
       <div className="truncate text-[length:var(--bw-fs-105,10.5px)] font-medium uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
-      <div className="mt-0.5 flex items-baseline gap-1">
-        <span
-          className={cn(
-            "truncate font-mono text-[length:var(--bw-fs-18,1.125rem)] font-semibold tabular-nums leading-none",
-            tone === "muted" && "text-muted-foreground",
-            tone === "up" && "text-emerald-700 dark:text-emerald-300",
-            tone === "down" && "text-red-700 dark:text-red-300"
-          )}
-        >
-          {value}
-        </span>
-        {unit && (
-          <span className="shrink-0 text-[length:var(--bw-fs-105,10.5px)] text-muted-foreground">
-            {unit}
-          </span>
+      <div
+        className={cn(
+          "mt-0.5 flex items-baseline gap-1",
+          unitEl && unitSide === "left" && "justify-between",
+        )}
+      >
+        {unitSide === "left" ? (
+          <>
+            {unitEl}
+            {valueEl}
+          </>
+        ) : (
+          <>
+            {valueEl}
+            {unitEl}
+          </>
         )}
       </div>
       {sub && (

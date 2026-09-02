@@ -105,7 +105,12 @@ import { BreakdownRail } from "@/components/digest/drilldown/series-parts";
 import type { RailItem } from "@/components/digest/drilldown/series-parts";
 import { cn } from "@/lib/utils";
 import { printCard } from "./print-card";
-import type { HistoryPoint, MatrixRow, Period } from "@/lib/analytics/matrix";
+import type {
+  HistoryPoint,
+  MatrixRow,
+  Period,
+  UnitRules,
+} from "@/lib/analytics/matrix";
 import {
   foldSelection,
   GRANULARITY_LABEL,
@@ -113,9 +118,18 @@ import {
   rollingWindowFor,
   type Granularity,
 } from "@/lib/analytics/matrix";
-import { fmtCompact, unitSuffix } from "@/lib/analytics/format";
-import type { AnalyticsMonth } from "@/lib/analytics/types";
-import type { MetricSpec } from "@/lib/analytics/metrics";
+import { fmtCompact, unitGlyphFor, unitSuffix } from "@/lib/analytics/format";
+import type { AnalyticsMonth, ProductionBatchRow } from "@/lib/analytics/types";
+import type { MetricSpecOf } from "@/lib/analytics/metrics";
+
+/**
+ * The presentational half of a spec — label, unit, decimals, colours,
+ * dictionary. `never` for the unit makes this whole card clock-agnostic (R6):
+ * an RC Inventory row read against a calendar month and a Production row read
+ * against a production batch render through the same component, which is what
+ * keeps the two bands one design rather than two.
+ */
+type AnySpec = MetricSpecOf<never>;
 import { PeriodFilter, type PeriodFilterOption } from "./period-filter";
 import { NO_HIDDEN } from "@/lib/analytics/period-selection";
 
@@ -125,29 +139,46 @@ import { NO_HIDDEN } from "@/lib/analytics/period-selection";
 // re-measures for free with no `matchMedia` and no hydration seam.
 const CHART_HEIGHT = "var(--an-chart)";
 
-function bucketNounFor(g: Granularity): string {
-  return g === "M" ? "month" : g === "Q" ? "quarter" : "year";
+/**
+ * R6 — the PLURAL, declared rather than derived.
+ *
+ * `${noun}s` was fine while every bucket was a month, a quarter or a year. The
+ * batch clock produced "9 batchs with a figure" on the first render — the same
+ * bug `PeriodFilter.nounPlural` was added for in R5, one component over. A
+ * plural is a fact about a word, so it is stated.
+ */
+function bucketPluralFor(g: Granularity): string {
+  return g === "B" ? "batches" : `${bucketNounFor(g)}s`;
 }
 
-function fmtExact(spec: MetricSpec, v: number): string {
-  const n = v.toLocaleString("en-US", {
+function bucketNounFor(g: Granularity): string {
+  return g === "M"
+    ? "month"
+    : g === "Q"
+      ? "quarter"
+      : g === "B"
+        ? "batch"
+        : "year";
+}
+
+/**
+ * The magnitude at full precision — **NUMBER ONLY since R6.**
+ *
+ * It used to prefix a ₱ and suffix a `%`, which read fine beside a right-hand
+ * unit label but is exactly the duplication the unit-on-the-left format
+ * removes: the stat strip now prints `₱/kg  48.26`, not `₱/kg  ₱48.26%`. The
+ * chart TOOLTIPS still append `unitSuffix()` and are unaffected — a tooltip is
+ * a sentence, not a column, so a trailing unit is right there.
+ */
+function fmtExact(spec: AnySpec, v: number): string {
+  return v.toLocaleString("en-US", {
     minimumFractionDigits: spec.decimals,
     maximumFractionDigits: spec.decimals,
   });
-  switch (spec.unit) {
-    case "php":
-      return `₱${n}`;
-    case "php_per_kg":
-      return `₱${n}`;
-    case "pct":
-      return `${n}%`;
-    default:
-      return n;
-  }
 }
 
 /** Axis / tooltip magnitude — compact for pesos, exact for everything else. */
-function fmtAxis(spec: MetricSpec, v: number): string {
+function fmtAxis(spec: AnySpec, v: number): string {
   if (spec.unit === "php") return fmtCompact(v);
   if (Math.abs(v) >= 10_000) return fmtCompact(v);
   return v.toLocaleString("en-US", {
@@ -188,7 +219,7 @@ function paddedDomain(values: number[]): [number, number] | undefined {
  * not rendered either. A toggle for a line that cannot exist is a control that
  * lies about what the page can do.
  */
-function canDrawAvg(spec: MetricSpec, granularity: Granularity): boolean {
+function canDrawAvg(spec: AnySpec, granularity: Granularity): boolean {
   return granularity !== "Y" && !spec.pair;
 }
 
@@ -300,7 +331,7 @@ function MetricTrendChart({
   showAvg,
   emptyText,
 }: {
-  spec: MetricSpec;
+  spec: AnySpec;
   history: readonly HistoryPoint[];
   /** The comparison series, folded by the SAME rollup rules. Null when none. */
   pairHistory: readonly HistoryPoint[] | null;
@@ -311,7 +342,7 @@ function MetricTrendChart({
    * because a ₱/kg and a tonnage share no scale.
    */
   overlay: {
-    spec: MetricSpec;
+    spec: AnySpec;
     history: readonly HistoryPoint[];
   } | null;
   granularity: Granularity;
@@ -798,10 +829,16 @@ function AgingSplit({ month }: { month: AnalyticsMonth }) {
  * none. So the rail splits the month's downtime records three ways and lets
  * the reader see which kind they are looking at.
  */
-function DowntimeSplit({ month }: { month: AnalyticsMonth }) {
-  const withDuration = month.downtimeShiftsWithDuration ?? 0;
-  const reasonOnly = month.downtimeShiftsReasonOnly ?? 0;
-  const records = month.downtimeShiftCount ?? 0;
+interface DowntimeRecord {
+  downtimeShiftsWithDuration: number | null;
+  downtimeShiftsReasonOnly: number | null;
+  downtimeShiftCount: number | null;
+}
+
+function DowntimeSplit({ record }: { record: DowntimeRecord }) {
+  const withDuration = record.downtimeShiftsWithDuration ?? 0;
+  const reasonOnly = record.downtimeShiftsReasonOnly ?? 0;
+  const records = record.downtimeShiftCount ?? 0;
   const other = Math.max(records - withDuration - reasonOnly, 0);
   const total = withDuration + reasonOnly + other;
   const items: RailItem[] = total <= 0 ? [] : [
@@ -833,16 +870,16 @@ function DowntimeSplit({ month }: { month: AnalyticsMonth }) {
   ].filter((i) => Number(i.value) > 0);
   return (
     <div className="flex flex-col gap-2">
-      <BreakdownRail items={items} emptyText="No downtime record this month." maxHeight={130} />
+      <BreakdownRail items={items} emptyText="No downtime record here." maxHeight={130} />
       <p className="px-3 pb-1 text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
         A downtime total of zero can mean two completely different things.{" "}
         <strong className="font-semibold">
           A shift that named the repair and left the duration blank is real
           downtime the hours cannot see
         </strong>{" "}
-        — August 2026 is 23 shifts of exactly that, which is why its 0.00 hours
-        is marked and can never be quoted as a record. Nothing is estimated in
-        to fill the gap; the count is what makes the gap visible.
+        — the AUGUST 2026 campaign is 22 shifts of exactly that, which is why
+        its 0.00 hours is marked and can never be quoted as a record. Nothing is
+        estimated in to fill the gap; the count is what makes the gap visible.
       </p>
     </div>
   );
@@ -856,9 +893,17 @@ function DowntimeSplit({ month }: { month: AnalyticsMonth }) {
  * quantified instead — and nothing here repairs it, because correcting the
  * underlying row is Renzo's call and a separate, audited write.
  */
-function PowerSplit({ month }: { month: AnalyticsMonth }) {
-  const total = month.kwh ?? 0;
-  const suspect = month.kwhSuspectKwh ?? 0;
+interface PowerRecord {
+  kwh: number | null;
+  kwhSuspectKwh: number | null;
+  kwhSuspectReadingCount: number | null;
+  powerMeterCount: number | null;
+  powerDays: number | null;
+}
+
+function PowerSplit({ record }: { record: PowerRecord }) {
+  const total = record.kwh ?? 0;
+  const suspect = record.kwhSuspectKwh ?? 0;
   const sound = Math.max(total - suspect, 0);
   const items: RailItem[] = total <= 0 ? [] : [
     {
@@ -872,7 +917,7 @@ function PowerSplit({ month }: { month: AnalyticsMonth }) {
     {
       key: "suspect",
       label: "Mis-keyed readings",
-      meta: `${month.kwhSuspectReadingCount ?? 0} reading${(month.kwhSuspectReadingCount ?? 0) === 1 ? "" : "s"}`,
+      meta: `${record.kwhSuspectReadingCount ?? 0} reading${(record.kwhSuspectReadingCount ?? 0) === 1 ? "" : "s"}`,
       value: suspect.toLocaleString("en-US", { maximumFractionDigits: 0 }),
       unit: "kWh",
       sharePct: (suspect / total) * 100,
@@ -882,7 +927,7 @@ function PowerSplit({ month }: { month: AnalyticsMonth }) {
   ].filter((i) => i.sharePct > 0);
   return (
     <div className="flex flex-col gap-2">
-      <BreakdownRail items={items} emptyText="No meter reading this month." maxHeight={120} />
+      <BreakdownRail items={items} emptyText="No meter reading here." maxHeight={120} />
       <p className="px-3 pb-1 text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
         The kWh total is published{" "}
         <strong className="font-semibold">exactly as metered</strong> — it is
@@ -891,11 +936,11 @@ function PowerSplit({ month }: { month: AnalyticsMonth }) {
         out, because a wrong reading there does not look wrong, it looks like a
         twenty-fold efficiency collapse. Nothing on this page corrects the
         underlying reading.{" "}
-        {month.powerMeterCount != null && (
+        {record.powerMeterCount != null && (
           <>
-            {month.powerMeterCount} meter
-            {month.powerMeterCount === 1 ? "" : "s"} reported over{" "}
-            {month.powerDays ?? 0} day{(month.powerDays ?? 0) === 1 ? "" : "s"}.
+            {record.powerMeterCount} meter
+            {record.powerMeterCount === 1 ? "" : "s"} reported over{" "}
+            {record.powerDays ?? 0} day{(record.powerDays ?? 0) === 1 ? "" : "s"}.
           </>
         )}
       </p>
@@ -904,33 +949,107 @@ function PowerSplit({ month }: { month: AnalyticsMonth }) {
 }
 
 /**
- * Which side panel a row earns, if any. Declared here rather than on the
- * registry because it is a LAYOUT fact about this component — the registry
- * describes numbers, not which pane they sit beside.
+ * ── THE SIDE RAIL IS NOW A PROP, NOT A SWITCH (owner feedback R6) ──────────
+ *
+ * It used to be `sidePanelFor(spec.key)` reading `anchorMonth`, which quietly
+ * assumed every row on this page was read against a calendar month. R6 makes
+ * the card clock-agnostic, so the rail is built by whoever OWNS the clock and
+ * handed in as a node: `MonthSideRail` below for the RC Inventory band,
+ * `BatchSideRail` for the Production band. The card only has to know whether
+ * there IS one, which is what the two-column layout needs.
+ *
+ * Both are exported so the two rooms compose them; both return `null` for a row
+ * that has earned no rail, so `sideRail && …` is the whole layout rule.
  */
-type SidePanel = "stock_value" | "aging" | "downtime" | "power" | null;
-
-function sidePanelFor(key: MetricSpec["key"]): SidePanel {
-  switch (key) {
-    // R4: the coverage and closed-block rails went with the money rows they
-    // explained. This one arrived with the row that replaced Inventory value.
-    case "inventory_value":
-      return "stock_value";
-    case "stock_age":
-    case "over_120d":
-      return "aging";
-    case "downtime_hours":
-      return "downtime";
-    case "power_kwh":
-    case "power_intensity":
-      return "power";
-    default:
-      return null;
+export function MonthSideRail({
+  spec,
+  month,
+}: {
+  spec: AnySpec;
+  month: AnalyticsMonth | null;
+}): React.ReactElement | null {
+  if (!month) return null;
+  const subtitle = month.monthStart.slice(0, 7);
+  if (spec.key === "ending_inventory") {
+    return (
+      <DrilldownSection
+        title="What the net is made of"
+        subtitle={subtitle}
+        bodyClassName="p-0"
+      >
+        <InventorySplit month={month} />
+      </DrilldownSection>
+    );
   }
+  if (spec.key === "inventory_value") {
+    return (
+      <DrilldownSection
+        title="What the average is measured over"
+        subtitle={subtitle}
+        bodyClassName="p-0"
+      >
+        <StockValueSplit month={month} />
+      </DrilldownSection>
+    );
+  }
+  if (spec.key === "stock_age" || spec.key === "over_120d") {
+    return (
+      <DrilldownSection
+        title="How the yard is aged"
+        subtitle={subtitle}
+        bodyClassName="p-0"
+      >
+        <AgingSplit month={month} />
+      </DrilldownSection>
+    );
+  }
+  return null;
 }
 
-export interface MetricExpandProps {
-  row: MatrixRow;
+/**
+ * The Production band's rails, on the BATCH clock.
+ *
+ * `DowntimeSplit` and `PowerSplit` are the SAME components the calendar band
+ * used, unchanged: they were narrowed to the exact fields they read
+ * (`DowntimeRecord`, `PowerRecord`), and a `ProductionBatchRow` carries those
+ * fields under the same names because it is the same fact on a different clock.
+ * One panel, not two that would drift.
+ */
+export function BatchSideRail({
+  spec,
+  batch,
+}: {
+  spec: AnySpec;
+  batch: ProductionBatchRow | null;
+}): React.ReactElement | null {
+  if (!batch) return null;
+  if (spec.key === "downtime_hours") {
+    return (
+      <DrilldownSection
+        title="What the downtime records say"
+        subtitle={batch.campaignLabel}
+        bodyClassName="p-0"
+      >
+        <DowntimeSplit record={batch} />
+      </DrilldownSection>
+    );
+  }
+  if (spec.key === "power_kwh" || spec.key === "power_intensity") {
+    return (
+      <DrilldownSection
+        title="What the meters recorded"
+        subtitle={batch.campaignLabel}
+        bodyClassName="p-0"
+      >
+        <PowerSplit record={batch} />
+      </DrilldownSection>
+    );
+  }
+  return null;
+}
+
+export interface MetricExpandProps<U> {
+  row: MatrixRow<U>;
   granularity: Granularity;
   /**
    * The COMPLETE period axis at this granularity (`Matrix.allPeriods`). The
@@ -939,18 +1058,28 @@ export interface MetricExpandProps {
    * needs the MONTHS underneath — a price over a selection is Σ pesos ÷ Σ
    * priced kilos, which no amount of averaging the points can produce.
    */
-  allPeriods: readonly Period[];
+  allPeriods: readonly Period<U>[];
   /**
    * The options the matrix itself was folded with (`Matrix.foldOptions`).
    * Passed through rather than re-derived so a selection can never be folded
    * under different rules than the grid it sits inside.
    */
   foldOptions: { canViewPrices: boolean; perWorkingDay: boolean };
+  /**
+   * R6 — the CLOCK's own rules (`Matrix.rules`), threaded for the same reason
+   * `foldOptions` is: a selection re-folded here must obey the same blank rules
+   * the grid did, or a blank in the card would be explained by a sentence about
+   * a different clock.
+   */
+  rules: UnitRules<U>;
   /** Header for the trailing summary column, so the strip names the window. */
   totalLabel: string;
   totalFullLabel: string;
-  /** The newest month inside the displayed window — the split panel's subject. */
-  anchorMonth: AnalyticsMonth | null;
+  /**
+   * R6 — the side rail, already built by whoever owns the clock (see
+   * `MonthSideRail` / `BatchSideRail`). Omitted or null = a one-column card.
+   */
+  sideRail?: React.ReactNode;
   perWorkingDay: boolean;
   /** What the printed sheet says the reader was looking at. */
   scopeLabel: string;
@@ -989,31 +1118,36 @@ export interface MetricExpandProps {
    * page can do, and worse, it would advertise the existence of a figure the
    * reader may not have.
    */
-  priceOverlay?: MatrixRow | null;
+  priceOverlay?: MatrixRow<U> | null;
   onClose(): void;
 }
 
-export function MetricExpand({
+export function MetricExpand<U>({
   row,
   granularity,
   allPeriods,
   foldOptions,
+  rules,
   totalLabel,
   totalFullLabel,
-  anchorMonth,
+  sideRail,
   perWorkingDay,
   scopeLabel,
   asOfDate,
   showDictionary,
   priceOverlay,
   onClose,
-}: MetricExpandProps) {
+}: MetricExpandProps<U>) {
   const spec = row.metric;
   const cardRef = React.useRef<HTMLElement | null>(null);
   const noun = bucketNounFor(granularity);
-  const unit = unitSuffix(spec.unit);
+  const nouns = bucketPluralFor(granularity);
+  // R6 — the stat strip wears the unit on the LEFT, like every value cell on
+  // the page, so `unitSuffix` is no longer read here at all. It remains the
+  // CHART's vocabulary ("48.26 ₱/kg" inside a tooltip is a sentence, not a
+  // column) and is still used by `MetricTrendChart` above.
+  const statGlyph = unitGlyphFor(spec) || undefined;
   const normalised = perWorkingDay && spec.perWorkingDay;
-  const sidePanel = sidePanelFor(spec.key);
 
   // ── THE YEAR CHECKLIST (R2), WITH SMART DEFAULTS (R4) ───────────────────
   // Session state, keyed to this card, never to the URL — see the block
@@ -1103,9 +1237,9 @@ export function MetricExpand({
         title:
           e.withValue === 0
             ? `${y} — nothing was recorded for this figure. A genuine blank, not a zero; switching it off tidies the chart and changes no number.`
-            : `${y} — ${e.withValue} of ${e.total} ${noun}s carry a figure.`,
+            : `${y} — ${e.withValue} of ${e.total} ${nouns} carry a figure.`,
       }));
-  }, [row.history, granularity, noun]);
+  }, [row.history, granularity, nouns]);
 
   const shownYearCount = yearOptions.filter((o) => !hiddenYears.has(o.key)).length;
   const selectedSuffix = isFiltered ? " · selected" : "";
@@ -1169,8 +1303,8 @@ export function MetricExpand({
   const selectionFold = React.useMemo(() => {
     if (!isFiltered) return null;
     const selected = allPeriods.filter((p) => !hiddenYears.has(String(p.year)));
-    return foldSelection(spec, selected, foldOptions);
-  }, [isFiltered, allPeriods, hiddenYears, spec, foldOptions]);
+    return foldSelection(spec, selected, foldOptions, rules);
+  }, [isFiltered, allPeriods, hiddenYears, spec, foldOptions, rules]);
 
   const settled = React.useMemo(
     () =>
@@ -1213,7 +1347,7 @@ export function MetricExpand({
     : null;
   const excluded = settled.length - comparable.length;
   const recordScope =
-    `Across ${comparable.length} comparable ${noun}s.` +
+    `Across ${comparable.length} comparable ${nouns}.` +
     ` An in-progress ${noun} cannot set a record, and neither can an estimate or the first ${noun} a figure was ever recorded.` +
     (excluded > 0
       ? ` ${excluded} settled ${noun}${excluded === 1 ? " is" : "s are"} held out on those grounds.`
@@ -1252,10 +1386,10 @@ export function MetricExpand({
 
   /** What the chart card's own header says it is drawing. */
   const chartSubtitle = isFiltered
-    ? `${withValue} ${noun}s with a figure · ${shownYearCount}/${yearOptions.length} years`
+    ? `${withValue} ${nouns} with a figure · ${shownYearCount}/${yearOptions.length} years`
     : granularity === "Y"
-      ? `${withValue} ${noun}s with a figure`
-      : `${withValue} ${noun}s with a figure · shaded band is the window above`;
+      ? `${withValue} ${nouns} with a figure`
+      : `${withValue} ${nouns} with a figure · shaded band is the window above`;
 
   /** The years, spelled out — for the printed sheet and the card's own note. */
   const selectedYearsNote = isFiltered
@@ -1349,7 +1483,8 @@ export function MetricExpand({
             <DrilldownStat
               label={`Latest${selectedSuffix}`}
               value={latest?.value == null ? "—" : fmtExact(spec, latest.value)}
-              unit={latest?.value == null ? undefined : unit}
+              unit={latest?.value == null ? undefined : statGlyph}
+              unitSide="left"
               sub={latest?.fullLabel}
               title={
                 isFiltered
@@ -1365,12 +1500,13 @@ export function MetricExpand({
                     ? "—"
                     : fmtExact(spec, selectionFold.value)
                 }
-                unit={selectionFold.value == null ? undefined : unit}
+                unit={selectionFold.value == null ? undefined : statGlyph}
+                unitSide="left"
                 // R4 — `withValue`, the SAME count the chart header prints, so
                 // the strip and the chart can never appear to disagree. See
                 // the block comment on `withValue`.
-                sub={`${shownYearCount} of ${yearOptions.length} years · ${withValue} ${noun}s with a figure`}
-                title={`Folded over the years you left switched on, by this row's own rule — ${spec.dictionary.rollup} It is never an average of the points on the chart. The ${noun} count is how many carry a figure; ${selectionFold.periodCount} ${noun}s are in the selection in all.`}
+                sub={`${shownYearCount} of ${yearOptions.length} years · ${withValue} ${nouns} with a figure`}
+                title={`Folded over the years you left switched on, by this row's own rule — ${spec.dictionary.rollup} It is never an average of the points on the chart. The ${noun} count is how many carry a figure; ${selectionFold.periodCount} ${nouns} are in the selection in all.`}
               />
             ) : (
               <DrilldownStat
@@ -1378,7 +1514,8 @@ export function MetricExpand({
                 value={
                   row.total?.value == null ? "—" : fmtExact(spec, row.total.value)
                 }
-                unit={row.total?.value == null ? undefined : unit}
+                unit={row.total?.value == null ? undefined : statGlyph}
+                unitSide="left"
                 sub={totalFullLabel}
                 title={`How the ${totalLabel} column is built: ${spec.dictionary.rollup}`}
               />
@@ -1386,14 +1523,16 @@ export function MetricExpand({
             <DrilldownStat
               label={`Highest${selectedSuffix}`}
               value={high ? fmtExact(spec, high.value) : "—"}
-              unit={high ? unit : undefined}
+              unit={high ? statGlyph : undefined}
+              unitSide="left"
               sub={high?.fullLabel}
               title={recordScope}
             />
             <DrilldownStat
               label={`Lowest${selectedSuffix}`}
               value={low ? fmtExact(spec, low.value) : "—"}
-              unit={low ? unit : undefined}
+              unit={low ? statGlyph : undefined}
+              unitSide="left"
               sub={low?.fullLabel}
               title={recordScope}
             />
@@ -1402,8 +1541,7 @@ export function MetricExpand({
           <div
             className={cn(
               "grid grid-cols-1 gap-3",
-              (spec.key === "ending_inventory" || sidePanel) &&
-                "lg:grid-cols-[1fr_320px]",
+              sideRail && "lg:grid-cols-[1fr_320px]",
             )}
           >
             <DrilldownSection
@@ -1444,8 +1582,8 @@ export function MetricExpand({
                       color={spec.avgColor}
                       title={
                         showAvg
-                          ? `Hide the 3-${noun} avg line. It is a trailing mean over the last three ${noun}s and it breaks at a gap rather than drawing across one — hiding it changes nothing else on the chart, and the printed sheet follows whatever you leave switched on.`
-                          : `Draw the 3-${noun} avg line — a trailing mean over the last three ${noun}s, which breaks at a gap rather than drawing across one.`
+                          ? `Hide the 3-${noun} avg line. It is a trailing mean over the last three ${nouns} and it breaks at a gap rather than drawing across one — hiding it changes nothing else on the chart, and the printed sheet follows whatever you leave switched on.`
+                          : `Draw the 3-${noun} avg line — a trailing mean over the last three ${nouns}, which breaks at a gap rather than drawing across one.`
                       }
                     />
                   )}
@@ -1543,55 +1681,7 @@ export function MetricExpand({
               )}
             </DrilldownSection>
 
-            {spec.key === "ending_inventory" && anchorMonth && (
-              <DrilldownSection
-                title="What the net is made of"
-                subtitle={anchorMonth.monthStart.slice(0, 7)}
-                bodyClassName="p-0"
-              >
-                <InventorySplit month={anchorMonth} />
-              </DrilldownSection>
-            )}
-
-            {sidePanel === "stock_value" && anchorMonth && (
-              <DrilldownSection
-                title="What the average is measured over"
-                subtitle={anchorMonth.monthStart.slice(0, 7)}
-                bodyClassName="p-0"
-              >
-                <StockValueSplit month={anchorMonth} />
-              </DrilldownSection>
-            )}
-
-            {sidePanel === "aging" && anchorMonth && (
-              <DrilldownSection
-                title="How the yard is aged"
-                subtitle={anchorMonth.monthStart.slice(0, 7)}
-                bodyClassName="p-0"
-              >
-                <AgingSplit month={anchorMonth} />
-              </DrilldownSection>
-            )}
-
-            {sidePanel === "downtime" && anchorMonth && (
-              <DrilldownSection
-                title="What the downtime records say"
-                subtitle={anchorMonth.monthStart.slice(0, 7)}
-                bodyClassName="p-0"
-              >
-                <DowntimeSplit month={anchorMonth} />
-              </DrilldownSection>
-            )}
-
-            {sidePanel === "power" && anchorMonth && (
-              <DrilldownSection
-                title="What the meters recorded"
-                subtitle={anchorMonth.monthStart.slice(0, 7)}
-                bodyClassName="p-0"
-              >
-                <PowerSplit month={anchorMonth} />
-              </DrilldownSection>
-            )}
+            {sideRail}
           </div>
 
           {/* The dictionary, spelled out — the same copy the row's info button

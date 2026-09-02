@@ -24,7 +24,18 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import type { MetricDictionaryEntry, MetricSpec } from "@/lib/analytics/metrics";
+import type {
+  MetricDictionaryEntry,
+  MetricSpecOf,
+} from "@/lib/analytics/metrics";
+
+/**
+ * Only the PRESENTATIONAL half of a spec — the label, the sublabel and the
+ * dictionary. `never` for the unit makes this component clock-agnostic (R6): a
+ * calendar row and a production-batch row both satisfy it, and neither can
+ * smuggle a `read()` into a component whose job is prose.
+ */
+type AnySpec = MetricSpecOf<never>;
 
 /** The whole entry as one flat string — the hover affordance. */
 export function dictionaryEntryTitle(
@@ -41,7 +52,7 @@ export function dictionaryEntryTitle(
 }
 
 /** The matrix row's flavour of the same thing. */
-export function dictionaryTitle(spec: MetricSpec): string {
+export function dictionaryTitle(spec: AnySpec): string {
   return dictionaryEntryTitle(spec.label, spec.sublabel, spec.dictionary);
 }
 
@@ -145,7 +156,7 @@ export function MetricInfo({
   spec,
   className,
 }: {
-  spec: MetricSpec;
+  spec: AnySpec;
   className?: string;
 }) {
   return (

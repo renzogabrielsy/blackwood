@@ -82,7 +82,9 @@ import {
   type Granularity,
   type MatrixRow,
 } from "@/lib/analytics/matrix";
+import { MONTH_RULES } from "@/lib/analytics/matrix";
 import type { MetricKey, MetricSection } from "@/lib/analytics/metrics";
+import { buildBatchMatrix } from "@/lib/analytics/production-batch";
 import type { AnalyticsData, AnalyticsMonth } from "@/lib/analytics/types";
 import { AnalyticsMatrix } from "./analytics-matrix";
 import { AnalyticsNav } from "./analytics-nav";
@@ -92,8 +94,8 @@ import { SupplierRoom } from "./supplier-room";
 import { ProductionRoom } from "./production-room";
 import { PeriodFilter, type PeriodFilterOption } from "./period-filter";
 import { GroupPrintPage, GroupPrintStage } from "./group-print";
+import { MonthSideRail } from "./metric-expand";
 import { NO_HIDDEN, serializeHidden } from "@/lib/analytics/period-selection";
-import { selectedCampaignMonths } from "@/lib/analytics/campaign";
 
 /**
  * The bands the TOP matrix renders. The production band is deliberately not
@@ -159,6 +161,9 @@ const PERIOD_NOUN: Record<Granularity, { one: string; many: string }> = {
   M: { one: "month", many: "months" },
   Q: { one: "quarter", many: "quarters" },
   Y: { one: "year", many: "years" },
+  // Never selectable from the Y/Q/M toggle — it is the Production band's fixed
+  // grain — but the record is total so a future switch on it cannot default.
+  B: { one: "batch", many: "batches" },
 };
 
 export interface AnalyticsViewProps {
@@ -269,74 +274,32 @@ export function AnalyticsView({
   );
 
   /**
-   * ── R5 ITEM 8 — THE BATCH FILTER DRIVES THE PRODUCTION BAND ─────────────
+   * ── R6 — THE PRODUCTION BAND IS ITS OWN CLOCK ──────────────────────────
    *
-   * The months the SELECTED campaigns ran in, or `null` when nothing is
-   * switched off. `null` is not "every month": it means there is no filter at
-   * all, which is what lets the production band reuse the page's own fold
-   * rather than building an identical second one under a different name.
-   */
-  const campaignMonths = React.useMemo(
-    () => selectedCampaignMonths(data.campaigns, hiddenCampaigns),
-    [data.campaigns, hiddenCampaigns],
-  );
-
-  /**
-   * The production band's own period selection: the page's hidden columns,
-   * PLUS every period that does not overlap a selected campaign.
+   * A second fold, over CAMPAIGNS rather than months, through the same
+   * `assembleMatrix` machinery — same rollup contract, same callout gate, same
+   * delta rules. The `?bhide=` set is applied to it DIRECTLY, because a period
+   * key on this clock IS a `campaignLabel`: the one control drives the campaign
+   * panel's columns, this band's columns and the grade mix, with no mapping
+   * step between them.
    *
-   * **A MONTH IS ATOMIC HERE, and the page says so out loud** (the note in
-   * `production-room.tsx`). Downtime and electricity are metered by calendar
-   * month while a campaign straddles month boundaries — AUGUST closed and
-   * SEPTEMBER opened on 2026-08-29 — so a month that overlaps a SELECTED and
-   * an UNSELECTED campaign is shown WHOLE. Splitting it would mean inventing a
-   * per-campaign share of a meter reading that was never taken per campaign,
-   * which is the one thing this page does not do.
-   */
-  const productionHidden = React.useMemo(() => {
-    if (!campaignMonths) return hidden;
-    const next = new Set(hidden);
-    for (const p of matrix.windowPeriods) {
-      const overlaps = p.months.some((m) =>
-        campaignMonths.has(m.monthStart.slice(0, 7)),
-      );
-      if (!overlaps) next.add(p.key);
-    }
-    return next;
-  }, [campaignMonths, hidden, matrix.windowPeriods]);
-
-  /**
-   * The production band's fold. Identical options to the matrix above it —
-   * same months, same rollups, same ₱ gate — differing ONLY in which periods
-   * are switched off, so a production cell prints the same number it would
-   * have printed unfiltered and the summary column honestly re-folds over the
-   * selection and renames itself `Selected`, exactly as the column checklist
-   * already makes it do.
+   * R5 needed `selectedCampaignMonths` to carry a batch selection into calendar
+   * columns, and it needed a paragraph explaining that a month overlapping a
+   * selected and an unselected batch had to be shown whole. Both are retired:
+   * there is no such month any more.
    *
-   * When no campaign is switched off this IS the page's own matrix object, not
-   * a copy of it.
+   * `canViewPrices` is threaded even though **no row in this band is ₱-bearing
+   * and none can be** — no peso column exists in either batch view. Passing it
+   * costs nothing and means the gate is not something a future row would have
+   * to remember to reconnect.
    */
   const productionMatrix = React.useMemo(
     () =>
-      productionHidden === hidden
-        ? matrix
-        : buildMatrix(data.months, {
-            granularity,
-            year,
-            canViewPrices: data.canViewPrices,
-            perWorkingDay,
-            hiddenPeriods: productionHidden,
-          }),
-    [
-      productionHidden,
-      hidden,
-      matrix,
-      data.months,
-      data.canViewPrices,
-      granularity,
-      year,
-      perWorkingDay,
-    ],
+      buildBatchMatrix(data.productionBatches.rows, {
+        canViewPrices: data.canViewPrices,
+        hiddenPeriods: hiddenCampaigns,
+      }),
+    [data.productionBatches.rows, data.canViewPrices, hiddenCampaigns],
   );
 
   /**
@@ -362,8 +325,10 @@ export function AnalyticsView({
    */
   const expandedRow = React.useMemo(() => {
     if (!metric) return null;
-    const row = matrix.rows.find((r) => r.metric.key === metric) ?? null;
-    return row && row.metric.section !== "production" ? row : null;
+    // R6 — the two bands are two REGISTRIES now, not two sections of one, so
+    // "does this row belong to me" is simply "is it in my fold". A production
+    // key is absent from `matrix.rows` entirely.
+    return matrix.rows.find((r) => r.metric.key === metric) ?? null;
   }, [matrix.rows, metric]);
 
   /**
@@ -385,6 +350,37 @@ export function AnalyticsView({
     [matrix.rows, metric],
   );
 
+  /**
+   * R6 — fed-price coverage per COLUMN, for the `~` hover only.
+   *
+   * Σ traceable ÷ Σ all over the column's months — the same Σnum ÷ Σden the
+   * weighted rows use, over two columns the SQL layer publishes. It moved out
+   * of `analytics-matrix.tsx` when that table became clock-agnostic: coverage
+   * belongs to a PERIOD, so it is the caller that owns the clock that supplies
+   * it. It is hover copy, never a figure the grid prints.
+   */
+  const coverageByPeriod = React.useMemo(() => {
+    const out = new Map<string, number | null>();
+    let winTraceable = 0;
+    let winAll = 0;
+    for (const p of matrix.periods) {
+      let traceable = 0;
+      let all = 0;
+      for (const m of p.months) {
+        traceable += m.fedKgPriceTraceable ?? 0;
+        all += (m.fedKgPriceTraceable ?? 0) + (m.fedKgPriceUntraceable ?? 0);
+      }
+      out.set(p.key, all > 0 ? (traceable / all) * 100 : null);
+      winTraceable += traceable;
+      winAll += all;
+    }
+    const totalKey = matrix.rows[0]?.total?.periodKey;
+    if (totalKey) {
+      out.set(totalKey, winAll > 0 ? (winTraceable / winAll) * 100 : null);
+    }
+    return out;
+  }, [matrix.periods, matrix.rows]);
+
   /** The newest month inside the displayed window — what the split panel describes. */
   const anchorMonth: AnalyticsMonth | null = React.useMemo(() => {
     const inWindow = matrix.periods.flatMap((p) => p.months);
@@ -399,7 +395,17 @@ export function AnalyticsView({
       ? "every year on record"
       : `${year}${matrix.periods.some((p) => p.isPartial) ? " · the marked column is still in progress" : ""}`;
 
-  /** What a printed metric card says the reader was looking at. */
+  /**
+   * What a printed metric card says the reader was looking at.
+   *
+   * R6 — TWO of them, because the page now has two clocks and a printed sheet
+   * that named the wrong one would be exactly the misquote the print footer
+   * exists to prevent.
+   */
+  const batchPrintScope =
+    hiddenCampaigns.size > 0
+      ? `${data.campaigns.length - hiddenCampaigns.size} of ${data.campaigns.length} production batches selected`
+      : "All production batches";
   const printScope = matrix.filtered
     ? `${granularity === "Y" ? "All years" : String(year)} · ${matrix.periods.length} of ${matrix.windowPeriods.length} ${noun.many} selected`
     : granularity === "Y"
@@ -667,6 +673,7 @@ export function AnalyticsView({
         perWorkingDay={perWorkingDay}
         comparison={comparison}
         sections={TOP_BANDS}
+        coverageByPeriod={coverageByPeriod}
         onPrintSection={startBandPrint}
         printingSection={printBand}
         expand={
@@ -681,9 +688,15 @@ export function AnalyticsView({
               granularity={granularity}
               allPeriods={matrix.allPeriods}
               foldOptions={matrix.foldOptions}
+              rules={MONTH_RULES}
               totalLabel={matrix.totalLabel}
               totalFullLabel={matrix.totalFullLabel}
-              anchorMonth={anchorMonth}
+              sideRail={
+                <MonthSideRail
+                  spec={expandedRow.metric}
+                  month={anchorMonth}
+                />
+              }
               perWorkingDay={perWorkingDay}
               scopeLabel={printScope}
               asOfDate={data.asOfDate}
@@ -734,23 +747,16 @@ export function AnalyticsView({
           live for every role including Production. */}
       <ProductionRoom
         matrix={productionMatrix}
-        months={data.months}
+        batches={data.productionBatches.rows}
         grades={data.productionGrades}
-        year={year}
-        granularity={granularity}
         selected={metric}
         onSelect={setMetric}
-        perWorkingDay={perWorkingDay}
         comparison={comparison}
-        printScope={printScope}
+        printScope={batchPrintScope}
         asOfDate={data.asOfDate}
         showDictionary={showDictionary}
-        // R5 — the months the selected batches ran in, or null for no filter.
-        campaignMonths={campaignMonths}
-        campaignSelection={{
-          selected: data.campaigns.length - hiddenCampaigns.size,
-          total: data.campaigns.length,
-        }}
+        // R6 — ONE checklist, applied directly. See `production-batch.ts`.
+        hiddenCampaigns={hiddenCampaigns}
       />
 
       {/* ── The SUPPLIER axis ──────────────────────────────────────────
@@ -793,9 +799,10 @@ export function AnalyticsView({
                 granularity={granularity}
                 allPeriods={matrix.allPeriods}
                 foldOptions={matrix.foldOptions}
+                rules={MONTH_RULES}
                 totalLabel={matrix.totalLabel}
                 totalFullLabel={matrix.totalFullLabel}
-                anchorMonth={anchorMonth}
+                sideRail={<MonthSideRail spec={r.metric} month={anchorMonth} />}
                 perWorkingDay={perWorkingDay}
                 scopeLabel={printScope}
                 asOfDate={data.asOfDate}

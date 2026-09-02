@@ -23,6 +23,7 @@ import { getAnalyticsData } from "@/lib/analytics/queries";
 import type { AnalyticsData } from "@/lib/analytics/types";
 import type { ComparisonMode, Granularity } from "@/lib/analytics/matrix";
 import { METRIC_BY_KEY, type MetricKey } from "@/lib/analytics/metrics";
+import { BATCH_METRIC_BY_KEY } from "@/lib/analytics/production-batch";
 import { AnalyticsView } from "./analytics-view";
 import { AnalyticsError } from "./analytics-error";
 import { parseHidden } from "@/lib/analytics/period-selection";
@@ -86,9 +87,22 @@ function resolveDictionary(raw: Param): boolean {
   return first(raw) !== "off";
 }
 
+/**
+ * R6 — BOTH registries are consulted, because the page now has two clocks.
+ *
+ * The RC Inventory rows are read against calendar months and the Production
+ * rows against production batches, so they live in two registries rather than
+ * one — but a `?metric=` deep link names a ROW, not a clock. Checking both is
+ * what keeps every existing link resolving, including the four the Home Digest
+ * drill-downs carry and any link to a production row shared before this round.
+ * A key belongs to exactly one of the two, so there is nothing to disambiguate.
+ */
 function resolveMetric(raw: Param): MetricKey | null {
   const v = first(raw);
-  return v && METRIC_BY_KEY.has(v as MetricKey) ? (v as MetricKey) : null;
+  if (!v) return null;
+  const known =
+    METRIC_BY_KEY.has(v as MetricKey) || BATCH_METRIC_BY_KEY.has(v);
+  return known ? (v as MetricKey) : null;
 }
 
 export default async function AnalyticsPage({

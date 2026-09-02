@@ -117,25 +117,21 @@ export function campaignMonthKeys(c: CampaignCost): string[] {
   return [...keys].sort();
 }
 
-/**
- * The months the SELECTED campaigns cover, or `null` when nothing is switched
- * off — `null` meaning "no filter at all", which is a different answer from
- * "every month", and the difference is what lets a caller skip a re-fold
- * entirely rather than re-deriving the same matrix under a different name.
- *
- * `hidden` is the switched-OFF set, the same shape every other checklist on
- * this page carries: an empty set cannot mean "nothing is selected", it can
- * only mean "everything is".
- */
-export function selectedCampaignMonths(
-  campaigns: readonly CampaignCost[],
-  hidden: ReadonlySet<string>,
-): ReadonlySet<string> | null {
-  if (hidden.size === 0) return null;
-  const out = new Set<string>();
-  for (const c of campaigns) {
-    if (hidden.has(campaignKey(c))) continue;
-    for (const k of campaignMonthKeys(c)) out.add(k);
-  }
-  return out;
-}
+// ── `selectedCampaignMonths` WAS HERE, AND IS GONE (owner feedback R6) ───────
+//
+// R5 needed it to carry the campaign checklist's selection into the production
+// band's CALENDAR columns: a batch is not a month, so the selection had to be
+// projected onto months before it could filter anything, and the projection was
+// lossy enough to need a caveat sentence on screen ("a month overlapping a
+// selected and an unselected batch is shown whole").
+//
+// R6 moved that band onto the batch clock, so a column IS a batch and the
+// checklist filters it by identity — `?bhide=` holds `campaignLabel` keys and
+// the campaign panel, the production band and the grade mix all read the same
+// set with no mapping step. There is nothing left for this function to do.
+//
+// Deleted rather than left exported: a projection helper that no caller uses is
+// exactly the thing a future round reaches for, and reaching for it would put
+// the calendar clock back into the production band by the back door.
+// `campaignMonthKeys` stays — the campaign PANEL still uses it to say which
+// months a campaign spanned, which is a label, not a filter.
