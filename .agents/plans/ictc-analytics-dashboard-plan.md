@@ -1362,3 +1362,132 @@ every table and every stat strip · group print (8 pages, 664×260 charts on a 1
 and per-metric print (exactly one `data-print-card`) · 1512 / 2560 / 375 at both themes with
 `scrollWidth === clientWidth` at all three and frozen cells carrying no alpha and no
 `backdrop-filter` · and, under `role=production`, every ₱ figure reading `—`.
+
+## 13. OWNER FEEDBACK ROUND 7 — 2026-09-02 (PURCHASE/USAGE + THE MERGED CAMPAIGN TABLE)
+
+Renzo's seven-item list, applied. **This round removed four matrix rows and merged two
+tables into one**, so the page is now THREE sections rather than four.
+
+> ### ✅ ROUND 7 SHIPPED — 2026-09-02, branch `feat/analytics-round-7`
+> Gates: `npx tsc --noEmit` clean · `npm run lint` **146 problems / 16 errors** (the
+> baseline, unmoved) · `npm run build` clean · `npx tsx scripts/verify-table-core.ts`
+> **84 assertions** · `npm run test:e2e` **57 passed**. Browser-verified in a throwaway
+> harness at `app/dev/table-playground/analytics-r7/`, since deleted.
+
+| # | Asked for | Where it landed |
+|---|---|---|
+| 1 | Drop `RC IN total` / `RC OUT`; keep Purchase volume and add **Usage** below it | `lib/analytics/metrics.ts` — `usage_volume`, reading `view_analytics_cost_monthly.fed_kg` |
+| 2 | Net flow stays yard-flow; its expand draws the two removed series | `MetricSpec.pairs` (a LIST now) + `matrix.ts` `pairHistories` + `metric-expand.tsx` |
+| 3 | Drop Produced / Yield / both ₱-per-produced from the campaign panel | subsumed by item 5 — they exist once, in the merged table |
+| 4 | Drop `Avg stock age` and `Stock over 120 days` | `metrics.ts`; `AgingSplit` deleted with them |
+| 5 | **Merge the campaign panel and the Production table into ONE** | `lib/analytics/campaign-matrix.ts` (new) + `app/(app)/analytics/campaign-room.tsx` (new); `batch-cost-panel.tsx`, `production-room.tsx` and `lib/analytics/production-batch.ts` deleted |
+| 6 | Section order RC Inventory → Campaigns → Suppliers | `analytics-view.tsx`, `analytics-nav.tsx` (three anchors, not four) |
+| 7 | Keep every established convention | unit-on-left, MoM + YoY/Δ chip, smart year defaults, in-place expands with Print, master `Definitions`, big-screen scale, landscape print, dividers, reorder — all inherited by construction, because the merged table is the SAME `AnalyticsMatrix` component |
+
+### 13.1 The decision worth recording: Usage and Charcoal fed are two different numbers
+
+Both are **MAIN-only fed kilos** and both are correct. They differ because they are on
+different clocks, and the page says so twice — in the Usage row's own dictionary and in the
+campaign table's header paragraph.
+
+- **`Usage` (RC Inventory) is the CALENDAR month**, `view_analytics_cost_monthly.fed_kg`.
+- **`Charcoal fed` (the campaign table) is the BATCH clock**, `view_analytics_batch_cost.fed_kg`.
+
+A campaign straddles month boundaries — AUGUST closed and SEPTEMBER opened on 2026-08-29 —
+so for any month a changeover fell in, the two are *supposed* to disagree. Publishing both
+without saying which clock each is on is the mistake; publishing only one would have made
+the yard's month-on-month row unavailable or the campaign's cost basis unavailable.
+
+**And Usage is NOT `view_analytics_flow_monthly.out_kg`.** That column is the OUT clock and
+still counts sundry pulls (L-047's three-clock doctrine: FED = MAIN · OUT = everything ·
+BALANCE = deliveries − OUT). A row called "Usage" that counted charcoal which never reached
+the plant would re-introduce exactly the 552,629 kg error the September 2 migration fixed.
+
+### 13.2 The second decision: RC IN and RC OUT now live only inside the Net flow expand
+
+They were the yard's two undifferentiated totals, and Renzo asked for rows that say what
+they mean. **Neither series was deleted.** `Net flow` is the one row on the page genuinely
+about gross movement, so both are declared as its `pairs` and drawn as lines over its bars,
+labelled `RC IN, all arrivals` and `RC OUT, all destinations`. They fold through the row's
+OWN rollup and per-working-day option, so `in − out = net` holds in every column of the
+chart rather than only in a month.
+
+`MetricSpec.pair` became `MetricSpec.pairs` for this — a list, because a subtraction has
+two halves. Nothing declared a pair before this round, so the migration touched only the
+mechanism, never a live series.
+
+`page.tsx` gained `RETIRED_METRIC_ALIASES` (`rc_in_total` → `net_flow`, `rc_out` →
+`net_flow`) so every link ever shared, including the Home Digest's two drill-down hrefs,
+opens where those numbers now live. The two aging keys are deliberately NOT aliased: they
+have no home, and pointing them at an arbitrary neighbour would be worse than opening no
+row at all.
+
+### 13.3 The merge is a frontend fold, and it CHECKS rather than assumes
+
+`view_analytics_batch_cost` (32 rows) and `view_analytics_production_by_batch` (32 rows)
+already share a spine (`campaign_options UNION campaign_yield`) and the adapter already
+sorts both by `campaignSeq`. **No SQL was written for this round.**
+
+`foldCampaignRows()` outer-joins them on `(production_batch, campaign_year)` and keeps the
+two view rows as NAMED HALVES (`row.cost`, `row.batch`) rather than spreading them into one
+flat object — six field names collide, and a spread would settle all six silently by
+declaration order. Every `read` therefore says which view it is reading, on its own line.
+
+Where they overlap:
+
+- **`fedKg` comes from the COST view**, because the five ₱ rows are ratios over those exact
+  kilos and a headline disagreeing with its own denominator is worse than one disagreeing
+  with a sibling view. The fold **counts** any disagreement above 1 kg (measured 0 of 32)
+  and the room prints a sentence naming the campaigns if it ever finds one.
+- **`producedKg` / `yieldPct` come from the PRODUCTION view**, because that one is NULL —
+  never 0 — on the 22 campaigns that predate daily production reporting. The cost view
+  publishes 0 there deliberately (for it that column is a money denominator), and a 0 in an
+  owner-facing headline reads as a plant that ran and made nothing.
+- **Yield is still `view_rc_movement_campaign_yield.yield_pct` verbatim**, so R6's tie with
+  the RC Movement campaign panel survives the merge untouched.
+
+Two rollups needed a denominator no view publishes, and both are documented at the point of
+use: **Weight lost** inverts the view's own published ratio (`weight_lost_kg ÷ loss_pct`)
+to get delivered kilos, so a selection is Σ lost ÷ Σ delivered rather than the mean of the
+campaigns' percentages; **True ₱/kg**, **Cost of storage time** and both **₱ per produced
+kg** rows weight by the same kilos their own value is weighted by. A campaign with a zero
+`loss_pct` or a missing side drops out of BOTH halves — the `yieldUsable` discipline.
+
+### 13.4 What the merged table gained, and what it kept
+
+**Gained**: the six money-and-yard rows are matrix rows now, so each has a
+period-over-period delta, the comparison chip, an in-place expand with its own chart,
+checklist, average switch and Print, and a real `MetricDictionaryEntry` instead of a
+`title` attribute.
+
+**Kept**: the `?bhide=` `Batches` checklist (now two consumers — the table and the grade
+mix — instead of three), the `Blocks closed / priced` coverage line as a footer ROW
+(`AnalyticsMatrix` gained a `footer` slot; it is a node, not a fake metric, so it can never
+enter the callout gate or the group print), row dividers, drag/keyboard reorder, group
+print, unit-on-left cells, and the ₱ gate — five of the sixteen rows are `price: true` and
+the adapter already nulls them server-side, so a restricted role gets `null` in the cell and
+the matrix renders the row locked.
+
+**The reorder scope is a NEW localStorage key by construction**: `MetricSection` went
+`"production"` → `"campaigns"`, and the matrix keys its saved order `metrics:<section>`, so
+the merged table reads `bw.analytics.roworder.v1.metrics:campaigns`. A stale order saved
+against `metrics:production` or against the old panel's `campaign` scope cannot misapply,
+and `resolveOrder` would append the new rows anyway.
+
+### 13.5 What was checked in the browser
+
+Nav reads `RC Inventory · Campaigns · Suppliers` and the three anchors sit at 400 / 935 /
+8163 px in that order · RC Inventory prints exactly seven rows with **Purchase volume then
+Usage adjacent** and neither aging row present · the campaign table prints all **sixteen**
+rows in the asked-for order with the `BLOCKS CLOSED / PRICED` footer beneath them and the
+grade mix beneath that · `?metric=rc_out` opens **Net flow**, whose chart draws 33 bars, two
+dashed lines and a legend reading `RC IN, all arrivals · RC OUT, all destinations · Net
+flow`, with the explanatory note under it · `?bhide=` over three campaigns re-renders the
+table to 18 of 21 columns, narrows the grade mix with it and updates the coverage footer's
+own total · keyboard ↓ on a campaign grip moves the row and writes
+`bw.analytics.roworder.v1.metrics:campaigns` · group `Print 16` mounts 16 pages with 48
+laid-out chart surfaces under `@page { size: a4 landscape; margin: 12mm }`, then unmounts
+with zero `data-print-page` and zero `data-print-ancestor` left behind · under
+`role=production` seven rows read `Restricted` and **zero `₱<digits>` sequences appear
+anywhere on the page** · and at **1512 light, 1512 dark, 2560 dark and 375 light**,
+`document.scrollWidth === clientWidth` with no truncated row label.

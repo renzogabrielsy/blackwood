@@ -84,24 +84,26 @@ import {
 } from "@/lib/analytics/matrix";
 import { MONTH_RULES } from "@/lib/analytics/matrix";
 import type { MetricKey, MetricSection } from "@/lib/analytics/metrics";
-import { buildBatchMatrix } from "@/lib/analytics/production-batch";
+import {
+  buildCampaignMatrix,
+  foldCampaignRows,
+} from "@/lib/analytics/campaign-matrix";
 import type { AnalyticsData, AnalyticsMonth } from "@/lib/analytics/types";
 import { AnalyticsMatrix } from "./analytics-matrix";
 import { AnalyticsNav } from "./analytics-nav";
 import { MetricExpand } from "./metric-expand";
-import { BatchCostPanel } from "./batch-cost-panel";
 import { SupplierRoom } from "./supplier-room";
-import { ProductionRoom } from "./production-room";
+import { CampaignRoom } from "./campaign-room";
 import { PeriodFilter, type PeriodFilterOption } from "./period-filter";
 import { GroupPrintPage, GroupPrintStage } from "./group-print";
 import { MonthSideRail } from "./metric-expand";
 import { NO_HIDDEN, serializeHidden } from "@/lib/analytics/period-selection";
 
 /**
- * The bands the TOP matrix renders. The production band is deliberately not
- * one of them — it is the same fold, rendered by the same component, down in
- * its own section after the supplier room, because the page's reading order is
- * PERIOD → CAMPAIGN → SUPPLIER → PRODUCTION.
+ * The bands the TOP matrix renders. The campaign band is deliberately not one
+ * of them — it is a different CLOCK on a different fold, rendered by the same
+ * component down in its own section, because the page's reading order is
+ * PERIOD → CAMPAIGN → SUPPLIER.
  *
  * OWNER FEEDBACK R4: this was `["flow", "money"]`. The money band is dissolved
  * (see `metrics.ts` → `MetricKey`), so the top matrix is the RC Inventory band
@@ -274,32 +276,37 @@ export function AnalyticsView({
   );
 
   /**
-   * ── R6 — THE PRODUCTION BAND IS ITS OWN CLOCK ──────────────────────────
+   * ── R6/R7 — THE CAMPAIGN TABLE IS ITS OWN CLOCK ────────────────────────
    *
    * A second fold, over CAMPAIGNS rather than months, through the same
    * `assembleMatrix` machinery — same rollup contract, same callout gate, same
    * delta rules. The `?bhide=` set is applied to it DIRECTLY, because a period
-   * key on this clock IS a `campaignLabel`: the one control drives the campaign
-   * panel's columns, this band's columns and the grade mix, with no mapping
-   * step between them.
+   * key on this clock IS a `campaignLabel`: one control drives this table's
+   * columns and the grade mix under it, with no mapping step between them.
    *
-   * R5 needed `selectedCampaignMonths` to carry a batch selection into calendar
-   * columns, and it needed a paragraph explaining that a month overlapping a
-   * selected and an unselected batch had to be shown whole. Both are retired:
-   * there is no such month any more.
+   * R7 folds BOTH campaign views into one row before the matrix sees them —
+   * `view_analytics_batch_cost` (the money and yard half) and
+   * `view_analytics_production_by_batch` (the plant half) — because Renzo asked
+   * for one table rather than two stacked ones printing Produced and Yield
+   * twice. `foldCampaignRows` also COUNTS any `fed_kg` disagreement between the
+   * two, which the room prints rather than the merge assuming (measured 0/32).
    *
-   * `canViewPrices` is threaded even though **no row in this band is ₱-bearing
-   * and none can be** — no peso column exists in either batch view. Passing it
-   * costs nothing and means the gate is not something a future row would have
-   * to remember to reconnect.
+   * `canViewPrices` is threaded because eight of the sixteen rows ARE ₱-bearing
+   * since the merge — the adapter has already nulled them, and this is what
+   * makes the matrix render those rows locked.
    */
-  const productionMatrix = React.useMemo(
+  const campaignFold = React.useMemo(
+    () => foldCampaignRows(data.campaigns, data.productionBatches.rows),
+    [data.campaigns, data.productionBatches.rows],
+  );
+
+  const campaignMatrix = React.useMemo(
     () =>
-      buildBatchMatrix(data.productionBatches.rows, {
+      buildCampaignMatrix(campaignFold.rows, {
         canViewPrices: data.canViewPrices,
         hiddenPeriods: hiddenCampaigns,
       }),
-    [data.productionBatches.rows, data.canViewPrices, hiddenCampaigns],
+    [campaignFold.rows, data.canViewPrices, hiddenCampaigns],
   );
 
   /**
@@ -708,55 +715,36 @@ export function AnalyticsView({
         }
       />
 
-      {/* ── The BATCH basis ───────────────────────────────────────────────
+      {/* ── The CAMPAIGN axis ─────────────────────────────────────────────
           OUTSIDE the matrix on purpose: a campaign is a different AXIS. It
           crosses month boundaries (AUGUST closed and SEPTEMBER opened on
           2026-08-29), so folding it in would mean a column that is neither a
-          month nor a quarter sitting beside columns that are. */}
-      <div id="section-campaigns" className="scroll-mt-24">
-        <BatchCostPanel
-          campaigns={data.campaigns}
-          canViewPrices={data.canViewPrices}
-          // R5 — the panel's own checklist. The STATE lives here because it
-          // has two consumers: this panel's columns and the production band's
-          // months.
-          hidden={hiddenCampaigns}
-          onHiddenChange={setHiddenCampaigns}
-        />
-      </div>
+          month nor a quarter sitting beside columns that are.
 
-      {/* ── The PRODUCTION axis ────────────────────────────────────────
-          Where the yard's kilos stop being charcoal and start being
-          product. Its rows are the SAME `buildMatrix` machinery as the table
-          at the top — same months, same rollups, same expand.
-
-          ── R5 ITEM 7: IT MOVED ABOVE THE SUPPLIER ROOM ────────────────
-          Not for taste. R5 item 8 makes the campaign checklist DRIVE this
-          band's months, and a control and the thing it controls cannot have
-          an unrelated section between them — a reader who unticks four
-          batches has to be able to see what that did without scrolling past
-          the whole supplier room to find out. The two blocks are now
-          adjacent and read as one thought: the batch basis, then the
-          calendar months those batches ran in.
-
-          The page's descending axis is otherwise intact — PERIOD → CAMPAIGN
-          → PRODUCTION → SUPPLIER — and suppliers reads last on its own
-          merits: it is the only block that answers "who", it is the widest
-          (a matrix, a premium table and a chart), and nothing else on the
-          page depends on it. No ₱ exists anywhere in production, so it is
-          live for every role including Production. */}
-      <ProductionRoom
-        matrix={productionMatrix}
+          ── R7: IT IS NOW ONE TABLE, NOT TWO ──────────────────────────────
+          The campaign panel and the production band were separate components
+          rendering the same axis, the same columns and the same `?bhide=`
+          selection — and printing Produced and Yield twice. Renzo asked for one
+          table, so `CampaignRoom` is both, with the grade mix beneath it. The
+          page's descending axis is now PERIOD → CAMPAIGN → SUPPLIER, and
+          suppliers reads last on its own merits: it is the only block that
+          answers "who", it is the widest, and nothing else depends on it. */}
+      <CampaignRoom
+        matrix={campaignMatrix}
+        campaigns={campaignFold.rows}
+        fedKgMismatches={campaignFold.fedKgMismatches}
         batches={data.productionBatches.rows}
         grades={data.productionGrades}
+        canViewPrices={data.canViewPrices}
         selected={metric}
         onSelect={setMetric}
         comparison={comparison}
         printScope={batchPrintScope}
         asOfDate={data.asOfDate}
         showDictionary={showDictionary}
-        // R6 — ONE checklist, applied directly. See `production-batch.ts`.
-        hiddenCampaigns={hiddenCampaigns}
+        // ONE checklist, applied directly. See `campaign-matrix.ts`.
+        hidden={hiddenCampaigns}
+        onHiddenChange={setHiddenCampaigns}
       />
 
       {/* ── The SUPPLIER axis ──────────────────────────────────────────
@@ -874,11 +862,9 @@ export function AnalyticsView({
         {/* ── What R5 added, said once, on the page ────────────────────── */}
         <p>
           The <span className="font-medium text-foreground">Batches</span>{" "}
-          filter on the campaign panel also chooses which{" "}
-          <span className="font-medium text-foreground">months</span> the
-          production band and the grade mix cover — production is metered by
-          calendar month while a batch straddles months, so a month that
-          overlaps both a selected and an unselected batch is shown whole. Rows
+          filter on the campaign table chooses its columns{" "}
+          <em>and</em> the grade mix beneath it — one control, two consumers,
+          filtering by batch identity rather than by any calendar month. Rows
           can be dragged into your own order within their own group (or moved
           with <span className="font-mono">↑</span> /{" "}
           <span className="font-mono">↓</span> from the grip); that order is

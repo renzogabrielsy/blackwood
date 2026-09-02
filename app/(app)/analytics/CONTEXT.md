@@ -36,6 +36,16 @@
 > JAN/MAR/APR because blocks a campaign only *sun-dried* from are no longer counted as fed.
 > Every figure quoted elsewhere in this file for those four months is **pre-correction**.
 >
+> **OWNER FEEDBACK ROUND 7 APPLIED — 2026-09-02. ⚠ THIS ROUND IS THE AUTHORITY.**
+> Four matrix rows are gone (`RC IN total` · `RC OUT` · `Avg stock age` · `Stock over 120
+> days`), one is new (**Usage** — charcoal FED, destination MAIN only, on the CALENDAR
+> month), and **the campaign panel and the Production band are now ONE sixteen-row table**
+> (`campaign-room.tsx` over `lib/analytics/campaign-matrix.ts`). The page is **three
+> sections** — RC Inventory → Campaigns → Suppliers — and the nav carries three anchors.
+> `batch-cost-panel.tsx`, `production-room.tsx` and `lib/analytics/production-batch.ts` no
+> longer exist. Read **"Owner feedback round 7"** at the end of this file before trusting
+> any row list, file list, anchor list or section name above it.
+>
 > **OWNER FEEDBACK ROUND 5 APPLIED — 2026-09-02. ⚠ THIS ROUND RE-ORDERED THE PAGE
 > AND REMOVED TWO SURFACES.** The **callout strip is unmounted**, the supplier
 > premium and supplier matrix **footnote paragraphs are gone**, **Production now sits
@@ -80,8 +90,8 @@ layer**; **P3, the supplier room**; **P4, the production matrix — the page is 
 |------|------|
 | `page.tsx` | **Server Component.** Awaits `getAnalyticsData()`, resolves the OPENING view from `searchParams` (`year` · `g` · `wd` · `cmp` · `hide` · `dict` · `metric`), owns the shell class (`bw-analytics` + the 1920px container relax — R3) and hands both to the client shell. Owns nothing else — no heading (the navbar owns the title), no aggregation, no gate of its own beyond the adapter's. Fetch inside `try/catch`, render outside it. |
 | `analytics-view.tsx` | **Client shell.** (R6: builds TWO folds — `buildMatrix()` for RC Inventory on calendar months and `buildBatchMatrix()` for Production on campaigns — and threads the campaign checklist's `?bhide=` set into the panel, the production band and the grade mix alike.) Owns the view controls (year `Select`, Y/Q/M toggle, **Compare chip toggle**, per-working-day `Switch`, the R2 `Columns` checklist and the **R3 master `Definitions` switch**), the anchor row, the live block-utilization chip, the callout strip, the matrix, **the campaign panel, the supplier room, the production room** and the restatement footer. Calls `buildMatrix()` in a `useMemo`. It renders `AnalyticsMatrix` for the `flow` + `money` bands only, and passes the expand panel INTO it; the `production` band is rendered by `production-room.tsx` from the SAME fold. |
-| `analytics-matrix.tsx` | **The matrix table** — a bespoke dense table (see "Why not the Blackwood Table"). Frozen KPI-name column, explicit `<colgroup>` widths, `width: max-content` inside `overflow-x-auto`, a trailing summary column, **section bands** (anchor targets, `id="band-<key>"`, wearing the section accent as a left border), an optional `sections` filter so the component can be mounted twice, the `~` / `·` / `⚠` cell marks, the green/red direction tint, and **the in-place expand row** (`colSpan` over every column, panel `sticky left-0` at the scroller's measured width). |
-| `analytics-nav.tsx` | **The in-page anchor row.** Sticky (`top-0 z-40`), glass, **five** links, active section observed with an `IntersectionObserver` and claimed instantly on click. A flow element, so pinning it shifts nothing. |
+| `analytics-matrix.tsx` | **The matrix table** — a bespoke dense table (see "Why not the Blackwood Table"). Frozen KPI-name column, explicit `<colgroup>` widths, `width: max-content` inside `overflow-x-auto`, a trailing summary column, **section bands** (anchor targets, `id="band-<key>"`, wearing the section accent as a left border), an optional `sections` filter so the component can be mounted twice, **an R7 `footer` slot** (a node appended after every band — today the campaign table's `Blocks closed / priced` line; a node rather than a fake metric, so a coverage note can never enter the callout gate or the group print), the `~` / `·` / `⚠` cell marks, the green/red direction tint, and **the in-place expand row** (`colSpan` over every column, panel `sticky left-0` at the scroller's measured width). |
+| `analytics-nav.tsx` | **The in-page anchor row.** Sticky (`top-0 z-40`), glass, **three** links since R7 (RC Inventory · Campaigns · Suppliers — the Production anchor went with the section it named), active section observed with an `IntersectionObserver` and claimed instantly on click. A flow element, so pinning it shifts nothing. |
 | `print-card.ts` | **R4 — the print mechanism, extracted.** `printCard(el)` tags every ancestor `data-print-ancestor`, adds `bw-printing` to `<body>` and calls `window.print()`, clearing both on `afterprint` with a 1 s fallback. It lived inside `metric-expand.tsx` until the supplier expand needed it too; two copies of something this fiddly would drift the first time one was touched. A plain module, not `"use client"` — it is imported only by client components and touches the DOM at CALL time. **R5: it also MARKS the card itself** when the element does not already carry `data-print-card`, and unmarks it in `clear()` — the group-print stage and the campaign panel are printable without being permanently marked, which they must not be (the sheet hides everything that is not `[data-print-card]`, so a second permanent mark would put the campaign table on every printed metric sheet). |
 | `group-print.tsx` | **R5 — print a whole metric GROUP.** `GroupPrintStage` renders the group's cards in a real, laid-out 1040 px column parked inside a zero-sized clipped box, waits 400 ms for `ResponsiveContainer` to measure, calls `printCard` on it, and unmounts on `afterprint` (2 s fallback). `GroupPrintPage` wraps one card and carries the page break. **The offstage-with-layout trick is load-bearing and was measured**: `display: none` gives no box, recharts measures its parent's box, and a print media query does not apply until the dialog is already open — a `hidden print:block` sheet prints empty chart frames. |
 | `row-handle.tsx` | **R5 — the drag grip and the `<tr>` drop props.** HTML5 drag-and-drop (the platform already solves auto-scroll and hit testing inside a sticky-column `overflow-x-auto` table), payload `text/plain` = the row key, plus ArrowUp / ArrowDown on the focused handle through the SAME `move()` the pointer path ends in. The handle is `opacity-0 group-hover:opacity-100` and stays in layout, so nothing reflows when it appears. |
@@ -89,14 +99,15 @@ layer**; **P3, the supplier room**; **P4, the production matrix — the page is 
 | `grade-expand.tsx` | **R5 — one grade, batch by batch (R6).** The grade mix's row expand, carrying the full R4 universal module contract: a checklist with the smart default (it opens on the **production batches** that grade was actually run in — months until R6), a stat strip that re-folds from it, an average switch, Print and the master `Definitions` switch. Bars = tonnes on a zero-floored axis, dashed line = share of the batch on its OWN axis fixed 0–100. The trailing average is a **3-batch** mean. No ₱ exists in it and none is derivable. |
 | `metric-expand.tsx` | **The row expand** (+ R3: `canDrawAvg` and the `AvgToggle` beside `Years`, and the dictionary blocks behind the page's `Definitions` switch), rendered IN PLACE inside the matrix, in a full-width row directly beneath the row that was clicked. Stat strip + full-history chart (bar or line, **plus the dashed comparison line where a row declares a pair**) + one of six side rails (inventory split · price coverage · closed blocks · aging bands · downtime · power) + the dictionary spelled out + **a Print button** that prints just this card. Reuses `DrilldownSection` / `DrilldownStat` / `BreakdownRail` / `DRILLDOWN_AXIS_TICK` / `drilldownTooltipChrome` from the drill-down chassis. |
 | `metric-info.tsx` | **The dictionary** at the point of use — an `Info` button with the whole entry as a native `title` (hover) and a `Popover` card (click). `DictionaryPopover` is the ONE card and takes any `MetricDictionaryEntry`; `MetricInfo` is the matrix row's wrapper over it (`METRICS[].dictionary`) and the supplier room passes `SUPPLIER_DICTIONARY` entries into the same component, so a metric and a supplier figure can never explain themselves in two layouts. |
-| `batch-cost-panel.tsx` | **P2 — the BATCH basis.** One column per production campaign, nine rows (fed · delivered ₱/kg · true ₱/kg · **cost of storage time** · weight lost · produced · yield · ₱/produced kg on both bases) plus a `blocks closed / priced` coverage line. Frozen row-label column, opens scrolled to the newest campaign. |
+| ~~`batch-cost-panel.tsx`~~ | **DELETED in R7** — merged into `campaign-room.tsx`. Its nine rows are now nine of the sixteen in the shared campaign matrix, and its `Blocks closed / priced` line is that table's footer row. Historic role: One column per production campaign, nine rows (fed · delivered ₱/kg · true ₱/kg · **cost of storage time** · weight lost · produced · yield · ₱/produced kg on both bases) plus a `blocks closed / priced` coverage line. Frozen row-label column, opens scrolled to the newest campaign. |
+| `campaign-room.tsx` | **R7 — THE MERGED CAMPAIGN SECTION.** One `<section id="section-campaigns">` carrying: the header + the `Batches` checklist (`?bhide=`), the four selection chips (Fed · Made · Top grade · Power), the dictionary strip, the **sixteen-row campaign matrix** with its `Blocks closed / priced` FOOTER row, its expand, the grade mix, and the group-print stage. It replaced `batch-cost-panel.tsx` + `production-room.tsx`, which printed **Produced** and **Yield** twice on one screen after R6 put them on the same clock. |
 | `aging-watchlist.tsx` | **UNMOUNTED (owner feedback R1).** Nothing imports it and the adapter no longer reads its view. Kept, compiling, against the `AgingWatchItem` / `AgingWatchlist` types so the block is one read and one JSX element away if it is ever wanted back. |
 | `supplier-room.tsx` | **P3 — the SUPPLIER axis.** The section shell: the concentration header (top-1 / top-3 / seller count / suppliers-to-half), the dictionary strip, and the four blocks below. Follows the page's YEAR picker; deliberately NOT the Y/Q/M toggle. |
 | `supplier-matrix.tsx` | **P3 — supplier × month volume.** Frozen supplier column, tonnes + share-of-month per cell, ↩ returns chips, a YTD column, a `Σ market` footer row that prints P1's own figure, `Show all N` over a top-12 default, and the **in-place expand row** (same mechanism as the KPI matrix). |
 | `supplier-premium.tsx` | **P3 — the ₱ read (gated).** Weighted ₱/kg paid, weighted premium vs market, priced kg, and a diverging bar per supplier. Footer prints the WEIGHTED rollup (₱0.00 by construction). |
 | `supplier-explorer.tsx` | **P3 — the three-line story.** Price × volume × active-supplier count for the year, from `AnalyticsMonth` (P1's own view) — no new read. |
 | `supplier-expand.tsx` | **P3 — one supplier's year.** Five stats, a bars + premium-line chart, a month-by-month share rail, and the returns note. |
-| `production-room.tsx` | **P4 — the PRODUCTION axis, on the BATCH clock since R6.** The section shell: the selection chips (made · top grade · reported days · power, folded over the batches actually shown), the clarification paragraph that says a column is a batch and which single figure is mapped rather than tagged, the dictionary strip, the production band of the **batch** matrix, its expand, and the grade mix. Reads `?bhide=` — the campaign panel's own checklist — with no mapping step. No ₱ anywhere, so nothing in it is gated. |
+| ~~`production-room.tsx`~~ | **DELETED in R7** — merged into `campaign-room.tsx`. Historic role: P4 — the PRODUCTION axis, on the BATCH clock since R6.** The section shell: the selection chips (made · top grade · reported days · power, folded over the batches actually shown), the clarification paragraph that says a column is a batch and which single figure is mapped rather than tagged, the dictionary strip, the production band of the **batch** matrix, its expand, and the grade mix. Reads `?bhide=` — the campaign panel's own checklist — with no mapping step. No ₱ anywhere, so nothing in it is gated. |
 | `production-grades.tsx` | **P4 — grade × production-batch tonnage (R6; grade × month until then).** Frozen grade column, tonnes + share-of-batch per cell, a `Selected` column, and a `Σ made` footer row that prints the Production output row's own figure — with the tie CHECKED, not assumed. |
 | `unit-value.tsx` | **R6 — the unit on the LEFT.** `UnitValue` renders one value as `flex justify-between`: the unit glyph pinned left in muted 11 px, the number pinned right keeping its `tabular-nums` column. CLAUDE.md's Currency (Accounting format) rule, generalised from ₱ to every unit. An empty glyph falls back to a plain right-aligned number, so a bare count loses nothing. One component rather than a convention — nine call sites would have drifted in size, colour and spacing the first time one was touched. |
 | `period-filter.tsx` | **R2 — THE checklist popover, written once, mounted twice.** The matrix's period columns and a row expand's chart years. Trigger + `All` / `None` + a dense scrollable list of `role="checkbox"` buttons; Radix Popover gives Esc and focus-return for free. Its state is the set of **hidden** keys, never the selected ones. **R4 changed what that set STARTS as, and only on the chart filters:** a matrix COLUMN filter still opens with everything checked (its periods come from the complete flow spine, so "all" and "the ones with data" are the same set), while an EXPAND's filter opens on the periods that actually carry a figure for that row. The hidden-set shape is what made both defaults expressible without a second mechanism. |
@@ -111,7 +122,7 @@ layer**; **P3, the supplier room**; **P4, the production matrix — the page is 
 | `matrix.ts` | **The pure fold** — period axis, cells, deltas (percentage AND `deltaAbs`), YoY, the trailing summary column, the full history series, the pair history, the per-period annotations, the section grouping and the callouts, all in ONE pass over the same numbers. Also owns `ComparisonMode` / `COMPARISON_MODES`. Pure, client-safe. |
 | `supplier.ts` | **P3 — the supplier fold + its dictionary.** `buildSupplierYear` (columns, rows, YTD, concentration), `buildExplorer`, `SUPPLIER_DICTIONARY`, and **`weightedPremiumPhpKg` — the ONE function that aggregates `premium_php_kg` anywhere in the codebase.** Pure, client-safe. |
 | `production.ts` | **P4 — the grade fold + its dictionary, on the BATCH clock since R6.** `buildGradeSet` (campaign columns, grade rows, the `Selected` column, the checked Σ tie, the top-grade read), `foldGradeSelection` and `PRODUCTION_DICTIONARY` — whose `batch_clock` entry is new in R6 and states the changeover-kWh convention where a reader meets it. Pure, client-safe. |
-| `production-batch.ts` | **R6 — the eight production rows and the batch axis.** `BATCH_METRICS` (the registry, section stamped by construction), `BATCH_METRIC_BY_KEY` (so a `?metric=` deep link into the band still resolves), `BATCH_RULES`, `BATCH_GRANULARITY = "B"` and `buildBatchMatrix`. A SECOND registry beside `metrics.ts` rather than a flag inside it, because the two read different row shapes on different clocks. **Not one row is `price: true` and not one is `perWorkingDay`, and both are structural** — no ₱ column exists in either batch view, and the plant's own denominator is `reportedDays`, which is its own row. Pure, client-safe. |
+| `campaign-matrix.ts` | **R7 — THE CAMPAIGN REGISTRY, THE MERGE AND THE BATCH AXIS.** It replaced `production-batch.ts`. `CampaignMatrixRow` keeps the two source rows as NAMED HALVES (`cost` / `batch`) rather than spreading them — six field names collide, and a spread would settle all six silently by declaration order. `foldCampaignRows()` outer-joins them on `(production_batch, campaign_year)` and **counts** any `fed_kg` disagreement above 1 kg (measured 0 of 32) rather than asserting there is none. `CAMPAIGN_METRICS` (sixteen rows, section stamped by construction), `CAMPAIGN_METRIC_BY_KEY`, `CAMPAIGN_RULES`, `CAMPAIGN_GRANULARITY = "B"`, `buildCampaignMatrix`, `coverageSentence`. **Five rows are `price: true`** and none is `perWorkingDay` — the second is structural (the plant's denominator is `reportedDays`, which is its own row). Pure, client-safe. |
 | `period-selection.ts` | **R2 — the hidden set's URL codec** (`NO_HIDDEN`, `serializeHidden`, `parseHidden`). A separate module from `period-filter.tsx` for one reason: that file is `"use client"`, and a plain function exported from a client module becomes a client REFERENCE, so the Server Component calling it would fail at request time rather than at build time. Pure, importable from both sides. **R5 reuses it verbatim for `?bhide=`.** |
 | `campaign.ts` | **R5 — campaign identity.** `CAMPAIGN_MONTHS`, `campaignMonthIndex`, **`campaignSeq`** (moved OUT of `queries.ts`, which is `server-only`, so the panel's checklist and the server's column sort share ONE definition of chronological), `campaignKey` and **`campaignMonthKeys`** (the `YYYY-MM` months a campaign covers — a LABEL on the campaign panel, not a filter). **R6 deleted `selectedCampaignMonths`**: it existed only to project a batch selection onto calendar columns, and the production band no longer has any. Pure, client-safe. |
 | `row-order.ts` | **R5 — the ordering arithmetic**: `resolveOrder`, `isDefaultOrder`, `moveKey`, `dropKey`, `applyOrder`. Pure, so an ordering bug is readable without mounting anything, and so the same functions can be run against an untrusted `localStorage` value. **A saved order is a PREFERENCE, never a row list** — a key that no longer names a row is dropped and a row the save never heard of is APPENDED in registry position, so a row added in a future round cannot be hidden by an order set today. |
@@ -1736,6 +1747,179 @@ than assumed. The committed Blackwood Table playground beside it was not touched
   cells' computed backgrounds carry **no alpha and no `backdrop-filter`**.
 - **Gates**: `tsc --noEmit` clean · `npm run lint` 146/16 (baseline) · `npm run build`
   clean · `verify-table-core` 84 assertions · `playwright` 57 passed.
+
+## Owner feedback round 7 — purchase vs usage, and ONE campaign table, 2026-09-02
+
+Renzo's seven-item list. **This round removed four matrix rows and merged two tables into
+one**, so the page is three sections rather than four. Where anything above disagrees with
+what follows, this section is the authority.
+
+| # | Asked for | Where it landed |
+|---|---|---|
+| 1 | Drop `RC IN total` / `RC OUT`; keep Purchase volume, add **Usage** below it | `lib/analytics/metrics.ts` — the new `usage_volume` row |
+| 2 | Net flow stays yard-flow; its expand draws the two removed series | `MetricSpec.pairs` (a LIST now), `matrix.ts` `pairHistories`, `metric-expand.tsx` |
+| 3 | Drop the campaign panel's Produced / Yield / both ₱-per-produced | subsumed by item 5 — each exists exactly once now |
+| 4 | Drop `Avg stock age` and `Stock over 120 days` | `metrics.ts`; `AgingSplit` deleted with them |
+| 5 | **Merge the campaign panel and the Production table** | `lib/analytics/campaign-matrix.ts` + `campaign-room.tsx` (both new); three files deleted |
+| 6 | Section order RC Inventory → Campaigns → Suppliers | `analytics-view.tsx`, `analytics-nav.tsx` |
+| 7 | Keep every established convention | inherited by construction — the merged table is the SAME `AnalyticsMatrix` |
+
+### The RC Inventory band is seven rows now
+
+| # | Row | Unit | Rollup | Δ mode | ÷ working days? | ₱-gated |
+|---|-----|------|--------|--------|-----------------|---------|
+| 1 | Market price | ₱/kg | weighted | % | no | **yes** |
+| 2 | Purchase volume | t | sum | % | **yes** | no |
+| 3 | **Usage** (new) | t | sum | % | **yes** | no |
+| 4 | Active suppliers | count | peak | abs | no | no |
+| 5 | Net flow | t | sum | **abs** | **yes** | no |
+| 6 | Ending inventory | t | periodEnd | % | no | no |
+| 7 | Stock avg cost | ₱/kg | periodEnd | % | no | **yes** |
+
+### Usage and Charcoal fed are two different numbers, on purpose
+
+Both are **MAIN-only fed kilos**, both correct, and they differ because they are on
+different clocks. The page says so twice — in the Usage row's dictionary and in the
+campaign table's header paragraph.
+
+- **`Usage` is the CALENDAR month** — `view_analytics_cost_monthly.fed_kg`.
+- **`Charcoal fed` is the BATCH clock** — `view_analytics_batch_cost.fed_kg`.
+
+A campaign straddles month boundaries (AUGUST closed and SEPTEMBER opened on 2026-08-29),
+so for any month a changeover fell in the two are *supposed* to disagree. Printing both
+without naming the clock is the mistake; printing one would take away either the yard's
+month-on-month row or the campaign's cost basis.
+
+**Usage is NOT `view_analytics_flow_monthly.out_kg`.** That column is the OUT clock and
+still counts sundry pulls — L-047's three-clock doctrine (FED = MAIN · OUT = everything ·
+BALANCE = deliveries − OUT). A row called "Usage" that counted charcoal which never reached
+the plant would re-introduce the exact 552,629 kg error migration `20260902071050` fixed.
+
+### RC IN and RC OUT now live only inside the Net flow expand
+
+They were the yard's two undifferentiated totals. **Neither series was deleted**: Net flow
+is the one row genuinely about gross movement, so both are declared as its `pairs` and
+drawn as dashed lines over its bars, labelled `RC IN, all arrivals` and `RC OUT, all
+destinations`. They fold through the row's OWN rollup and its per-working-day option, so
+`in − out = net` holds in every column of the chart rather than only in a month.
+
+`MetricSpec.pair` became **`MetricSpec.pairs`** for this — a subtraction has two halves —
+and `MatrixRow.pairHistory` became `pairHistories`. Nothing declared a pair before this
+round, so the migration touched the mechanism and never a live series. `canDrawAvg` still
+refuses the trailing mean on a paired row: three series plus two smoothed ones is noise.
+
+`page.tsx` gained **`RETIRED_METRIC_ALIASES`** (`rc_in_total` → `net_flow`, `rc_out` →
+`net_flow`) so every `?metric=` link ever shared — including the Home Digest's two
+drill-down hrefs — opens where those numbers now live. The two aging keys are deliberately
+NOT aliased: they have no home, and pointing them at an arbitrary neighbour would be worse
+than opening no row.
+
+### The merged campaign table — sixteen rows, in Renzo's order
+
+Charcoal fed (T) · Block price (₱/kg) · True ₱/kg fed · Cost of storage time · Weight lost
+(%) · Blocks closed · Produced (T) · Output per reported day · Yield (%) · Process loss (%)
+· ₱ per produced kg (block-price basis) · ₱ per produced kg (TRUE basis) · Downtime (h) ·
+Power (kWh) · Power intensity (kWh/kg) · Bags counted — then the `BLOCKS CLOSED / PRICED`
+footer row, then the grade mix.
+
+It reads as one sentence about a campaign: what went in and what it cost, what came out,
+what a kilo of product cost, what the plant burned.
+
+**The merge is a FRONTEND FOLD and it CHECKS rather than assumes.** The two views already
+share a spine (`campaign_options UNION campaign_yield`) and the adapter already sorts both
+by `campaignSeq`, so **no SQL was written for this round**. `foldCampaignRows()` outer-joins
+them on `(production_batch, campaign_year)`, keeps the two rows as NAMED HALVES
+(`row.cost` / `row.batch`) rather than spreading them — six field names collide, and a
+spread would settle all six silently by declaration order — and **counts** any `fed_kg`
+disagreement above 1 kg. Measured **0 of 32**; the room prints a sentence naming the
+campaigns if it ever finds one.
+
+Where the two overlap:
+
+- **`fedKg` ← the COST view.** The five ₱ rows are ratios over those exact kilos, and a
+  headline disagreeing with its own denominator is worse than one disagreeing with a
+  sibling view.
+- **`producedKg` / `yieldPct` ← the PRODUCTION view.** That one is NULL — never 0 — on the
+  22 campaigns predating daily production reporting. The cost view publishes 0 there
+  deliberately (for it that column is a money denominator), and a 0 in an owner-facing
+  headline reads as a plant that ran and made nothing.
+- **Yield is still `view_rc_movement_campaign_yield.yield_pct` verbatim**, so R6's tie with
+  the RC Movement campaign panel survives the merge untouched.
+
+**Two rollups needed a denominator no view publishes**, and both say so at the point of
+use. **Weight lost** inverts the view's own published ratio (`weight_lost_kg ÷ loss_pct`)
+to recover delivered kilos, so a selection is Σ lost ÷ Σ delivered rather than the mean of
+the campaigns' percentages — the "average of averages" the whole page refuses; a zero
+`loss_pct` drops that campaign out of BOTH halves, the `yieldUsable` discipline. **True
+₱/kg**, **Cost of storage time** and both **₱ per produced kg** rows weight by exactly the
+kilos their own published value is weighted by.
+
+### What the merged table gained, and what it kept
+
+**Gained**, because the six money-and-yard rows are matrix rows now: a period-over-period
+delta, the comparison chip, an in-place expand with its own chart, checklist, average
+switch and Print, and a real `MetricDictionaryEntry` instead of a `title` attribute.
+
+**Kept**: the `?bhide=` `Batches` checklist (two consumers now — the table and the grade
+mix — instead of three), the `Blocks closed / priced` coverage line as a footer **row**,
+the dividers, drag/keyboard reorder, group print, unit-on-left cells, and the ₱ gate —
+**five of the sixteen rows are `price: true`** and the adapter already nulls them
+server-side, so a restricted role gets `null` in the cell and the matrix renders the row
+locked.
+
+**The footer is a NODE, not a metric.** `AnalyticsMatrix` gained a `footer` prop rendered
+after every band. Giving the coverage line a fake `MetricSpec` so it could be a row would
+have put a coverage note into the callout gate, the history fold and the group print.
+
+**The reorder scope is a new localStorage key BY CONSTRUCTION.** `MetricSection` went
+`"production"` → `"campaigns"` and the matrix keys its saved order `metrics:<section>`, so
+the merged table reads **`bw.analytics.roworder.v1.metrics:campaigns`**. A stale order saved
+against `metrics:production`, or against the old panel's `campaign` scope, cannot misapply —
+and `resolveOrder` would have appended the new rows regardless.
+
+### What was deleted, and what deliberately was not
+
+**Deleted**: `app/(app)/analytics/batch-cost-panel.tsx`,
+`app/(app)/analytics/production-room.tsx`, `lib/analytics/production-batch.ts`, and
+`AgingSplit` in `metric-expand.tsx`. A rail nothing can open is dead code, not a spare —
+the same call R4 made when it deleted `CoverageSplit` and `ClosedBlocksSplit`.
+
+**Not deleted**: nothing in SQL, nothing in the payload. `view_analytics_aging_eom` is
+untouched and `Ending inventory` still reads its `open_kg`; `inKg` / `outKg` still cross the
+wire and are what Net flow's two lines are built from; `view_analytics_production_monthly`
+and `_grade_monthly` remain correct and still feed the digest. `SECTION_ACCENT.production`
+and `SECTION_ACCENT.money` are still declared — an accent is a colour token, not a band.
+
+### Verified in the browser (throwaway harness, since deleted)
+
+The harness mounted the REAL `AnalyticsView` in the REAL shell class over synthetic data at
+`app/dev/table-playground/analytics-r7/`, resolving `?bhide=` / `?hide=` / `?metric=` /
+`?role=` from `searchParams` exactly as `page.tsx` does, so the server round-trip was
+exercised rather than assumed.
+
+- **Structure**: nav reads `RC Inventory · Campaigns · Suppliers`; the three anchors sit at
+  400 / 935 / 8163 px in that order; RC Inventory prints exactly seven rows with **Purchase
+  volume then Usage adjacent** and neither aging row present; the campaign table prints all
+  **sixteen** rows in the asked-for order, the `BLOCKS CLOSED / PRICED` footer beneath them
+  and the grade mix beneath that.
+- **Net flow**: `?metric=rc_out` opens **Net flow** (the alias), whose chart draws 33 bars,
+  two dashed lines and a legend reading `RC IN, all arrivals · RC OUT, all destinations ·
+  Net flow`, with the explanatory note under it.
+- **The checklist**: `?bhide=` over three campaigns re-renders the table to 18 of 21
+  columns, narrows the grade mix with it, updates the coverage footer's own total, and the
+  header sentence reads *"Filtered to 18 of 21 batches"*.
+- **Reorder**: keyboard ↓ on a campaign grip moves the row and writes
+  `bw.analytics.roworder.v1.metrics:campaigns` — a key neither old table used.
+- **Print**: group `Print 16` mounts 16 pages carrying 48 laid-out chart surfaces under
+  `@page { size: a4 landscape; margin: 12mm }`, then unmounts with zero `data-print-page`,
+  zero `data-print-ancestor` and no `bw-printing` left on `<body>`.
+- **The ₱ gate**: under `role=production` seven rows read `Restricted` and **zero
+  `₱<digits>` sequences appear anywhere on the page**.
+- **Scales**: 1512 light, 1512 dark, 2560 dark and 375 light —
+  `document.scrollWidth === clientWidth` at all four, and zero truncated row labels.
+- **Gates**: `tsc --noEmit` clean · `npm run lint` 146 problems / 16 errors (the baseline,
+  unmoved) · `npm run build` clean · `verify-table-core` 84 assertions · `npm run test:e2e`
+  57 passed.
 
 ## Dependencies
 
