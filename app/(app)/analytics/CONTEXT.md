@@ -2064,3 +2064,4 @@ hardcoded to day/month while these buckets are months, quarters or years.
 - `app/(app)/CONTEXT.md` — the Home Digest, the daily gateway that links here
 - `components/digest/CONTEXT.md` — the drill-down chassis this page borrows its chart chrome from
 - `components/NAVBAR.md` — the breadcrumb + module-list registration
+- `supabase/migrations/20260903013948_analytics_inventory_price_open_only.sql` — 2026-09-03: `view_analytics_inventory_eom` now values **OPEN piles only** (closed-block residue is resiko, not stock), so `avg_unit_cost_php_kg` — the **RC Inventory Price** — equals the Blocking header exactly (₱37.139967505327993986 over 10,527,344.00 kg / 170 blocks on 2026-09-01, was ₱36.2587 over 11,743,657.10 kg); 30 of 75 months moved, max ₱1.1158/kg; `valued_kg` + aging's `closed_residue_kg` = `positive_balance_kg` on 75/75 months (0.00 kg); the old figure survives as `all_positive_avg_unit_cost_php_kg`

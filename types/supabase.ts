@@ -3224,9 +3224,13 @@ export type Database = {
       view_analytics_inventory_eom: {
         Row: {
           active_batches: number | null
+          all_positive_avg_unit_cost_php_kg: number | null
           as_of_date: string | null
           avg_unit_cost_php_kg: number | null
           batches_with_balance: number | null
+          closed_residue_kg: number | null
+          closed_residue_php_kg: number | null
+          closed_residue_value_php: number | null
           ending_kg: number | null
           ending_value_php: number | null
           is_partial_month: boolean | null
