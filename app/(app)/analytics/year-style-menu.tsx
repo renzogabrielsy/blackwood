@@ -133,7 +133,7 @@ export function YearStyleMenu({
       <PopoverTrigger asChild>
         <button
           type="button"
-          title="Set the colour and the line style of each year. The eight swatches are the page's checked palette — each pair is distinguishable in both themes and to a colour-blind reader; the picker beside them is your own colour. Your choice is remembered in this browser and applies to every chart on the page."
+          title="Set the colour and the line style of each year. The eight swatches are the page's checked palette — each pair is distinguishable in both themes and to a colour-blind reader; the picker beside them is your own colour. Your choice is saved to your account and applies to every chart on the page, on every browser you sign in from."
           aria-label={`Style — ${years.length} year${years.length === 1 ? "" : "s"}`}
           className={cn(
             "inline-flex h-[var(--an-h-8)] shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] font-medium",
@@ -279,7 +279,7 @@ export function YearStyleMenu({
         </div>
 
         <p className="border-t px-2.5 py-1.5 text-[length:var(--bw-fs-105)] leading-relaxed text-muted-foreground">
-          Remembered in this browser and applied to every chart on the page.
+          Saved to your account and applied to every chart on the page.
           Styling changes what a line LOOKS like and never what it says.
         </p>
       </PopoverContent>

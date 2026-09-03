@@ -143,6 +143,7 @@ import {
   type YearStyleMap,
 } from "@/lib/analytics/year-overlay";
 import { useYearStyles } from "./use-year-styles";
+import { useAnalyticsPrefs } from "./use-analytics-prefs";
 import { StrokePreview, YearStyleMenu } from "./year-style-menu";
 
 // R3: a CSS variable, not a number. The expand chart is the "see things
@@ -1745,6 +1746,11 @@ export function MetricExpand<U>({
   const statGlyph = unitGlyphFor(spec) || undefined;
   const normalised = perWorkingDay && spec.perWorkingDay;
 
+  // R10 — the three chart choices on this card (which years, the price overlay,
+  // the trailing average) are the reader's SETTINGS, not this mount's state.
+  // See `use-analytics-prefs.ts` for why they had to leave `useState`.
+  const { prefs, patch } = useAnalyticsPrefs();
+
   // ── THE YEAR CHECKLIST (R2), WITH SMART DEFAULTS (R4) ───────────────────
   // Session state, keyed to this card, never to the URL — see the block
   // comment at the top of the file. The state is still the HIDDEN set; what
@@ -1771,19 +1777,47 @@ export function MetricExpand<U>({
   // The MATRIX's column filter is deliberately NOT changed: its periods come
   // from the flow spine, which is complete by construction, so "the ones with
   // data" and "all of them" are the same set there.
-  const [hiddenYears, setHiddenYears] = React.useState<ReadonlySet<string>>(
-    () => {
-      const byYear = new Map<number, boolean>();
-      for (const h of row.history) {
-        byYear.set(h.year, (byYear.get(h.year) ?? false) || h.value != null);
-      }
-      const empty = [...byYear.entries()]
-        .filter(([, hasValue]) => !hasValue)
-        .map(([y]) => String(y));
-      // Every year empty → hide none. See the third property above.
-      if (empty.length === 0 || empty.length === byYear.size) return NO_HIDDEN;
-      return new Set(empty);
-    },
+  //
+  // ── R10 — IT IS A PREFERENCE NOW, AND IT IS PAGE-WIDE ───────────────────
+  // Renzo: *"Every choice is made back to default when switching around
+  // different charts and rows and from a refresh."* This control was the worst
+  // offender: both call sites `key` this card by metric, so opening another row
+  // REMOUNTED it and the reader's choice evaporated. It now lives in
+  // `use-analytics-prefs.ts` — page-wide (a year is the same entity in every
+  // expand, the identical reasoning the year PALETTE is stored under) and per
+  // user, so it survives a row change, a section change, a reload and a
+  // different browser.
+  //
+  // **`null` and `[]` are different answers, and the smart default is why.**
+  // `null` means the reader has never touched the control, so the derivation
+  // below runs and opens the row with its honestly-empty years already off.
+  // `[]` means they said "show me all of them", which must not be overruled by
+  // a default on the next row. Storing "no years hidden" as absent would make
+  // those two states the same and resurrect the default over an explicit
+  // choice — the NULL ≠ 0 rule, in a checklist.
+  const smartDefaultHidden = React.useMemo<ReadonlySet<string>>(() => {
+    const byYear = new Map<number, boolean>();
+    for (const h of row.history) {
+      byYear.set(h.year, (byYear.get(h.year) ?? false) || h.value != null);
+    }
+    const empty = [...byYear.entries()]
+      .filter(([, hasValue]) => !hasValue)
+      .map(([y]) => String(y));
+    // Every year empty → hide none. See the third property above.
+    if (empty.length === 0 || empty.length === byYear.size) return NO_HIDDEN;
+    return new Set(empty);
+  }, [row.history]);
+
+  const hiddenYears = React.useMemo<ReadonlySet<string>>(
+    () =>
+      prefs.expandHiddenYears == null
+        ? smartDefaultHidden
+        : new Set(prefs.expandHiddenYears),
+    [prefs.expandHiddenYears, smartDefaultHidden],
+  );
+  const setHiddenYears = React.useCallback(
+    (next: Set<string>) => patch({ expandHiddenYears: [...next] }),
+    [patch],
   );
   const isFiltered = hiddenYears.size > 0;
 
@@ -1792,18 +1826,31 @@ export function MetricExpand<U>({
   // pesos — `row.restricted` is set server-side from the same `canViewPrices()`
   // that nulled the values, so there is nothing to reveal and nothing to hint
   // at.
+  //
+  // R10 — the DEFAULT is still off; what changed is that a reader who switched
+  // it on finds it on again next time, here and on every other card.
   const overlayRow =
     priceOverlay && !priceOverlay.restricted ? priceOverlay : null;
-  const [showOverlay, setShowOverlay] = React.useState(false);
+  const showOverlay = prefs.showOverlay;
+  const setShowOverlay = React.useCallback(
+    (next: boolean) => patch({ showOverlay: next }),
+    [patch],
+  );
 
   // ── THE TRAILING-AVERAGE SWITCH (owner feedback R3) ─────────────────────
   // DEFAULT ON — today's behaviour, so nobody has to switch anything on to get
-  // back the page they know. Session state on this card, matched deliberately
-  // to the Years checklist beside it: both are one card's exploration of one
-  // row rather than a description of the page's window, so neither belongs in
-  // an address someone might share. The card is keyed by metric at both call
-  // sites, so opening a different row starts with the line drawn again.
-  const [showAvg, setShowAvg] = React.useState(true);
+  // back the page they know. Matched deliberately to the Years checklist beside
+  // it: both are one reader's habit rather than a description of the page's
+  // window, so neither belongs in an address someone might share.
+  //
+  // R10 — but a habit that evaporates is not a habit. It was `useState` on a
+  // card keyed by metric, so switching the line off and opening the next row
+  // drew it again; it is now the stored preference the checklist beside it is.
+  const showAvg = prefs.showAvg;
+  const setShowAvg = React.useCallback(
+    (next: boolean) => patch({ showAvg: next }),
+    [patch],
+  );
 
   // ── THE YEAR OVERLAY (owner feedback R9) ────────────────────────────────
   // The clock decides whether an overlay is even a question. `Y` is excluded
@@ -1882,7 +1929,7 @@ export function MetricExpand<U>({
       else next.add(key);
       setHiddenYears(next);
     },
-    [hiddenYears],
+    [hiddenYears, setHiddenYears],
   );
 
   const rollWindow = rollingWindowFor(granularity);

@@ -61,7 +61,7 @@ export function RowHandle({
       type="button"
       draggable
       aria-label={`Reorder ${label} — position ${position} of ${total}. Drag, or press the up and down arrow keys.`}
-      title={`Drag to move ${label} within this group, or focus this handle and use ↑ / ↓. The order is remembered in this browser only and changes no figure.`}
+      title={`Drag to move ${label} within this group, or focus this handle and use ↑ / ↓. The order is saved to your account and changes no figure.`}
       onDragStart={(e) => {
         // `text/plain` is the one format every engine carries without a fuss,
         // and the payload is the row key — the drop target resolves it against

@@ -6,32 +6,39 @@
 // Renzo: *"drag to reorder rows within their table metric group of course."*
 //
 // ── WHERE IT IS PERSISTED, AND WHY NOT THE URL ───────────────────────────────
-// `localStorage`, keyed per SECTION. Every other view control on this page
-// lives in the address bar (`year`, `g`, `wd`, `cmp`, `metric`, `hide`, `dict`,
-// and R5's `bhide`) because each of them describes WHAT IS ON SCREEN — a link
-// carrying one shows the recipient the same figures.
+// A row order is not a description of what is on screen. It describes how one
+// reader likes to read, it changes no number, hides nothing and adds nothing,
+// and pasting it into a colleague's browser would silently rearrange a page
+// they had already learned the shape of. It is also long — eight to ten keys
+// per section — and would dominate an address whose whole point is to be
+// legible. So: per reader, per section, and never in a link.
 //
-// A row order is not that. It describes how one reader likes to read, it
-// changes no number, hides nothing and adds nothing, and pasting it into a
-// colleague's browser would silently rearrange a page they had already learned
-// the shape of. It is also long — eight to ten keys per section — and would
-// dominate an address whose whole point is to be legible. So: per browser, per
-// section, and never in a link.
+// ── R10 MOVED THE STORAGE, NOT THE ARITHMETIC ────────────────────────────────
+// It used to own a `localStorage` key per scope (`bw.analytics.roworder.v2.<scope>`).
+// The sequences now live inside the ONE analytics preference record
+// (`use-analytics-prefs.ts`) under `rowOrder[scope]`, which adds two things this
+// hook could not have on its own: a per-USER copy in `user_table_settings`, so a
+// reorder follows the reader to another browser, and one Reset that clears every
+// analytics preference at once instead of one section at a time. The old
+// per-scope keys — v2 AND R5's original v1 — are still read once by that store's
+// legacy fold, so nobody loses an order they already set.
+//
+// **The interface below is unchanged**, so `analytics-matrix.tsx` needed no edit.
 //
 // ── THE TWO PROPERTIES THAT KEEP IT HONEST ───────────────────────────────────
 // 1. **It is read in an EFFECT, never during render.** The server renders the
 //    registry order, so the first client paint must be the registry order too;
-//    reading `localStorage` in a lazy `useState` initialiser would produce a
-//    different tree on the client and a hydration mismatch. The saved order is
-//    applied on the tick after mount, which is imperceptible and correct.
+//    reading storage in a lazy `useState` initialiser would produce a different
+//    tree on the client and a hydration mismatch. That effect now lives in the
+//    store, once for every preference, rather than here once per scope.
 // 2. **A save is a preference, not a row list.** `resolveOrder` drops a key
 //    that no longer names a row and appends a row the save never heard of, so a
 //    row added in a later round cannot be hidden by an order set today. See
 //    `lib/analytics/row-order.ts`.
 //
-// Storage failing is not an error state. A private window, a browser with site
-// data blocked or a full quota all mean "this reader has no saved order", which
-// is exactly the default — so every read and write is wrapped and a failure is
+// Storage failing is not an error state — a private window, blocked site data
+// or a full quota all mean "this reader has no saved order", which is exactly
+// the default. Every read and write is wrapped in the store, and a failure is
 // silent by design.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -42,43 +49,7 @@ import {
   moveKey,
   resolveOrder,
 } from "@/lib/analytics/row-order";
-
-/**
- * Versioned, so a future change of shape cannot be read as this one.
- *
- * **R8 bumped v1 → v2.** The campaign registry lost five rows, so a saved
- * order written before this round names keys that no longer exist. Property 2
- * above already handles that exactly — `resolveOrder` DROPS a key that names
- * no row and APPENDS a row the save never heard of, and it is asserted — so
- * the bump is belt and braces rather than a fix for a live break. It is here
- * because a stored order is the one piece of this page's state that outlives a
- * deploy in a reader's browser, and "the saved value's shape changed" is
- * precisely what a version is for. It costs the RC Inventory group's saved
- * order too, which is a preference and not a figure.
- */
-const STORAGE_PREFIX = "bw.analytics.roworder.v2.";
-
-function read(scope: string): string[] | null {
-  try {
-    const raw = window.localStorage.getItem(STORAGE_PREFIX + scope);
-    if (!raw) return null;
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return null;
-    return parsed.filter((v): v is string => typeof v === "string");
-  } catch {
-    return null;
-  }
-}
-
-function write(scope: string, order: readonly string[] | null) {
-  try {
-    if (order == null) window.localStorage.removeItem(STORAGE_PREFIX + scope);
-    else window.localStorage.setItem(STORAGE_PREFIX + scope, JSON.stringify(order));
-  } catch {
-    // A reader with storage blocked keeps the registry order for this session.
-    // That is a degraded preference, never a degraded figure.
-  }
-}
+import { useAnalyticsPrefs } from "./use-analytics-prefs";
 
 export interface RowOrder {
   /** The keys to render, in order. Always covers every default key exactly once. */
@@ -93,17 +64,13 @@ export interface RowOrder {
 }
 
 export function useRowOrder(
-  /** Stable per table group — `metrics:flow`, `campaign`, `grades`. */
+  /** Stable per table group — `metrics:flow`, `metrics:campaigns`, `grades`. */
   scope: string,
   /** The registry's own order. The authority on which rows exist. */
   defaults: readonly string[],
 ): RowOrder {
-  const [saved, setSaved] = React.useState<readonly string[] | null>(null);
-
-  // Property 1 above — after mount, never during render.
-  React.useEffect(() => {
-    setSaved(read(scope));
-  }, [scope]);
+  const { prefs, patch } = useAnalyticsPrefs();
+  const saved = prefs.rowOrder[scope] ?? null;
 
   const order = React.useMemo(
     () => resolveOrder(defaults, saved),
@@ -115,10 +82,9 @@ export function useRowOrder(
       // A no-op move (a row already at the top being pushed up) returns the
       // same reference, so it never writes and never re-renders.
       if (next === order) return;
-      setSaved(next);
-      write(scope, next);
+      patch({ rowOrder: { ...prefs.rowOrder, [scope]: [...next] } });
     },
-    [order, scope],
+    [order, patch, prefs.rowOrder, scope],
   );
 
   const move = React.useCallback(
@@ -132,9 +98,14 @@ export function useRowOrder(
   );
 
   const reset = React.useCallback(() => {
-    setSaved(null);
-    write(scope, null);
-  }, [scope]);
+    // Absent, not empty: an empty array would be a saved order that says
+    // nothing, and `resolveOrder` would have to treat it as the registry's
+    // anyway. Removing the scope is what makes "reset" and "never touched"
+    // the same state — the store's rule 4.
+    const next = { ...prefs.rowOrder };
+    delete next[scope];
+    patch({ rowOrder: next });
+  }, [patch, prefs.rowOrder, scope]);
 
   return {
     order,
