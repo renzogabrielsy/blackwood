@@ -1138,3 +1138,81 @@ grants and `security_invoker=true` preserved on all 15, `batches.current_weight`
 from base tables across 715 batches with max gap **0.00 kg**, and
 `aging_eom.open_kg + closed_residue_kg = inventory_eom.positive_balance_kg` still exact on
 **75/75** months.
+
+---
+
+## L-048 — A WORKSHEET NAME IS TYPED BY A HUMAN; AN EMPTY READ OF A NON-EMPTY FILE IS AN ALARM (2026-09-03)
+
+**The third time this month a name a person typed was mistaken for a machine format**, and
+the first time it went completely unreported. MC's `260902 PROPOSED DAILY REPORT SEPTEMBER
+2026.xlsx` names its day tabs **`Aug. 29`, `Sep. 1`, `SEP. 2`** — a **period** after the
+month abbreviation. `SHEET_NAME_RE` was `^([A-Za-z]+)\s+(\d{1,2})\s*$`: a bare space, and
+nothing else, between the month word and the day. All three tabs were skipped,
+`extractProposed` returned **ZERO rows from a workbook holding 10 feedings / 82,837 kg**,
+classify read 0/0/0, apply wrote nothing — and the run then **LABELED the email processed,
+ADVANCED the watermark, and reported `succeeded` with no finding at all** (run
+`cc8c66f9-efb4-4282-bc6c-b8def86e7a78`, 2026-09-03 01:41Z).
+
+**The family:** L-039 was Czarina's `Aug. 2026` addressed by a generated `August 2026`;
+L-042 was MC's `FEEDING # 1` read as malformed instead of as shorthand; this is MC's
+`Sep. 2`. Same sentence every time: **anything a person types into a tab, a label or a cell
+is a naming convention to be READ TOLERANTLY, by one shared tokenizer, never matched against
+the one spelling we happened to see first.** The month token now comes from
+`lib/months.ts::monthNumberFromToken` — the SAME table L-039's price-tab resolver reads — so
+the local 24-entry copy that used to live in `rc_out/extract.ts` is gone.
+
+**BUT THE PARSER IS THE SMALLER HALF.** Widening a regex fixes the tabs we have seen. What
+made this incident invisible for two days is that **nothing anywhere said the file had not
+been read.** The three skips existed only as strings in `soft_warnings`, which is not a
+findings channel, so `rc_out` stopped dead at **2026-08-28** while every other stream stood
+at Sept 1–2, and the operator's only clues were two SYMPTOMS a day later: the Blocking
+cross-check flagging **79,165 kg across 4 blocks** (exactly the un-ingested feedings) and
+`stale_stream` reporting RC Out 2 working days behind. Neither named the cause.
+
+**THE RULE, and it generalises past worksheets: an extraction that yields ZERO rows from a
+NON-EMPTY source is a `high` finding, and it must leave the source UNCONSUMED.** "Zero rows"
+is a legitimate answer only from a file with zero day tabs. `reports/sourceTabs.ts` is the
+one constructor; the finding NAMES BOTH LISTS — the tabs it could not read AND the tabs it
+could — for the same reason L-039's price-tab note names what it looked for beside what the
+file actually has: one list is a complaint, two lists side by side show the convention that
+moved. `high` when 0 of N parsed, `attention` when some did.
+
+**Unconsumed is the half that had to survive the fix.** Every primary mailbox query ends
+`-label:"Blackwood-Processed"`, so labeling an email it could not read is the sync throwing
+the source away. When 0 of N tabs parse, `rc_out/apply.ts` now skips BOTH the Gmail label and
+the watermark advance — nothing was written, so there is nothing to be idempotent about, and
+the honest end state is *"we could not read it, and it is still sitting there."*
+
+**A SECOND, DIFFERENT CASE THE PARSER CAN NEVER FIX — found by replaying Storage.** The
+workbook one run earlier (`6b555102`, 2026-09-01, `260829 PROPOSED DAILY REPORT SEPTEMBER
+2026.xlsx`) has exactly ONE sheet, named literally **`Sheet1`**, carrying the 2026-08-29
+feedings with the date only in cell J1 (`August 29,2026`). The new regex still refuses it —
+correctly, `SHEET` is not a month — so it is the pure `tabs_read = 0` case, and the loud +
+unconsumed rule is the ONLY thing that answers it. **No date-from-header inference was
+built**: guessing a transaction date from a title cell is exactly the kind of quiet wrong
+this ledger keeps refusing. The data self-heals anyway, because the workbook is cumulative
+(the same three sections re-arrived under a proper `Aug. 29` tab the next day, 12,314 kg,
+byte-identical).
+
+**AND A THIRD LESSON, from a symptom nobody could have acted on.** Run `f1e9f342`
+(a manual Run Sync at 03:13Z) reported *"No RC DELIVERIES report arrived"* about an email
+run `cc8c66f9` had ingested and labeled ninety minutes earlier — because a processed email
+is excluded from every later mailbox query. **"Not received" must not mean "already eaten."**
+`reportNotReceivedNote` now reads `ingestion_watermarks` (`last_email_received_at`, else
+`last_run_at`, compared on the run's own **Asia/Manila** day — `last_run_at` is stamped from
+inside apply, which only runs when a file was present, so a stamp from today means an email
+WAS consumed today). It is a **downgrade to `info` with a different sentence, never a
+silence** — reporting nothing would be L-044's reassuring sentence in a new costume — and an
+unreadable bookkeeping row leaves the finding at full volume, because an unknown must never
+quieten an alarm.
+
+**Provenance:** 2026-09-03, branch `fix/sync-proposed-tab-period`. Both engines moved in
+lockstep (`extract_proposed_daily.py` + `src/reports/rc_out/extract.ts`), so this is a
+**post-port business-rule change, NOT a deviation** — the two rc_out fixtures' tab names
+(`JUNE 30`, `JULY 1`, `JULY 2`) parse identically under both regexes, so **no oracle rebuild
+was required and parity stayed 12/12**. Proven against the real file: `Aug. 29` 3 sections /
+12,314 kg, `Sep. 1` 3 / 41,867 kg, `SEP. 2` 4 / 28,656 kg. No regression: the two August
+workbooks (`260828`, `270826`) still yield 92 and 88 rows with 22 / 21 tabs parsed and zero
+unparsed. Gates: worker `tsc` clean, 885 tests (37 new), parity 12/12 clean,
+`verify:container-build` OK, `verify-findings` 58 checks, root `tsc` clean, lint at its
+146/16 baseline.

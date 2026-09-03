@@ -743,6 +743,51 @@ export class DbClient {
   }
 
   /**
+   * Read one `ingestion_watermarks` row — the RUN BOOKKEEPING for a report type, as
+   * distinct from `dataWatermark()` which is MAX(transaction_date) over the fact table.
+   *
+   * Added 2026-09-03 (L-048 part 3) for ONE question: *did an earlier run already process
+   * this stream's email today?* `last_run_at` is written by `upsertIngestionWatermark`, and
+   * every writer calls it from inside apply — which only runs when a source file was
+   * actually present — so a fresh `last_run_at` means "an email was consumed", not merely
+   * "a run happened". That is the fact the `report_not_received` finding needs before it
+   * tells an operator no report arrived (see reports/reportNotReceived.ts).
+   *
+   * NON-FATAL by contract, like every other observability read: a failure returns null with
+   * the message, never throws, so a bookkeeping read can never fail a sync. And null is
+   * returned for BOTH "no row" and "could not read" — the caller treats an unknown as
+   * "cannot claim it was already processed", which is the conservative direction (it keeps
+   * the finding at full volume rather than silencing it on no evidence).
+   */
+  async readIngestionWatermark(reportType: string): Promise<{
+    row: { last_run_at: string | null; last_email_id: string | null; last_email_received_at: string | null } | null;
+    error: string | null;
+  }> {
+    try {
+      const { data, error } = await this.sb
+        .from("ingestion_watermarks")
+        .select("report_type,last_run_at,last_email_id,last_email_received_at")
+        .eq("report_type", reportType)
+        .limit(1);
+      if (error) return { row: null, error: sliceMsg(error.message) };
+      const r = Array.isArray(data) && data.length ? (data[0] as Row) : null;
+      if (!r) return { row: null, error: null };
+      const s = (v: unknown): string | null =>
+        typeof v === "string" && v.trim() ? v : null;
+      return {
+        row: {
+          last_run_at: s(r.last_run_at),
+          last_email_id: s(r.last_email_id),
+          last_email_received_at: s(r.last_email_received_at),
+        },
+        error: null,
+      };
+    } catch (err) {
+      return { row: null, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
    * The REAL data watermark = MAX(dateColumn). Mirrors
    * orchestrator_common.data_watermark. Returns "YYYY-MM-DD" or null.
    */

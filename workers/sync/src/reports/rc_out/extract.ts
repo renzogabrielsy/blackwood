@@ -14,7 +14,7 @@
  */
 import type { LoadedWorkbook, LoadedSheet, CellValue } from "../../lib/xlsx.js";
 import { coerceFloat, coerceDate } from "../../lib/norm.js";
-import { monthName } from "../../lib/months.js";
+import { monthName, monthNumberFromToken } from "../../lib/months.js";
 import { CLOSING_PHRASES } from "../../lib/closingRemarks.js";
 
 // ---------------------------------------------------------------------------
@@ -34,18 +34,35 @@ const FALLBACK_MONTH_PREFIX: Record<number, string> = {
   10: "OCTOBER", 11: "NOVEMBER", 12: "DECEMBER",
 };
 
-/** extract_proposed_daily.py:62-69 — sheet-name month word → month number (abbr + full). */
-const MONTH_NAME_TO_NUM: Record<string, number> = {
-  JANUARY: 1, JAN: 1, FEBRUARY: 2, FEB: 2,
-  MARCH: 3, MAR: 3, APRIL: 4, APR: 4,
-  MAY: 5, JUNE: 6, JUN: 6, JULY: 7, JUL: 7,
-  AUGUST: 8, AUG: 8, SEPTEMBER: 9, SEPT: 9, SEP: 9,
-  OCTOBER: 10, OCT: 10, NOVEMBER: 11, NOV: 11,
-  DECEMBER: 12, DEC: 12,
-};
+// The sheet-name month word is resolved through `monthNumberFromToken` (lib/months.ts) —
+// THE one month-token table in this worker, the same one Czarina's price-tab resolver
+// reads (L-039). The local `MONTH_NAME_TO_NUM` map that used to live here carried the
+// identical 24 spellings; a second copy is exactly how the two sides of a "which month is
+// this" question drift. The Python oracle keeps its own map (same 24 tokens, asserted by
+// `test/reports/rc_out-sheet-names.test.ts`), because the two engines cannot share a module.
 
-/** extract_proposed_daily.py:71 — SHEET_NAME_RE, case-insensitive. */
-const SHEET_NAME_RE = /^([A-Za-z]+)\s+(\d{1,2})\s*$/;
+/**
+ * SHEET_NAME_RE — the DAY-TAB name (extract_proposed_daily.py:80, both engines in lockstep).
+ *
+ * L-048 (2026-09-03): this was `^([A-Za-z]+)\s+(\d{1,2})\s*$` — a space, and nothing else,
+ * between the month word and the day. MC's SEPTEMBER 2026 workbook names its tabs
+ * `Aug. 29`, `Sep. 1`, `SEP. 2` — a PERIOD after the abbreviation — so all three tabs
+ * failed to parse, `extractProposed` returned ZERO rows from a workbook full of feedings,
+ * and rc_out silently stopped at 2026-08-28 while the run reported success. Exactly the
+ * shape of L-039 (Czarina's `Aug. 2026` addressed as a generated `August 2026`) and L-042
+ * (`FEEDING # 1` read as malformed instead of as shorthand): **a worksheet name a human
+ * typed must be parsed by a tolerant reader, never matched against one spelling.**
+ *
+ * Now accepted: an optional period after the month token, any (or NO) whitespace around
+ * the separator, an optional trailing period, and any case — `Aug. 29`, `AUG.29`,
+ * `Sept 1`, `September 1`, `Sep. 2.`, ` MAY 26 `.
+ *
+ * Still rejected, deliberately: a non-month word (`SUMMARY`, `TOTAL`, `Sheet1` — "SHEET"
+ * is not a month), a day out of range for the month (`Aug 32`, caught by `isValidCalDate`
+ * exactly as Python's `date()` ValueError does), and a 3-4 digit tail (`JANUARY 2026`, the
+ * RC MOVEMENT month-tab shape, can never be read as a day).
+ */
+const SHEET_NAME_RE = /^\s*([A-Za-z]+)\s*\.?\s*(\d{1,2})\s*\.?\s*$/;
 /** extract_proposed_daily.py:72 — BLOCK_NO_RE. */
 const BLOCK_NO_RE = /^\s*#\s*(\d+)\s*$/;
 
@@ -125,14 +142,13 @@ function parseBlockNo(value: CellValue): number | null {
   return null;
 }
 
-/** extract_proposed_daily.py:142-154 sheet_name_to_date. */
-function sheetNameToDate(sheetName: string, year: number): CalDate | null {
+/** extract_proposed_daily.py:158-170 sheet_name_to_date. Exported for the name-parsing tests. */
+export function sheetNameToDate(sheetName: string, year: number): CalDate | null {
   const m = sheetName.match(SHEET_NAME_RE);
   if (!m) return null;
-  const monthName = m[1].toUpperCase();
   const day = parseInt(m[2], 10);
-  const monthNum = MONTH_NAME_TO_NUM[monthName];
-  if (monthNum === undefined) return null;
+  const monthNum = monthNumberFromToken(m[1]);
+  if (monthNum === null) return null;
   // Python date(year, month, day) raises ValueError on an out-of-range day.
   if (!isValidCalDate(year, monthNum, day)) return null;
   return { year, month: monthNum, day };
@@ -399,7 +415,18 @@ function extractSheet(ws: LoadedSheet, year: number): [ProposedRow[], string[]] 
 export interface ProposedExtract {
   rows: ProposedRow[];
   warnings: string[];
+  /** Every sheet in the workbook, in workbook order. */
   sheetsProcessed: string[];
+  /**
+   * The sheets whose NAME resolved to a calendar date — i.e. the day tabs actually read.
+   * L-048: a warning in `warnings` was the ONLY record that a tab had been skipped, and
+   * `soft_warnings` is not on the findings path, so an unreadable workbook was
+   * indistinguishable from an empty one. These two lists make "how much of this file did
+   * we manage to read" a STRUCTURED fact the orchestrator can raise a finding from.
+   */
+  sheetsParsed: string[];
+  /** The sheets whose NAME could not be resolved to a date — nothing was read from them. */
+  sheetsUnparsed: string[];
 }
 
 /**
@@ -411,6 +438,8 @@ export function extractProposed(wb: LoadedWorkbook, year: number): ProposedExtra
   const rows: ProposedRow[] = [];
   const warnings: string[] = [];
   const sheetsProcessed: string[] = [];
+  const sheetsParsed: string[] = [];
+  const sheetsUnparsed: string[] = [];
   for (const name of wb.sheetNames) {
     const ws = wb.sheet(name);
     if (!ws) continue;
@@ -418,8 +447,12 @@ export function extractProposed(wb: LoadedWorkbook, year: number): ProposedExtra
     rows.push(...r);
     warnings.push(...w);
     sheetsProcessed.push(name);
+    // The SAME predicate `extractSheet` routed on — re-asked, never re-implemented, so the
+    // two can never disagree about which tabs were read.
+    if (sheetNameToDate(name, year) === null) sheetsUnparsed.push(name);
+    else sheetsParsed.push(name);
   }
-  return { rows, warnings, sheetsProcessed };
+  return { rows, warnings, sheetsProcessed, sheetsParsed, sheetsUnparsed };
 }
 
 // ---------------------------------------------------------------------------

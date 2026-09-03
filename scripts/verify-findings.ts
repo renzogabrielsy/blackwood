@@ -38,6 +38,7 @@ import type {
   HeldRow,
   PriceNote,
   ReportNotReceived,
+  SourceTabNote,
   SingleSourceOverdue,
   SourceDiff,
   SyncRunResult,
@@ -678,6 +679,123 @@ check('the missing-report finding never reassures, and says what it searched', (
   assert.ok(f.reason.includes('2026-08-11'), 'must state how far back it searched')
   assert.equal(f.data.through_date, '2026-08-14')
   assert.equal(f.data.missed_working_days, 3)
+})
+
+check('an EARLIER RUN TODAY that already ate the mail downgrades — and never silences (L-048)', () => {
+  // Every primary mailbox query ends `-label:"Blackwood-Processed"`, so once one run
+  // consumes the email every later run that day sees an empty mailbox. Measured
+  // 2026-09-03: run cc8c66f9 ingested the RC DELIVERIES mail at 01:41Z, and f1e9f342 at
+  // 03:13Z reported that none had arrived. Crying wolf on every manual Run Sync is how an
+  // operator learns to skip the one finding that matters.
+  const f = flattenRunFindings(
+    notReceivedRun({
+      missed_working_days: 3, // would be `attention` on its own
+      already_processed: true,
+      last_processed_at: '2026-08-18T00:41:00Z',
+      last_processed_email_id: 'thread-abc',
+    }),
+  )
+  assert.equal(f.length, 1, 'downgraded, NOT removed — silence would be the old bug in a new costume')
+  assert.equal(f[0].kind, 'report_not_received')
+  assert.equal(f[0].severity, 'info')
+  assert.match(f[0].title, /earlier run today/i)
+  assert.equal(f[0].data.already_processed, true)
+  assert.equal(f[0].data.last_processed_at, '2026-08-18T00:41:00Z')
+  // The unknown case must NEVER quieten the alarm.
+  const unknown = flattenRunFindings(notReceivedRun({ missed_working_days: 3 }))[0]
+  assert.equal(unknown.data.already_processed, false)
+  assert.equal(unknown.severity, 'attention')
+})
+
+// ── 3.7b A source workbook that ARRIVED and could not be read (L-048). ────
+//
+// THE REGRESSION THIS PINS: run cc8c66f9 opened MC's September PROPOSED workbook, whose
+// day tabs are named `Aug. 29` / `Sep. 1` / `SEP. 2`. The tab-name reader wanted a bare
+// space, all three were skipped, ZERO rows came out of a workbook full of feedings, and
+// the run then labeled the email processed and reported `succeeded` with NO finding at
+// all. rc_out stopped dead at 2026-08-28. The skips lived only in `soft_warnings`, which
+// nothing on this list reads.
+function tabNote(over: Partial<SourceTabNote> = {}): SourceTabNote {
+  return {
+    kind: 'source_tabs_unreadable',
+    report_type: 'rc_out',
+    source_label: 'PROPOSED DAILY REPORT',
+    filename: '260902 PROPOSED DAILY REPORT SEPTEMBER 2026.xlsx',
+    tabs_total: 3,
+    tabs_read: 0,
+    unreadable_tabs: ['Aug. 29', 'Sep. 1', 'SEP. 2'],
+    readable_tabs: [],
+    rows_extracted: 0,
+    source_left_unconsumed: true,
+    ...over,
+  }
+}
+
+function tabNoteRun(note: SourceTabNote): SyncRunResult {
+  return {
+    reports: {
+      rc_out: {
+        apply: {
+          report_type: 'rc_out',
+          ok: true,
+          held: [],
+          labeled: false,
+          watermark_updated: false,
+          errors: [],
+          source_tab_notes: [note],
+        },
+      },
+    },
+  } as unknown as SyncRunResult
+}
+
+check('a workbook that arrived and read as NOTHING is a HIGH finding naming both lists', () => {
+  const f = flattenRunFindings(tabNoteRun(tabNote()))
+  assert.equal(f.length, 1)
+  assert.equal(f[0].kind, 'source_tabs_unreadable')
+  assert.equal(f[0].severity, 'high')
+  assert.equal(f[0].section, 'rc_out')
+  assert.match(f[0].title, /Not one of the 3 tabs/)
+  // Both sides, the way the price-tab finding names what it wanted AND what it found.
+  for (const tab of ['Aug. 29', 'Sep. 1', 'SEP. 2']) {
+    assert.ok(f[0].reason.includes(tab), `must name the tab it could not read: ${tab}`)
+  }
+  assert.deepEqual(f[0].data.unreadable_tabs, ['Aug. 29', 'Sep. 1', 'SEP. 2'])
+  assert.equal(f[0].data.source_left_unconsumed, true)
+  assert.match(f[0].reason, /left unmarked/i, 'must say the email is still there to re-read')
+  for (const k of Object.keys(f[0].data)) assert.ok(!isCostKey(k), `cost-ish key: ${k}`)
+})
+
+check('a PARTIAL tab failure is attention, and names the tabs it DID read', () => {
+  const f = flattenRunFindings(
+    tabNoteRun(
+      tabNote({
+        tabs_total: 3,
+        tabs_read: 2,
+        unreadable_tabs: ['notes'],
+        readable_tabs: ['Sep. 1', 'SEP. 2'],
+        rows_extracted: 7,
+        source_left_unconsumed: false,
+      }),
+    ),
+  )[0]
+  assert.equal(f.severity, 'attention')
+  assert.equal(f.title, '1 of 3 tabs in PROPOSED DAILY REPORT could not be read')
+  assert.ok(f.reason.includes('"Sep. 1"') && f.reason.includes('"SEP. 2"'))
+  assert.ok(!/left unmarked/i.test(f.reason), 'a partial read DID consume the email')
+})
+
+check('the tab finding has a stable identity and re-surfaces when the tab list changes', () => {
+  const a = findingIdentity(flattenRunFindings(tabNoteRun(tabNote()))[0])
+  const b = findingIdentity(flattenRunFindings(tabNoteRun(tabNote()))[0])
+  assert.match(a.fingerprint, /^[0-9a-f]{64}$/)
+  assert.equal(a.fingerprint, b.fingerprint, 'same workbook, same identity')
+  assert.equal(a.contentHash, b.contentHash, 'same situation, same content hash')
+  const moved = findingIdentity(
+    flattenRunFindings(tabNoteRun(tabNote({ unreadable_tabs: ['Aug. 29', 'Sep. 1'], tabs_total: 2 })))[0],
+  )
+  assert.equal(moved.fingerprint, a.fingerprint, 'still the same workbook')
+  assert.notEqual(moved.contentHash, a.contentHash, 'a different tab list IS a different situation')
 })
 
 // ── 3.8 The freshness watch that could not run (L-044). ───────────────────

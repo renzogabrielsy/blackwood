@@ -27,6 +27,7 @@ import type { ProgressEmitter } from "../../lib/progress.js";
 import type { FieldDiff } from "./classify.js";
 import type { ProposedRow } from "./extract.js";
 import { type HeldRow, type HeldKind, rcOutKey } from "../held.js";
+import type { SourceTabNote } from "../sourceTabs.js";
 import { operatorError } from "../../lib/operatorError.js";
 import {
   batchLocationConflictDetail,
@@ -99,6 +100,17 @@ export interface RcOutCompact {
    *  movement cross-check was unavailable this run). */
   quarantined_dates?: QuarantinedDate[];
   source: { email_subject?: string | null; email_uid?: number | string | null; email_thread_id?: string | null };
+  /**
+   * L-048 — set ONLY when the workbook opened and NOT ONE of its day tabs could be read.
+   * Suppresses labeling + the watermark advance so the same email can be read again after
+   * a fix; carries the reason so the run says why out loud instead of going quiet. A
+   * PARTIAL tab failure never sets this: real rows were written, and the note alone is the
+   * report.
+   */
+  source_unconsumable?: { reason: string } | null;
+  /** L-048 — the tab-readability notes this run produced, echoed onto the apply envelope
+   *  so they reach `lib/sync/findings.ts` and the Excel workbook. */
+  source_tab_notes?: SourceTabNote[];
   actionable: {
     new: Array<{ index: unknown; row: ProposedRow }>;
     changed: Array<{ index: unknown; row: ProposedRow; db_row: Record<string, unknown>; diff: FieldDiff[] }>;
@@ -131,6 +143,9 @@ export interface ApplyResult {
   watermark_updated: boolean;
   errors: string[];
   gate_failures?: GateFailureDetail[];
+  /** L-048 — workbooks this run opened and could not fully read. ALWAYS present (default
+   *  []), so the shape never depends on whether anything went wrong. */
+  source_tab_notes: SourceTabNote[];
   /** Batches auto-created this apply from a pattern-valid unmapped batch_code
    *  (2026-07-11 policy — see lib/batchAutoCreate.ts). Empty when none. */
   auto_created_batches: AutoCreatedBatchNote[];
@@ -554,9 +569,25 @@ export async function applyRcOut(compact: RcOutCompact, deps: ApplyDeps): Promis
 
   // Label + watermark whenever not errors (sync_rc_out.py:306-315) — a quarantine hold
   // is NOT an error (see the file header); it does not block labeling/watermark.
+  //
+  // L-048 (2026-09-03): an UNCONSUMABLE source does block both. When not one day tab in
+  // the workbook could be read, labeling the email `Blackwood-Processed` removes it from
+  // every future mailbox query (`-label:"Blackwood-Processed"`) — the run would throw away
+  // a source it never read. Nothing was written, so there is nothing to be idempotent
+  // about; the correct end state is "we could not read it, and it is still there".
+  const unconsumable = compact.source_unconsumable ?? null;
   let watermarkUpdated = false;
   let labeled = false;
-  if (!errors.length) {
+  if (unconsumable) {
+    await emit?.(
+      "apply",
+      `Leaving the email unread-and-unmarked so it can be picked up again — ${unconsumable.reason}`,
+      90,
+      undefined,
+      "error",
+    );
+  }
+  if (!errors.length && !unconsumable) {
     await emit?.("apply", "Updating the audit trail…", 90);
     watermarkUpdated = await db.upsertIngestionWatermark(REPORT_TYPE, {
       lastEmailId: compact.source?.email_thread_id ?? null,
@@ -572,6 +603,15 @@ export async function applyRcOut(compact: RcOutCompact, deps: ApplyDeps): Promis
 
   if (errors.length) {
     await emit?.("finalize", `Finished with ${errors.length} problem(s) — see details.`, 100, undefined, "warn");
+  } else if (unconsumable) {
+    await emit?.(
+      "finalize",
+      `Nothing was read from the report and nothing was written — the email is still ` +
+        `waiting, so a fix can pick it straight back up.`,
+      100,
+      unconsumable.reason,
+      "error",
+    );
   } else if (quarantineByDate.size) {
     await emit?.(
       "finalize",
@@ -597,6 +637,7 @@ export async function applyRcOut(compact: RcOutCompact, deps: ApplyDeps): Promis
     watermark_updated: watermarkUpdated,
     errors,
     gate_failures: gateFailures.length ? gateFailures : undefined,
+    source_tab_notes: compact.source_tab_notes ?? [],
     auto_created_batches: autoCreatedBatches,
   };
 }
