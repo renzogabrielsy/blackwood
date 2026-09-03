@@ -36,6 +36,12 @@
 > JAN/MAR/APR because blocks a campaign only *sun-dried* from are no longer counted as fed.
 > Every figure quoted elsewhere in this file for those four months is **pre-correction**.
 >
+> **OWNER FEEDBACK ROUND 8 APPLIED — 2026-09-03.** One change: the campaign table's
+> `Batches` checklist is now **TWO dropdowns — `Year` and `Batches`** — over the SAME
+> `?bhide=` selection. Thirty-two lines in one list was a wall; the batch list is now
+> scoped to the years selected beside it. The URL contract, the codec and
+> `period-filter.tsx` are all untouched. See **"Owner feedback round 8"** at the end.
+>
 > **OWNER FEEDBACK ROUND 7 APPLIED — 2026-09-02. ⚠ THIS ROUND IS THE AUTHORITY.**
 > Four matrix rows are gone (`RC IN total` · `RC OUT` · `Avg stock age` · `Stock over 120
 > days`), one is new (**Usage** — charcoal FED, destination MAIN only, on the CALENDAR
@@ -100,7 +106,7 @@ layer**; **P3, the supplier room**; **P4, the production matrix — the page is 
 | `metric-expand.tsx` | **The row expand** (+ R3: `canDrawAvg` and the `AvgToggle` beside `Years`, and the dictionary blocks behind the page's `Definitions` switch), rendered IN PLACE inside the matrix, in a full-width row directly beneath the row that was clicked. Stat strip + full-history chart (bar or line, **plus the dashed comparison line where a row declares a pair**) + one of six side rails (inventory split · price coverage · closed blocks · aging bands · downtime · power) + the dictionary spelled out + **a Print button** that prints just this card. Reuses `DrilldownSection` / `DrilldownStat` / `BreakdownRail` / `DRILLDOWN_AXIS_TICK` / `drilldownTooltipChrome` from the drill-down chassis. |
 | `metric-info.tsx` | **The dictionary** at the point of use — an `Info` button with the whole entry as a native `title` (hover) and a `Popover` card (click). `DictionaryPopover` is the ONE card and takes any `MetricDictionaryEntry`; `MetricInfo` is the matrix row's wrapper over it (`METRICS[].dictionary`) and the supplier room passes `SUPPLIER_DICTIONARY` entries into the same component, so a metric and a supplier figure can never explain themselves in two layouts. |
 | ~~`batch-cost-panel.tsx`~~ | **DELETED in R7** — merged into `campaign-room.tsx`. Its nine rows are now nine of the sixteen in the shared campaign matrix, and its `Blocks closed / priced` line is that table's footer row. Historic role: One column per production campaign, nine rows (fed · delivered ₱/kg · true ₱/kg · **cost of storage time** · weight lost · produced · yield · ₱/produced kg on both bases) plus a `blocks closed / priced` coverage line. Frozen row-label column, opens scrolled to the newest campaign. |
-| `campaign-room.tsx` | **R7 — THE MERGED CAMPAIGN SECTION.** One `<section id="section-campaigns">` carrying: the header + the `Batches` checklist (`?bhide=`), the four selection chips (Fed · Made · Top grade · Power), the dictionary strip, the **sixteen-row campaign matrix** with its `Blocks closed / priced` FOOTER row, its expand, the grade mix, and the group-print stage. It replaced `batch-cost-panel.tsx` + `production-room.tsx`, which printed **Produced** and **Yield** twice on one screen after R6 put them on the same clock. |
+| `campaign-room.tsx` | **R7 — THE MERGED CAMPAIGN SECTION.** One `<section id="section-campaigns">` carrying: the header + (**R8**) the **two** checklists — `Year` and `Batches`, both writing the ONE `?bhide=` set through `lib/analytics/campaign-selection.ts` — the four selection chips (Fed · Made · Top grade · Power), the dictionary strip, the **sixteen-row campaign matrix** with its `Blocks closed / priced` FOOTER row, its expand, the grade mix, and the group-print stage. It replaced `batch-cost-panel.tsx` + `production-room.tsx`, which printed **Produced** and **Yield** twice on one screen after R6 put them on the same clock. |
 | `aging-watchlist.tsx` | **UNMOUNTED (owner feedback R1).** Nothing imports it and the adapter no longer reads its view. Kept, compiling, against the `AgingWatchItem` / `AgingWatchlist` types so the block is one read and one JSX element away if it is ever wanted back. |
 | `supplier-room.tsx` | **P3 — the SUPPLIER axis.** The section shell: the concentration header (top-1 / top-3 / seller count / suppliers-to-half), the dictionary strip, and the four blocks below. Follows the page's YEAR picker; deliberately NOT the Y/Q/M toggle. |
 | `supplier-matrix.tsx` | **P3 — supplier × month volume.** Frozen supplier column, tonnes + share-of-month per cell, ↩ returns chips, a YTD column, a `Σ market` footer row that prints P1's own figure, `Show all N` over a top-12 default, and the **in-place expand row** (same mechanism as the KPI matrix). |
@@ -125,6 +131,7 @@ layer**; **P3, the supplier room**; **P4, the production matrix — the page is 
 | `campaign-matrix.ts` | **R7 — THE CAMPAIGN REGISTRY, THE MERGE AND THE BATCH AXIS.** It replaced `production-batch.ts`. `CampaignMatrixRow` keeps the two source rows as NAMED HALVES (`cost` / `batch`) rather than spreading them — six field names collide, and a spread would settle all six silently by declaration order. `foldCampaignRows()` outer-joins them on `(production_batch, campaign_year)` and **counts** any `fed_kg` disagreement above 1 kg (measured 0 of 32) rather than asserting there is none. `CAMPAIGN_METRICS` (sixteen rows, section stamped by construction), `CAMPAIGN_METRIC_BY_KEY`, `CAMPAIGN_RULES`, `CAMPAIGN_GRANULARITY = "B"`, `buildCampaignMatrix`, `coverageSentence`. **Five rows are `price: true`** and none is `perWorkingDay` — the second is structural (the plant's denominator is `reportedDays`, which is its own row). Pure, client-safe. |
 | `period-selection.ts` | **R2 — the hidden set's URL codec** (`NO_HIDDEN`, `serializeHidden`, `parseHidden`). A separate module from `period-filter.tsx` for one reason: that file is `"use client"`, and a plain function exported from a client module becomes a client REFERENCE, so the Server Component calling it would fail at request time rather than at build time. Pure, importable from both sides. **R5 reuses it verbatim for `?bhide=`.** |
 | `campaign.ts` | **R5 — campaign identity.** `CAMPAIGN_MONTHS`, `campaignMonthIndex`, **`campaignSeq`** (moved OUT of `queries.ts`, which is `server-only`, so the panel's checklist and the server's column sort share ONE definition of chronological), `campaignKey` and **`campaignMonthKeys`** (the `YYYY-MM` months a campaign covers — a LABEL on the campaign panel, not a filter). **R6 deleted `selectedCampaignMonths`**: it existed only to project a batch selection onto calendar columns, and the production band no longer has any. Pure, client-safe. |
+| `campaign-selection.ts` | **R8 — the TWO dropdowns over ONE selection.** `groupCampaignYears` / `groupCampaignNames` derive both checklists from the `?bhide=` set on every render (so they cannot drift from the columns), `hiddenYearKeys` / `hiddenNameKeys` / `shownYearSet` project it, and `applyYearSelection` / `applyNameSelection` write it back **as a DIFF** — only the groups whose own ticked state moved are rewritten, which is what stops a year toggle silently restoring a per-batch pick. Reads `productionBatch` and `campaignYear` as the separate columns they already are: **no label is ever split or rebuilt.** Pure, client-safe, pinned by `scripts/verify-campaign-selection.ts` (11 assertions). |
 | `row-order.ts` | **R5 — the ordering arithmetic**: `resolveOrder`, `isDefaultOrder`, `moveKey`, `dropKey`, `applyOrder`. Pure, so an ordering bug is readable without mounting anything, and so the same functions can be run against an untrusted `localStorage` value. **A saved order is a PREFERENCE, never a row list** — a key that no longer names a row is dropped and a row the save never heard of is APPENDED in registry position, so a row added in a future round cannot be hidden by an order set today. |
 | `format.ts` | Display formatters, the blank-reason hover copy and the estimate hover. **R6 adds `UNIT_GLYPH` and `unitGlyphFor(spec)`** — the ONE table mapping a `MetricUnit` to the glyph a cell prints on its left (`₱/kg` · `₱` · `T` · `d` · `%` · `h` · `kWh` · `kWh/kg`), with `count` deliberately BLANK because "12 what?" is a per-row question the spec's own `glyph` answers (`sellers`, `bags`, `piles`). Presentation only. |
 | `queries.ts` | **The server-only ADAPTER.** Reads the **nine** views + the live blocking grid, applies the ₱ gate and the two honest nullings, returns `AnalyticsData`. |
@@ -1486,6 +1493,12 @@ list quietly short of the real one is exactly what a reader must be told.
 
 ### The batch checklist, and the one thing it must not sort by
 
+> ⚠ **SUPERSEDED IN PART BY R8 (2026-09-03): the ONE checklist is now TWO — `Year` and
+> `Batches`.** Everything below about the SET is still exactly true (`?bhide=`, the codec,
+> the hidden-set shape, the sort rule, `nounPlural`); what changed is that the batch list
+> holds NAMES rather than labels and is scoped to the years selected beside it. Read
+> "Owner feedback round 8" at the end for the split.
+
 `PeriodFilter` mounted a fourth time, in the campaign panel's header, labelled `Batches`.
 The options are `campaigns` **in payload order**, and that is the whole sorting story:
 the adapter already orders them chronologically by the month their NAME spells, so the
@@ -1920,6 +1933,94 @@ exercised rather than assumed.
 - **Gates**: `tsc --noEmit` clean · `npm run lint` 146 problems / 16 errors (the baseline,
   unmoved) · `npm run build` clean · `verify-table-core` 84 assertions · `npm run test:e2e`
   57 passed.
+
+## Owner feedback round 8 — the batches filter, split in two, 2026-09-03
+
+Renzo, verbatim: *"In by production batch table, change how the batches drop down filter
+work from checking every known batch to separating this into two drop downs: one for years
+and one for the batches without the year. Currently it lists all 32 batches in one drop
+down. I'd rather be able to see all the batches within a year type of thing hence the
+separated dropdowns."*
+
+### The selection did not change — only the control over it did
+
+`?bhide=` still holds hidden **`campaignLabel`** keys, `lib/analytics/period-selection.ts`
+is untouched byte for byte, and that ONE set still drives the campaign table's columns, the
+grade mix and the group print. `period-filter.tsx` is unchanged too — it is simply mounted
+five times now instead of four.
+
+**Both lists are DERIVED from the hidden set on every render.** There is no `hiddenYears`
+state anywhere, which is the whole reason the two controls cannot come to disagree with each
+other or with the columns: a year checkbox is not a thing that is stored, it is a question
+asked of the set. `lib/analytics/campaign-selection.ts` is where that question is answered,
+pure and client-safe, and `scripts/verify-campaign-selection.ts` pins it with 11 assertions.
+
+### Neither list parses a label
+
+`CampaignMatrixRow` already carries `productionBatch` (`AUGUST`) and `campaignYear` (`2026`)
+as separate columns straight from SQL — the label is the third field, not a composite that
+has to be taken apart. So the split reads what is already there, and `campaignLabel` stays
+the identity and is never rebuilt from the two halves either. Check 11 of the verify script
+proves that by selecting correctly on a label deliberately spelled `AUG-26 CAMPAIGN`, which
+a `"<name> <year>"` reconstruction would have missed entirely.
+
+### The two rules that make the pair coherent
+
+1. **A control reads unticked only when EVERY column it stands for is hidden.** A year with
+   one batch still on screen is a year that is showing. Anything looser lets a fully-visible
+   year read as off; anything stricter lets a fully-hidden year read as on.
+2. **A toggle is applied as a DIFF, never as an absolute rewrite.** Recomputing every label
+   from the year checkboxes would silently restore the per-batch picks the moment a reader
+   touched the year control — the "my filter reset itself" bug. Only groups whose own state
+   actually moved are rewritten. Check 9 is exactly this: hide JANUARY 2026 by name, switch
+   2025 off and back on, and JANUARY 2026 is **still** hidden.
+
+### The batch list is scoped to the selected years, and that IS the feature
+
+Untick 2024 and the names that existed only in it leave the second list rather than sitting
+there toggling a column nobody can see. A name that ran in two selected years toggles
+**both** columns; a name toggle never touches a campaign in a switched-off year, so "hidden
+because of its year" and "hidden by name" never get confused (checks 3, 6, 7).
+
+**Sorting.** Years keep the payload's own chronological order — the adapter already sorts by
+`campaignSeq`, so nothing here re-derives one. Names sort by the month the name spells, so
+the list reads JANUARY → DECEMBER with any non-month name after the twelve; alphabetical
+(APRIL, AUGUST, DECEMBER) remains unrepresentable. Each line carries a `meta`: a year's is
+how many batches it holds (or `shown/total` while partial), a name's is the single year it
+ran in, `×N` when it ran in several, or `shown/total` while partial.
+
+### One layout fix came with it
+
+The header's control block was `shrink-0`. With two triggers plus the count sentence it
+measured **403 px inside a 375 px screen** and pushed the DOCUMENT into horizontal overflow —
+the one thing every table on this page is built to avoid. It is now `min-w-0 max-w-full`,
+and its own `flex-wrap` drops the sentence onto its own line. Measured before **425/375**,
+after **375/375**.
+
+### Verified in the browser (throwaway harness, since deleted)
+
+`app/dev/table-playground/analytics-r8/` mounted the REAL `CampaignRoom` in the REAL shell
+class over 34 synthetic campaigns (2024 and 2025 complete, 2026 JAN–SEP plus one non-month
+name `TRIAL`), resolving `?bhide=` from `searchParams` exactly as `page.tsx` does and
+mirroring the page's own `history.replaceState` write-back, so the server round-trip was
+exercised rather than assumed.
+
+- **The two dropdowns**: `Year` lists `2024 · 12`, `2025 · 12`, `2026 · 10`; `Batches` lists
+  `JANUARY ×3 … SEPTEMBER ×3`, `OCTOBER ×2`, `NOVEMBER ×2`, `DECEMBER ×2`, `TRIAL 2026` —
+  thirteen lines standing for thirty-four columns.
+- **Year narrows Batches**: unticking 2024 and 2025 leaves the batch list holding exactly
+  2026's ten names, the table holding its ten columns in chronological order, the trigger
+  reading `Year filter — 1 of 3 years shown` with a `1/3` badge, the header sentence reading
+  `1 of 3 years · 10 of 34 batches`, and the prose reading *"Filtered to 10 of 34 batches
+  across 1 of 3 years"*.
+- **`?bhide=` round-trips**: the URL the app wrote (24 hidden labels) reloads as a deep link
+  with 2024 and 2025 `aria-checked="false"`, 2026 true, and both triggers reading the same
+  counts on the FIRST paint.
+- **No document overflow**: `document.scrollWidth === clientWidth` at **1512** and at
+  **375**, popover open and closed; the tables still scroll inside their own wrappers.
+- **Gates**: `tsc --noEmit` clean · `npm run lint` 146 problems / 16 errors (the baseline,
+  unmoved) · `npm run build` clean · `verify-table-core` 84 assertions · `npm run test:e2e`
+  57 passed · `verify-campaign-selection` 11 assertions (new).
 
 ## Dependencies
 

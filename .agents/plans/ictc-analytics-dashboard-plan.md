@@ -1491,3 +1491,64 @@ with zero `data-print-page` and zero `data-print-ancestor` left behind · under
 `role=production` seven rows read `Restricted` and **zero `₱<digits>` sequences appear
 anywhere on the page** · and at **1512 light, 1512 dark, 2560 dark and 375 light**,
 `document.scrollWidth === clientWidth` with no truncated row label.
+
+### 13.6 OWNER FEEDBACK ROUND 8 — 2026-09-03 (THE BATCHES FILTER SPLIT IN TWO)
+
+Renzo, verbatim: *"In by production batch table, change how the batches drop down filter
+work from checking every known batch to separating this into two drop downs: one for years
+and one for the batches without the year. Currently it lists all 32 batches in one drop
+down. I'd rather be able to see all the batches within a year type of thing hence the
+separated dropdowns."*
+
+**The selection did not change — only the control over it did.** `?bhide=` still holds
+hidden `campaignLabel` keys, `lib/analytics/period-selection.ts` is untouched, and the one
+set still drives the campaign table, the grade mix and the group print. The two dropdowns
+are a PRESENTATION of that set, derived on every render, so they cannot drift from the
+columns they claim to describe. `period-filter.tsx` is unchanged and is now mounted five
+times rather than four.
+
+**Neither list parses a label.** `CampaignMatrixRow` already carries `productionBatch`
+(`AUGUST`) and `campaignYear` (`2026`) as separate columns straight from SQL, so the split
+reads two fields that already exist; `campaignLabel` stays the identity and is never
+rebuilt from the halves either. `scripts/verify-campaign-selection.ts` check 11 pins that
+by selecting correctly on a label that deliberately is NOT `"<name> <year>"`.
+
+**Two rules make the pair coherent, and both are asserted** (`lib/analytics/campaign-selection.ts`):
+
+1. **A control reads unticked only when EVERY column it stands for is hidden.** A year with
+   one batch still showing is a year that is showing. Looser and a fully-visible year reads
+   as off; stricter and a fully-hidden year reads as on.
+2. **A toggle is applied as a DIFF, never an absolute rewrite.** Recomputing every label
+   from the year checkboxes would silently restore the per-batch picks the moment the reader
+   touched the year control — the classic "my filter reset itself" bug. Only the groups whose
+   own state actually moved are rewritten. Check 9 is exactly this: hide JANUARY 2026 by
+   name, switch 2025 off and on, and JANUARY 2026 is *still* hidden.
+
+**The batch list is scoped to the selected years, which is the feature.** Untick 2024 and
+the names that existed only there leave the list rather than sitting in it toggling a column
+nobody can see. A name that ran in two selected years toggles BOTH columns; a name toggle
+never touches a campaign in a switched-off year (checks 3, 6, 7).
+
+**Sorting.** Years keep the payload's own chronological order (the adapter already sorts by
+`campaignSeq`, so nothing re-derives one). Names sort by the month the name spells, so the
+list reads JANUARY → DECEMBER with any non-month name after the twelve — alphabetical
+(APRIL, AUGUST, DECEMBER) stays unrepresentable.
+
+**One layout fix came with it.** The header's control block was `shrink-0`; with two
+triggers plus the count sentence it measured **403 px inside a 375 px screen** and pushed
+the DOCUMENT into horizontal overflow — the one thing every table on this page exists to
+avoid. It is now `min-w-0 max-w-full` and its own `flex-wrap` drops the sentence to its own
+line. Measured before **425/375**, after **375/375**.
+
+**Checked in the browser** (throwaway harness at `app/dev/table-playground/analytics-r8/`,
+34 synthetic campaigns over 2024/2025/2026 + one non-month name, since deleted): the Year
+list reads `2024 · 12`, `2025 · 12`, `2026 · 10` and the Batches list reads `JANUARY ×3 …
+DECEMBER ×2`, `TRIAL 2026` · unticking 2024 and 2025 leaves the Batches list holding exactly
+2026's ten names, the table holding its ten columns, the trigger reading `Year filter — 1 of
+3 years shown` and the header reading `1 of 3 years · 10 of 34 batches` · the `?bhide=` the
+app wrote reloads as a deep link with 2024 and 2025 `aria-checked="false"` and 2026 true ·
+`document.scrollWidth === clientWidth` at **1512** and at **375**, popover open and closed.
+
+**Gates**: `tsc --noEmit` clean · `npm run lint` 146 problems / 16 errors (baseline,
+unmoved) · `npm run build` clean · `verify-table-core` 84 assertions · `npm run test:e2e` 57
+passed · `verify-campaign-selection` 11 assertions (new).
