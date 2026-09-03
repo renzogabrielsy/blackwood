@@ -77,7 +77,19 @@ MONTH_NAME_TO_NUM = {
     "DECEMBER": 12, "DEC": 12,
 }
 
-SHEET_NAME_RE = re.compile(r"^([A-Z]+)\s+(\d{1,2})\s*$", re.IGNORECASE)
+# SHEET_NAME_RE — the DAY-TAB name. L-048 (2026-09-03, both engines in lockstep — see
+# PORTING_DECISIONS.md "Post-port business-rule changes"): this was
+# r"^([A-Z]+)\s+(\d{1,2})\s*$" — a space, and nothing else, between the month word and
+# the day. MC's SEPTEMBER 2026 workbook names its tabs "Aug. 29", "Sep. 1", "SEP. 2" (a
+# PERIOD after the abbreviation), so all three failed to parse, the extractor returned
+# ZERO rows from a workbook full of feedings, and rc_out silently stopped at 2026-08-28.
+# Same shape as L-039 (Czarina's "Aug. 2026") and L-042 ("FEEDING # 1"): a worksheet name
+# a HUMAN typed must be parsed tolerantly, never matched against one spelling.
+# Accepted now: optional period after the month token, any/no whitespace around the
+# separator, an optional trailing period, any case. Still rejected: a non-month word
+# ("SUMMARY", "Sheet1"), an out-of-range day ("Aug 32", caught by date()), and a 3-4 digit
+# tail ("JANUARY 2026", the RC MOVEMENT month-tab shape).
+SHEET_NAME_RE = re.compile(r"^\s*([A-Za-z]+)\s*\.?\s*(\d{1,2})\s*\.?\s*$", re.IGNORECASE)
 BLOCK_NO_RE = re.compile(r"^\s*#\s*(\d+)\s*$")
 
 # FEED-section WHSE-label detector (2026-07-11 fix, both engines in lockstep — see

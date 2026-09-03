@@ -41,11 +41,19 @@ interface StubOpts {
   streamStatus?: Row[] | "throw";
   /** `view_digest_unpriced_deliveries` rows, or "throw" to model a broken read. */
   overdue?: Row[] | "throw";
+  /** The `ingestion_watermarks` row (L-048). Absent = no earlier run consumed the mail. */
+  watermark?: { last_run_at: string | null; last_email_id: string | null; last_email_received_at: string | null } | null;
+  /** Model an unreadable bookkeeping row — must leave the finding at FULL volume. */
+  watermarkError?: string;
 }
 
 function stubDb(opts: StubOpts = {}): DbClient {
   const stub: Partial<DbClient> = {
     dataWatermark: async () => "2026-08-14",
+    readIngestionWatermark: async () =>
+      opts.watermarkError
+        ? { row: null, error: opts.watermarkError }
+        : { row: opts.watermark ?? null, error: null },
     readRows: async (table: string) => {
       if (table === "view_digest_stream_status") {
         if (opts.streamStatus === "throw") throw new Error("view unavailable");
@@ -245,5 +253,87 @@ describe("no RC DELIVERIES report arrived (L-044)", () => {
         expect(/cost|price|php|peso/i.test(k), `cost-ish key in finding data: ${k}`).toBe(false);
       }
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// L-048 part 3 — "not received" must not mean "already eaten".
+// ---------------------------------------------------------------------------
+//
+// Every primary mailbox query ends `-label:"Blackwood-Processed"`, so the moment one run
+// labels the email, every later run that day finds an empty mailbox. Measured on
+// 2026-09-03: run `cc8c66f9` ingested and labeled the day's RC DELIVERIES mail at 01:41
+// UTC, and the manual Run Sync `f1e9f342` at 03:13 UTC then announced that no report had
+// arrived. A finding that cries wolf on every second run of the day is a finding an
+// operator learns to skip — which is exactly how the real failure would get through.
+describe("an EARLIER RUN TODAY already took the report in (L-048)", () => {
+  // runTs 2026-08-18T01:00:00Z → 09:00 Manila, so the run's Manila day is 2026-08-18.
+  const TODAY_UTC = "2026-08-18T00:41:00Z"; // 08:41 Manila, same plant day
+  const DAYS_AGO_UTC = "2026-08-16T01:00:00Z";
+
+  const wm = (lastRunAt: string | null, received: string | null = null) => ({
+    last_run_at: lastRunAt,
+    last_email_id: "thread-abc",
+    last_email_received_at: received,
+  });
+
+  it("downgrades to info and says WHO ate the mail — it never goes silent", async () => {
+    const res = await runReport(
+      deps(stubDb({ streamStatus: [statusRow(0)], watermark: wm(TODAY_UTC) })),
+      "r",
+      NO_FILES,
+    );
+    const note = res.apply.report_not_received!;
+    expect(note.already_processed).toBe(true);
+    expect(note.last_processed_at).toBe(TODAY_UTC);
+    expect(note.last_processed_email_id).toBe("thread-abc");
+
+    // The finding still exists — silence would be the L-044 sentence in a new costume.
+    const f = findingsFor(res.apply).find((x) => x.kind === "report_not_received")!;
+    expect(f.severity).toBe("info");
+    expect(f.title).toMatch(/earlier run today/i);
+    expect(f.reason).toMatch(/excluded from every later mailbox search/i);
+  });
+
+  it("prefers the MAIL's own clock when the row carries one", async () => {
+    const res = await runReport(
+      deps(stubDb({ streamStatus: [statusRow(0)], watermark: wm(DAYS_AGO_UTC, TODAY_UTC) })),
+      "r",
+      NO_FILES,
+    );
+    expect(res.apply.report_not_received!.already_processed).toBe(true);
+    expect(res.apply.report_not_received!.last_processed_at).toBe(TODAY_UTC);
+  });
+
+  it("a stamp from ANOTHER day does not excuse today's silence", async () => {
+    const res = await runReport(
+      deps(stubDb({ streamStatus: [statusRow(3)], watermark: wm(DAYS_AGO_UTC) })),
+      "r",
+      NO_FILES,
+    );
+    expect(res.apply.report_not_received!.already_processed).toBe(false);
+    const f = findingsFor(res.apply).find((x) => x.kind === "report_not_received")!;
+    expect(f.severity).toBe("attention");
+    expect(f.title).toMatch(/missed 3 working days/i);
+  });
+
+  it("no bookkeeping row at all → full volume (an unknown must not quieten an alarm)", async () => {
+    const res = await runReport(
+      deps(stubDb({ streamStatus: [statusRow(5)], watermark: null })),
+      "r",
+      NO_FILES,
+    );
+    expect(res.apply.report_not_received!.already_processed).toBe(false);
+    expect(findingsFor(res.apply).find((x) => x.kind === "report_not_received")!.severity).toBe("high");
+  });
+
+  it("an UNREADABLE bookkeeping row → full volume, never a downgrade", async () => {
+    const res = await runReport(
+      deps(stubDb({ streamStatus: [statusRow(5)], watermarkError: "permission denied" })),
+      "r",
+      NO_FILES,
+    );
+    expect(res.apply.report_not_received!.already_processed).toBe(false);
+    expect(findingsFor(res.apply).find((x) => x.kind === "report_not_received")!.severity).toBe("high");
   });
 });

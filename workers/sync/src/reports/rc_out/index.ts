@@ -43,6 +43,7 @@ import {
   type QuarantinedDate,
 } from "./apply.js";
 import { fmtKg } from "../held.js";
+import { sourceTabsNote, isTotalTabFailure, type SourceTabNote } from "../sourceTabs.js";
 
 export const REPORT_TYPE = "rc_out";
 
@@ -195,6 +196,7 @@ export async function runReport(
       labeled: false,
       watermark_updated: false,
       errors: [],
+      source_tab_notes: [],
       auto_created_batches: [],
     };
     return {
@@ -219,6 +221,36 @@ export async function runReport(
   await emit?.("extract", "Reading the daily feeding spreadsheet…", 28);
   const proposedWb = await loadWorkbook(await readFile(primaryPath));
   const proposedAll = extractProposed(proposedWb, year);
+
+  // L-048 (2026-09-03) — DID WE ACTUALLY READ THE FILE? A workbook whose day-tab names the
+  // extractor cannot parse yields zero rows and, before this, said so ONLY in
+  // `soft_warnings` (not a findings channel), so the run reported success while rc_out
+  // silently stopped. The note NAMES both sides — the tabs it could not read and the tabs
+  // it could — and when NOT ONE parsed, the email is left unlabeled and the watermark
+  // unmoved so the very same email can be re-read after a fix. See reports/sourceTabs.ts.
+  const tabNote = sourceTabsNote({
+    reportType: REPORT_TYPE,
+    sourceLabel: "PROPOSED DAILY REPORT",
+    filename: primaryAtt.filename ?? null,
+    parsed: proposedAll.sheetsParsed,
+    unparsed: proposedAll.sheetsUnparsed,
+    rowsExtracted: proposedAll.rows.length,
+  });
+  const sourceTabNotes: SourceTabNote[] = tabNote ? [tabNote] : [];
+  const totalTabFailure = tabNote !== null && isTotalTabFailure(tabNote);
+  if (tabNote) {
+    await emit?.(
+      "extract",
+      `Could not read ${tabNote.unreadable_tabs.length} of ${tabNote.tabs_total} tab(s) in ` +
+        `${tabNote.filename ?? "the report"} — ${tabNote.unreadable_tabs.join(", ")}` +
+        (tabNote.tabs_read
+          ? `; read ${tabNote.readable_tabs.join(", ")}.`
+          : `. Nothing at all was read from this workbook.`),
+      29,
+      undefined,
+      totalTabFailure ? "error" : "warn",
+    );
+  }
 
   // DATE-SETTLEMENT LEDGER (2026-07-12): a settled date has its DB total already
   // corroborated by the RC MOVEMENT sheet (see rc_out_date_settlements, populated by
@@ -396,6 +428,15 @@ export async function runReport(
       email_uid: primaryAtt.emailUid,
       email_thread_id: primaryAtt.threadId ?? null,
     },
+    source_tab_notes: sourceTabNotes,
+    source_unconsumable: totalTabFailure
+      ? {
+          reason:
+            `not one of the ${tabNote?.tabs_total ?? 0} tab(s) in ` +
+            `${tabNote?.filename ?? "the workbook"} could be read as a day ` +
+            `(${(tabNote?.unreadable_tabs ?? []).join(", ")})`,
+        }
+      : null,
     actionable: {
       new: classified.new,
       changed: classified.changed,

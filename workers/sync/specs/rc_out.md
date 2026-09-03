@@ -47,7 +47,25 @@ no longer has this behavior.
 
 ### Sheet anatomy
 
-One sheet per DAY, sheet name format `"{3-LETTER-OR-FULL MONTH} {DAY}"` e.g. `"MAY 26"` — matched by `SHEET_NAME_RE = r"^([A-Z]+)\s+(\d{1,2})\s*$"` (case-insensitive). `sheet_name_to_date(name, year)` resolves the month word via `MONTH_NAME_TO_NUM` (a combined dict accepting BOTH abbreviations and full names, e.g. both `"MAR"` and `"MARCH"` map to `3`) and combines with the CLI-supplied `--year`.
+One sheet per DAY, sheet name format `"{3-LETTER-OR-FULL MONTH} {DAY}"` e.g. `"MAY 26"`, `"Aug. 29"`, `"SEP. 2"` — matched by `SHEET_NAME_RE = r"^\s*([A-Za-z]+)\s*\.?\s*(\d{1,2})\s*\.?\s*$"` (case-insensitive, both engines). `sheet_name_to_date(name, year)` resolves the month word and combines it with the CLI-supplied `--year`.
+
+**L-048 (2026-09-03) — THE SEPARATOR IS OPTIONAL, BECAUSE A HUMAN TYPES IT.** The regex used to require a bare SPACE between the month word and the day (`^([A-Z]+)\s+(\d{1,2})\s*$`). MC's September 2026 workbook names its tabs `Aug. 29` / `Sep. 1` / `SEP. 2` — a **period** after the abbreviation — so all three were skipped and the extractor returned **zero rows from a workbook holding 10 feedings / 82,837 kg**. Now accepted: an optional period after the month token, any (or no) whitespace around the separator, an optional trailing period, any case. Still refused, deliberately: a non-month word (`SUMMARY`, `TOTAL`, `Sheet1` — "SHEET" is not a month), an out-of-range day (`Aug 32`, caught by `isValidCalDate` / Python's `date()` ValueError), and a 3-4 digit tail (`JANUARY 2026`, the RC MOVEMENT month-tab shape). Third instance of the same confusion — see L-039 (Czarina's `Aug. 2026`) and L-042 (`FEEDING # 1`).
+
+**The month token comes from `lib/months.ts::monthNumberFromToken`** — THE one month-token table in the worker, shared with the price-tab resolver — not from a local map. The Python oracle keeps its own `MONTH_NAME_TO_NUM` (identical 24 spellings, incl. the SEPT/SEP asymmetry), because the two engines cannot share a module; `test/reports/rc_out-sheet-names.test.ts` pins the accepted/refused table on the TS side.
+
+### § Unreadable tabs — an empty read of a NON-EMPTY workbook (L-048)
+
+`extractProposed` returns `sheetsParsed` / `sheetsUnparsed` beside `rows`, so "how much of this file did we manage to read" is a STRUCTURED fact and not a string in `soft_warnings` (which is not a findings channel — that is exactly how the September stall stayed invisible while `rc_out` sat at 2026-08-28).
+
+`runReport` turns a non-empty `sheetsUnparsed` into one `source_tab_notes` entry via the single constructor `reports/sourceTabs.ts::sourceTabsNote`:
+
+- **`high`** when `tabs_read === 0` — the whole file was unread. **`attention`** when some tabs parsed and some did not.
+- The note **NAMES BOTH LISTS** (unreadable AND readable), the L-039 discipline: one list is a complaint, two lists side by side show the naming convention that moved.
+- **`tabs_read === 0` ⇒ the source is NOT CONSUMED.** `apply.ts` skips BOTH the Gmail label and the watermark advance (`compact.source_unconsumable`), because every primary mailbox query ends `-label:"Blackwood-Processed"` and labeling a file it could not read is the sync throwing the source away. Nothing was written, so there is nothing to be idempotent about. A PARTIAL failure consumes normally — real rows were written.
+- Nothing is HELD: no durable case, so there is nothing to close by hand once the names parse.
+- Carries no ₱ and nothing derivable into one (sheet names, counts, a filename).
+
+Surfaced as the `source_tabs_unreadable` finding (`section: 'rc_out'`) — `app/(app)/sync/types.ts::SourceTabNote` → `lib/sync/cases-fold.ts::collectSourceTabNotes` → `lib/sync/findings.ts::fromSourceTabNote`.
 
 ### Block-section detection
 
@@ -427,6 +445,8 @@ Manual-INSERT via `write_ingestion_audit` RPC — `rc_out` has NO audit trigger 
 
 Only if `not errors` (note: this does NOT check for `held` rows the way deliveries's comment implies checking "non-held unapplied" — `sync_rc_out.py` labels purely on `not errors`, full stop, even if many rows are held).
 
+**AND only if the source was READABLE (L-048, 2026-09-03).** A `compact.source_unconsumable` — set by `index.ts` when NOT ONE day tab in the workbook could be read — suppresses both the label and the watermark advance, so the same email can be picked up again after a fix. A quarantine hold still does not (a quarantined date is a decision, not an unread file).
+
 ---
 
 ## 6. Rule checklist
@@ -439,6 +459,7 @@ Only if `not errors` (note: this does NOT check for `held` rows the way deliveri
 | L-010 (batch-slot remap to ACTIVE occupant) | NOT codified | judgment only, human-resolved |
 | L-011/L-012 (misattributed feed reassignment/dedup) | NOT codified | judgment only, human-resolved |
 | L-019 (full-span dedup + sub-watermark guard) | classify_rc_out.py:236-252 | A settled-date row with no natural-key match is FLAGGED, never INSERTed, when `--watermark` is passed. |
+| L-048 (unreadable day tabs) | `extract.ts::SHEET_NAME_RE` + `reports/sourceTabs.ts` + `index.ts`/`apply.ts` | `Aug. 29` / `Sep. 1` / `SEP. 2` / `AUG.29` / `Sept 1` all resolve; `SUMMARY`, `Sheet1`, `Aug 32`, `JANUARY 2026` all refuse; a workbook with 0 readable tabs raises ONE `high` `source_tabs_unreadable` finding naming both lists AND leaves `labeled=false` / `watermark_updated=false`; a partial failure is `attention` and still labels. |
 | L-037 (balance-integrity guard) | `classify_rc_out.py::balance_integrity` + `classify.ts::balanceIntegrity` | A two-leg same-batch same-day sheet whose legs are internally consistent yields BOTH legs' own DAY TOTALs ([10,813, 20,932], never [10,813, 31,745]); a leg whose DAY TOTAL disagrees with STRT−END is FLAGGED ("cross-block cumulative"); a same-slot section whose STRT ≠ the prior leg's END is FLAGGED ("slot continuity"); a blank-balance section is never held; a corrupt DAY TOTAL matching a corrected DB row is FLAGGED, not VALUE_CHANGED. |
 | L-020 (idempotent insert) | sync_rc_out.py:265 | Re-running apply twice on the same classified file inserts nothing the second time. |
 | rc_out-drift-gate-500kg | sync_rc_out.py Gate 1 | `abs(P-M) > 500` on any date → `ok:false`, apply writes nothing. |

@@ -502,6 +502,65 @@ export interface ReportNotReceived {
   reports_next_day: boolean
   /** The run's Asia/Manila calendar date — what "today" means at the plant. */
   as_of: string
+  /**
+   * TRUE when an EARLIER RUN ON THE SAME MANILA DAY already ingested and labeled this
+   * stream's email (2026-09-03, L-048). Every primary mailbox query ends
+   * `-label:"Blackwood-Processed"`, so once one run consumes the mail every later run that
+   * day sees an empty mailbox — and this finding used to report it as though the sender had
+   * gone quiet (measured: run `cc8c66f9` ingested the RC DELIVERIES mail at 01:41 UTC, and
+   * `f1e9f342` at 03:13 UTC announced that none had arrived). It DOWNGRADES the finding to
+   * `info` and changes the sentence; it never suppresses it. FALSE whenever it could not be
+   * established, including an unreadable bookkeeping row — an unknown must not quieten an
+   * alarm.
+   */
+  already_processed?: boolean
+  /** The timestamp that proved it (`last_email_received_at`, else `last_run_at`). */
+  last_processed_at?: string | null
+  /** The Gmail thread id the consuming run recorded, when there is one. */
+  last_processed_email_id?: string | null
+}
+
+/**
+ * A SOURCE WORKBOOK this run opened and could not fully read (2026-09-03, L-048).
+ *
+ * The third incident of the same shape: a worksheet name a HUMAN typed, matched against
+ * ONE spelling by machine. L-039 was Czarina's `Aug. 2026` addressed as a generated
+ * `August 2026`; L-042 was MC's `FEEDING # 1` read as malformed instead of as shorthand;
+ * this is MC's PROPOSED day tabs `Aug. 29` / `Sep. 1` / `SEP. 2`, whose PERIOD after the
+ * month abbreviation the tab-name regex rejected. All three tabs were skipped, the
+ * extractor returned ZERO rows from a workbook full of feedings, and the run labeled the
+ * email processed and reported success with NO finding at all — rc_out silently stopped at
+ * 2026-08-28 while every other stream was at Sept 1-2.
+ *
+ * So: an extraction that yields nothing from a NON-EMPTY source is a finding, and when NOT
+ * ONE tab was readable the source is left UNCONSUMED (`source_left_unconsumed`) — email
+ * unlabeled, watermark unmoved — so the next run can read the very same email after a fix.
+ *
+ * Never held and never a durable case: the moment the names parse it stops firing, so
+ * there is nothing to close by hand. Carries no ₱ and nothing derivable into one.
+ */
+export interface SourceTabNote {
+  /** `source_tabs_unreadable` today. A field, not a literal, so a second flavour of
+   *  "the file is here and unreadable" can join without a second channel. */
+  kind: string
+  /** The `reports` key this workbook feeds, e.g. "rc_out". */
+  report_type: string
+  /** Plain-English name of the document ("PROPOSED DAILY REPORT"). */
+  source_label: string
+  /** The attachment filename — the one fact that says WHICH workbook this was. */
+  filename: string | null
+  /** Worksheets in the file. */
+  tabs_total: number
+  /** Worksheets whose name resolved to a date (the ones actually read). */
+  tabs_read: number
+  /** The names it could NOT read (capped at 25 by the worker). */
+  unreadable_tabs: string[]
+  /** The names it COULD read (capped at 25). Empty is itself the alarm. */
+  readable_tabs: string[]
+  /** Rows the extractor produced from the whole workbook. */
+  rows_extracted: number
+  /** True when the run deliberately left the email unlabeled + the watermark unmoved. */
+  source_left_unconsumed: boolean
 }
 
 export interface ApplyResult {
@@ -545,6 +604,10 @@ export interface ApplyResult {
    *  read it as `apply?.awaiting_batch_assignment ?? []` (see
    *  `collectAwaitingBatchAssignments`). Only the `deliveries` report ever fills it. */
   awaiting_batch_assignment?: AwaitingBatchAssignment[]
+  /** Source workbooks this run opened and could not fully read (L-048). Same optionality
+   *  contract as `auto_created_batches` — read it as `apply?.source_tab_notes ?? []` (see
+   *  `collectSourceTabNotes`). Only the `rc_out` report fills it today. */
+  source_tab_notes?: SourceTabNote[]
   /** Set ONLY when this report's source file never arrived (L-044). Absent on every
    *  ordinary run, so the KEY'S PRESENCE is the fact — never an array with a length to
    *  check. Read it via `collectReportsNotReceived`. */

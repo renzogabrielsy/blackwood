@@ -272,6 +272,25 @@ export interface AwaitingBatchAssignmentNote {
 }
 
 /**
+ * One source workbook this run opened and could not fully read (2026-09-03, L-048).
+ * Mirror of the frontend `SourceTabNote`, built by `reports/sourceTabs.ts`. Never held and
+ * never a durable case — the moment the tab names parse it stops firing. No PHP field:
+ * sheet names, counts and a filename carry nothing to gate.
+ */
+export interface SourceTabNoteEntry {
+  kind: string;
+  report_type: string;
+  source_label: string;
+  filename: string | null;
+  tabs_total: number;
+  tabs_read: number;
+  unreadable_tabs: string[];
+  readable_tabs: string[];
+  rows_extracted: number;
+  source_left_unconsumed: boolean;
+}
+
+/**
  * The report's source file did not arrive at all (2026-08-18, L-044). Mirror of the
  * frontend `ReportNotReceived`, built by `reports/reportNotReceived.ts`.
  *
@@ -293,6 +312,12 @@ export interface ReportNotReceivedNote {
   lateness_unknown_reason: string | null;
   reports_next_day: boolean;
   as_of: string;
+  /** L-048 — TRUE when an earlier run on the same Manila day already ingested this
+   *  stream's email, so the empty mailbox is the sync's own doing. Never true on an
+   *  unreadable bookkeeping row: an unknown must not quieten an alarm. */
+  already_processed: boolean;
+  last_processed_at: string | null;
+  last_processed_email_id: string | null;
 }
 
 /**
@@ -326,6 +351,9 @@ export interface ApplyResult {
   unpriced_overdue: UnpricedOverdueNote[];
   /** Deliveries with no pile assigned yet (L-042). ALWAYS present (default []). */
   awaiting_batch_assignment: AwaitingBatchAssignmentNote[];
+  /** Source workbooks this run opened and could not fully read (L-048). ALWAYS present
+   *  (default []), so an ordinary run's shape does not depend on nothing going wrong. */
+  source_tab_notes: SourceTabNoteEntry[];
   /** Set ONLY when this report's source file never arrived (L-044). Absent otherwise. */
   report_not_received?: ReportNotReceivedNote;
 }
@@ -402,6 +430,8 @@ interface RawApply {
   unpriced_overdue?: unknown;
   /** deliveries only — rows weighed in with no pile assigned yet (L-042). */
   awaiting_batch_assignment?: unknown;
+  /** rc_out only (today) — workbooks opened whose tab names could not all be read (L-048). */
+  source_tab_notes?: unknown;
   /** Set only when this report's source file never arrived at all (L-044). */
   report_not_received?: unknown;
 }
@@ -666,6 +696,30 @@ function toAwaitingBatchAssignments(v: unknown): AwaitingBatchAssignmentNote[] {
   return Array.isArray(v) ? v.map(toAwaitingBatchAssignment) : [];
 }
 
+/** Coerce one raw source-tab note → SourceTabNoteEntry (L-048). No PHP by construction. */
+function toSourceTabNote(v: unknown): SourceTabNoteEntry {
+  const o = (v ?? {}) as Record<string, unknown>;
+  const nullable = (x: unknown): string | null =>
+    typeof x === "string" && x.trim() ? x : null;
+  return {
+    kind: str(o.kind) || "source_tabs_unreadable",
+    report_type: str(o.report_type),
+    source_label: str(o.source_label),
+    filename: nullable(o.filename),
+    tabs_total: num(o.tabs_total),
+    tabs_read: num(o.tabs_read),
+    unreadable_tabs: strArray(o.unreadable_tabs),
+    readable_tabs: strArray(o.readable_tabs),
+    rows_extracted: num(o.rows_extracted),
+    source_left_unconsumed: o.source_left_unconsumed === true,
+  };
+}
+
+/** Coerce a raw source-tab-notes array → SourceTabNoteEntry[]. */
+function toSourceTabNotes(v: unknown): SourceTabNoteEntry[] {
+  return Array.isArray(v) ? v.map(toSourceTabNote) : [];
+}
+
 /**
  * Coerce a raw "the report never arrived" note → ReportNotReceivedNote, or null (L-044).
  *
@@ -700,6 +754,11 @@ function toReportNotReceived(v: unknown): ReportNotReceivedNote | null {
     lateness_unknown_reason: nullable(o.lateness_unknown_reason),
     reports_next_day: o.reports_next_day === true,
     as_of: str(o.as_of),
+    // Boolean-strict, not truthy: only an explicit `true` may downgrade the finding, so a
+    // missing/garbled field leaves it at full volume (L-048).
+    already_processed: o.already_processed === true,
+    last_processed_at: nullable(o.last_processed_at),
+    last_processed_email_id: nullable(o.last_processed_email_id),
   };
 }
 
@@ -777,6 +836,7 @@ export function normalizeApply(
     price_notes: toPriceNotes(raw.price_notes),
     unpriced_overdue: toUnpricedOverdues(raw.unpriced_overdue),
     awaiting_batch_assignment: toAwaitingBatchAssignments(raw.awaiting_batch_assignment),
+    source_tab_notes: toSourceTabNotes(raw.source_tab_notes),
     // L-044 — spread, not assigned: the KEY'S PRESENCE is the fact ("no report arrived"),
     // so an ordinary run must keep the byte-identical shape it had before this existed.
     ...(notReceived ? { report_not_received: notReceived } : {}),
@@ -848,6 +908,7 @@ export function failedReportResult(
       price_notes: [],
       unpriced_overdue: [],
       awaiting_batch_assignment: [],
+      source_tab_notes: [],
     },
     status: "error",
     error: message,

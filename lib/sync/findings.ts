@@ -35,6 +35,7 @@ import type {
   SingleSourceOverdue,
   SlowGmailSearch,
   SourceDiff,
+  SourceTabNote,
   StaleStream,
   StaleStreamCheck,
   SyncReportType,
@@ -59,6 +60,7 @@ import {
   collectSingleSourceOverdue,
   collectSlowGmailSearches,
   collectSourceDiffs,
+  collectSourceTabNotes,
   collectStaleStreamCheck,
   collectStaleStreams,
   collectUnpricedOverdue,
@@ -1508,6 +1510,13 @@ const LATENESS_UNKNOWN_TEXT: Record<string, string> = {
 
 function fromReportNotReceived(r: ReportNotReceived): RunFinding {
   const missed = r.missed_working_days
+  // L-048 — an EARLIER RUN TODAY already ate the mail. Every primary mailbox query ends
+  // `-label:"Blackwood-Processed"`, so a second run on the same day legitimately finds
+  // nothing; reporting that as "the report never arrived" is crying wolf on every manual
+  // Run Sync, and a finding an operator learns to skip is how the real failure gets
+  // through. It is downgraded and re-worded, never hidden: silence would be the L-044
+  // sentence in a new costume.
+  const eaten = r.already_processed === true
   const lateness =
     missed == null
       ? (LATENESS_UNKNOWN_TEXT[r.lateness_unknown_reason ?? ''] ??
@@ -1528,8 +1537,9 @@ function fromReportNotReceived(r: ReportNotReceived): RunFinding {
     kind: 'report_not_received',
     kindLabel: 'The daily report never arrived',
     source: r.source_label,
-    title:
-      missed && missed > 0
+    title: eaten
+      ? `No new ${r.source_label} — an earlier run today already took this one in`
+      : missed && missed > 0
         ? `No ${r.source_label} arrived — ${r.stream_label} has missed ${missed} working day${missed === 1 ? '' : 's'}`
         : `No ${r.source_label} arrived in this run's mailbox window`,
     location: r.through_date ?? r.as_of,
@@ -1543,16 +1553,99 @@ function fromReportNotReceived(r: ReportNotReceived): RunFinding {
       lateness_unknown_reason: r.lateness_unknown_reason,
       reports_next_day: r.reports_next_day,
       as_of: r.as_of,
+      already_processed: eaten,
+      last_processed_at: r.last_processed_at ?? null,
+      last_processed_email_id: r.last_processed_email_id ?? null,
     },
-    reason:
-      `The sync searched the mailbox back to ${r.since} and found no ${r.source_label}, so ` +
-      `this run had nothing to read and wrote nothing for it. ${through} ${lateness} ` +
-      `Nothing is wrong with the sync — chase the sender, or check the report was not filed ` +
-      `under a different subject.`,
-    severity: missed == null ? 'attention' : missed >= 4 ? 'high' : missed >= 2 ? 'attention' : 'info',
+    reason: eaten
+      ? `An earlier sync run today already read this stream's report and marked the email ` +
+        `processed${r.last_processed_at ? ` (${r.last_processed_at})` : ''}, and a processed ` +
+        `email is deliberately excluded from every later mailbox search — so finding nothing ` +
+        `this run is expected, not a missing report. ${through} Nothing needs chasing; this ` +
+        `note is here only so an empty mailbox is never left unexplained.`
+      : `The sync searched the mailbox back to ${r.since} and found no ${r.source_label}, so ` +
+        `this run had nothing to read and wrote nothing for it. ${through} ${lateness} ` +
+        `Nothing is wrong with the sync — chase the sender, or check the report was not filed ` +
+        `under a different subject.`,
+    severity: eaten
+      ? 'info'
+      : missed == null ? 'attention' : missed >= 4 ? 'high' : missed >= 2 ? 'attention' : 'info',
     // REUSED, not re-derived: `staleStreamSection` already owns "which lane does this
     // stream belong to", and the two findings describe the same stream from two sides.
     section: staleStreamSection(r.stream),
+  }
+}
+
+/**
+ * A SOURCE WORKBOOK the run opened and could not fully read (2026-09-03, L-048).
+ *
+ * THE RUN THIS REPLACES: `cc8c66f9` opened MC's September PROPOSED workbook, whose day tabs
+ * are named `Aug. 29`, `Sep. 1`, `SEP. 2`. The tab-name reader wanted a bare space between
+ * month and day, so all three were skipped, ZERO rows came out of a workbook full of
+ * feedings, apply wrote nothing — and the run then LABELED the email processed, advanced
+ * the watermark, and reported `succeeded` with NO finding at all. The three skips existed
+ * only in `soft_warnings`, which nothing on this list reads. rc_out stopped dead at
+ * 2026-08-28, and the operator's only clues were two SYMPTOMS a day later: the Blocking
+ * cross-check flagging 79,165 kg across 4 blocks, and `stale_stream` saying RC Out had
+ * missed 2 working days. Neither named the cause.
+ *
+ * Two things make this finding useful rather than decorative:
+ *   - It NAMES BOTH LISTS — the tabs it could not read AND the tabs it could. Exactly why
+ *     `fromPriceNote`'s tab-miss note carries `looked_for` beside `tabs_found`: one list is
+ *     a complaint, two lists side by side show the naming convention that moved.
+ *   - `high` when NOT ONE tab parsed. That is not "some data is missing", it is "this file
+ *     was not read", and it is the only state in which the run also leaves the email
+ *     UNCONSUMED (`source_left_unconsumed`) so a fix can pick it straight back up.
+ *     `attention` for a partial miss: real rows were written, and part of the source was
+ *     still unseen.
+ */
+function fromSourceTabNote(n: SourceTabNote): RunFinding {
+  const total = num(n.tabs_total) ?? 0
+  const read = num(n.tabs_read) ?? 0
+  const missed = Array.isArray(n.unreadable_tabs) ? n.unreadable_tabs : []
+  const readable = Array.isArray(n.readable_tabs) ? n.readable_tabs : []
+  const whole = read === 0
+  const file = str(n.filename)
+  const label = str(n.source_label) ?? 'the report'
+
+  const quoted = (names: string[]) => names.map((x) => `"${x}"`).join(', ')
+
+  return {
+    key: `source_tabs:${n.report_type}:${file ?? ''}`,
+    kind: 'source_tabs_unreadable',
+    kindLabel: whole ? 'The report could not be read at all' : 'Part of the report could not be read',
+    source: label,
+    title: whole
+      ? `Not one of the ${total} tab${total === 1 ? '' : 's'} in ${label} could be read — nothing was taken from it`
+      : `${missed.length} of ${total} tabs in ${label} could not be read`,
+    location: file ?? label,
+    data: {
+      report_type: n.report_type,
+      filename: file,
+      tabs_total: total,
+      tabs_read: read,
+      unreadable_tabs: missed,
+      readable_tabs: readable,
+      rows_extracted: num(n.rows_extracted) ?? 0,
+      source_left_unconsumed: n.source_left_unconsumed === true,
+    },
+    reason:
+      `The sync opened ${file ? `"${file}"` : label} and could not read ` +
+      `${missed.length === total ? 'any' : `${missed.length}`} of its ${total} sheet ` +
+      `name${total === 1 ? '' : 's'} as a date: ${quoted(missed)}. ` +
+      (readable.length
+        ? `It did read ${quoted(readable)}. `
+        : `It read none of them, so nothing at all was taken from this workbook. `) +
+      (n.source_left_unconsumed === true
+        ? `The email has deliberately been left unmarked and the sync's position unchanged, ` +
+          `so once the naming is understood the very same report can be read again — ` +
+          `nothing has been thrown away. `
+        : '') +
+      `A sheet name is typed by a person, so this is almost always a new way of writing the ` +
+      `same thing (a full stop after the month, a different abbreviation) rather than a ` +
+      `mistake — compare the two lists above and the pattern is usually obvious.`,
+    severity: whole ? 'high' : 'attention',
+    section: 'rc_out',
   }
 }
 
@@ -1659,6 +1752,12 @@ export function flattenRunFindings(result: SyncRunResult): RunFinding[] {
   //      list while it is normal — it used to be reported as MALFORMED — and it gets louder
   //      the longer the cell stays empty.
   for (const a of collectAwaitingBatchAssignments(result)) out.push(fromAwaitingBatchAssignment(a))
+
+  // 12d. Source workbooks that ARRIVED and could not be read (L-048). Immediately before
+  //      the "never arrived" findings because the two answer the same operator question
+  //      from opposite ends — nothing came in, versus something came in and told us
+  //      nothing — and a run can legitimately raise both.
+  for (const n of collectSourceTabNotes(result)) out.push(fromSourceTabNote(n))
 
   // 12c. Reports whose SOURCE FILE never arrived (L-044). Immediately before the stale
   //      streams because it is the other half of the same sentence: this says the email is
@@ -2037,6 +2136,7 @@ const SHORT_KIND: Record<string, string> = {
   price_no_row_matched: 'nothing matched prices',
   price_overdue_check_failed: 'price check failed',
   report_not_received: 'report never arrived',
+  source_tabs_unreadable: 'report unreadable',
   stale_stream_check_failed: 'freshness check failed',
   price_fuzzy_match: 'price spelling differs',
   price_fuzzy_ambiguous: 'price match not unique',

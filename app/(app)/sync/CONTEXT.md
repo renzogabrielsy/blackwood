@@ -893,6 +893,33 @@ Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerpri
     `stale_stream`** — that is a DATA fact, this is a FETCH fact, and it fires even at 0 missed days
     because that is the case where the Google Sheet keeps the data current while the email pipeline is
     quietly dead. `section` comes from the shared `staleStreamSection`, so the two agree on the lane.
+  - **`report_not_received` DOES NOT MEAN "ALREADY EATEN" (2026-09-03, L-048).** Every primary
+    mailbox query ends `-label:"Blackwood-Processed"`, so the moment one run consumes an email every
+    later run that day finds an empty mailbox — measured: run `cc8c66f9` ingested and labeled the
+    day's RC DELIVERIES mail at 01:41Z and `f1e9f342` at 03:13Z announced that none had arrived. The
+    note now carries **`already_processed`**, set by the worker from `ingestion_watermarks`
+    (`last_email_received_at`, else `last_run_at`, compared on the run's own **Asia/Manila** day;
+    that stamp is written from inside apply, which only runs when a file was present). It is a
+    **downgrade to `info` with a different sentence, never a suppression** — silence would be the
+    reassuring line above in a new costume — and an unreadable/absent bookkeeping row leaves the
+    finding at full volume, because an unknown must never quieten an alarm.
+  - **`source_tabs_unreadable`** (`section: 'rc_out'`, `collectSourceTabNotes(result)` →
+    `result.reports[type].apply.source_tab_notes ?? []` → `fromSourceTabNote`, 2026-09-03, L-048).
+    **The opposite end of the same question `report_not_received` asks**: nothing came in, versus
+    something came in and told us nothing. MC's September PROPOSED workbook names its day tabs
+    `Aug. 29` / `Sep. 1` / `SEP. 2`; the tab-name reader wanted a bare space, all three were skipped,
+    **ZERO rows came out of a workbook holding 10 feedings / 82,837 kg**, and the run labeled the
+    email, advanced the watermark and reported `succeeded` with **no finding at all** — the skips
+    lived only in `soft_warnings`, which this list does not read. `rc_out` stopped at 2026-08-28 and
+    the only clues were two symptoms a day later (the Blocking cross-check's 79,165 kg over 4 blocks,
+    and `stale_stream`). **`high` when 0 of N tabs parsed, `attention` when some did**, and the
+    finding **names BOTH lists** — the tabs it could not read AND the tabs it could — the L-039
+    discipline (one list is a complaint; two lists side by side show the naming convention that
+    moved). At `tabs_read = 0` the worker also leaves the email **UNLABELED and the watermark
+    unmoved** (`source_left_unconsumed`), so a fix can re-read the very same email; a partial failure
+    consumes normally. Never held (no durable case to close by hand) and structurally ₱-free — sheet
+    names, counts and a filename. Proof: `scripts/verify-findings.ts` + the worker's
+    `test/reports/rc_out-sheet-names.test.ts`.
   - **`stale_stream_check_failed`** (`attention`, `section: 'run'`, via
     `collectStaleStreamCheck(result)` → `result.reconciliation.stale_stream_check`, written **only on
     failure**). The sharpest instance of the same shape, found while auditing the one above:
@@ -907,7 +934,7 @@ Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerpri
     `stale_stream`: that reports streams the check FOUND late, this reports that the check could not
     run, and an empty staleness section means "nothing is late" only when this finding is absent.
   Nothing in the Excel generator changed — `section` files them on the existing sheets. Proof:
-  `scripts/verify-findings.ts` (30 checks), `workers/sync/test/workflows/mailClerk.test.ts`,
+  `scripts/verify-findings.ts` (58 checks), `workers/sync/test/workflows/mailClerk.test.ts`,
   `workers/sync/test/reports/deliveries-price-enrichment.test.ts`,
   `workers/sync/test/reports/deliveries-report-not-received.test.ts`,
   `workers/sync/test/lib/streamStaleness.test.ts`. Full spec:

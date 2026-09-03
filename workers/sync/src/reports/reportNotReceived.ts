@@ -57,6 +57,31 @@
  *
  * Nothing is written and nothing is HELD: no durable case, so there is never anything to
  * close by hand once the report shows up.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * "NOT RECEIVED" MUST NOT MEAN "ALREADY EATEN" (2026-09-03, L-048 part 3)
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Every primary mailbox query ends `-label:"Blackwood-Processed"`, so the moment one run
+ * labels an email, every LATER run on the same day sees an empty mailbox and this note
+ * fired as though the sender had gone quiet. Measured: run `cc8c66f9` processed and
+ * labeled the day's RC DELIVERIES email at 01:41 UTC; the manual Run Sync `f1e9f342` at
+ * 03:13 UTC then reported "No RC DELIVERIES report arrived" about an email that had
+ * arrived and been ingested ninety minutes earlier. A finding that cries wolf on every
+ * second run of the day is a finding an operator learns to skip — which is precisely how
+ * the failure this note exists to catch would get through.
+ *
+ * The evidence is `ingestion_watermarks`: `last_run_at` is stamped from inside apply, and
+ * apply only runs when a source file was present, so a stamp from TODAY means an email was
+ * consumed today. `last_email_received_at` is preferred when set (it is the mail's own
+ * clock rather than the run's) and falls back to `last_run_at`. "Today" is the run's own
+ * ASIA/MANILA calendar date — the plant's day, the same boundary `as_of` uses — because
+ * that is the unit an operator means by "this morning's report".
+ *
+ * It is a DOWNGRADE, never a silence: the note still fires, carrying `already_processed`
+ * so the finding can say WHO ate the mail instead of implying nobody sent it. Reporting
+ * nothing would re-create the L-044 sentence in a new costume — a run that says nothing is
+ * indistinguishable from a run that checked and was satisfied. And when the watermark read
+ * FAILS, `already_processed` stays false: an unknown must never quieten an alarm.
  */
 
 import type { LatenessUnknownReason, StreamStatusRead } from "../lib/streamStaleness.js";
@@ -94,6 +119,18 @@ export interface ReportNotReceived {
   reports_next_day: boolean;
   /** The run's Asia/Manila calendar date — what "today" means at the plant. */
   as_of: string;
+  /**
+   * TRUE when an earlier run on the SAME Manila day already ingested (and labeled) this
+   * stream's email — so the empty mailbox is this sync's own doing, not a silent sender.
+   * FALSE whenever it could not be established, including when the bookkeeping read
+   * failed: an unknown must never quieten an alarm.
+   */
+  already_processed: boolean;
+  /** The timestamp that proved it — `last_email_received_at` if set, else `last_run_at`.
+   *  Null when there is no bookkeeping row or it could not be read. */
+  last_processed_at: string | null;
+  /** The Gmail thread id that run recorded, when there is one. */
+  last_processed_email_id: string | null;
 }
 
 /**
@@ -111,6 +148,39 @@ export function manilaDate(runTs: string): string {
   return new Date(ms + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
+/** One `ingestion_watermarks` row, as `DbClient.readIngestionWatermark` returns it. */
+export interface IngestionWatermarkRow {
+  last_run_at: string | null;
+  last_email_id: string | null;
+  last_email_received_at: string | null;
+}
+
+/**
+ * Did an earlier run on the SAME Asia/Manila day already ingest this stream's email?
+ *
+ * Exported so the rule is testable on its own and stated once. `null`/absent input ⇒
+ * `false` — a missing or unreadable bookkeeping row can never be read as "already
+ * handled", because that would let a failed read silence the finding.
+ */
+export function alreadyProcessedToday(
+  row: IngestionWatermarkRow | null | undefined,
+  asOfManilaDate: string,
+): { already: boolean; at: string | null; emailId: string | null } {
+  if (!row) return { already: false, at: null, emailId: null };
+  // The MAIL's own clock when we have it, else the run's. Both are UTC ISO strings and
+  // both are converted through the same Manila shift, so the comparison is like-for-like.
+  const at = row.last_email_received_at ?? row.last_run_at ?? null;
+  if (!at) return { already: false, at: null, emailId: row.last_email_id ?? null };
+  const t = Date.parse(at);
+  if (!Number.isFinite(t)) return { already: false, at, emailId: row.last_email_id ?? null };
+  const stampedDay = manilaDate(new Date(t).toISOString());
+  return {
+    already: stampedDay === asOfManilaDate,
+    at,
+    emailId: row.last_email_id ?? null,
+  };
+}
+
 /** The ONE constructor. Build a note any other way and the fields below can disagree. */
 export function reportNotReceivedNote(args: {
   reportType: string;
@@ -120,8 +190,15 @@ export function reportNotReceivedNote(args: {
   runTs: string;
   /** The `view_digest_stream_status` read for `stream` — the ANSWER, or WHY there isn't one. */
   read: StreamStatusRead;
+  /**
+   * The stream's `ingestion_watermarks` row, when it could be read. Omitted/null ⇒ the
+   * note reports at full volume (see `alreadyProcessedToday`).
+   */
+  watermarkRow?: IngestionWatermarkRow | null;
 }): ReportNotReceived {
   const { status, missedWorkingDays, unknownReason } = args.read;
+  const asOf = manilaDate(args.runTs);
+  const consumed = alreadyProcessedToday(args.watermarkRow, asOf);
   return {
     report_type: args.reportType,
     source_label: args.sourceLabel,
@@ -134,6 +211,9 @@ export function reportNotReceivedNote(args: {
     missed_working_days: missedWorkingDays,
     lateness_unknown_reason: unknownReason,
     reports_next_day: status?.reports_next_day ?? false,
-    as_of: manilaDate(args.runTs),
+    as_of: asOf,
+    already_processed: consumed.already,
+    last_processed_at: consumed.at,
+    last_processed_email_id: consumed.emailId,
   };
 }

@@ -25,6 +25,7 @@ import type {
   SingleSourceOverdue,
   SlowGmailSearch,
   SourceDiff,
+  SourceTabNote,
   StaleStream,
   StaleStreamCheck,
   SyncReportType,
@@ -192,6 +193,29 @@ export function collectAwaitingBatchAssignments(
     const report = reports[key]
     if (!report) continue
     for (const note of report.apply?.awaiting_batch_assignment ?? []) out.push(note)
+  }
+  return out
+}
+
+/**
+ * Flatten every source workbook a run opened and could not fully read
+ * (`result.reports[type].apply.source_tab_notes`, 2026-09-03, L-048).
+ *
+ * The channel exists because the ONLY record of a skipped worksheet used to be a string in
+ * `soft_warnings`, which is not on the findings path — so a workbook the sync could open
+ * and got NOTHING out of was indistinguishable from a quiet day. Like `collectPriceNotes`
+ * and `collectAwaitingBatchAssignments` these are NOT folded into durable cases: the moment
+ * the tab names parse the finding stops firing, so there would be nothing to close by hand.
+ */
+export function collectSourceTabNotes(result: SyncRunResult): SourceTabNote[] {
+  const reports = result.reports
+  if (!reports) return []
+
+  const out: SourceTabNote[] = []
+  for (const key of Object.keys(reports) as SyncReportType[]) {
+    const report = reports[key]
+    if (!report) continue
+    for (const note of report.apply?.source_tab_notes ?? []) out.push(note)
   }
   return out
 }

@@ -226,6 +226,11 @@ export async function runReport(
     //      on the first day it would have fired, it did not run. It now runs on EVERY run.
     // -------------------------------------------------------------------------
     const runTs = deps.runTs ?? new Date().toISOString();
+    // L-048 part 3: an empty mailbox is not evidence the sender went quiet — an EARLIER
+    // run today may have labeled the email `Blackwood-Processed`, which every primary
+    // query excludes. Read the run bookkeeping before saying nothing arrived. Non-fatal
+    // and never throws; an unreadable row leaves the note at full volume.
+    const wmRead = await db.readIngestionWatermark(REPORT_TYPE);
     const notReceived = reportNotReceivedNote({
       reportType: REPORT_TYPE,
       sourceLabel: "RC DELIVERIES report",
@@ -233,6 +238,7 @@ export async function runReport(
       since,
       runTs,
       read: await findStreamStatus(db, "deliveries"),
+      watermarkRow: wmRead.row,
     });
 
     const overdueRead = await readUnpricedOverdue(db);
@@ -246,7 +252,9 @@ export async function runReport(
     const missed = notReceived.missed_working_days;
     await emit?.(
       "finalize",
-      missed && missed > 0
+      notReceived.already_processed
+        ? `No new RC DELIVERIES report — today's was already taken in by an earlier run.`
+        : missed && missed > 0
         ? `No RC DELIVERIES report arrived — and RC IN has now missed ${missed} working ` +
             `day${missed === 1 ? "" : "s"}.`
         : "No RC DELIVERIES report arrived in this run's mailbox window.",
@@ -254,7 +262,7 @@ export async function runReport(
       notReceived.through_date
         ? `RC IN has data through ${notReceived.through_date}.`
         : undefined,
-      "warn",
+      notReceived.already_processed ? "info" : "warn",
     );
 
     const emptyApply: ApplyResult = {
