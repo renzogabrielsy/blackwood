@@ -98,6 +98,9 @@ import { PeriodFilter, type PeriodFilterOption } from "./period-filter";
 import { GroupPrintPage, GroupPrintStage } from "./group-print";
 import { MonthSideRail } from "./metric-expand";
 import { NO_HIDDEN, serializeHidden } from "@/lib/analytics/period-selection";
+import { DEFAULT_ANALYTICS_PREFS } from "@/lib/analytics/prefs";
+import { useAnalyticsPrefs } from "./use-analytics-prefs";
+import { ResetPrefsButton } from "./reset-prefs-button";
 
 /**
  * The bands the TOP matrix renders. The campaign band is deliberately not one
@@ -172,15 +175,23 @@ export interface AnalyticsViewProps {
   data: AnalyticsData;
   initialYear: number;
   initialGranularity: Granularity;
-  initialPerWorkingDay: boolean;
-  initialComparison: ComparisonMode;
+  /**
+   * R10 — `null` means the ADDRESS SAID NOTHING, not "off".
+   *
+   * These three are spelled in the URL only in their non-default state, so
+   * their absence has always been silence. Distinguishing silence from a stated
+   * default is what lets the reader's saved setting answer the first and never
+   * the second — see the precedence rule in the component body.
+   */
+  initialPerWorkingDay: boolean | null;
+  initialComparison: ComparisonMode | null;
   initialMetric: MetricKey | null;
   /** The switched-off period keys from `?hide=`. Empty = every column. */
   initialHidden: ReadonlySet<string>;
   /** R5 — the switched-off campaign keys from `?bhide=`. Empty = every batch. */
   initialHiddenCampaigns: ReadonlySet<string>;
-  /** R3 — whether an expand card prints its two dictionary blocks. */
-  initialShowDictionary: boolean;
+  /** R3 — whether an expand card prints its two dictionary blocks. `null` = silent. */
+  initialShowDictionary: boolean | null;
 }
 
 export function AnalyticsView({
@@ -197,9 +208,30 @@ export function AnalyticsView({
   const [year, setYear] = React.useState(initialYear);
   const [granularity, setGranularity] =
     React.useState<Granularity>(initialGranularity);
-  const [perWorkingDay, setPerWorkingDay] = React.useState(initialPerWorkingDay);
-  const [comparison, setComparison] =
-    React.useState<ComparisonMode>(initialComparison);
+  // ── R10 — THE READER'S OWN SETTINGS ──────────────────────────────────────
+  // Renzo: *"I would rather it remembers the last settings used per user."*
+  // `use-analytics-prefs.ts` is the ONE store; what follows is the three
+  // page-level toggles' half of it. See the store for why the year palette, the
+  // expand chart's toggles and the row order live in the same record.
+  const { prefs, patch: patchPrefs, resetAll: resetPrefs, customised: prefsCustomised, pruneYears } =
+    useAnalyticsPrefs();
+
+  /**
+   * THE PRECEDENCE RULE, stated once: **the URL wins wherever the URL speaks.**
+   *
+   * `wd`, `cmp` and `dict` are spelled in the address ONLY in their non-default
+   * state, so an absent param has always meant "nothing was said" rather than
+   * "off". `page.tsx` now passes `null` for exactly that case, which is what
+   * lets a preference answer the question the address left silent — and lets a
+   * shared link carrying `?wd=1` still show its recipient the same figures,
+   * whatever their own habit is. A preference never overrides a statement.
+   */
+  const [perWorkingDay, setPerWorkingDayState] = React.useState(
+    initialPerWorkingDay ?? DEFAULT_ANALYTICS_PREFS.perWorkingDay,
+  );
+  const [comparison, setComparisonState] = React.useState<ComparisonMode>(
+    initialComparison ?? DEFAULT_ANALYTICS_PREFS.comparison,
+  );
   const [metric, setMetric] = React.useState<MetricKey | null>(initialMetric);
   /**
    * The switched-OFF period keys, across every granularity and year at once.
@@ -237,9 +269,79 @@ export function AnalyticsView({
    * row was opened, which is exactly the moment a reader who does not want the
    * prose would meet it again.
    */
-  const [showDictionary, setShowDictionary] = React.useState(
-    initialShowDictionary,
+  const [showDictionary, setShowDictionaryState] = React.useState(
+    initialShowDictionary ?? DEFAULT_ANALYTICS_PREFS.showDictionary,
   );
+
+  /**
+   * Adopt the stored setting for whichever of the three the address left
+   * silent, once the store has read it — and stop adopting the moment the
+   * reader touches that control, so a remote copy landing a beat late can
+   * never undo a click they have already made.
+   *
+   * It is an EFFECT rather than a lazy initialiser for the reason every store
+   * on this page is: the server renders the defaults, and reading a browser
+   * store during render is a hydration mismatch. The adopted value lands on the
+   * tick after the record does, which is imperceptible and correct.
+   */
+  const touched = React.useRef(new Set<"wd" | "cmp" | "dict">());
+  React.useEffect(() => {
+    if (initialPerWorkingDay === null && !touched.current.has("wd")) {
+      setPerWorkingDayState(prefs.perWorkingDay);
+    }
+    if (initialComparison === null && !touched.current.has("cmp")) {
+      setComparisonState(prefs.comparison);
+    }
+    if (initialShowDictionary === null && !touched.current.has("dict")) {
+      setShowDictionaryState(prefs.showDictionary);
+    }
+  }, [
+    prefs.perWorkingDay,
+    prefs.comparison,
+    prefs.showDictionary,
+    initialPerWorkingDay,
+    initialComparison,
+    initialShowDictionary,
+  ]);
+
+  const setPerWorkingDay = React.useCallback(
+    (next: boolean) => {
+      touched.current.add("wd");
+      setPerWorkingDayState(next);
+      patchPrefs({ perWorkingDay: next });
+    },
+    [patchPrefs],
+  );
+  const setComparison = React.useCallback(
+    (next: ComparisonMode) => {
+      touched.current.add("cmp");
+      setComparisonState(next);
+      patchPrefs({ comparison: next });
+    },
+    [patchPrefs],
+  );
+  const setShowDictionary = React.useCallback(
+    (next: boolean) => {
+      touched.current.add("dict");
+      setShowDictionaryState(next);
+      patchPrefs({ showDictionary: next });
+    },
+    [patchPrefs],
+  );
+
+  /**
+   * Rule 2 of the store — a saved setting is a preference, never a fact about
+   * the data. A hidden year or a year colour naming a year the payload no
+   * longer carries is dropped here, ONCE, with the PAGE's year list. A card
+   * must never do this: it knows only its own row's years, and pruning against
+   * those would delete the reader's choice about every other row.
+   *
+   * `pruneAnalyticsPrefs` returns the same record when nothing moved, so a
+   * clean set never writes and this effect settles immediately.
+   */
+  React.useEffect(() => {
+    pruneYears(data.years);
+  }, [pruneYears, data.years, prefs]);
 
   React.useEffect(() => {
     syncUrl({
@@ -633,6 +735,11 @@ export function AnalyticsView({
           </span>
         </label>
 
+        {/* R10 — the one door out of the preference store. Beside `Definitions`
+            because that is where the page-level toggles are, and absent
+            entirely while there is nothing to reset. */}
+        <ResetPrefsButton customised={prefsCustomised} onReset={resetPrefs} />
+
         <span className="ml-auto flex items-center gap-3 text-[length:var(--bw-fs-11)] text-muted-foreground">
           {/* LIVE, never historical — a batch only records where it is NOW, so
               past block occupancy is not reconstructable and is never a row. */}
@@ -867,8 +974,8 @@ export function AnalyticsView({
           can be dragged into your own order within their own group (or moved
           with <span className="font-mono">↑</span> /{" "}
           <span className="font-mono">↓</span> from the grip); that order is
-          remembered in this browser only, never travels in a link, and changes
-          no figure. Each group&rsquo;s{" "}
+          saved to your account, never travels in a link, and changes no
+          figure. Each group&rsquo;s{" "}
           <span className="font-medium text-foreground">Print</span> button
           produces one landscape report — every row in that group as its own
           page, in the order you put them in.

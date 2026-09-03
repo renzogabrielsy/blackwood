@@ -1822,3 +1822,84 @@ repeating annual axis. Neither has a second year to overlay.
 **Gates:** `tsc --noEmit` clean · `npm run lint` 146 / 16 (baseline, unmoved) ·
 `npm run build` clean · `verify-year-overlay` 24 · `verify-table-core` 84 ·
 `verify-campaign-selection` 11 · `npm run test:e2e` 57 passed.
+
+## 16. OWNER FEEDBACK ROUND 10 — 2026-09-03 (PREFERENCES REMEMBERED PER USER)
+
+Renzo, verbatim: *"Currently, the style selections for the charts in analytics has no sense
+of memory or permanence when it comes to user selection. Every choice is made back to
+default when switching around different charts and rows and from a refresh. I would much
+rather it remembers the last settings used per user."*
+
+### The diagnosis, which is a placement rather than a bug
+
+Three places a preference could live, and only two of them survived anything. Year colours
+(R9) and row order (R5) were in `localStorage` and did survive. Everything else — the
+expand's Years checklist, `Overlay price`, `3-month avg`, and the page's Compare chip,
+per-working-day and `Definitions` — was `React.useState`. **Both call sites `key`
+`MetricExpand` by metric**, so opening another row REMOUNTS the card and its state starts
+over. That is exactly "back to default when switching around different charts and rows". The
+three page-level toggles survived a reload only because `syncUrl` had written them into the
+address; on a bare `/analytics` they came back at their defaults.
+
+### What was built
+
+1. **One record, two stores.** `lib/analytics/prefs.ts` (pure: the shape, the untrusted-value
+   parser, the pruner, the serialiser, the legacy fold) + `use-analytics-prefs.ts` (a
+   module-level singleton with a subscriber set, `localStorage` under
+   `bw.analytics.prefs.v1` written synchronously, `user_table_settings` under
+   `module = 'analytics'` written on a 500 ms debounce, last write wins).
+2. **`use-year-styles.ts` and `use-row-order.ts` keep their interfaces** and simply sit on the
+   store, so `metric-expand.tsx`, `year-style-menu.tsx`, `analytics-matrix.tsx` and
+   `row-handle.tsx` needed no structural edit. The storage moved; the arithmetic did not.
+3. **The storage layer is reused, the provider is not.** Two shape-agnostic server actions,
+   `getUserModuleSettings` / `saveUserModuleSettings`, sit beside the RC IN pair in
+   `lib/actions/table-settings.ts`, so `user_table_settings` still has exactly one door.
+   `TableSettingsProvider` itself is hard-typed to `RcInTableSettings` and merges
+   `DEFAULT_RC_IN_SETTINGS` into whatever it reads, which is nonsense over an analytics
+   record — reuse the table, not the shape. The new pair REPLACES rather than merges, because
+   "reset to defaults" is a removal and a merge can only ever add.
+4. **The hidden-year set is PAGE-WIDE**, for the identical reason the year palette already
+   was: a year is the same entity in every expand, so a per-card set would mean re-setting the
+   same control at every row.
+5. **`null` ≠ `[]`.** `null` = never chosen, so R4's smart default runs; `[]` = "show me all
+   of them", which a default must not overrule. The NULL ≠ 0 rule, in a checklist.
+6. **The URL is unchanged and still wins wherever it speaks.** `?year=` / `?g=` / `?hide=` /
+   `?bhide=` / `?metric=` describe what is on screen and are never stored. `wd`, `cmp` and
+   `dict` were always spelled only in their non-default state, so an absent param was already
+   silence; `page.tsx` now returns `null` for that case and a preference answers the silence,
+   never the statement. An unrecognised value is a statement too.
+7. **Nobody loses what they already set.** A one-time fold of `bw.analytics.yearstyle.v1` and
+   both row-order prefixes (v2 winning), run only when no R10 record exists, leaving the old
+   keys in place so a rollback still finds them.
+8. **Reset.** One confirmed action clearing the whole record, absent when there is nothing to
+   reset, naming what it destroys because none of it is visible from the button. It touches no
+   URL param.
+
+### A GRANT that had never been there
+
+The brief's premise — "the RC IN settings prove `authenticated` can already upsert its own
+row" — is **false, measured**. `pg_class.relacl` on `user_table_settings` was NULL and
+`has_table_privilege('authenticated', …)` was `false` for SELECT, INSERT and UPDATE, behind
+three correct RLS policies, with **zero rows in the table**. A policy is not a grant: every
+read and write had been failing `42501` since the table was created, the error was
+`console.error`d by the provider, and `localStorage` carried the RC IN settings so nobody
+noticed. Fixed by `20260903065818_user_table_settings_authenticated_grants` —
+SELECT/INSERT/UPDATE to `authenticated` only (no DELETE, no `anon`, no `service_role`),
+proven by a `DO` block that becomes the role and raises if it still cannot read. L-043 /
+L-044 in a third costume. No schema change and no type regeneration: `module` deliberately
+carries no CHECK, and a grant alters no generated type.
+
+### Verified in the browser (throwaway fixture, deleted before commit)
+
+A clean Chromium profile at 1512×980 dark, over the REAL `AnalyticsView` in the REAL shell
+class on 33 synthetic months: a fresh reader has no stored record and no Reset button; every
+setting changed writes exactly the expected document with all defaults omitted; a DIFFERENT
+row opens carrying them (`Years filter — 1 of 3 years shown`, 2026 magenta + dashed, avg
+off); a full reload from a bare URL restores all of it; `?cmp=yoy&wd=0&dict=on` overrides
+without touching the stored record; Reset asks first, removes the key entirely and takes
+itself off the page; and 15 server-action POSTs were captured carrying `["analytics"]`,
+`["analytics",{…}]` and `["analytics",{}]`. No hydration mismatch, no page error.
+
+**Gates:** `tsc --noEmit` clean · `npm run lint` 146 / 16 (baseline, unmoved) ·
+`npm run build` clean · `verify-analytics-prefs` **15** (new) · `verify-table-core` 84 ·
+`verify-campaign-selection` 11 · `verify-year-overlay` 24 · `npm run test:e2e` 57 passed.

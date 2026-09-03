@@ -777,7 +777,7 @@ function MatrixSectionRows<U>({
                 type="button"
                 onClick={rowOrder.reset}
                 aria-label={`Reset the ${section.label} row order`}
-                title={`Put the ${section.label} rows back in their original order. The order is remembered in this browser only and never changed a figure.`}
+                title={`Put the ${section.label} rows back in their original order. The order is saved to your account and never changed a figure.`}
                 className="inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded border border-border/70 text-muted-foreground transition-colors duration-150 hover:bg-background hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <RotateCcw className="size-2.5" aria-hidden />

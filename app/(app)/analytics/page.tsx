@@ -65,9 +65,28 @@ function resolveYear(raw: Param, years: readonly number[], fallback: number): nu
   return Number.isInteger(v) && years.includes(v) ? v : fallback;
 }
 
-/** What the second chip under every value shows. Defaults to the year-ago read. */
-function resolveComparison(raw: Param): ComparisonMode {
-  return first(raw) === "actual" ? "actual" : "yoy";
+/**
+ * What the second chip under every value shows.
+ *
+ * R10 — `null` means THE ADDRESS SAID NOTHING. `cmp`, `wd` and `dict` have
+ * always been spelled only in their non-default state, so an absent param was
+ * already silence rather than a stated "no"; what changes is that the shell can
+ * now tell the two apart, and let the reader's saved setting answer the silence.
+ * A param that IS present still wins outright — a shared link must show its
+ * recipient the same figures whatever their own habit is. An unrecognised value
+ * is a statement too, and resolves to the default rather than to the preference.
+ */
+function resolveComparison(raw: Param): ComparisonMode | null {
+  const v = first(raw);
+  if (v == null) return null;
+  return v === "actual" ? "actual" : "yoy";
+}
+
+/** `?wd=1` on, anything else stated off, absent = silent. See above. */
+function resolvePerWorkingDay(raw: Param): boolean | null {
+  const v = first(raw);
+  if (v == null) return null;
+  return v === "1";
 }
 
 /**
@@ -83,8 +102,10 @@ function resolveComparison(raw: Param): ComparisonMode {
  * expand at once, so a shared link carrying it means the same thing to whoever
  * opens it — which is exactly the test the expand's own Years filter fails.
  */
-function resolveDictionary(raw: Param): boolean {
-  return first(raw) !== "off";
+function resolveDictionary(raw: Param): boolean | null {
+  const v = first(raw);
+  if (v == null) return null;
+  return v !== "off";
 }
 
 /**
@@ -173,7 +194,7 @@ export default async function AnalyticsPage({
         data={data}
         initialYear={resolveYear(params.year, data.years, data.defaultYear)}
         initialGranularity={resolveGranularity(params.g)}
-        initialPerWorkingDay={first(params.wd) === "1"}
+        initialPerWorkingDay={resolvePerWorkingDay(params.wd)}
         initialComparison={resolveComparison(params.cmp)}
         initialMetric={resolveMetric(params.metric)}
         // OWNER FEEDBACK R2 — the switched-off period columns, resolved

@@ -10,6 +10,17 @@
 > the shaded window band or a 75-month axis predate it — see
 > **"Owner feedback round 9 — the year overlay"** near the end of this file.
 
+> **OWNER FEEDBACK ROUND 10 APPLIED — 2026-09-03. ⚠ EVERY CHART AND VIEW CHOICE IS NOW
+> REMEMBERED PER USER.** The page had three places a preference could live and a scatter of
+> `React.useState` that lost the reader's choice on every row change; there is now ONE record
+> (`use-analytics-prefs.ts` over `lib/analytics/prefs.ts`), written to `localStorage`
+> instantly and to `user_table_settings (user_id, module='analytics')` on a 500 ms debounce.
+> `use-year-styles.ts` and `use-row-order.ts` keep their interfaces and simply sit on it.
+> **The URL is unchanged and still wins wherever it speaks.** Passages below that say a
+> setting is "remembered in this browser only", or that the expand's Years checklist / avg
+> toggle / overlay toggle is session state on one card, predate it — see **"Owner feedback
+> round 10 — preferences remembered per user"** at the end of this file.
+
 > **OWNER FEEDBACK ROUND 1 APPLIED — 2026-09-01.** Renzo read the live page and gave a
 > ten-item list. Everything below already reflects it; the round's own summary is the
 > section **"Owner feedback round 1"** near the end of this file, which is the place to
@@ -118,7 +129,9 @@ layer**; **P3, the supplier room**; **P4, the production matrix — the page is 
 | `print-card.ts` | **R4 — the print mechanism, extracted.** `printCard(el)` tags every ancestor `data-print-ancestor`, adds `bw-printing` to `<body>` and calls `window.print()`, clearing both on `afterprint` with a 1 s fallback. It lived inside `metric-expand.tsx` until the supplier expand needed it too; two copies of something this fiddly would drift the first time one was touched. A plain module, not `"use client"` — it is imported only by client components and touches the DOM at CALL time. **R5: it also MARKS the card itself** when the element does not already carry `data-print-card`, and unmarks it in `clear()` — the group-print stage and the campaign panel are printable without being permanently marked, which they must not be (the sheet hides everything that is not `[data-print-card]`, so a second permanent mark would put the campaign table on every printed metric sheet). |
 | `group-print.tsx` | **R5 — print a whole metric GROUP.** `GroupPrintStage` renders the group's cards in a real, laid-out 1040 px column parked inside a zero-sized clipped box, waits 400 ms for `ResponsiveContainer` to measure, calls `printCard` on it, and unmounts on `afterprint` (2 s fallback). `GroupPrintPage` wraps one card and carries the page break. **The offstage-with-layout trick is load-bearing and was measured**: `display: none` gives no box, recharts measures its parent's box, and a print media query does not apply until the dialog is already open — a `hidden print:block` sheet prints empty chart frames. |
 | `row-handle.tsx` | **R5 — the drag grip and the `<tr>` drop props.** HTML5 drag-and-drop (the platform already solves auto-scroll and hit testing inside a sticky-column `overflow-x-auto` table), payload `text/plain` = the row key, plus ArrowUp / ArrowDown on the focused handle through the SAME `move()` the pointer path ends in. The handle is `opacity-0 group-hover:opacity-100` and stays in layout, so nothing reflows when it appears. |
-| `use-row-order.ts` | **R5 — the reader's own row order for one group.** `localStorage`, keyed `bw.analytics.roworder.v1.<scope>`, read in an EFFECT (never a lazy initialiser — the server renders the registry order, so reading storage during render is a hydration mismatch). Every read and write is wrapped: a private window or blocked site data means "no saved order", which is the default. |
+| `use-row-order.ts` | **R5 — the reader's own row order for one group.** **R10 moved the storage, not the arithmetic:** the sequences now live at `prefs.rowOrder[scope]` inside the one analytics preference record, so a reorder follows the reader to another browser and one Reset clears every section at once. The interface (`order` / `custom` / `move` / `drop` / `reset`) is unchanged, so `analytics-matrix.tsx` needed no edit. `reset` REMOVES the scope rather than storing `[]` — "reset" and "never touched" must be one state. Old keys (`bw.analytics.roworder.v2.<scope>` and R5's `v1.`) are read once by the store's legacy fold. |
+| `use-analytics-prefs.ts` | **R10 — NEW. THE store.** A module-level singleton (not context: the readers are mounted by components under no common provider) + a subscriber set for same-tab liveness, `localStorage` under `bw.analytics.prefs.v1` written synchronously, and `user_table_settings` under `module = 'analytics'` written on a 500 ms debounce, last write wins. Reads storage in an EFFECT (never a lazy initialiser — hydration), wraps every read and write, treats the stored value as untrusted, and runs the ONE-TIME legacy fold when no R10 record exists. Exposes `prefs` / `patch` / `resetAll` / `customised` / `pruneYears`. |
+| `reset-prefs-button.tsx` | **R10 — NEW. The one door out.** Beside `Definitions` in the control row; absent entirely when `customised` is false (R3's rule — a control that can do nothing lies about the page). Confirms through an `AlertDialog` that NAMES what goes, because none of it is visible from the button and none of it is recoverable. It touches no URL param. |
 | `grade-expand.tsx` | **R5 — one grade, batch by batch (R6).** The grade mix's row expand, carrying the full R4 universal module contract: a checklist with the smart default (it opens on the **production batches** that grade was actually run in — months until R6), a stat strip that re-folds from it, an average switch, Print and the master `Definitions` switch. Bars = tonnes on a zero-floored axis, dashed line = share of the batch on its OWN axis fixed 0–100. The trailing average is a **3-batch** mean. No ₱ exists in it and none is derivable. |
 | `metric-expand.tsx` | **The row expand** (+ R3: `canDrawAvg` and the `AvgToggle` beside `Years`, and the dictionary blocks behind the page's `Definitions` switch), rendered IN PLACE inside the matrix, in a full-width row directly beneath the row that was clicked. Stat strip + full-history chart (bar or line, **plus the dashed comparison line where a row declares a pair**) + one of six side rails (inventory split · price coverage · closed blocks · aging bands · downtime · power) + the dictionary spelled out + **a Print button** that prints just this card. Reuses `DrilldownSection` / `DrilldownStat` / `BreakdownRail` / `DRILLDOWN_AXIS_TICK` / `drilldownTooltipChrome` from the drill-down chassis. |
 | `metric-info.tsx` | **The dictionary** at the point of use — an `Info` button with the whole entry as a native `title` (hover) and a `Popover` card (click). `DictionaryPopover` is the ONE card and takes any `MetricDictionaryEntry`; `MetricInfo` is the matrix row's wrapper over it (`METRICS[].dictionary`) and the supplier room passes `SUPPLIER_DICTIONARY` entries into the same component, so a metric and a supplier figure can never explain themselves in two layouts. |
@@ -149,6 +162,7 @@ layer**; **P3, the supplier room**; **P4, the production matrix — the page is 
 | `period-selection.ts` | **R2 — the hidden set's URL codec** (`NO_HIDDEN`, `serializeHidden`, `parseHidden`). A separate module from `period-filter.tsx` for one reason: that file is `"use client"`, and a plain function exported from a client module becomes a client REFERENCE, so the Server Component calling it would fail at request time rather than at build time. Pure, importable from both sides. **R5 reuses it verbatim for `?bhide=`.** |
 | `campaign.ts` | **R5 — campaign identity.** `CAMPAIGN_MONTHS`, `campaignMonthIndex`, **`campaignSeq`** (moved OUT of `queries.ts`, which is `server-only`, so the panel's checklist and the server's column sort share ONE definition of chronological), `campaignKey` and **`campaignMonthKeys`** (the `YYYY-MM` months a campaign covers — a LABEL on the campaign panel, not a filter). **R6 deleted `selectedCampaignMonths`**: it existed only to project a batch selection onto calendar columns, and the production band no longer has any. Pure, client-safe. |
 | `campaign-selection.ts` | **R8 — the TWO dropdowns over ONE selection.** `groupCampaignYears` / `groupCampaignNames` derive both checklists from the `?bhide=` set on every render (so they cannot drift from the columns), `hiddenYearKeys` / `hiddenNameKeys` / `shownYearSet` project it, and `applyYearSelection` / `applyNameSelection` write it back **as a DIFF** — only the groups whose own ticked state moved are rewritten, which is what stops a year toggle silently restoring a per-batch pick. Reads `productionBatch` and `campaignYear` as the separate columns they already are: **no label is ever split or rebuilt.** Pure, client-safe, pinned by `scripts/verify-campaign-selection.ts` (11 assertions). |
+| `prefs.ts` | **R10 — NEW. THE SHAPE of the saved settings and the arithmetic over it.** `AnalyticsPrefs`, `DEFAULT_ANALYTICS_PREFS`, `parseAnalyticsPrefs` (untrusted-value validator — every field checked, anything unrecognised dropped, never throws), `pruneAnalyticsPrefs` (drops years the payload no longer carries, returns the SAME reference when nothing moved), `serializeAnalyticsPrefs` (omits every defaulted field, so a defaulted record is `{}`), `isDefaultPrefs`, `migrateLegacyPrefs`, `chooseStoredPrefs`. Pure and client-safe — it never touches `window` or Supabase, so a settings bug is provable without mounting anything. Pinned by `scripts/verify-analytics-prefs.ts` (15 assertions). |
 | `row-order.ts` | **R5 — the ordering arithmetic**: `resolveOrder`, `isDefaultOrder`, `moveKey`, `dropKey`, `applyOrder`. Pure, so an ordering bug is readable without mounting anything, and so the same functions can be run against an untrusted `localStorage` value. **A saved order is a PREFERENCE, never a row list** — a key that no longer names a row is dropped and a row the save never heard of is APPENDED in registry position, so a row added in a future round cannot be hidden by an order set today. |
 | `format.ts` | Display formatters, the blank-reason hover copy and the estimate hover. **R6 adds `UNIT_GLYPH` and `unitGlyphFor(spec)`** — the ONE table mapping a `MetricUnit` to the glyph a cell prints on its left (`₱/kg` · `₱` · `T` · `d` · `%` · `h` · `kWh` · `kWh/kg`), with `count` deliberately BLANK because "12 what?" is a per-row question the spec's own `glyph` answers (`sellers`, `bags`, `piles`). Presentation only. |
 | `queries.ts` | **The server-only ADAPTER.** Reads the **nine** views + the live blocking grid, applies the ₱ gate and the two honest nullings, returns `AnalyticsData`. |
@@ -2384,10 +2398,206 @@ OAuth) on synthetic data spanning 2024–2026 with a custom campaign `SRC` start
   unmoved) · `npm run build` clean · `verify-year-overlay` **24** · `verify-table-core` 84 ·
   `verify-campaign-selection` 11 · `npm run test:e2e` 57 passed.
 
+## Owner feedback round 10 — preferences remembered per user, 2026-09-03
+
+Renzo, verbatim: *"Currently, the style selections for the charts in analytics has no sense
+of memory or permanence when it comes to user selection. Every choice is made back to
+default when switching around different charts and rows and from a refresh. I would much
+rather it remembers the last settings used per user."*
+
+### Why it reset, exactly
+
+Not a bug in any one control — a placement. Before this round the page had **three** places
+a preference could live:
+
+| Where | What was in it | What happened on a row change | On a reload |
+|---|---|---|---|
+| `localStorage` (`use-year-styles.ts`) | year colours + strokes | survived | survived |
+| `localStorage` (`use-row-order.ts`, per scope) | row order | survived | survived |
+| **`React.useState`** | the expand's Years checklist, `Overlay price`, `3-month avg`, and the page's Compare chip / per-working-day / Definitions | **LOST** | **LOST** |
+
+Both call sites `key` `MetricExpand` by metric, so opening another row **remounts** it and
+its `useState` starts over. That is precisely "every choice is made back to default when
+switching around different charts and rows". The three page-level toggles survived a reload
+only because `syncUrl` had written them into the address; on a bare `/analytics` they came
+back at their defaults.
+
+### One record, two stores
+
+`lib/analytics/prefs.ts` owns the SHAPE and the arithmetic (pure, client-safe);
+`app/(app)/analytics/use-analytics-prefs.ts` owns the storage. The dual-persistence pattern
+is copied from `components/providers/table-settings.tsx` rather than invented:
+
+- **`localStorage`** under `bw.analytics.prefs.v1`, written **synchronously** on every
+  change — instant, offline, survives a reload;
+- **`user_table_settings (user_id, module = 'analytics', settings jsonb)`**, written on a
+  **500 ms debounce**, last write wins. This is the *per user* half — the thing that follows
+  the reader from the office machine to the laptop.
+
+The provider itself is **not** reused: it is hard-typed to `RcInTableSettings` and merges
+`DEFAULT_RC_IN_SETTINGS` into whatever it reads, which is nonsense over an analytics record.
+What IS reused is the storage layer — two new shape-agnostic server actions,
+`getUserModuleSettings` / `saveUserModuleSettings`, live beside the RC IN pair in
+`lib/actions/table-settings.ts`, so `user_table_settings` still has exactly one door.
+
+They differ from `saveTableSettings` in two deliberate ways. **They REPLACE rather than
+merge** — `saveTableSettings` spreads a patch over the stored row, so a key can be added but
+never removed, and "reset to defaults" is precisely a removal. And **a failure is returned,
+not swallowed** — the caller decides, and here the caller logs it and carries on, because a
+preference that did not reach the database is still correct in this browser.
+
+The store is a **module-level singleton with a subscriber set**, not React context: the
+readers are mounted by components with no common provider (the matrix, the shell, and up to
+two expand cards from different rooms), and threading a provider through the page for a
+preference would be more machinery than the preference. That is the judgement
+`use-year-styles.ts` already made; this store inherits it and now covers every setting
+instead of one.
+
+### What is remembered
+
+| Setting | Was | Now |
+|---|---|---|
+| Year colours + strokes | `localStorage` only | `prefs.yearStyles` — same `YearStyleMap`, same validator, now per user |
+| Which years an expand chart draws | `useState`, per card | `prefs.expandHiddenYears` — **page-wide**, per user |
+| `Overlay price` | `useState`, per card | `prefs.showOverlay` (default still OFF) |
+| `3-month avg` | `useState`, per card | `prefs.showAvg` (default still ON) |
+| Compare chip (`YoY %` / `Δ actual`) | `useState` + `?cmp=` | `prefs.comparison`, URL unchanged |
+| Per working day | `useState` + `?wd=` | `prefs.perWorkingDay`, URL unchanged |
+| `Definitions` | `useState` + `?dict=` | `prefs.showDictionary`, URL unchanged |
+| Row order per section | `localStorage`, one key per scope | `prefs.rowOrder[scope]`, per user |
+
+**The hidden-years set is PAGE-WIDE, and for the identical reason the year palette already
+was**: a year is the same entity in every expand, so if switching 2024 off on Purchase
+volume left it on for Yield, the reader would re-set the same control at every row — which
+is the cost the fixed axis exists to remove.
+
+### `null` and `[]` are different answers, and the smart default is why
+
+`expandHiddenYears` is `readonly string[] | null`. **`null` means the reader has never
+touched the control**, so R4's smart default runs and the card opens with its honestly-empty
+years already off. **`[]` means they said "show me all of them"**, which must not be
+overruled by a default on the next row. Collapsing the two would either kill the smart
+default for everyone or resurrect it over an explicit choice. The same NULL ≠ 0 discipline
+the SQL layer applies to an unpriced delivery, in a checklist. `serializeAnalyticsPrefs`
+therefore omits the key when it is `null` and writes `[]` when it is empty.
+
+### The precedence rule: THE URL WINS WHEREVER THE URL SPEAKS
+
+Nothing moved out of the address bar. `?year=`, `?g=`, `?hide=`, `?bhide=` and `?metric=`
+describe **what is on screen**, so a link carrying one is a statement its recipient must see
+exactly, and none of them is stored.
+
+`wd`, `cmp` and `dict` have always been spelled **only in their non-default state**, so an
+absent param was already *silence* rather than a stated "no". `page.tsx` now returns `null`
+for exactly that case (`resolvePerWorkingDay` / `resolveComparison` / `resolveDictionary`),
+which is the whole change: a preference answers the silence and never the statement. An
+unrecognised value is a statement too and resolves to the default, not to the preference.
+The adoption happens in an EFFECT — the server renders the defaults, so reading a browser
+store during render is a hydration mismatch — and stops the moment the reader touches that
+control, so a remote copy landing a beat late can never undo a click already made.
+
+### Nobody loses what they already set
+
+On the first load with no R10 record, `migrateLegacyPrefs` folds the pre-existing keys —
+`bw.analytics.yearstyle.v1` (R9) and every `bw.analytics.roworder.v2.<scope>` **and** R5's
+original `v1.` prefix, v2 winning where both exist for one scope. The old keys are **left in
+place, never deleted**: a rollback to the previous build must still find them, and an orphan
+key costs a few hundred bytes in one browser. If the reader has nothing local but the
+database has a row, the row is adopted and cached; if the reader has something local and the
+database has nothing, the local record seeds the row so a second browser inherits it.
+`chooseStoredPrefs` states the tie-break: **local wins**, because every write goes there
+first and to the database on a debounce, so the local copy is never older for the browser
+that made the change.
+
+### A stored value is an INPUT, and is treated like one
+
+`parseAnalyticsPrefs` validates field by field and drops anything it did not write; it never
+throws and never returns a partial shape, so a corrupt record degrades to the defaults, which
+is a working page. Year styles go through `parseYearStyles` — the same validator R9 wrote,
+whichever door the value came in by, because a colour goes straight into a `style` attribute.
+Scope names, row keys, the hidden-year list and the scope count are all bounded, so a hostile
+store cannot become a large render. And `pruneAnalyticsPrefs` runs ONCE from the shell with
+the **page's** year list (never a card's — a card knows only its own row's years, and pruning
+against those would delete the reader's choice about every other row), returning the same
+reference when nothing moved so a clean record never writes.
+
+### Reset
+
+`reset-prefs-button.tsx`, beside `Definitions`. It clears the whole record — the Style
+popover's own per-year and all-years resets and the row handle's per-section reset are still
+there, and a page-wide button that cleared only *some* of the page's memory would be the
+worse kind of control. It is **absent when there is nothing to reset** (`customised` is
+`isDefaultPrefs` inverted), and it **confirms**, because what it destroys is invisible from
+the button and unrecoverable — the dialog names the colours, the hidden years and the row
+orders rather than saying "settings". It touches **no URL param**: resetting a habit must not
+silently re-slice the figures someone is reading.
+
+### A GRANT that had never been there (found while wiring the DB half)
+
+The brief said the RC IN settings prove `authenticated` can already upsert its own
+`user_table_settings` row. **Measured, they do not.** `pg_class.relacl` on the table was
+`NULL` — no role but the owner held any privilege — and
+`has_table_privilege('authenticated', …)` was `false` for SELECT, INSERT and UPDATE alike,
+while the table carried three correct RLS policies and **zero rows**.
+
+A **policy is not a grant**: a policy can only narrow a privilege that exists, so every read
+and write has been failing with `42501 permission denied for table user_table_settings`
+since the table was created. `saveTableSettings` returns the error and the provider
+`console.error`s it, so the RC IN per-user table settings have silently never persisted —
+`localStorage` carried them and nobody noticed. L-043 / L-044 in a third costume, and the
+same instrument: a plain `GRANT`, proven by **assuming the victim's role** rather than by
+reading the grant table. Migration `20260903065818_user_table_settings_authenticated_grants`
+grants SELECT/INSERT/UPDATE to `authenticated` and nothing else — **no DELETE** (reset writes
+an empty document), nothing to `anon`, nothing to `service_role` — and ends in a `DO` block
+that becomes `authenticated`, reads the table and raises if it still cannot. It also
+COMMENTs the table, recording that `module` deliberately carries **no** check constraint:
+a new screen that wants to remember something is not a schema change, so **no migration was
+needed for the `'analytics'` value and `types/supabase.ts` is unchanged** (a grant alters no
+type).
+
+### Verified in the browser (throwaway fixture, deleted before commit)
+
+`app/dev/table-playground/analytics-prefs/` mounted the REAL `AnalyticsView` in the REAL
+shell class over 33 synthetic months spanning 2024–2026, resolving the three now-nullable
+params exactly as `page.tsx` does, driven in a clean Chromium profile at 1512×980 dark.
+
+- **A fresh reader** — `localStorage` empty, **no Reset button**, three years at the R9
+  palette (2024 solid blue · 2025 dashed orange · 2026 dotted aqua), `YoY %`, Definitions on.
+- **Every setting changed** — 2024 and 2025 switched off from the legend, 2026 set to magenta
+  + dashed in the Style popover, `3-month avg` off, `Δ actual`, per-working-day on,
+  Definitions off. The stored document is exactly
+  `{"yearStyles":{"2026":{"color":"var(--bw-year-5)","style":"dashed"}},"expandHiddenYears":["2024","2025"],"showAvg":false,"comparison":"actual","perWorkingDay":true,"showDictionary":false}`
+  — every defaulted field absent.
+- **A DIFFERENT row carries them**: closing Market price and opening **Purchase volume**
+  gives `Years filter — 1 of 3 years shown`, 2026 magenta and dashed, `3-month avg` off,
+  per-working-day units. Before this round that card opened at the smart default every time.
+- **A full reload from a BARE URL** (`?metric=purchase_volume`, no `wd`/`cmp`/`dict`) comes
+  back with all of it, and `syncUrl` re-acquires `&wd=1&cmp=actual&dict=off`.
+- **The URL still wins**: `?cmp=yoy&wd=0&dict=on` renders `YoY %`, per-working-day off and
+  the dictionary blocks back, with the stored preference **unchanged** — a statement is not
+  overwritten by a habit, and a habit is not overwritten by a statement.
+- **Reset** asks first, then removes the `localStorage` key entirely (`null`, not `{}`),
+  takes the Reset button off the page, and restores all three years, the default palette,
+  `YoY %`, per-working-day off and Definitions on.
+- **The database write is real**: 15 server-action POSTs captured, bodies
+  `["analytics"]` (the read), `["analytics",{…the document…}]` (the debounced save) and
+  `["analytics",{}]` after Reset. In the fixture the action reaches
+  `auth.getUser()` and returns `Not authenticated` (it is not behind OAuth), which is itself
+  the proof that the action ran server-side with the right module key and payload shape.
+- **No hydration mismatch and no page error** — the only console output is recharts'
+  pre-existing zero-size `ResponsiveContainer` warning.
+- **Gates**: `tsc --noEmit` clean · `npm run lint` 146 problems / 16 errors (the baseline,
+  unmoved) · `npm run build` clean · `verify-analytics-prefs` **15** (new) ·
+  `verify-table-core` 84 · `verify-campaign-selection` 11 · `verify-year-overlay` 24 ·
+  `npm run test:e2e` 57 passed.
+
 ## Dependencies
 
 - `lib/analytics/*` (own), `lib/auth.ts` (`canViewPrices`), `lib/supabase/server.ts`
-- `components/ui/{popover,select,switch}`, `lib/utils` (`cn`), `recharts`, `lucide-react`,
+- **R10** `lib/actions/table-settings.ts` — `getUserModuleSettings` / `saveUserModuleSettings`,
+  the two shape-agnostic server actions over `user_table_settings`. The RC IN pair beside them
+  is untouched and this module never imports it.
+- `components/ui/{popover,select,switch,alert-dialog}`, `lib/utils` (`cn`), `recharts`, `lucide-react`,
   `next/link` (only the unmounted watchlist still imports it)
 - `components/digest/drilldown/drilldown-modal.tsx` — `DrilldownSection` (whose optional
   `action` header slot R2 added), `DrilldownStat`, `DRILLDOWN_AXIS_TICK`,
@@ -2426,4 +2636,10 @@ hardcoded to day/month while these buckets are months, quarters or years.
 - `app/(app)/CONTEXT.md` — the Home Digest, the daily gateway that links here
 - `components/digest/CONTEXT.md` — the drill-down chassis this page borrows its chart chrome from
 - `components/NAVBAR.md` — the breadcrumb + module-list registration
+- `supabase/migrations/20260903065818_user_table_settings_authenticated_grants.sql` — **R10**:
+  the GRANT that had never existed. `authenticated` held NO privilege on `user_table_settings`
+  (relacl NULL, `has_table_privilege` false for all three) behind three correct RLS policies, so
+  every read and write had been failing 42501 since the table was created and it held zero rows —
+  a policy is not a grant. SELECT/INSERT/UPDATE to `authenticated` only; no DELETE, no anon, no
+  service_role; proven by a `DO` block that becomes the role and raises if it still cannot read.
 - `supabase/migrations/20260903013948_analytics_inventory_price_open_only.sql` — 2026-09-03: `view_analytics_inventory_eom` now values **OPEN piles only** (closed-block residue is resiko, not stock), so `avg_unit_cost_php_kg` — the **RC Inventory Price** — equals the Blocking header exactly (₱37.139967505327993986 over 10,527,344.00 kg / 170 blocks on 2026-09-01, was ₱36.2587 over 11,743,657.10 kg); 30 of 75 months moved, max ₱1.1158/kg; `valued_kg` + aging's `closed_residue_kg` = `positive_balance_kg` on 75/75 months (0.00 kg); the old figure survives as `all_positive_avg_unit_cost_php_kg`
