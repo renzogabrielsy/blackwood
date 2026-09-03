@@ -19,8 +19,11 @@
 // by `campaignSeq`. No SQL was written for this round.
 //
 // ── WHAT IT KEEPS, DELIBERATELY ──────────────────────────────────────────────
-//   • the `Batches` checklist (`?bhide=`), which now drives the table and the
-//     grade mix — two consumers instead of three, one control;
+//   • the `?bhide=` selection, which drives the table and the grade mix — two
+//     consumers, one set. **R8 split the CONTROL over it in two** (a Year
+//     dropdown and a batch-NAME dropdown) without touching the set: thirty-two
+//     lines in one list is a wall, and the two questions a reader actually asks
+//     are "just 2026" and "every January". See the derivation below;
 //   • the `Blocks closed / priced` coverage line, as a footer ROW rather than a
 //     rail, because it is the sentence a blank true price owes its reader and a
 //     reader must not have to open anything to see it;
@@ -53,6 +56,16 @@ import {
   type CampaignMatrixRow,
 } from "@/lib/analytics/campaign-matrix";
 import { campaignKey, campaignMonthKeys } from "@/lib/analytics/campaign";
+import {
+  applyNameSelection,
+  applyYearSelection,
+  groupCampaignNames,
+  groupCampaignYears,
+  hiddenNameKeys,
+  hiddenYearKeys,
+  shownYearSet,
+  yearKey,
+} from "@/lib/analytics/campaign-selection";
 import { buildGradeSet, PRODUCTION_DICTIONARY } from "@/lib/analytics/production";
 import type {
   ProductionBatchRow,
@@ -176,33 +189,106 @@ export function CampaignRoom({
   );
 
   /**
-   * The checklist's options — `campaigns` in PAYLOAD ORDER, and that is the
-   * whole sorting story: the adapter already orders campaigns chronologically
-   * by the month their NAME spells (`campaignSeq`), so the list reads JAN → DEC
-   * within each year and matches the columns beside it exactly. Alphabetical —
-   * APRIL, AUGUST, DECEMBER — is the obvious bug and is unrepresentable here,
-   * because nothing in this component re-derives an order.
+   * ── R8 — TWO DROPDOWNS OVER ONE SELECTION ──────────────────────────────
+   *
+   * Renzo, 2026-09-03: *"I'd rather be able to see all the batches within a
+   * year type of thing."* Thirty-two lines in one list is a wall, and the
+   * thing a reader actually wants to say is either "just 2026" or "every
+   * January". So the control is split — a YEAR list and a BATCH-NAME list —
+   * while the SELECTION is not: `?bhide=` still holds `campaignLabel` keys,
+   * still drives the table, the grade mix and the group print from one set,
+   * and `period-selection.ts` is untouched. Both lists are DERIVED from that
+   * set on every render, which is why they cannot drift from the columns.
+   *
+   * Neither list splits a label apart to find a year: `productionBatch` and
+   * `campaignYear` arrive as separate columns and are read as they are.
+   *
+   * The name list is scoped to the years currently on screen — that IS the
+   * feature. Untick 2024 and the batches it alone contained leave the second
+   * list rather than sitting there toggling a column nobody can see.
    */
-  const options = React.useMemo<PeriodFilterOption[]>(
+  const yearGroups = React.useMemo(
+    () => groupCampaignYears(campaigns, hidden),
+    [campaigns, hidden],
+  );
+  const shownYears = React.useMemo(() => shownYearSet(yearGroups), [yearGroups]);
+  const nameGroups = React.useMemo(
+    () => groupCampaignNames(campaigns, hidden, shownYears),
+    [campaigns, hidden, shownYears],
+  );
+  const hiddenYears = React.useMemo(() => hiddenYearKeys(yearGroups), [yearGroups]);
+  const hiddenNames = React.useMemo(() => hiddenNameKeys(nameGroups), [nameGroups]);
+
+  const onYearChange = React.useCallback(
+    (next: Set<string>) =>
+      onHiddenChange(applyYearSelection(yearGroups, hidden, next)),
+    [yearGroups, hidden, onHiddenChange],
+  );
+  const onNameChange = React.useCallback(
+    (next: Set<string>) =>
+      onHiddenChange(applyNameSelection(nameGroups, hidden, next)),
+    [nameGroups, hidden, onHiddenChange],
+  );
+
+  const yearOptions = React.useMemo<PeriodFilterOption[]>(
     () =>
-      campaigns.map((r) => {
-        const c = r.cost;
-        const months = c ? campaignMonthKeys(c) : [];
+      yearGroups.map((y) => {
+        const total = y.campaigns.length;
+        const partial = y.shownCount > 0 && y.shownCount < total;
         return {
-          key: campaignKey(r),
-          label: r.campaignLabel,
-          meta: c?.lastFedDate ? c.lastFedDate.slice(5) : "not fed",
-          empty: c?.fedKg == null,
+          key: yearKey(y.id),
+          label: String(y.id),
+          meta: partial ? `${y.shownCount}/${total}` : `${total}`,
+          // Nothing in the whole year ever fed the plant — rendered quieter,
+          // still toggleable, exactly as a never-fed campaign was before.
+          empty: y.campaigns.every((c) => c.cost?.fedKg == null),
           title:
-            `${r.campaignLabel} — ${
-              c?.firstFedDate && c?.lastFedDate
-                ? `fed ${c.firstFedDate} → ${c.lastFedDate}`
-                : "no feeding recorded yet"
-            }. Covers ${months.length} calendar month${months.length === 1 ? "" : "s"}` +
-            `${months.length ? ` (${months.join(", ")})` : ""} — unticking it removes this column from the table and from the grade mix below.`,
+            `${y.id} — ${total} production batch${total === 1 ? "" : "es"}: ` +
+            `${y.campaigns.map((c) => c.productionBatch).join(", ")}. ` +
+            "Unticking it removes every one of those columns from the table and " +
+            "from the grade mix below, and drops its batches from the Batches " +
+            "list beside it; ticking it back returns the year whole.",
         };
       }),
-    [campaigns],
+    [yearGroups],
+  );
+
+  /**
+   * The BATCH list. One line per NAME, sorted by the month that name spells
+   * (`campaignSeq` — the one definition), so it reads JANUARY → DECEMBER and
+   * alphabetical (APRIL, AUGUST, DECEMBER) stays unrepresentable here.
+   */
+  const batchOptions = React.useMemo<PeriodFilterOption[]>(
+    () =>
+      nameGroups.map((n) => {
+        const total = n.campaigns.length;
+        const partial = n.shownCount > 0 && n.shownCount < total;
+        const only = total === 1 ? n.campaigns[0] : null;
+        const months = only?.cost ? campaignMonthKeys(only.cost) : [];
+        return {
+          key: n.id,
+          label: n.id,
+          meta: partial
+            ? `${n.shownCount}/${total}`
+            : only
+              ? String(only.campaignYear)
+              : `×${total}`,
+          empty: n.campaigns.every((c) => c.cost?.fedKg == null),
+          title: only
+            ? `${only.campaignLabel} — ${
+                only.cost?.firstFedDate && only.cost?.lastFedDate
+                  ? `fed ${only.cost.firstFedDate} → ${only.cost.lastFedDate}`
+                  : "no feeding recorded yet"
+              }. Covers ${months.length} calendar month${months.length === 1 ? "" : "s"}` +
+              `${months.length ? ` (${months.join(", ")})` : ""} — unticking it ` +
+              "removes this column from the table and from the grade mix below."
+            : `${n.id} ran in ${n.campaigns
+                .map((c) => c.campaignYear)
+                .join(", ")}. Ticking or unticking it toggles all ${total} of ` +
+              "those columns at once; years switched off above are not touched.",
+        };
+      }),
+    [nameGroups],
   );
 
   const shown = React.useMemo(
@@ -407,6 +493,9 @@ export function CampaignRoom({
                   <strong className="font-medium text-foreground">
                     Filtered to {summary.shownCount} of {campaigns.length}{" "}
                     batches
+                    {shownYears.size < yearGroups.length
+                      ? ` across ${shownYears.size} of ${yearGroups.length} years`
+                      : ""}
                   </strong>{" "}
                   — the grade mix below follows the same selection.
                 </>
@@ -425,25 +514,46 @@ export function CampaignRoom({
             </span>
           </p>
         </div>
-        {/* ── The group's own controls ─────────────────────────────────── */}
+        {/* ── The group's own controls ───────────────────────────────────
+            R8 — TWO dropdowns, ONE selection. Year narrows the batch list
+            beside it; both write the same `?bhide=` set of campaign labels. */}
+        {/* `min-w-0` and NOT `shrink-0`: with two triggers plus the count
+            sentence, a non-shrinking control block is wider than a 375 px
+            screen and pushes the DOCUMENT into horizontal overflow — the one
+            thing every table on this page is built to avoid. Shrinkable, its
+            own `flex-wrap` puts the sentence on its own line instead. */}
         <span
-          className="flex shrink-0 flex-wrap items-center justify-end gap-1.5"
+          className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1.5"
           data-print-hide
         >
           <span className="text-[length:var(--bw-fs-115)] text-muted-foreground">
             {filtered
-              ? `${summary.shownCount} of ${campaigns.length} batches`
-              : `${campaigns.length} campaigns · scroll left for older`}
+              ? `${
+                  shownYears.size < yearGroups.length
+                    ? `${shownYears.size} of ${yearGroups.length} years · `
+                    : ""
+                }${summary.shownCount} of ${campaigns.length} batches`
+              : `${yearGroups.length} years · ${campaigns.length} campaigns · scroll left for older`}
           </span>
+          <PeriodFilter
+            label="Year"
+            noun="year"
+            nounPlural="years"
+            align="end"
+            options={yearOptions}
+            hidden={hiddenYears}
+            onChange={onYearChange}
+            title="Choose which campaign years this table shows. Everything is on by default. A year is a shorthand for every batch inside it — unticking one removes all of its columns and drops its batches from the Batches list beside this one; ticking it back returns the year whole."
+          />
           <PeriodFilter
             label="Batches"
             noun="batch"
             nounPlural="batches"
             align="end"
-            options={options}
-            hidden={hidden}
-            onChange={onHiddenChange}
-            title="Choose which production batches this table shows. Everything is on by default and the list is in the batches' own chronological order — January to December within each year, taken from the month each batch is NAMED for, never alphabetically. It also narrows the grade mix below."
+            options={batchOptions}
+            hidden={hiddenNames}
+            onChange={onNameChange}
+            title="Choose which production batches this table shows, by NAME — the list is January to December in the batches' own chronological order, never alphabetically, and it holds only the names that exist inside the years selected beside it. A name that ran in more than one selected year toggles every one of those columns at once. It also narrows the grade mix below."
           />
         </span>
       </header>
