@@ -366,6 +366,19 @@ export interface HistoryPoint {
    * that drifts the day a key format changes.
    */
   year: number;
+  /**
+   * R9 — the point's POSITION WITHIN ITS YEAR, carried straight off
+   * `Period.seq`: 1–12 at month granularity, 1–4 at quarter, and on the batch
+   * clock the month index of the campaign's NAME (99 when the name is not one
+   * of the twelve).
+   *
+   * It exists for the same reason `year` above does. The year-overlay chart
+   * places a point on a fixed JAN…DEC / Q1…Q4 axis, and deriving "which month
+   * is this" by slicing `periodKey` would be a second definition of a fact the
+   * period already states — the exact drift this field's neighbour was added
+   * to prevent.
+   */
+  seq: number;
   value: number | null;
   isPartial: boolean;
   /** Trailing 3-period mean. Presentation smoothing only; null at YEAR granularity. */
@@ -891,6 +904,7 @@ export function assembleMatrix<U>(
       label: pointLabel(p),
       fullLabel: p.fullLabel,
       year: p.year,
+      seq: p.seq,
       value: values[i],
       isPartial: p.isPartial,
       avg: rollingWindow > 0 ? rollingMean(values, i, rollingWindow) : null,
@@ -955,6 +969,7 @@ export function assembleMatrix<U>(
               label: pointLabel(p),
               fullLabel: p.fullLabel,
               year: p.year,
+              seq: p.seq,
               value: raw.value,
               isPartial: p.isPartial,
               avg: null,

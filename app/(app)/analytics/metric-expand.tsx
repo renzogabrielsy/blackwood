@@ -133,6 +133,16 @@ import type { MetricSpecOf } from "@/lib/analytics/metrics";
 type AnySpec = MetricSpecOf<never>;
 import { PeriodFilter, type PeriodFilterOption } from "./period-filter";
 import { NO_HIDDEN } from "@/lib/analytics/period-selection";
+import {
+  buildYearOverlay,
+  resolveYearStyle,
+  slotKeyForPoint,
+  type OverlayClock,
+  type OverlayPoint,
+  type YearStyleMap,
+} from "@/lib/analytics/year-overlay";
+import { useYearStyles } from "./use-year-styles";
+import { StrokePreview, YearStyleMenu } from "./year-style-menu";
 
 // R3: a CSS variable, not a number. The expand chart is the "see things
 // clearer" payload, so it grows 260 -> 340 px above 1920 px — and because
@@ -611,6 +621,462 @@ function MetricTrendChart({
           )}
         </ComposedChart>
       </ResponsiveContainer>
+    </div>
+  );
+}
+
+/**
+ * What the batch clock needs that a `HistoryPoint` cannot carry: the campaign's
+ * own NAME (`AUGUST`, `SRC`) and the day it started producing. Supplied by the
+ * room that owns the clock — see `campaign-room.tsx` — because the expand is
+ * deliberately clock-agnostic (R6) and must not learn to read a campaign row.
+ */
+export interface CampaignSlotMeta {
+  name: string;
+  startDate: string | null;
+}
+
+/**
+ * ══ OWNER FEEDBACK R9 — ONE SERIES PER YEAR ON A FIXED AXIS ════════════════
+ *
+ * Renzo: *"instead of making it a long chart that encompasses multiple years,
+ * you could have each year be represented by a line — solid line, dotted, area
+ * line, etc of differing colors … and have the axes be set to just January to
+ * December, Q1 to Q4 and batches to be JANUARY to DECEMBER."*
+ *
+ * The X axis stops being TIME and becomes POSITION-IN-THE-YEAR; the year moves
+ * out of the axis and into the series. Six years of months was 75 ticks reading
+ * left to right, which answers "what happened" and cannot answer "is this
+ * August better than last August" — the question a month-on-month room exists
+ * for. Twelve ticks with a line per year answers it by construction.
+ *
+ * ── FOUR DECISIONS WORTH KNOWING ────────────────────────────────────────────
+ *
+ * **1. Every series is a LINE here, even on a row whose spec says `bar`.**
+ * Three years × twelve slots is thirty-six grouped bars in a 260 px box; the
+ * spec's `chart` field still governs the AXIS DOMAIN (a bar-shaped row keeps
+ * its zero floor, because a tonnage is read as a length from zero whichever
+ * mark draws it), so nothing about magnitude changes — only the mark.
+ *
+ * **2. The companion lines, the trailing average and the price overlay draw
+ * only when exactly ONE year is on.** Multiplying each of them by the number of
+ * overlaid years is where this chart would become unreadable, and none of them
+ * is the comparison a reader switched years on to make. The card says so in one
+ * line rather than leaving them silently absent.
+ *
+ * **3. Placement is `lib/analytics/year-overlay.ts` and nothing else.** This
+ * component never decides where a point goes, never sums two points into a
+ * slot, and never fills a missing slot with a zero. A slot a year has no figure
+ * for is `null`, so the line breaks there exactly as the long chart broke at a
+ * month nothing was recorded in.
+ *
+ * **4. Identity is never colour alone.** Every year carries a distinct stroke
+ * as well as a distinct hue (three light-mode palette slots sit under 3:1
+ * against the page, which obliges exactly this relief), and the legend spells
+ * the year out beside the stroke it draws — which is also what keeps the
+ * printed, colourless sheet readable.
+ */
+function YearOverlayChart({
+  spec,
+  clock,
+  history,
+  pairHistories,
+  overlay,
+  campaignMeta,
+  styles,
+  hiddenYears,
+  onToggleYear,
+  showAvg,
+  avgDrawable,
+  emptyText,
+}: {
+  spec: AnySpec;
+  clock: OverlayClock;
+  /** Already narrowed to the years the reader left switched on. */
+  history: readonly HistoryPoint[];
+  pairHistories: readonly (readonly HistoryPoint[])[] | null;
+  overlay: { spec: AnySpec; history: readonly HistoryPoint[] } | null;
+  campaignMeta?: ReadonlyMap<string, CampaignSlotMeta>;
+  styles: YearStyleMap;
+  hiddenYears: ReadonlySet<string>;
+  /** The legend is a second door onto the `Years` checklist, not a second set. */
+  onToggleYear(year: number): void;
+  showAvg: boolean;
+  /** Companions are drawn — true only while exactly one year is overlaid. */
+  avgDrawable: boolean;
+  emptyText?: string;
+}) {
+  const tip = drilldownTooltipChrome();
+  const unit = unitSuffix(spec.unit);
+  const noun = bucketNounFor(clock);
+  const avgLabel = `3-${noun} avg`;
+  const gradientPrefix = React.useId().replace(/:/g, "");
+
+  const slotOf = React.useCallback(
+    (h: HistoryPoint) =>
+      slotKeyForPoint(clock, {
+        seq: h.seq,
+        name: campaignMeta?.get(h.periodKey)?.name ?? null,
+      }),
+    [clock, campaignMeta],
+  );
+
+  const fold = React.useMemo(() => {
+    const points: OverlayPoint[] = history.map((h) => {
+      const meta = campaignMeta?.get(h.periodKey);
+      return {
+        periodKey: h.periodKey,
+        year: h.year,
+        seq: h.seq,
+        value: h.value,
+        fullLabel: h.fullLabel,
+        name: meta?.name ?? null,
+        startDate: meta?.startDate ?? null,
+      };
+    });
+    return buildYearOverlay(clock, points);
+  }, [history, clock, campaignMeta]);
+
+  const pairs = (spec.pairs ?? []).map((p, i) => ({
+    ...p,
+    dataKey: `pair${i}`,
+    history: pairHistories?.[i] ?? [],
+  }));
+
+  /**
+   * The recharts rows: the fold's own placement, plus — only in the single-year
+   * case — the companion series merged in by slot. They ride on the SAME row
+   * objects so every mark shares one axis; two charts side by side would hide
+   * the gap that IS the fact.
+   */
+  const data = React.useMemo(() => {
+    const rows = fold.rows.map((r) => ({ ...r }));
+    if (!avgDrawable) return rows;
+    const byKey = new Map(rows.map((r) => [r.slotKey, r] as const));
+    if (showAvg) {
+      for (const h of history) {
+        const k = slotOf(h);
+        const row = k ? byKey.get(k) : undefined;
+        if (row) row.avg = h.avg;
+      }
+    }
+    pairs.forEach((p) => {
+      for (const h of p.history) {
+        const k = slotOf(h);
+        const row = k ? byKey.get(k) : undefined;
+        if (row) row[p.dataKey] = h.value;
+      }
+    });
+    if (overlay) {
+      for (const h of overlay.history) {
+        const k = slotOf(h);
+        const row = k ? byKey.get(k) : undefined;
+        if (row) row.overlay = h.value;
+      }
+    }
+    return rows;
+  }, [fold.rows, avgDrawable, showAvg, history, pairs, overlay, slotOf]);
+
+  const resolved = fold.series.map((s) => ({
+    ...s,
+    ...resolveYearStyle(s.year, styles),
+  }));
+
+  const values = data.flatMap((r) =>
+    [
+      ...fold.series.map((s) => r[s.dataKey]),
+      ...pairs.map((p) => r[p.dataKey]),
+    ].filter((v): v is number => typeof v === "number"),
+  );
+  const overlayValues = data
+    .map((r) => r.overlay)
+    .filter((v): v is number => typeof v === "number");
+
+  if (values.length === 0) {
+    return (
+      <p className="px-3 py-12 text-center text-[length:var(--bw-fs-12)] leading-[var(--bw-lh-xs)] text-muted-foreground">
+        {emptyText ?? "Nothing recorded for this metric yet."}
+      </p>
+    );
+  }
+
+  const crossesZero = values.some((v) => v < 0);
+  // Unchanged from the long chart, and deliberately still keyed on `spec.chart`
+  // rather than on the mark this component draws: a row whose figure is read as
+  // a length from zero keeps its zero floor even though it is now a line.
+  const domain: [number | string, number | string] =
+    spec.chart === "line"
+      ? (paddedDomain(values) ?? ["auto", "auto"])
+      : [crossesZero ? "auto" : 0, "auto"];
+
+  const yearOf = new Map(resolved.map((r) => [String(r.year), r] as const));
+  const pairByDataKey = new Map(pairs.map((p) => [p.dataKey, p] as const));
+
+  /**
+   * The legend, written by hand for two reasons recharts' own cannot serve: its
+   * built-in swatch does not carry a `stroke-dasharray`, so a printed sheet
+   * would lose the one encoding that survives without colour; and each entry is
+   * a real button that switches its year off, which is the second door onto the
+   * `Years` checklist Renzo asked for. It is NOT a second selection — it writes
+   * the same hidden set.
+   */
+  const legend = (
+    <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 px-1 pt-1">
+      {resolved.map((r) => (
+        <button
+          key={r.year}
+          type="button"
+          role="checkbox"
+          aria-checked={!hiddenYears.has(String(r.year))}
+          onClick={() => onToggleYear(r.year)}
+          title={`${r.year} — ${r.withValue} ${r.withValue === 1 ? noun : bucketPluralFor(clock)} with a figure. Click to switch this year off; the Years filter puts it back.`}
+          className="inline-flex cursor-pointer items-center gap-1.5 rounded px-1 py-0.5 text-[length:var(--bw-fs-11)] leading-[var(--bw-lh-xs)] text-muted-foreground transition-colors duration-150 hover:bg-muted/60 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <StrokePreview color={r.color} style={r.style} width={18} />
+          <span className="font-mono tabular-nums">{r.year}</span>
+        </button>
+      ))}
+      {avgDrawable && showAvg && canDrawAvg(spec, clock) && (
+        <span className="inline-flex items-center gap-1.5 px-1 py-0.5 text-[length:var(--bw-fs-11)] text-muted-foreground">
+          <StrokePreview color={spec.avgColor} style="solid" width={18} />
+          {avgLabel}
+        </span>
+      )}
+      {avgDrawable &&
+        pairs.map((p) => (
+          <span
+            key={p.dataKey}
+            className="inline-flex items-center gap-1.5 px-1 py-0.5 text-[length:var(--bw-fs-11)] text-muted-foreground"
+          >
+            <StrokePreview color={p.color} style="dashed" width={18} />
+            {p.label}
+          </span>
+        ))}
+      {avgDrawable && overlay && (
+        <span className="inline-flex items-center gap-1.5 px-1 py-0.5 text-[length:var(--bw-fs-11)] text-muted-foreground">
+          <StrokePreview color={overlay.spec.color} style="dashed" width={18} />
+          {overlay.spec.label} (right)
+        </span>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="flex w-full flex-col">
+      <div className="w-full" style={{ height: CHART_HEIGHT }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart
+            data={data}
+            // The RIGHT margin is the axis's last LABEL, not the plot. A tick is
+            // centred on its point, so half of `Dec` — and half of `DECEMBER` on
+            // the batch clock — hangs past the plot's right edge and is clipped
+            // by the SVG. Measured at 1512 px and at 375 px.
+            margin={{
+              top: 6,
+              right: clock === "B" ? 36 : 14,
+              bottom: 0,
+              left: clock === "B" ? 12 : 0,
+            }}
+          >
+            <defs>
+              {resolved
+                .filter((r) => r.style === "area")
+                .map((r) => (
+                  <linearGradient
+                    key={r.year}
+                    id={`${gradientPrefix}-${r.year}`}
+                    x1="0"
+                    y1="0"
+                    x2="0"
+                    y2="1"
+                  >
+                    <stop offset="0%" stopColor={r.color} stopOpacity={0.28} />
+                    <stop offset="100%" stopColor={r.color} stopOpacity={0.02} />
+                  </linearGradient>
+                ))}
+            </defs>
+            <CartesianGrid
+              stroke="var(--border)"
+              strokeOpacity={0.4}
+              vertical={false}
+            />
+            <XAxis
+              dataKey="label"
+              tick={DRILLDOWN_AXIS_TICK}
+              tickLine={false}
+              axisLine={{ stroke: "var(--border)" }}
+              // Twelve short ticks fit at every width the page supports — down
+              // to 375 px, measured — so the calendar clocks pin every one of
+              // them rather than letting the long chart's 75-month thinning
+              // rule drop labels that have room.
+              //
+              // The BATCH clock does not: its labels are whole month NAMES plus
+              // whatever a custom campaign is called, and pinning those on a
+              // phone would overlap them into mush. It keeps recharts' own
+              // width-aware thinning with the gap turned down as far as it goes,
+              // so it prints every label that fits and no more. A thinned tick
+              // still names itself in the tooltip.
+              interval={clock === "B" ? undefined : 0}
+              minTickGap={clock === "B" ? 4 : 0}
+            />
+            <YAxis
+              tick={DRILLDOWN_AXIS_TICK}
+              tickLine={false}
+              axisLine={false}
+              width={56}
+              domain={domain}
+              tickFormatter={(v: number) => fmtAxis(spec, v)}
+            />
+            {avgDrawable && overlay && (
+              <YAxis
+                yAxisId="overlay"
+                orientation="right"
+                tick={DRILLDOWN_AXIS_TICK}
+                tickLine={false}
+                axisLine={false}
+                width={52}
+                domain={paddedDomain(overlayValues) ?? ["auto", "auto"]}
+                tickFormatter={(v: number) => fmtAxis(overlay.spec, v)}
+              />
+            )}
+            <RTooltip
+              {...tip}
+              formatter={(value, name, item) => {
+                const key = String(name);
+                const year = yearOf.get(key);
+                if (year) {
+                  const row = item?.payload as Record<string, unknown> | undefined;
+                  const full = row?.[year.labelKey];
+                  return [
+                    value == null ? "—" : `${fmtExact(spec, Number(value))} ${unit}`,
+                    typeof full === "string" ? full : String(year.year),
+                  ];
+                }
+                if (key === "overlay") {
+                  return [
+                    value == null
+                      ? "—"
+                      : `${fmtExact(overlay!.spec, Number(value))} ${unitSuffix(overlay!.spec.unit)}`,
+                    overlay!.spec.label,
+                  ];
+                }
+                return [
+                  value == null ? "—" : `${fmtExact(spec, Number(value))} ${unit}`,
+                  key === "avg"
+                    ? avgLabel
+                    : (pairByDataKey.get(key)?.label ?? spec.label),
+                ];
+              }}
+              labelFormatter={(label, payload) =>
+                payload?.[0]?.payload?.fullLabel ?? label
+              }
+            />
+            {crossesZero && (
+              <ReferenceLine y={0} stroke="var(--border)" strokeWidth={1} />
+            )}
+            {/* Oldest first, so the newest year is drawn on top. */}
+            {resolved.map((r) =>
+              r.style === "area" ? (
+                <Area
+                  key={r.year}
+                  type="monotone"
+                  dataKey={r.dataKey}
+                  name={String(r.year)}
+                  stroke={r.color}
+                  strokeWidth={2}
+                  fill={`url(#${gradientPrefix}-${r.year})`}
+                  fillOpacity={1}
+                  dot={false}
+                  activeDot={{ r: 3.5 }}
+                  isAnimationActive={false}
+                  connectNulls={false}
+                />
+              ) : (
+                <Line
+                  key={r.year}
+                  type="monotone"
+                  dataKey={r.dataKey}
+                  name={String(r.year)}
+                  stroke={r.color}
+                  strokeWidth={2}
+                  strokeDasharray={r.dash}
+                  // A slot only one year carries would otherwise draw nothing at
+                  // all — a line needs two points, a dot needs none.
+                  dot={{ r: 2 }}
+                  activeDot={{ r: 3.5 }}
+                  isAnimationActive={false}
+                  connectNulls={false}
+                />
+              ),
+            )}
+            {avgDrawable &&
+              pairs.map((p) => (
+                <Line
+                  key={p.dataKey}
+                  type="monotone"
+                  dataKey={p.dataKey}
+                  name={p.dataKey}
+                  stroke={p.color}
+                  strokeWidth={1.75}
+                  strokeDasharray="4 3"
+                  dot={false}
+                  isAnimationActive={false}
+                  connectNulls={false}
+                />
+              ))}
+            {avgDrawable && showAvg && canDrawAvg(spec, clock) && (
+              <Line
+                type="monotone"
+                dataKey="avg"
+                name="avg"
+                stroke={spec.avgColor}
+                strokeWidth={2}
+                dot={false}
+                isAnimationActive={false}
+                connectNulls={false}
+              />
+            )}
+            {avgDrawable && overlay && (
+              <Line
+                yAxisId="overlay"
+                type="monotone"
+                dataKey="overlay"
+                name="overlay"
+                stroke={overlay.spec.color}
+                strokeWidth={2}
+                strokeDasharray="4 3"
+                dot={false}
+                isAnimationActive={false}
+                connectNulls={false}
+              />
+            )}
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+      {legend}
+      {/* A custom campaign the payload gives no start date for could not be
+          placed, so it is parked at the end rather than guessed into a month.
+          Said out loud, because a slot in an unexpected place with no
+          explanation is worse than no slot. */}
+      {fold.unplaced.length > 0 && (
+        <p className="px-1 pt-1 text-[length:var(--bw-fs-12)] leading-relaxed text-muted-foreground">
+          {fold.unplaced.join(", ")}{" "}
+          {fold.unplaced.length === 1 ? "carries" : "carry"} no start date, so{" "}
+          {fold.unplaced.length === 1 ? "it sits" : "they sit"} at the end of the
+          axis rather than being guessed into a month.
+        </p>
+      )}
+      {/* Measured 0 in every case on record; reported rather than assumed away,
+          because two figures quietly becoming one is the failure this whole
+          page is built against. */}
+      {fold.collisions.length > 0 && (
+        <p className="px-1 pt-1 text-[length:var(--bw-fs-12)] leading-relaxed text-amber-600 dark:text-amber-400">
+          {fold.collisions.length} figure
+          {fold.collisions.length === 1 ? "" : "s"} share a slot with another in
+          the same year and {fold.collisions.length === 1 ? "is" : "are"} not
+          drawn. Nothing was added together — the first is shown.
+        </p>
+      )}
     </div>
   );
 }
@@ -1100,6 +1566,16 @@ export interface MetricExpandProps<U> {
    * reader may not have.
    */
   priceOverlay?: MatrixRow<U> | null;
+  /**
+   * R9 — the batch clock's own slot facts, per period key: the campaign's NAME
+   * and the day it started producing.
+   *
+   * Supplied by the room that owns the clock rather than read off a unit here,
+   * because R6 made this card clock-agnostic on purpose and a `CampaignMatrixRow`
+   * import would undo that. Absent on the calendar clock, where a month's
+   * position in its year is `HistoryPoint.seq` and nothing else is needed.
+   */
+  campaignMeta?: ReadonlyMap<string, CampaignSlotMeta>;
   onClose(): void;
 }
 
@@ -1117,6 +1593,7 @@ export function MetricExpand<U>({
   asOfDate,
   showDictionary,
   priceOverlay,
+  campaignMeta,
   onClose,
 }: MetricExpandProps<U>) {
   const spec = row.metric;
@@ -1189,7 +1666,15 @@ export function MetricExpand<U>({
   // an address someone might share. The card is keyed by metric at both call
   // sites, so opening a different row starts with the line drawn again.
   const [showAvg, setShowAvg] = React.useState(true);
-  const avgAvailable = canDrawAvg(spec, granularity);
+
+  // ── THE YEAR OVERLAY (owner feedback R9) ────────────────────────────────
+  // The clock decides whether an overlay is even a question. `Y` is excluded
+  // structurally rather than by a flag: at year granularity a year IS one
+  // point, so "a series per year" is a scatter of single dots where the line it
+  // would replace was already the answer. The card says so beside the control.
+  const overlayClock: OverlayClock | null =
+    granularity === "Y" ? null : granularity;
+  const yearStyles = useYearStyles();
 
   /**
    * One line per year this row's history spans, carrying how much of that year
@@ -1224,6 +1709,43 @@ export function MetricExpand<U>({
 
   const shownYearCount = yearOptions.filter((o) => !hiddenYears.has(o.key)).length;
   const selectedSuffix = isFiltered ? " · selected" : "";
+
+  /** The overlaid years, ascending — the legend's order and the draw order. */
+  const shownYears = React.useMemo(
+    () =>
+      yearOptions
+        .filter((o) => !hiddenYears.has(o.key))
+        .map((o) => Number(o.key))
+        .sort((a, b) => a - b),
+    [yearOptions, hiddenYears],
+  );
+  /**
+   * The companion rule, in ONE place. Two or more overlaid years multiply every
+   * companion line by the number of years, and none of them is the comparison a
+   * reader switched years on to make — so the pairs, the trailing average and
+   * the price overlay draw only on a single year. The card says so out loud
+   * rather than leaving them silently missing, and their CONTROLS are not
+   * rendered while they cannot draw (R3's rule: a switch for a line that cannot
+   * exist is a control that lies about what the page can do).
+   */
+  const companionsDrawn = overlayClock == null || shownYears.length <= 1;
+  const avgAvailable = canDrawAvg(spec, granularity) && companionsDrawn;
+  /** Named, so the sentence lists what is missing instead of "some lines". */
+  const heldBack = [
+    ...(spec.pairs ?? []).map((p) => p.label),
+    ...(canDrawAvg(spec, granularity) && showAvg ? [`the 3-${noun} average`] : []),
+    ...(overlayRow && showOverlay ? [overlayRow.metric.label] : []),
+  ];
+  const toggleYear = React.useCallback(
+    (year: number) => {
+      const key = String(year);
+      const next = new Set(hiddenYears);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      setHiddenYears(next);
+    },
+    [hiddenYears],
+  );
 
   const rollWindow = rollingWindowFor(granularity);
 
@@ -1367,12 +1889,32 @@ export function MetricExpand<U>({
     [view.history],
   );
 
-  /** What the chart card's own header says it is drawing. */
-  const chartSubtitle = isFiltered
-    ? `${withValue} ${nouns} with a figure · ${shownYearCount}/${yearOptions.length} years`
-    : granularity === "Y"
-      ? `${withValue} ${nouns} with a figure`
-      : `${withValue} ${nouns} with a figure · shaded band is the window above`;
+  /**
+   * What the chart card's own header says it is drawing.
+   *
+   * R9 — on an overlay clock the axis is the year's own shape and the series
+   * ARE the years, so the subtitle names the axis rather than the shaded window
+   * band (which the overlay chart has no use for: every year occupies the same
+   * twelve slots, so there is no "window" to shade inside them).
+   */
+  const axisNote =
+    overlayClock === "M"
+      ? "Jan–Dec axis"
+      : overlayClock === "Q"
+        ? "Q1–Q4 axis"
+        : overlayClock === "B"
+          ? "JANUARY–DECEMBER axis"
+          : null;
+  const chartSubtitle = axisNote
+    ? // Terse on purpose. The header's right-hand span does not wrap (it is the
+      // shared drill-down chassis'), so this line now shares it with a third
+      // control — measured at 375 px, the long form pushed the buttons past the
+      // card. What it drops is said in full by the controls' own hovers and by
+      // the note under the chart.
+      `${axisNote} · ${shownYearCount}/${yearOptions.length} years · ${withValue} ${nouns}`
+    : isFiltered
+      ? `${withValue} ${nouns} with a figure · ${shownYearCount}/${yearOptions.length} years`
+      : `${withValue} ${nouns} with a figure`;
 
   /** The years, spelled out — for the printed sheet and the card's own note. */
   const selectedYearsNote = isFiltered
@@ -1530,9 +2072,11 @@ export function MetricExpand<U>({
             <DrilldownSection
               className="print:break-inside-avoid"
               title={
-                isFiltered
-                  ? `${spec.label} — the years you chose`
-                  : `${spec.label} — every ${noun} on record`
+                overlayClock
+                  ? `${spec.label} — one line per year`
+                  : isFiltered
+                    ? `${spec.label} — the years you chose`
+                    : `${spec.label} — every ${noun} on record`
               }
               subtitle={chartSubtitle}
               action={
@@ -1541,7 +2085,7 @@ export function MetricExpand<U>({
                   {/* R4 — the price overlay. Purchase volume only, default
                       OFF, and absent entirely for a role that may not see a
                       peso (see `priceOverlay` on the props). */}
-                  {overlayRow && (
+                  {overlayRow && companionsDrawn && (
                     <ChartToggle
                       on={showOverlay}
                       onChange={setShowOverlay}
@@ -1570,6 +2114,21 @@ export function MetricExpand<U>({
                       }
                     />
                   )}
+                  {/* R9 — the reader's own colour and stroke per year. Only
+                      where an overlay is drawn at all: at YEAR granularity
+                      there is one series and it wears the metric's own colour,
+                      so a year palette would govern nothing. */}
+                  {overlayClock && (
+                    <YearStyleMenu
+                      years={shownYears}
+                      styles={yearStyles.styles}
+                      onColor={yearStyles.setColor}
+                      onStyle={yearStyles.setStyle}
+                      onResetYear={yearStyles.resetYear}
+                      onResetAll={yearStyles.resetAll}
+                      customised={yearStyles.customised}
+                    />
+                  )}
                   <PeriodFilter
                     label="Years"
                     noun="year"
@@ -1586,23 +2145,64 @@ export function MetricExpand<U>({
               }
               bodyClassName="p-2 pb-1"
             >
-              <MetricTrendChart
-                spec={spec}
-                history={view.history}
-                pairHistories={view.pairs}
-                overlay={
-                  overlayRow && showOverlay && view.overlay
-                    ? { spec: overlayRow.metric, history: view.overlay }
-                    : null
-                }
-                granularity={granularity}
-                showAvg={showAvg}
-                emptyText={
-                  isFiltered
-                    ? "Every year is switched off. Open the Years filter and turn one back on — nothing has been discarded."
-                    : undefined
-                }
-              />
+              {overlayClock ? (
+                <YearOverlayChart
+                  spec={spec}
+                  clock={overlayClock}
+                  history={view.history}
+                  pairHistories={view.pairs}
+                  overlay={
+                    overlayRow && showOverlay && view.overlay && companionsDrawn
+                      ? { spec: overlayRow.metric, history: view.overlay }
+                      : null
+                  }
+                  campaignMeta={campaignMeta}
+                  styles={yearStyles.styles}
+                  hiddenYears={hiddenYears}
+                  onToggleYear={toggleYear}
+                  showAvg={showAvg}
+                  avgDrawable={companionsDrawn}
+                  emptyText={
+                    isFiltered
+                      ? "Every year is switched off. Open the Years filter and turn one back on — nothing has been discarded."
+                      : undefined
+                  }
+                />
+              ) : (
+                <MetricTrendChart
+                  spec={spec}
+                  history={view.history}
+                  pairHistories={view.pairs}
+                  overlay={
+                    overlayRow && showOverlay && view.overlay
+                      ? { spec: overlayRow.metric, history: view.overlay }
+                      : null
+                  }
+                  granularity={granularity}
+                  showAvg={showAvg}
+                  emptyText={
+                    isFiltered
+                      ? "Every year is switched off. Open the Years filter and turn one back on — nothing has been discarded."
+                      : undefined
+                  }
+                />
+              )}
+              {/* R9 — the companions are HELD BACK, not missing. Overlaying a
+                  dashed comparison line, a trailing mean and a secondary-axis
+                  price once per year is four times the ink for none of the
+                  comparison the reader switched years on to make. */}
+              {overlayClock && !companionsDrawn && heldBack.length > 0 && (
+                <p className="px-1 pb-1 pt-1.5 text-[length:var(--bw-fs-12)] leading-relaxed text-muted-foreground">
+                  {shownYears.length} years are overlaid, so{" "}
+                  <span className="font-medium text-foreground">
+                    {heldBack.join(", ")}
+                  </span>{" "}
+                  {heldBack.length === 1 ? "is" : "are"} held back — one per
+                  year would be {shownYears.length} more lines on the same axis.
+                  Show a single year to bring{" "}
+                  {heldBack.length === 1 ? "it" : "them"} back.
+                </p>
+              )}
               {/* R7 — one paragraph for however many companion lines the row
                   declares. A pair with an empty note contributes nothing, so a
                   two-line row can explain both in one sentence rather than in

@@ -1737,3 +1737,81 @@ share. The denominator is now `openKg`, which is the matching one: the migration
 `valued_kg = open_kg` on 75 of 75 months. The two prose surfaces that disclosed the old gap
 (the dictionary caveat and the rail's second bullet) now state the shared population
 instead.
+
+---
+
+## 15. OWNER FEEDBACK ROUND 9 — 2026-09-03 (YEAR OVERLAY CHARTS)
+
+**Renzo, verbatim:** *"For all dropdown charts, instead of making it a long chart that
+encompasses multiple years, you could have each year be represented by a line — solid line,
+dotted, area line, etc of differing colors (which we can also customize and set) — and have
+the axes be set to just January to December, Q1 to Q4 and batches to be JANUARY to DECEMBER.
+If we have a custom batch name that isn't a month (this is for production batches), then it
+should be chronologically placed within its production date month. So for example in AUGUST
+2026 BATCH, if I have a custom batch called SRC for example, then SRC axis should be placed
+after AUGUST location since its production date is August. All theoretical but best to be
+prepared."*
+
+**The change in one sentence: the expand chart's X axis stops being TIME and becomes
+POSITION-IN-THE-YEAR, and the year moves out of the axis and into the series.** Six years of
+months was 75 ticks reading left to right — an axis that answers *what happened* and cannot
+answer *is this August better than last August*, which is the question a month-on-month room
+exists for.
+
+### What shipped
+
+- **`lib/analytics/year-overlay.ts`** — the pure placement module: fixed slots per clock
+  (Jan…Dec · Q1…Q4 · JANUARY…DECEMBER + customs), the custom-campaign rule, the per-year
+  fold, and the year palette (colour + stroke, both pure functions of the year).
+- **`scripts/verify-year-overlay.ts`** — 20 framework-free assertions.
+- **`YearOverlayChart`** in `metric-expand.tsx`, mounted for `M` / `Q` / `B`. The long chart
+  (`MetricTrendChart`) is untouched and is what `Y` still renders.
+- **A `Style` popover** (`year-style-menu.tsx` + `use-year-styles.ts`) — colour and stroke
+  per year, persisted under `bw.analytics.yearstyle.v1`, page-wide.
+- **`--bw-year-1 … 8`** in `globals.css`, both themes.
+
+### The decisions worth recording
+
+1. **`Y` granularity is excluded structurally, not by a flag.** A year is one point there,
+   so "a series per year" is a scatter of single dots where the line it replaces was already
+   the answer. Keeping the old component for that path means the `Y` view carries zero
+   regression risk.
+2. **Every series is a LINE in overlay mode, even on a row whose spec says `bar`.** Three
+   years × twelve slots is thirty-six grouped bars in a 260 px box. `spec.chart` still
+   governs the AXIS DOMAIN (a bar-shaped row keeps its zero floor), so nothing about
+   magnitude changed — only the mark.
+3. **The companions draw only on a single year.** Pairs, the trailing average and the R4
+   price overlay are each multiplied by the year count otherwise. Their controls are not
+   rendered while they cannot draw, and the card prints one line naming what is held back.
+   This also removes the dual-axis chart in every multi-year state, which the data-viz
+   guidance calls the single most common chart mistake.
+4. **The custom-campaign rule refuses to guess three things.** The NAME wins for a
+   month-named campaign (AUGUST 2026 stays in AUGUST even if it started in September); a
+   custom name with no start date is parked at the end and FLAGGED rather than inferred into
+   a month; two customs in one month order by start date then by name, a total order, so the
+   axis is stable. The start date is `first_reported_date` (falling back to
+   `first_fed_date`) — already on the wire, so **no query changed**.
+5. **The placement module never aggregates.** A slot receiving two points for one year keeps
+   the first and REPORTS the collision; a missing point is `null`, never `0`. That line is
+   where every previous round's arithmetic bug lived.
+6. **The palette was validated, not chosen** — light worst-adjacent CVD ΔE 9.1 /
+   normal-vision 19.6; dark 8.4 / 19.3; both inside their mode's lightness band and over the
+   chroma floor. Three light slots fall under 3:1, which obliges relief: the legend always
+   names the year, and every year carries a distinct dash as well as a distinct hue — which
+   is also what keeps the (already landscape) printed sheet readable in mono. Colour and
+   stroke are pure functions of the year, anchored at 2024, so a filtered-out year never
+   repaints the survivors and the same year is the same colour in every expand.
+7. **One platform line changed.** `DrilldownSection`'s header now wraps; it was a single
+   non-shrinking row, and a third control took 375 px to 212 px of document overflow.
+   Wrapping costs a card with room nothing and takes it to 0 px. No tenant knowledge added.
+
+### Not done, and why
+
+The **supplier** and **grade** expands are untouched: the supplier room plots one supplier
+inside one calendar year (it follows the year picker, deliberately not the Y/Q/M toggle) and
+the grade expand plots a grade across the production BATCHES it was run in, not across a
+repeating annual axis. Neither has a second year to overlay.
+
+**Gates:** `tsc --noEmit` clean · `npm run lint` 146 / 16 (baseline, unmoved) ·
+`npm run build` clean · `verify-year-overlay` 20 · `verify-table-core` 84 ·
+`verify-campaign-selection` 11 · `npm run test:e2e` 57 passed.

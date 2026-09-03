@@ -85,6 +85,30 @@
   --chart-3: oklch(0.398 0.07 227.392);
   --chart-4: oklch(0.828 0.189 84.429);
   --chart-5: oklch(0.769 0.188 70.08);
+  /* ── /analytics — THE YEAR PALETTE (owner feedback R9, 2026-09-03) ────────
+     Eight categorical slots, one per year of the overlay charts. NOT the
+     `--chart-*` set above: those are the shadcn defaults, and their light and
+     dark columns are different hues rather than the same hue re-stepped, which
+     is fine for a two-series card and wrong for eight series a reader is asked
+     to tell apart.
+
+     These eight were CHECKED, not chosen — run through the data-viz palette
+     validator against each mode's own surface: light worst-adjacent CVD ΔE 9.1
+     / normal-vision 19.6; dark 8.4 / 19.3; every slot inside its mode's
+     lightness band and above the chroma floor. Three light slots sit under 3:1
+     against the page, which obliges relief — the overlay chart therefore always
+     ships a legend naming each year, and each year carries a distinct stroke
+     dash, so identity is never colour alone (and the printed sheet still reads
+     in mono). The slot ORDER is the safety mechanism; do not re-order them.
+     `lib/analytics/year-overlay.ts` maps a year to a slot. */
+  --bw-year-1: #2a78d6;
+  --bw-year-2: #eb6834;
+  --bw-year-3: #1baf7a;
+  --bw-year-4: #eda100;
+  --bw-year-5: #e87ba4;
+  --bw-year-6: #008300;
+  --bw-year-7: #4a3aa7;
+  --bw-year-8: #e34948;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.141 0.005 285.823);
   --sidebar-primary: oklch(0.21 0.006 285.885);
@@ -119,6 +143,17 @@
   --chart-3: oklch(0.769 0.188 70.08);
   --chart-4: oklch(0.627 0.265 303.9);
   --chart-5: oklch(0.645 0.246 16.439);
+  /* The SAME eight hues, re-stepped for the dark surface and validated as a
+     set against it — not an automatic flip of the light column. All eight
+     clear 3:1 here, so dark mode carries no relief obligation of its own. */
+  --bw-year-1: #3987e5;
+  --bw-year-2: #d95926;
+  --bw-year-3: #199e70;
+  --bw-year-4: #c98500;
+  --bw-year-5: #d55181;
+  --bw-year-6: #008300;
+  --bw-year-7: #9085e9;
+  --bw-year-8: #e66767;
   --sidebar: oklch(0.21 0.006 285.885);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.488 0.243 264.376);
