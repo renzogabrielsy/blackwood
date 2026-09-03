@@ -136,6 +136,7 @@ import { NO_HIDDEN } from "@/lib/analytics/period-selection";
 import {
   buildYearOverlay,
   resolveYearStyle,
+  seriesBridgedKey,
   slotKeyForPoint,
   type OverlayClock,
   type OverlayPoint,
@@ -626,6 +627,98 @@ function MetricTrendChart({
 }
 
 /**
+ * ── THE BRIDGED POINT, AND THE TWO PLACES IT HAS TO STAY QUIET ─────────────
+ *
+ * A custom campaign slot belongs to the year that ran it, so another year's
+ * line is drawn STRAIGHT THROUGH it (`year-overlay.ts` → the bridge pass). The
+ * value sitting in that cell is a line segment, not a figure — so it must not
+ * grow a dot and must not appear in a tooltip, or the chart would be publishing
+ * a number nobody recorded.
+ *
+ * Both are suppressed per POINT, from the row's own `b<year>` flag, rather than
+ * by `connectNulls` on the series — which would also bridge a genuinely missing
+ * MARCH, the one gap a broken line must keep showing.
+ */
+interface DotRenderProps {
+  cx?: number;
+  cy?: number;
+  index?: number;
+  value?: number | null;
+  payload?: Record<string, unknown>;
+}
+
+function isBridgedPoint(p: DotRenderProps, bridgedKey: string): boolean {
+  return p.payload?.[bridgedKey] === true;
+}
+
+interface TipEntry {
+  dataKey?: string | number;
+  name?: string | number;
+  value?: number | string | null;
+  color?: string;
+  payload?: Record<string, unknown>;
+}
+
+/**
+ * The overlay's tooltip, written by hand.
+ *
+ * recharts' default content renders every series at the hovered slot and its
+ * `formatter` cannot DROP an entry — it can only change how one is printed. A
+ * bridged year has to disappear entirely, so the content is ours. The chrome is
+ * still `drilldownTooltipChrome()`, the one definition, so it reads exactly
+ * like every other chart on the page.
+ */
+function OverlayTooltipContent({
+  active,
+  payload,
+  chrome,
+  resolve,
+}: {
+  active?: boolean;
+  payload?: readonly TipEntry[];
+  chrome: ReturnType<typeof drilldownTooltipChrome>;
+  /** dataKey → what to print, or null to drop the row entirely. */
+  resolve(entry: TipEntry): { name: string; value: string } | null;
+}) {
+  if (!active || !payload?.length) return null;
+  const row = payload[0]?.payload as Record<string, unknown> | undefined;
+  const heading =
+    typeof row?.fullLabel === "string" ? row.fullLabel : undefined;
+  const items = payload
+    .map((e) => ({ entry: e, shown: resolve(e) }))
+    .filter((x): x is { entry: TipEntry; shown: { name: string; value: string } } =>
+      x.shown != null,
+    );
+  if (items.length === 0) return null;
+  return (
+    <div style={chrome.contentStyle} className="px-2 py-1.5">
+      {heading && (
+        <div style={chrome.labelStyle} className="mb-1">
+          {heading}
+        </div>
+      )}
+      <ul className="flex flex-col gap-0.5">
+        {items.map(({ entry, shown }) => (
+          <li
+            key={String(entry.dataKey)}
+            className="flex items-center gap-1.5 whitespace-nowrap"
+            style={chrome.itemStyle}
+          >
+            <span
+              aria-hidden
+              className="size-2 shrink-0 rounded-[2px]"
+              style={{ background: entry.color }}
+            />
+            <span className="text-muted-foreground">{shown.name}</span>
+            <span className="ml-auto font-mono tabular-nums">{shown.value}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
  * What the batch clock needs that a `HistoryPoint` cannot carry: the campaign's
  * own NAME (`AUGUST`, `SRC`) and the day it started producing. Supplied by the
  * room that owns the clock — see `campaign-room.tsx` — because the expand is
@@ -780,6 +873,7 @@ function YearOverlayChart({
   const resolved = fold.series.map((s) => ({
     ...s,
     ...resolveYearStyle(s.year, styles),
+    bridgedKey: seriesBridgedKey(s.year),
   }));
 
   const values = data.flatMap((r) =>
@@ -811,6 +905,74 @@ function YearOverlayChart({
 
   const yearOf = new Map(resolved.map((r) => [String(r.year), r] as const));
   const pairByDataKey = new Map(pairs.map((p) => [p.dataKey, p] as const));
+
+  /** A dot marks a FIGURE. A bridged slot has none, so it gets none. */
+  const dotFor = (color: string, bridgedKey: string) =>
+    function renderDot(p: DotRenderProps) {
+      if (p.value == null || isBridgedPoint(p, bridgedKey)) {
+        return <g key={`d${p.index}`} />;
+      }
+      return (
+        <circle
+          key={`d${p.index}`}
+          cx={p.cx}
+          cy={p.cy}
+          r={2}
+          fill={color}
+          stroke={color}
+        />
+      );
+    };
+  const activeDotFor = (color: string, bridgedKey: string) =>
+    function renderActiveDot(p: DotRenderProps) {
+      if (p.value == null || isBridgedPoint(p, bridgedKey)) {
+        return <g key={`a${p.index}`} />;
+      }
+      return (
+        <circle
+          key={`a${p.index}`}
+          cx={p.cx}
+          cy={p.cy}
+          r={3.5}
+          fill={color}
+          stroke="var(--background)"
+          strokeWidth={1.5}
+        />
+      );
+    };
+
+  /**
+   * One tooltip row, or `null` to leave the series out of the tooltip entirely.
+   * A BRIDGED year is dropped here — the value under the cursor is the straight
+   * line between its real neighbours, and printing it would be the chart
+   * publishing a figure nobody recorded.
+   */
+  const resolveTipEntry = (e: TipEntry) => {
+    const key = String(e.name ?? e.dataKey ?? "");
+    const row = e.payload;
+    const year = yearOf.get(key);
+    if (year) {
+      if (row?.[year.bridgedKey] === true || e.value == null) return null;
+      const full = row?.[year.labelKey];
+      return {
+        name: typeof full === "string" ? full : String(year.year),
+        value: `${fmtExact(spec, Number(e.value))} ${unit}`,
+      };
+    }
+    if (e.value == null) return null;
+    if (key === "overlay") {
+      if (!overlay) return null;
+      return {
+        name: overlay.spec.label,
+        value: `${fmtExact(overlay.spec, Number(e.value))} ${unitSuffix(overlay.spec.unit)}`,
+      };
+    }
+    return {
+      name:
+        key === "avg" ? avgLabel : (pairByDataKey.get(key)?.label ?? spec.label),
+      value: `${fmtExact(spec, Number(e.value))} ${unit}`,
+    };
+  };
 
   /**
    * The legend, written by hand for two reasons recharts' own cannot serve: its
@@ -940,35 +1102,9 @@ function YearOverlayChart({
               />
             )}
             <RTooltip
-              {...tip}
-              formatter={(value, name, item) => {
-                const key = String(name);
-                const year = yearOf.get(key);
-                if (year) {
-                  const row = item?.payload as Record<string, unknown> | undefined;
-                  const full = row?.[year.labelKey];
-                  return [
-                    value == null ? "—" : `${fmtExact(spec, Number(value))} ${unit}`,
-                    typeof full === "string" ? full : String(year.year),
-                  ];
-                }
-                if (key === "overlay") {
-                  return [
-                    value == null
-                      ? "—"
-                      : `${fmtExact(overlay!.spec, Number(value))} ${unitSuffix(overlay!.spec.unit)}`,
-                    overlay!.spec.label,
-                  ];
-                }
-                return [
-                  value == null ? "—" : `${fmtExact(spec, Number(value))} ${unit}`,
-                  key === "avg"
-                    ? avgLabel
-                    : (pairByDataKey.get(key)?.label ?? spec.label),
-                ];
-              }}
-              labelFormatter={(label, payload) =>
-                payload?.[0]?.payload?.fullLabel ?? label
+              cursor={tip.cursor}
+              content={
+                <OverlayTooltipContent chrome={tip} resolve={resolveTipEntry} />
               }
             />
             {crossesZero && (
@@ -987,7 +1123,7 @@ function YearOverlayChart({
                   fill={`url(#${gradientPrefix}-${r.year})`}
                   fillOpacity={1}
                   dot={false}
-                  activeDot={{ r: 3.5 }}
+                  activeDot={activeDotFor(r.color, r.bridgedKey)}
                   isAnimationActive={false}
                   connectNulls={false}
                 />
@@ -1001,9 +1137,11 @@ function YearOverlayChart({
                   strokeWidth={2}
                   strokeDasharray={r.dash}
                   // A slot only one year carries would otherwise draw nothing at
-                  // all — a line needs two points, a dot needs none.
-                  dot={{ r: 2 }}
-                  activeDot={{ r: 3.5 }}
+                  // all — a line needs two points, a dot needs none. A BRIDGED
+                  // slot gets neither: the line passes through it, but there is
+                  // no figure there to mark.
+                  dot={dotFor(r.color, r.bridgedKey)}
+                  activeDot={activeDotFor(r.color, r.bridgedKey)}
                   isAnimationActive={false}
                   connectNulls={false}
                 />

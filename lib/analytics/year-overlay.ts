@@ -28,6 +28,22 @@
 // A year with no April is a year that has no April, and a zero there would
 // draw a line down to the floor and back.
 //
+// ── THE ONE EXCEPTION, AND WHY IT IS NOT `connectNulls` ──────────────
+// A CUSTOM campaign slot belongs to the year that ran it. `SRC` is a 2026
+// campaign, so 2024 and 2025 have no slot there at all — and a broken line at
+// that tick says "2024 is missing a figure here", which is false. Those years
+// are not missing anything; the column is simply not theirs.
+//
+// So a run of custom slots that belong to OTHER years is **BRIDGED**: the point
+// is given the straight-line value between its two real neighbours and flagged
+// `bridged`, so the line draws through it while the dot and the tooltip stay
+// away. It is a placement fact, marked per point, and NOT a blanket
+// `connectNulls` — which would also paper over a genuinely missing MARCH, the
+// one thing a broken line must keep saying. Two guards keep the distinction
+// exact: only a slot the year has NO POINT AT ALL at can be bridged (a year
+// that ran SRC and recorded nothing still breaks), and the run must be bounded
+// by REAL values on both sides (so a bridge can never span a missing month).
+//
 // ── THE CUSTOM-CAMPAIGN RULE, AND THE THREE THINGS IT REFUSES TO GUESS ─
 // A campaign is normally NAMED for a month (`AUGUST 2026`), which is the only
 // thing about it that is reliably chronological — `campaignMonthIndex()` in
@@ -135,7 +151,12 @@ export interface OverlaySeries {
   withValue: number;
 }
 
-/** One recharts row: a slot, plus `y<year>` / `f<year>` for every series. */
+/**
+ * One recharts row: a slot, plus `y<year>` / `f<year>` / `b<year>` per series —
+ * the value, its full period label, and whether the value at that slot is a
+ * BRIDGE rather than a figure (see the header). A bridged cell must never be
+ * drawn as a dot or read out in a tooltip: it is a line segment, not a number.
+ */
 export type OverlayRow = {
   slotKey: string;
   label: string;
@@ -161,6 +182,13 @@ export interface OverlayFold {
   collisions: OverlayCollision[];
   /** Custom campaign names that carry no start date, so could not be placed. */
   unplaced: string[];
+  /**
+   * Every (year, slot) a line is drawn STRAIGHT THROUGH because the slot is a
+   * custom campaign belonging to a different year. Reported rather than left
+   * implicit — a value on the chart that is not a figure is exactly the kind of
+   * thing that has to be nameable.
+   */
+  bridges: { year: number; slotKey: string }[];
 }
 
 const MONTH_SHORT = [
@@ -325,6 +353,11 @@ export function seriesLabelKey(year: number): string {
   return `f${year}`;
 }
 
+/** `b2026` — true where the value at that slot is a bridge, not a figure. */
+export function seriesBridgedKey(year: number): string {
+  return `b${year}`;
+}
+
 /**
  * THE FOLD — one series per year, placed into the fixed axis.
  *
@@ -358,6 +391,7 @@ export function buildYearOverlay(
     for (const y of years) {
       row[seriesDataKey(y)] = null;
       row[seriesLabelKey(y)] = null;
+      row[seriesBridgedKey(y)] = false;
     }
     return row;
   });
@@ -391,7 +425,53 @@ export function buildYearOverlay(
     }
   }
 
-  return { slots, series, rows, collisions, unplaced };
+  // ── THE BRIDGE PASS ───────────────────────────────────────────────────
+  // Runs LAST, over the placed rows, so it can only ever add a value to a cell
+  // that placement left empty — it can never touch, move or restate a figure.
+  const bridges: { year: number; slotKey: string }[] = [];
+  for (const year of years) {
+    const vKey = seriesDataKey(year);
+    const bKey = seriesBridgedKey(year);
+    // "Has a point" is the placement fact, NOT "has a value". A year that ran
+    // this campaign and recorded nothing is genuinely missing a figure and its
+    // line must break there, exactly as a missing month does.
+    const owns = (i: number) => taken.has(`${slots[i].key}|${year}`);
+    const valueAt = (i: number) => {
+      const v = rows[i][vKey];
+      return typeof v === "number" ? v : null;
+    };
+
+    let i = 0;
+    while (i < slots.length) {
+      if (slots[i].kind !== "custom" || owns(i)) {
+        i += 1;
+        continue;
+      }
+      // The whole run of consecutive foreign custom slots — two customs filed
+      // in the same month are one gap in another year's line, not two.
+      let j = i;
+      while (j < slots.length && slots[j].kind === "custom" && !owns(j)) j += 1;
+
+      const before = i - 1;
+      const after = j;
+      const a = before >= 0 ? valueAt(before) : null;
+      const b = after < slots.length ? valueAt(after) : null;
+      // BOUNDED BY REAL VALUES ON BOTH SIDES. Without this a bridge could span
+      // a missing MARCH and quietly draw across the one gap that is real; and
+      // a custom slot at either end of the axis has nothing to bridge between.
+      if (a != null && b != null) {
+        const span = after - before;
+        for (let k = i; k < j; k += 1) {
+          rows[k][vKey] = a + ((b - a) * (k - before)) / span;
+          rows[k][bKey] = true;
+          bridges.push({ year, slotKey: slots[k].key });
+        }
+      }
+      i = j;
+    }
+  }
+
+  return { slots, series, rows, collisions, unplaced, bridges };
 }
 
 // ---------------------------------------------------------------------

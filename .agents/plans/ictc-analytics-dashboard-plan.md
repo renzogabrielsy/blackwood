@@ -1791,17 +1791,24 @@ exists for.
    a month; two customs in one month order by start date then by name, a total order, so the
    axis is stable. The start date is `first_reported_date` (falling back to
    `first_fed_date`) — already on the wire, so **no query changed**.
-5. **The placement module never aggregates.** A slot receiving two points for one year keeps
+5. **A year's line bridges another year's custom slot.** `SRC` is a 2026 campaign, so 2024
+   has no slot there — a break would claim a missing figure that does not exist. Bridged
+   points take the straight-line value between their real neighbours, carry a `bridged`
+   flag, and are kept out of the dots and the tooltip. It is a per-point flag and **not**
+   `connectNulls`, which would also bridge a genuinely missing MARCH; the bridge only fills
+   a slot the year has NO POINT at, must be bounded by real values on both sides, and runs
+   last so it can never restate a placed figure.
+6. **The placement module never aggregates.** A slot receiving two points for one year keeps
    the first and REPORTS the collision; a missing point is `null`, never `0`. That line is
    where every previous round's arithmetic bug lived.
-6. **The palette was validated, not chosen** — light worst-adjacent CVD ΔE 9.1 /
+7. **The palette was validated, not chosen** — light worst-adjacent CVD ΔE 9.1 /
    normal-vision 19.6; dark 8.4 / 19.3; both inside their mode's lightness band and over the
    chroma floor. Three light slots fall under 3:1, which obliges relief: the legend always
    names the year, and every year carries a distinct dash as well as a distinct hue — which
    is also what keeps the (already landscape) printed sheet readable in mono. Colour and
    stroke are pure functions of the year, anchored at 2024, so a filtered-out year never
    repaints the survivors and the same year is the same colour in every expand.
-7. **One platform line changed.** `DrilldownSection`'s header now wraps; it was a single
+8. **One platform line changed.** `DrilldownSection`'s header now wraps; it was a single
    non-shrinking row, and a third control took 375 px to 212 px of document overflow.
    Wrapping costs a card with room nothing and takes it to 0 px. No tenant knowledge added.
 
@@ -1813,5 +1820,5 @@ the grade expand plots a grade across the production BATCHES it was run in, not 
 repeating annual axis. Neither has a second year to overlay.
 
 **Gates:** `tsc --noEmit` clean · `npm run lint` 146 / 16 (baseline, unmoved) ·
-`npm run build` clean · `verify-year-overlay` 20 · `verify-table-core` 84 ·
+`npm run build` clean · `verify-year-overlay` 24 · `verify-table-core` 84 ·
 `verify-campaign-selection` 11 · `npm run test:e2e` 57 passed.

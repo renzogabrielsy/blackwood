@@ -40,6 +40,15 @@
  *  18. A resolved style is the default unless overridden, and says which it is.
  *  19. Placement is total: every point that names a slot lands in one.
  *  20. The month of a start date is read, never guessed.
+ *  21. A year with no SRC is drawn STRAIGHT THROUGH the SRC slot — bridged, flagged,
+ *      and with the straight-line value — while the year that OWNS SRC is not.
+ *  22. A genuinely missing MONTH still BREAKS the line. This is what a blanket
+ *      `connectNulls` would have destroyed, and it is the whole reason the bridge is a
+ *      per-point flag.
+ *  23. A bridge is bounded by REAL values on both sides, and a run of consecutive
+ *      foreign customs is one bridge.
+ *  24. The bridge pass can only ever fill an EMPTY cell — it never touches, moves or
+ *      restates a figure that placement put down.
  *
  * Run:  npx tsx scripts/verify-year-overlay.ts
  */
@@ -53,6 +62,7 @@ import {
   monthOfDate,
   parseYearStyles,
   resolveYearStyle,
+  seriesBridgedKey,
   seriesDataKey,
   slotKeyForPoint,
   YEAR_DASH,
@@ -420,6 +430,127 @@ check('20. the month of a start date is read, never guessed', () => {
   assert.equal(monthOfDate('August 2026'), null)
   assert.equal(monthOfDate('2026-13-01'), null)
   assert.equal(monthOfDate('2026-00-01'), null)
+})
+
+// ---------------------------------------------------------------------------
+check('21. a year without SRC is bridged through it; the year that owns it is not', () => {
+  const pts = [
+    // 2024 and 2025 never ran SRC. 2026 did.
+    cp('AUGUST', 2024, 100, '2024-08-02'),
+    cp('SEPTEMBER', 2024, 200, '2024-09-02'),
+    cp('AUGUST', 2025, 300, '2025-08-02'),
+    cp('SEPTEMBER', 2025, 400, '2025-09-02'),
+    cp('AUGUST', 2026, 500, '2026-08-02'),
+    cp('SRC', 2026, 410, '2026-08-19'),
+    cp('SEPTEMBER', 2026, 600, '2026-09-02'),
+  ]
+  const fold = buildYearOverlay('B', pts)
+  const src = fold.rows.find((r) => r.label === 'SRC')!
+
+  // 2024: the slot is not theirs, so the line draws straight through it.
+  assert.equal(src[seriesBridgedKey(2024)], true)
+  assert.equal(src[seriesDataKey(2024)], 150, 'the straight line between 100 and 200')
+  assert.equal(src[seriesBridgedKey(2025)], true)
+  assert.equal(src[seriesDataKey(2025)], 350)
+
+  // 2026 OWNS SRC — its 410 is a figure, and a figure is never a bridge.
+  assert.equal(src[seriesBridgedKey(2026)], false)
+  assert.equal(src[seriesDataKey(2026)], 410)
+
+  assert.deepEqual(
+    fold.bridges.map((b) => `${b.year}:${b.slotKey}`).sort(),
+    ['2024:c:SRC', '2025:c:SRC'],
+  )
+
+  // A year that RAN the campaign and recorded nothing is genuinely missing a
+  // figure — placement, not value, is what decides. It must still break.
+  const nulled = buildYearOverlay('B', [
+    ...pts.filter((p) => p.year !== 2026),
+    cp('AUGUST', 2026, 500, '2026-08-02'),
+    cp('SRC', 2026, null, '2026-08-19'),
+    cp('SEPTEMBER', 2026, 600, '2026-09-02'),
+  ])
+  const src2 = nulled.rows.find((r) => r.label === 'SRC')!
+  assert.equal(src2[seriesDataKey(2026)], null)
+  assert.equal(src2[seriesBridgedKey(2026)], false)
+})
+
+// ---------------------------------------------------------------------------
+check('22. a genuinely missing MONTH still breaks the line', () => {
+  // 2024 has no MARCH at all, and no SRC either. The SRC slot bridges; MARCH
+  // must not — that is the distinction a blanket `connectNulls` destroys.
+  const fold = buildYearOverlay('B', [
+    cp('FEBRUARY', 2024, 100, '2024-02-02'),
+    cp('APRIL', 2024, 200, '2024-04-02'),
+    cp('AUGUST', 2024, 300, '2024-08-02'),
+    cp('SEPTEMBER', 2024, 400, '2024-09-02'),
+    cp('SRC', 2026, 410, '2026-08-19'),
+  ])
+  const march = fold.rows.find((r) => r.label === 'MARCH')!
+  assert.equal(march[seriesDataKey(2024)], null, 'a missing month is still a gap')
+  assert.equal(march[seriesBridgedKey(2024)], false)
+
+  const src = fold.rows.find((r) => r.label === 'SRC')!
+  assert.equal(src[seriesBridgedKey(2024)], true)
+  assert.equal(src[seriesDataKey(2024)], 350)
+
+  // A missing month in the CALENDAR clocks is untouched by all of this — there
+  // are no custom slots there, so nothing can ever be bridged.
+  const cal = buildYearOverlay('M', [mp(2026, 1, 5), mp(2026, 3, 9)])
+  assert.equal(cal.rows[1][seriesDataKey(2026)], null)
+  assert.equal(cal.rows[1][seriesBridgedKey(2026)], false)
+  assert.deepEqual(cal.bridges, [])
+})
+
+// ---------------------------------------------------------------------------
+check('23. a bridge needs a real value on BOTH sides, and one run is one bridge', () => {
+  // Nothing after AUGUST for 2024 → the axis simply ends; there is nothing to
+  // bridge TO, so no straight line is invented past the last figure.
+  const openEnded = buildYearOverlay('B', [
+    cp('AUGUST', 2024, 100, '2024-08-02'),
+    cp('SRC', 2026, 410, '2026-08-19'),
+  ])
+  const src = openEnded.rows.find((r) => r.label === 'SRC')!
+  assert.equal(src[seriesDataKey(2024)], null)
+  assert.equal(src[seriesBridgedKey(2024)], false)
+  assert.deepEqual(openEnded.bridges, [])
+
+  // Two customs filed in the same month are ONE gap in another year's line, and
+  // the interpolation walks across both.
+  const run = buildYearOverlay('B', [
+    cp('AUGUST', 2024, 100, '2024-08-02'),
+    cp('SEPTEMBER', 2024, 400, '2024-09-02'),
+    cp('ALPHA', 2026, 1, '2026-08-05'),
+    cp('ZULU', 2026, 2, '2026-08-27'),
+  ])
+  const names = run.slots.map((x) => x.label)
+  const aug = names.indexOf('AUGUST')
+  assert.deepEqual(names.slice(aug, aug + 4), ['AUGUST', 'ALPHA', 'ZULU', 'SEPTEMBER'])
+  assert.equal(run.rows[aug + 1][seriesDataKey(2024)], 200)
+  assert.equal(run.rows[aug + 2][seriesDataKey(2024)], 300)
+  assert.equal(run.bridges.filter((b) => b.year === 2024).length, 2)
+})
+
+// ---------------------------------------------------------------------------
+check('24. the bridge pass only ever fills an EMPTY cell', () => {
+  const pts = [
+    cp('AUGUST', 2024, 100, '2024-08-02'),
+    cp('SEPTEMBER', 2024, 200, '2024-09-02'),
+    cp('AUGUST', 2026, 500, '2026-08-02'),
+    cp('SRC', 2026, 410, '2026-08-19'),
+    cp('SEPTEMBER', 2026, 600, '2026-09-02'),
+  ]
+  const fold = buildYearOverlay('B', pts)
+  // Every figure that was placed is still exactly the figure that was placed.
+  for (const p of pts) {
+    const slot = p.name === 'SRC' ? 'SRC' : p.name
+    const row = fold.rows.find((r) => r.label === slot)!
+    assert.equal(row[seriesDataKey(p.year)], p.value, `${p.name} ${p.year}`)
+    assert.equal(row[seriesBridgedKey(p.year)], false)
+  }
+  // And a bridged cell is never counted as a figure by the series' own tally.
+  const s2024 = fold.series.find((x) => x.year === 2024)!
+  assert.equal(s2024.withValue, 2, 'AUGUST and SEPTEMBER — the bridge is not a third')
 })
 
 console.log(`\nAll ${passed} year-overlay checks passed.`)

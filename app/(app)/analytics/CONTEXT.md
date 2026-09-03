@@ -2242,6 +2242,30 @@ collision** (surfaced as an amber line under the chart), the same discipline as
 Measured 0 in every case on record. And **a missing point is `null`, never `0`** — a year
 with no April has no April, and a zero there would draw a line to the floor and back.
 
+### A year's line BRIDGES another year's custom slot
+
+`SRC` is a 2026 campaign, so 2024 and 2025 **have no slot there at all**. Breaking their
+lines at that tick said *"2024 is missing a figure here"*, which is false — those years are
+not missing anything, the column simply is not theirs. So a run of custom slots belonging
+to other years is **bridged**: the point takes the straight-line value between its two real
+neighbours and is flagged `bridged`, so the line draws through it while **the dot and the
+tooltip stay away** (a bridged value is a line segment, not a figure — the tooltip at SRC
+lists only `SRC 2026 · 410.0 t`, verified in the browser, while AUGUST lists all three).
+
+**It is a per-point flag, deliberately NOT `connectNulls`.** A blanket connect would also
+paper over a genuinely missing MARCH, which is the one gap a broken line must keep showing.
+Three guards make the distinction exact:
+
+1. only a slot the year has **no point at all** at can be bridged — a year that ran the
+   campaign and recorded nothing is genuinely missing a figure and still breaks;
+2. the run must be **bounded by real values on both sides**, so a bridge can never span a
+   missing month and never invents a line past the last figure on the axis;
+3. the pass runs LAST over the placed rows, so it can only ever fill an EMPTY cell — it
+   never touches, moves or restates a figure, and a bridge is never counted in the series'
+   `withValue` tally.
+
+The calendar clocks have no custom slots, so nothing there can ever be bridged.
+
 ### The companions are HELD BACK, not missing (requirement 3)
 
 The comparison `pairs` (Net flow's RC IN / RC OUT), the trailing average and the R4 price
@@ -2319,7 +2343,7 @@ entry has to be a real button.
 | File | Role |
 |---|---|
 | `lib/analytics/year-overlay.ts` | **NEW — THE placement rule and the year palette.** Slots for all three clocks, the custom-campaign rule, the per-year fold, plus `defaultYearColor` / `defaultYearStyle` / `resolveYearStyle` / `parseYearStyles`. Pure, client-safe. |
-| `scripts/verify-year-overlay.ts` | **NEW — 20 assertions** pinning it, framework-free. |
+| `scripts/verify-year-overlay.ts` | **NEW — 24 assertions** pinning it, framework-free. |
 | `app/(app)/analytics/use-year-styles.ts` | **NEW** — the `localStorage` store + same-tab broadcast. |
 | `app/(app)/analytics/year-style-menu.tsx` | **NEW** — the Style popover and `StrokePreview`. |
 | `app/(app)/analytics/metric-expand.tsx` | `YearOverlayChart` added beside the untouched `MetricTrendChart`; the companion rule, the legend, the `Style` control, the new `campaignMeta` prop. |
@@ -2339,8 +2363,9 @@ OAuth) on synthetic data spanning 2024–2026 with a custom campaign `SRC` start
   rather than 0.
 - **Q mode** — Q1…Q4, same three series.
 - **Campaign expand** — the axis reads JANUARY … AUGUST · **SRC** · SEPTEMBER … DECEMBER,
-  and the 2024 / 2025 lines **break at SRC** rather than bridging it, because neither year
-  has an SRC.
+  and the 2024 / 2025 lines **draw straight through SRC with no dot**, because that column
+  is 2026's and those years are not missing anything. Their tooltips at SRC are absent —
+  hovering it lists only `SRC 2026 · 410.0 t`, while AUGUST lists all three years.
 - **Style popover open** — eight swatches + the colour input + five drawn strokes per year.
 - **375 px** — every tick label present, `Dec` no longer clipped, and **0 px of horizontal
   document overflow**.
@@ -2356,7 +2381,7 @@ OAuth) on synthetic data spanning 2024–2026 with a custom campaign `SRC` start
   which fit at 375 px.
 
 - **Gates**: `tsc --noEmit` clean · `npm run lint` 146 problems / 16 errors (the baseline,
-  unmoved) · `npm run build` clean · `verify-year-overlay` **20** · `verify-table-core` 84 ·
+  unmoved) · `npm run build` clean · `verify-year-overlay` **24** · `verify-table-core` 84 ·
   `verify-campaign-selection` 11 · `npm run test:e2e` 57 passed.
 
 ## Dependencies
