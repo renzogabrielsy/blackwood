@@ -1,5 +1,15 @@
 # Analytics Module — ICTC Owner KPI Matrix (`/analytics`)
 
+> **OWNER FEEDBACK ROUND 9 APPLIED — 2026-09-03. ⚠ EVERY EXPAND CHART CHANGED SHAPE.**
+> The row expand's X axis is no longer TIME. It is **Jan…Dec (M) · Q1…Q4 (Q) ·
+> JANUARY…DECEMBER plus any custom campaign (the campaign table)**, with **one line per
+> year** overlaid on it, each in its own colour AND its own stroke, both settable in a new
+> **Style** popover and remembered per browser. `Y` granularity keeps the long chart
+> unchanged. The comparison pairs, the trailing average and the price overlay now draw only
+> when **exactly one year** is on. Passages below that describe "the full-history chart",
+> the shaded window band or a 75-month axis predate it — see
+> **"Owner feedback round 9 — the year overlay"** near the end of this file.
+
 > **OWNER FEEDBACK ROUND 1 APPLIED — 2026-09-01.** Renzo read the live page and gave a
 > ten-item list. Everything below already reflects it; the round's own summary is the
 > section **"Owner feedback round 1"** near the end of this file, which is the place to
@@ -2155,6 +2165,224 @@ session and a Google sign-in.
 - **Gates**: `tsc --noEmit` clean · `npm run lint` 146 problems / 16 errors (the baseline,
   unmoved) · `npm run build` clean · `verify-table-core` 84 · `verify-rc-in-grid` **34**
   (was 33) · `verify-campaign-selection` 11 · `npm run test:e2e` 57 passed.
+
+## Owner feedback round 9 — the year overlay, 2026-09-03
+
+Renzo, verbatim: *"For all dropdown charts, instead of making it a long chart that
+encompasses multiple years, you could have each year be represented by a line — solid
+line, dotted, area line, etc of differing colors (which we can also customize and set) —
+and have the axes be set to just January to December, Q1 to Q4 and batches to be JANUARY
+to DECEMBER. If we have a custom batch name that isn't a month (this is for production
+batches), then it should be chronologically placed within its production date month. So
+for example in AUGUST 2026 BATCH, if I have a custom batch called SRC for example, then
+SRC axis should be placed after AUGUST location since its production date is August. All
+theoretical but best to be prepared."*
+
+**In one sentence: every expand chart's X axis stops being TIME and becomes
+POSITION-IN-THE-YEAR, and the year moves out of the axis and into the series.** Six years
+of months was 75 ticks reading left to right, which answers *what happened* and cannot
+answer *is this August better than last August* — the question a month-on-month room
+exists for. Twelve ticks with a line per year answers it by construction.
+
+### Where it applies, and the one clock it deliberately skips
+
+| Clock | Axis | Series |
+|---|---|---|
+| `M` (RC Inventory, month) | Jan … Dec, 12 fixed slots | one per year |
+| `Q` (RC Inventory, quarter) | Q1 … Q4, 4 fixed slots | one per year |
+| `B` (the campaign table) | JANUARY … DECEMBER **+ any custom campaign** | one per year |
+| `Y` | unchanged — the long chart | one series, all years |
+
+`Y` is excluded **structurally, not by a flag**: at year granularity a year IS one point,
+so "a series per year" would be a scatter of disconnected single dots where the line it
+replaces was already the answer. `MetricTrendChart` — the long chart — is kept, unchanged,
+and is what `Y` still renders, so that path carries no regression risk at all.
+
+**The two rooms that mount `MetricExpand` both get it for free** (RC Inventory rows via
+`analytics-view.tsx`, campaign rows via `campaign-room.tsx`), which is the payoff of R6
+making the card clock-agnostic. **The supplier and grade expands are untouched and
+correctly so**: `supplier-expand.tsx` plots ONE supplier inside ONE calendar year (the room
+follows the page's year picker and deliberately not the Y/Q/M toggle), and
+`grade-expand.tsx` plots a grade across production BATCHES it was run in, not across a
+repeating annual axis. Neither has a second year to overlay, so an overlay there would be
+one series wearing new machinery.
+
+### The custom-campaign rule, and the three things it refuses to guess
+
+`lib/analytics/year-overlay.ts` is THE placement rule — pure, no React, no DOM — and it
+reuses `campaignMonthIndex()` from `campaign.ts` rather than re-spelling "is this one of
+the twelve". A campaign whose name is NOT one of them (Renzo's `SRC`) gets a slot of its
+own, immediately after the month its **start date** falls in.
+
+1. **The NAME always wins for a month-named campaign.** `AUGUST 2026` sits in the AUGUST
+   slot even when its first reported day is in September, or in the December before.
+   Moving it would silently re-file a campaign the plant itself named.
+2. **A custom name with no start date is never placed by inference.** It goes to the END
+   of the axis flagged `unplaced`, and the card prints a sentence saying so.
+3. **Two customs in one month are ordered by start date, then by name** — a total order,
+   so the axis is stable across renders and across years rather than depending on which
+   year happened to load first. A custom name that recurs is ONE slot, positioned by the
+   earliest start ever seen for it.
+
+**The start date is READ, never parsed out of a label.** `campaign-room.tsx` builds it as
+`ProductionBatchRow.firstReportedDate` — the campaign's first production day, which is
+exactly what Renzo meant by *"its production date"* — falling back to
+`CampaignCost.firstFedDate` for a campaign fed but never reported on. Both already cross
+the wire (`view_analytics_production_by_batch.first_reported_date`,
+`view_analytics_batch_cost.first_fed_date`), so **no query changed and no read was added.**
+
+### What the placement module will NOT do
+
+It decides slots and places points. It never adds, averages, weights or rounds. That line
+is where every previous round's arithmetic bug lived — the moment a placement helper folds
+two points together it has become a second definition of a number `matrix.ts` already owns.
+So a slot that somehow receives two points for one year **keeps the first and REPORTS the
+collision** (surfaced as an amber line under the chart), the same discipline as
+`foldCampaignRows` counting its `fed_kg` disagreements instead of asserting there are none.
+Measured 0 in every case on record. And **a missing point is `null`, never `0`** — a year
+with no April has no April, and a zero there would draw a line to the floor and back.
+
+### A year's line BRIDGES another year's custom slot
+
+`SRC` is a 2026 campaign, so 2024 and 2025 **have no slot there at all**. Breaking their
+lines at that tick said *"2024 is missing a figure here"*, which is false — those years are
+not missing anything, the column simply is not theirs. So a run of custom slots belonging
+to other years is **bridged**: the point takes the straight-line value between its two real
+neighbours and is flagged `bridged`, so the line draws through it while **the dot and the
+tooltip stay away** (a bridged value is a line segment, not a figure — the tooltip at SRC
+lists only `SRC 2026 · 410.0 t`, verified in the browser, while AUGUST lists all three).
+
+**It is a per-point flag, deliberately NOT `connectNulls`.** A blanket connect would also
+paper over a genuinely missing MARCH, which is the one gap a broken line must keep showing.
+Three guards make the distinction exact:
+
+1. only a slot the year has **no point at all** at can be bridged — a year that ran the
+   campaign and recorded nothing is genuinely missing a figure and still breaks;
+2. the run must be **bounded by real values on both sides**, so a bridge can never span a
+   missing month and never invents a line past the last figure on the axis;
+3. the pass runs LAST over the placed rows, so it can only ever fill an EMPTY cell — it
+   never touches, moves or restates a figure, and a bridge is never counted in the series'
+   `withValue` tally.
+
+The calendar clocks have no custom slots, so nothing there can ever be bridged.
+
+### The companions are HELD BACK, not missing (requirement 3)
+
+The comparison `pairs` (Net flow's RC IN / RC OUT), the trailing average and the R4 price
+overlay draw **only when exactly ONE year is on**. Multiplying each of them by the number
+of overlaid years is where the chart becomes unreadable, and none of them is the comparison
+a reader switched years on to make. Two consequences, both deliberate:
+
+- their **controls are not rendered** while they cannot draw — R3's standing rule that a
+  switch for a line the chart would never draw is a control that lies about what the page
+  can do;
+- the card prints **one line naming exactly what is held back** and how to get it back,
+  because a silently absent series reads as a bug.
+
+Switching back to a single year restores all three, the average toggle included (verified
+in the browser: the `3-month avg` control and its line reappear the moment the second year
+is switched off).
+
+### The palette was COMPUTED, not chosen
+
+Eight categorical slots, `--bw-year-1 … --bw-year-8` in `globals.css`, light and dark
+columns both, run through the data-viz palette validator against each mode's own surface
+rather than eyeballed:
+
+| | worst adjacent CVD ΔE | worst adjacent normal-vision ΔE | lightness band | chroma floor | contrast ≥3:1 |
+|---|---|---|---|---|---|
+| light (surface `#fcfcfb`) | **9.1** (≥8) | **19.6** (≥15) | all 8 in band | all 8 pass | 5 of 8 — see relief |
+| dark (surface `#1a1a19`) | **8.4** | **19.3** | all 8 in band | all 8 pass | all 8 |
+
+They are **not** the `--chart-*` set: those are the shadcn defaults, and their light and
+dark columns are different HUES rather than one hue re-stepped, which is fine for a
+two-series card and wrong for eight series a reader is asked to tell apart. **The slot
+ORDER is the safety mechanism — do not re-order them.**
+
+Three light slots sit under 3:1 against the page, which obliges *relief*, and the chart
+pays it twice: a legend is **always** present with the year spelled out, and **every year
+carries a distinct stroke dash as well as a distinct hue.** That second encoding is also
+what keeps the printed sheet legible — the sheet is already landscape (R3) and the dash
+patterns survive to paper, so four concurrent years separate with no colour at all.
+
+**Colour and stroke are pure functions of the YEAR, never of its position in a filtered
+list** — the data-viz rule "colour follows the entity, never its rank". Switching 2024 off
+must not repaint 2025, and the same year must be the same colour in every expand on the
+page. The cycle is anchored at **2024** (where `rc_out` begins, the first year every row
+has something to say), which puts 2024 / 2025 / 2026 on slots 1 / 2 / 3 — exactly the three
+the validator clears on the stricter ALL-PAIRS test in both modes — and gives them
+solid / dashed / dotted. `area` is offered in the picker and is **never a default**: two
+filled areas over one another hide each other in a way four strokes never do.
+
+### The Style popover, and where the reader's choice lives
+
+`year-style-menu.tsx` beside `Years` in the header's `data-print-hide` span — same shape,
+same height, same tokens as the two chart toggles it sits with. Per year: the eight palette
+swatches, a native colour input after them (the reader's own colour, offered rather than
+encouraged, because the page cannot validate it), five stroke buttons **drawn rather than
+named**, a per-year reset and a global Reset.
+
+Persisted in `localStorage` under **`bw.analytics.yearstyle.v1`, keyed by YEAR ALONE**, so
+one record governs the whole page — if 2025 were orange on one card and green on the next,
+the reader would re-learn the legend at every row, which is the exact cost a fixed axis
+exists to remove. `use-year-styles.ts` follows `use-row-order.ts`'s discipline exactly: read
+in an EFFECT (never a lazy initialiser — hydration), every read and write wrapped, and the
+stored value treated as **untrusted** — `parseYearStyles` validates every field and drops
+anything it did not write, because a colour goes straight into a `style` attribute. It also
+carries a same-tab broadcast, since the browser's own `storage` event fires only in OTHER
+tabs and two expands can be open at once on this page.
+
+**The legend is a second door onto the `Years` checklist, not a second selection.** Clicking
+a legend entry writes the same hidden set the checklist does. It is written by hand rather
+than left to recharts for two reasons: recharts' own swatch does not carry a
+`stroke-dasharray`, so paper would lose the encoding that survives without colour; and an
+entry has to be a real button.
+
+### Files
+
+| File | Role |
+|---|---|
+| `lib/analytics/year-overlay.ts` | **NEW — THE placement rule and the year palette.** Slots for all three clocks, the custom-campaign rule, the per-year fold, plus `defaultYearColor` / `defaultYearStyle` / `resolveYearStyle` / `parseYearStyles`. Pure, client-safe. |
+| `scripts/verify-year-overlay.ts` | **NEW — 24 assertions** pinning it, framework-free. |
+| `app/(app)/analytics/use-year-styles.ts` | **NEW** — the `localStorage` store + same-tab broadcast. |
+| `app/(app)/analytics/year-style-menu.tsx` | **NEW** — the Style popover and `StrokePreview`. |
+| `app/(app)/analytics/metric-expand.tsx` | `YearOverlayChart` added beside the untouched `MetricTrendChart`; the companion rule, the legend, the `Style` control, the new `campaignMeta` prop. |
+| `app/(app)/analytics/campaign-room.tsx` | builds `campaignMeta` from `matrix.allPeriods` — name + start date, read, never parsed from a label. |
+| `lib/analytics/matrix.ts` | `HistoryPoint.seq` — the point's position in its year, carried off `Period.seq` for the same reason `year` already was: deriving it by slicing `periodKey` would be a second definition of a fact the period already states. |
+| `app/globals.css` | `--bw-year-1 … 8`, both themes. |
+| `components/digest/drilldown/drilldown-modal.tsx` | **one platform line**: `DrilldownSection`'s header now WRAPS. It was a single non-shrinking row, so a subtitle beside two controls pushed them out of the card at 375 px — **measured 212 px of document overflow** once the expand grew a third control. Wrapping costs a card with room nothing (it still lays out on one line) and takes 375 px to **0 px of overflow**. No tenant knowledge added. |
+
+### Verified in the browser
+
+Driven through a throwaway fixture (deleted before commit; `/analytics` itself is behind
+OAuth) on synthetic data spanning 2024–2026 with a custom campaign `SRC` starting
+2026-08-19.
+
+- **M mode, 1512 px, light and dark** — twelve ticks, three years as solid blue / dashed
+  orange / dotted aqua, 2026 ending at September because the later months are `null`
+  rather than 0.
+- **Q mode** — Q1…Q4, same three series.
+- **Campaign expand** — the axis reads JANUARY … AUGUST · **SRC** · SEPTEMBER … DECEMBER,
+  and the 2024 / 2025 lines **draw straight through SRC with no dot**, because that column
+  is 2026's and those years are not missing anything. Their tooltips at SRC are absent —
+  hovering it lists only `SRC 2026 · 410.0 t`, while AUGUST lists all three years.
+- **Style popover open** — eight swatches + the colour input + five drawn strokes per year.
+- **375 px** — every tick label present, `Dec` no longer clipped, and **0 px of horizontal
+  document overflow**.
+- **Print preview** (the real `bw-printing` rules, media emulated) — one card, controls
+  gone, the paper title and restatement blocks present, and the three dash patterns intact
+  so the sheet reads in mono.
+- **Single year selected** — the `3-month avg` control and its line return.
+- **Two axis-label fixes measured, not assumed**: the chart's right margin is the last
+  LABEL's overhang (a tick is centred on its point, so half of `Dec` — and half of
+  `DECEMBER` — hung past the plot and was clipped); and the batch clock keeps recharts'
+  width-aware tick thinning rather than pinning `interval={0}`, because whole month NAMES
+  plus a custom campaign overlap into mush on a phone. The calendar clocks pin all twelve,
+  which fit at 375 px.
+
+- **Gates**: `tsc --noEmit` clean · `npm run lint` 146 problems / 16 errors (the baseline,
+  unmoved) · `npm run build` clean · `verify-year-overlay` **24** · `verify-table-core` 84 ·
+  `verify-campaign-selection` 11 · `npm run test:e2e` 57 passed.
 
 ## Dependencies
 

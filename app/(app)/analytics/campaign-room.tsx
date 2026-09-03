@@ -339,6 +339,42 @@ export function CampaignRoom({
   }, [matrix.periods, campaigns]);
 
   /**
+   * R9 — what the year-overlay axis needs about a campaign that a
+   * `HistoryPoint` cannot carry: its own NAME and the day it STARTED.
+   *
+   * The name is what places it — `campaignMonthIndex` in `lib/analytics/campaign.ts`
+   * is THE definition of "is this one of the twelve", already behind the column
+   * sort and the checklist — and the start date is what places a name that is
+   * NOT one of them (Renzo's `SRC`), immediately after the month it began in.
+   *
+   * **The start date is READ, never parsed out of a label.** It is
+   * `firstReportedDate` — the campaign's first production day, which is exactly
+   * what Renzo meant by "its production date" — falling back to `firstFedDate`
+   * for a campaign that was fed but never reported production. Both already
+   * cross the wire (`view_analytics_production_by_batch.first_reported_date`
+   * and `view_analytics_batch_cost.first_fed_date`), so this adds no read.
+   * Neither exists for a campaign that has done nothing yet, and the axis says
+   * so rather than inventing a month.
+   */
+  const campaignMeta = React.useMemo(
+    () =>
+      new Map(
+        matrix.allPeriods.map((p) => {
+          const r = p.months[0];
+          return [
+            p.key,
+            {
+              name: r?.productionBatch ?? "",
+              startDate:
+                r?.batch?.firstReportedDate ?? r?.cost?.firstFedDate ?? null,
+            },
+          ] as const;
+        }),
+      ),
+    [matrix.allPeriods],
+  );
+
+  /**
    * The headline figures, over the campaigns actually on screen — so the chips
    * describe the same window the table under them does. A chip quietly reading
    * every batch beside a filtered grid would be the page disagreeing with
@@ -635,6 +671,7 @@ export function CampaignRoom({
               scopeLabel={printScope}
               asOfDate={asOfDate}
               showDictionary={showDictionary}
+              campaignMeta={campaignMeta}
               onClose={() => onSelect(null)}
             />
           ) : undefined

@@ -396,11 +396,17 @@ export function DrilldownSection({
     <section
       className={cn("flex min-w-0 flex-col rounded-lg border bg-card/60", className)}
     >
-      <header className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2">
+      {/* The header WRAPS (2026-09-03). It used to be one non-shrinking row, so
+          a long subtitle beside two or more controls pushed them straight out of
+          the card at 375 px — measured at 212 px of document overflow once the
+          analytics expand grew a third control. Wrapping costs a card with room
+          nothing at all (the row still lays out on one line) and is the only
+          thing that makes a narrow one behave. */}
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 border-b px-3 py-2">
         <h4 className="min-w-0 truncate text-[length:var(--bw-fs-12,0.75rem)] font-semibold leading-[var(--bw-lh-xs,1rem)] tracking-tight">
           {title}
         </h4>
-        <span className="flex shrink-0 items-center gap-2">
+        <span className="flex min-w-0 flex-wrap items-center justify-end gap-2">
           {subtitle && (
             <span className="text-[length:var(--bw-fs-105,10.5px)] text-muted-foreground">
               {subtitle}
