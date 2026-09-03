@@ -1564,13 +1564,14 @@ one item that is not on `/analytics` at all.
 > ### ✅ SHIPPED — 2026-09-03, branch `feat/analytics-r8-cleanup`
 > Gates: `npx tsc --noEmit` clean · `npm run lint` **146 problems / 16 errors** (the
 > baseline, unmoved) · `npm run build` clean · `verify-table-core` **84** ·
-> `verify-rc-in-grid` **34** (was 33 — one new check block) · `verify-campaign-selection`
+> `verify-rc-in-grid` **37** (was 33 — one check block for the sort/filter opt-in, three
+> for the header chrome budget) · `verify-campaign-selection`
 > **11** · `npm run test:e2e` **57 passed**. Browser-verified at 1512 in throwaway harnesses
 > under `app/dev/table-playground/` (`r8/` and `r8-rcin/`), both deleted before the commit.
 
 | # | Asked for | Where it landed |
 |---|---|---|
-| A | *"the columns in v2 table of deliveries don't have robust filtering/sorting as per my rule about universal table modules"* | `app/(app)/inventory/rc-in/delivery-grid-v2.tsx` — `enableSort` + `enableFilter` on the `BlackwoodTable`, plus one new check block in `scripts/verify-rc-in-grid.ts` |
+| A | *"the columns in v2 table of deliveries don't have robust filtering/sorting as per my rule about universal table modules"* | `app/(app)/inventory/rc-in/delivery-grid-v2.tsx` — `enableSort` + `enableFilter` on the `BlackwoodTable`, plus four new check blocks in `scripts/verify-rc-in-grid.ts` (the opt-in, and the header chrome budget the opt-in made the columns owe) |
 | B | Remove three prose blocks — the campaign section's two paragraphs, the footnote under the campaign table, the suppliers intro + its truckload line | `campaign-room.tsx`, `supplier-room.tsx`; the footnote's one load-bearing fact moved into `MARK_LEGEND` in `lib/analytics/campaign-matrix.ts` |
 | C | Remove five campaign rows *for now* — Output per reported day, Downtime, Power, Power intensity, Bags counted | `lib/analytics/campaign-matrix.ts` (registry + their four annotation helpers), the Power chip in `campaign-room.tsx`, the row-order storage key bump in `use-row-order.ts` |
 | D | Rename **Stock avg cost → RC Inventory Price** | `lib/analytics/metrics.ts` (label + dictionary), `metric-expand.tsx`'s `StockValueSplit` (bullet AND its denominator) |
@@ -1603,6 +1604,23 @@ month headings and the Σ rule-off and renders the rows flat ascending; a `MIN 2
 WEIGHT leaves **59 of 120 rows**; the strip reads `59 of 120 rows · sorted by DATE ↑ ·
 Clear`; the funnel offers `contains…` plus MIN/MAX on WEIGHT and `contains…` alone on the
 text lanes; the blank rows stay at the bottom throughout.
+
+**The widths had to pay the chrome budget, and thirteen of eighteen headers clipped until
+they did.** CLAUDE.md's *"The header owes chrome, not just its label"* trap, hit for the
+fourth time (QC, RC Movement, now here): the sort caret and the filter funnel are
+`opacity-0` flex SIBLINGS of the label, so a column sized to its bare name loses **57px**
+(16 `px-2` + 32 for two 16px buttons + 8 for their two `gap-1` + 1 `border-r`) the moment
+they exist. Confirmed from the DOM rather than the class list — `columnWidth −
+labelBoxWidth === 57` on all eighteen. Every label was measured at the header's own type
+(`500 11px ui-sans-serif`, `letter-spacing: 0.275px`, uppercase) in Chromium at 1512, and
+every width is now `label + 57 + 1`; the 1px is a deliberate cushion, because `VM` sat at
+18.00 available against 18.00 needed on the first pass — passing, and one hundredth of a
+pixel from an ellipsis. Twelve columns grew (218px of sheet, which scrolls;
+`document.scrollWidth === clientWidth` at 1512), the seven lab lanes stopped sharing one
+width per decimal count because every lane is now floored by its own header, and three new
+check blocks in `verify-rc-in-grid.ts` (**37**) pin the measured table, the widest-real-value
+floors, and the 57 against `HeaderCell.tsx`'s own markup. Widening was the only honest fix:
+the alternative is `sortable: false` on the narrow lanes, and the ask was every column.
 
 **No `f_<column>` URL wiring was added, and none exists to copy.** The universal filter is
 VIEW state by design — `lib/table/CONTEXT.md` §3 states it never touches the URL — and the

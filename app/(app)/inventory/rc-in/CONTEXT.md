@@ -368,6 +368,75 @@ filters … are not built yet"* over a header that now plainly filters. It now n
 actually still absent — the live table's own STATE/Supplier/LOC popovers and their URL
 persistence, which are a different feature.
 
+#### The widths had to pay the chrome budget — thirteen of eighteen headers clipped
+
+CLAUDE.md, *"The header owes chrome, not just its label"*. Switching sort + filter on
+**clipped thirteen headers without touching one width**: `STATE` → `STA…`, `WEIGHT` →
+`WEI…`, `TRUCK` → `TR…`, `LOC` → `L`, `BD ASTM` / `BD JIS` → `B…`, `PHP/KG` → `PHP…` and
+every 2-decimal lab lane down to a single letter. The two chrome buttons are `opacity-0`
+flex **siblings** of the label — unseen, but in layout on every render — so a column sized
+to its bare name loses 57px the moment they exist. This is the fourth screen to hit it
+(QC 2026-08-26, RC Movement 2026-08-29, now here).
+
+**57 = 16 (`px-2`) + 32 (two 16px buttons) + 8 (their two `gap-1`) + 1 (`border-r`)**, and
+it was CONFIRMED from the DOM rather than taken from the class list: on all eighteen
+columns `columnWidth − labelBoxWidth === 57` exactly. This grid pays the budget once and no
+more — it declares no `renderHeaderSlot` (which would add 4px) and no `subLabel`.
+
+Every label was measured at the header's own type (`500 11px ui-sans-serif`,
+`letter-spacing: 0.275px`, uppercase) in Chromium at 1512, off an unconstrained probe span.
+**Every width is `label + 57 + 1`.** The 1px is a deliberate cushion, not slack: the labels
+are measured to two decimals and the flex row lays out in sub-pixels, and on the first pass
+`VM` sat at **18.00 available against 18.00 needed** — passing, and one hundredth of a pixel
+from an ellipsis.
+
+| Column | Label px | Floor (+57+1) | Was | Now |
+|---|---:|---:|---:|---:|
+| STATE | 35.50 | 93.50 | 92 | **94** |
+| DATE | 29.53 | 87.53 | 98 | 98 |
+| SUPPLIER | 55.78 | 113.78 | 150 | 150 |
+| BATCH | 38.86 | 96.86 | 152 | 152 |
+| LOC | 23.59 | 81.59 | 62 | **82** |
+| TRUCK | 39.70 | 97.70 | 90 | **98** |
+| SKS | 22.48 | 80.48 | 58 | **81** |
+| WEIGHT | 46.27 | 104.27 | 96 | **105** |
+| MC | 18.39 | 76.39 | 58 | **77** |
+| GRIT | 27.16 | 85.16 | 58 | **86** |
+| VM | 18.00 | 76.00 | 58 | **76** |
+| ASH | 24.11 | 82.11 | 58 | **83** |
+| FC | 15.03 | 73.03 | 58 | **74** |
+| BD ASTM | 52.41 | 110.41 | 76 | **111** |
+| BD JIS | 36.91 | 94.91 | 76 | **95** |
+| PHP/KG | 42.81 | 100.81 | 92 | **101** |
+| PHP TOTAL | 63.80 | 121.80 | 128 | 128 |
+| REMARKS | 55.38 | 113.38 | 220 | 220 |
+
+**A width only ever GREW, so no widest-real-value floor can have been broken** — the
+`SEPTEMBER-26-BLK18` batch code (150), the `₱ 1,234,567.89` accounting total (118), the
+`yyyy-MM-dd` date (86) and REMARKS' 200px Excel-Standard truncate are all still satisfied,
+and a second check block asserts them beside the header floors rather than trusting the
+argument.
+
+**The seven lab lanes stopped sharing a width.** They were `decimals === 3 ? 76 : 58`,
+because a 3-decimal lane was floored by its header and a 2-decimal lane by its value. With
+the chrome charged **every lane is floored by its header**, and each header is its own
+number — `FC` needs 74 and `GRIT` needs 86 — so one width per decimal count is no longer
+expressible. `LAB_COLUMNS` now carries a measured `width` per field.
+
+The sheet is **218px wider** in total and scrolls, which is the rule ("never crush, always
+scroll"); `document.scrollWidth === clientWidth` at 1512 with the popover open, so the
+document itself never overflows. **Widening was the only honest fix** — the alternative the
+platform offers is `sortable: false, filterable: false` on the narrow lanes, and Renzo asked
+for sort and filter on *all* columns.
+
+Pinned by three new check blocks in `scripts/verify-rc-in-grid.ts` (**37 now**), in the
+idiom of `verify-qc-grid.ts` / `verify-rc-movement-grid.ts`: the measured label table lives
+in the script, the widths are parsed out of the grid's own source, an empty or partial
+extraction is a FAILURE rather than a vacuous pass (proven — dropping WEIGHT back to 96
+fails with *"declared 96px but the header needs 104.27px"*), and the 57 itself is asserted
+against `HeaderCell.tsx`'s markup so a change to the platform's two buttons fails here
+rather than silently invalidating every number above.
+
 ## See Also
 - [Blackwood Table — the universal table module](../../../../lib/table/CONTEXT.md) — the port (`ColumnSpec` / `RowKind.occupies` / `TableSettings`), the React half, and the `?grid=v2` recipe `delivery-grid-v2.tsx` follows.
 - [Cenapro RC Deliveries](../../cenapro/deliveries/CONTEXT.md) — `deliveries-grid-v2.tsx` + `grid-v2-save.ts`, the reference implementation this module's editing pass follows. The shapes are deliberately the same; the ONE structural difference is the server, which takes an allowlisted PARTIAL patch there and a whole row here.

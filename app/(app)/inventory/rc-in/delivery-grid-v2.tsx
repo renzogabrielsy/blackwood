@@ -283,7 +283,39 @@ function editSeams(field: RcInField): Partial<ColumnSpec<DeliveryHistoryRow, Del
 // BD ASTM · BD JIS to 3. `LAB_DECIMALS` lives in the save model so the cell, the clipboard
 // and the payload can never disagree about how many a lane has.
 
-const LAB_COLUMNS: { key: LabField; label: string; title: string; decimals: number }[] =
+/**
+ * THE HEADER CHROME BUDGET — 57px, and every width below is `label + 57`.
+ *
+ * CLAUDE.md, "The header owes chrome, not just its label": a Blackwood Table column with
+ * the sort caret and the filter funnel pays **57px of INVISIBLE header chrome** —
+ * `px-2` (16) + two 16px buttons + their two `gap-1` (8) + the `border-r` (1). The
+ * buttons are `opacity-0` flex SIBLINGS of the label: unseen, but occupying layout on
+ * every render. A column sized to its bare label therefore clips the moment sort and
+ * filter are switched on, which is exactly what happened here — the R8 opt-in turned
+ * `STATE` into `STA…`, `WEIGHT` into `WEI…`, `LOC` into `L` and every lab lane into a
+ * single letter, while the widths themselves had not moved.
+ *
+ * MEASURED, not estimated: each label rendered at the header's own font
+ * (`500 11px ui-sans-serif`, `letter-spacing: 0.275px`, uppercase) in Chromium at 1512,
+ * against `colW − labelBoxW === 57` on every column — the budget confirmed from the DOM
+ * rather than assumed from the class list. `scripts/verify-rc-in-grid.ts` carries the
+ * table and asserts the floor, in the idiom of `verify-qc-grid` / `verify-rc-movement-grid`.
+ *
+ * Every width is `ceil(label) + 57 + 1`. **The 1px is a deliberate CUSHION, not a
+ * rounding slip**: the labels are measured to two decimal places and the browser lays the
+ * flex row out in sub-pixels, so a column sized to exactly `label + 57` sits at ZERO slack
+ * and one font-rendering nudge draws an ellipsis. `VM` measured 18.00 against an available
+ * 18.00 on the first pass — passing, and one hundredth of a pixel from not.
+ *
+ * A width only ever GREW: every column's widest-real-value floor (a `SEPTEMBER-26-BLK18`
+ * batch code, a `1,234,567.89` accounting total) is still satisfied by construction.
+ *
+ * The 57 lives as a CONSTANT in the verify script rather than here, for the same reason
+ * the two reference grids keep it there: a literal width can be parsed out of this file
+ * and checked against a measured label table, while a width computed here from a constant
+ * could only ever be checked against itself.
+ */
+const LAB_COLUMNS: { key: LabField; label: string; title: string; decimals: number; width: number }[] =
     LAB_FIELDS.map((key) => ({
         key,
         label: { mc: 'MC', grit: 'GRIT', vm: 'VM', ash: 'ASH', fc: 'FC', bd_astm: 'BD ASTM', bd_jis: 'BD JIS' }[key],
@@ -297,6 +329,12 @@ const LAB_COLUMNS: { key: LabField; label: string; title: string; decimals: numb
             bd_jis: 'Bulk density — JIS',
         }[key],
         decimals: LAB_DECIMALS[key],
+        // `label + 57 + 1`, measured. A 3-decimal BD lane used to be floored by its HEADER at
+        // 76 and a 2-decimal lane by its VALUE at 58; with the chrome charged, EVERY lane
+        // is floored by its header and each one is its own number — `FC` (15.03px) needs
+        // 74 and `GRIT` (27.16px) needs 86, so one shared width per decimal count is no
+        // longer expressible.
+        width: { mc: 77, grit: 86, vm: 76, ash: 83, fc: 74, bd_astm: 111, bd_jis: 95 }[key],
     }));
 
 // ─── Columns ─────────────────────────────────────────────────────────────────────
@@ -313,7 +351,9 @@ const COLUMNS: ColumnSpec<DeliveryHistoryRow, DeliveryGridCtx>[] = [
         // Floored by `SUNDRYING` — the longest `batch_status` value — plus the 6px status
         // dot and its gap, against the module's `px-2` + 1px selection gutter (18px of
         // chrome). 84 left it a pixel or two short; 92 is the honest minimum.
-        width: 92,
+        // 94 = `STATE` at 35.50px + the 57px chrome budget + 1. It was 92 — clipped to `STA…`
+        // by half a pixel, which is all Chrome needs to draw an ellipsis.
+        width: 94,
         pin: 'start',
         // The joined batch's status, never a field. No `parse`, so no editor can open on
         // it — the column half of the verdict refuses every cell whatever a row says.
@@ -392,7 +432,8 @@ const COLUMNS: ColumnSpec<DeliveryHistoryRow, DeliveryGridCtx>[] = [
         key: 'block_loc',
         label: 'LOC',
         title: 'Block / location',
-        width: 62,
+        // 82 = `LOC` at 23.59px + 57 + 1. At 62 the label had 5px and rendered `L`.
+        width: 82,
         cellKind: 'text',
         selectable: true,
         visible: hiddenBy('block_loc'),
@@ -409,7 +450,8 @@ const COLUMNS: ColumnSpec<DeliveryHistoryRow, DeliveryGridCtx>[] = [
         key: 'truck_plate',
         label: 'TRUCK',
         title: 'Truck plate',
-        width: 90,
+        // 98 = `TRUCK` at 39.70px + 57 + 1. At 90 it rendered `TR…`.
+        width: 98,
         cellKind: 'text',
         selectable: true,
         visible: hiddenBy('truck_plate'),
@@ -424,7 +466,8 @@ const COLUMNS: ColumnSpec<DeliveryHistoryRow, DeliveryGridCtx>[] = [
         key: 'sacks',
         label: 'SKS',
         title: 'Sacks',
-        width: 58,
+        // 81 = `SKS` at 22.48px + 57 + 1. At 58 the label had ONE pixel.
+        width: 81,
         align: 'right',
         cellKind: 'number',
         selectable: true,
@@ -442,7 +485,8 @@ const COLUMNS: ColumnSpec<DeliveryHistoryRow, DeliveryGridCtx>[] = [
         key: 'weight_kg',
         label: 'WEIGHT',
         title: 'Weight (kg)',
-        width: 96,
+        // 105 = `WEIGHT` at 46.27px + 57 + 1. At 96 it rendered `WEI…`.
+        width: 105,
         align: 'right',
         cellKind: 'number',
         selectable: true,
@@ -462,9 +506,7 @@ for (const lab of LAB_COLUMNS) {
         key: lab.key,
         label: lab.label,
         title: lab.title,
-        // A 3-decimal BD lane is floored by its HEADER (`BD ASTM`, seven characters at
-        // `text-[11px]` uppercase ≈ 54px against 68 − 17 = 51 usable), not by `0.352`.
-        width: lab.decimals === 3 ? 76 : 58,
+        width: lab.width,
         align: 'right',
         cellKind: 'number',
         selectable: true,
@@ -510,7 +552,8 @@ COLUMNS.push(
         key: 'cost_basis',
         label: 'PHP/KG',
         title: 'Delivered price per kilogram',
-        width: 92,
+        // 101 = `PHP/KG` at 42.81px + 57 + 1. At 92 it rendered `PHP…`.
+        width: 101,
         align: 'right',
         cellKind: 'number',
         selectable: true,
