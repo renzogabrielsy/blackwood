@@ -472,5 +472,60 @@ check('every error surface in the grid is the persistent, copyable one', () => {
   assert.equal(/\btoast\.error\s*\(/.test(src), false, 'sonner toast.error is forbidden — use errorToast')
 })
 
+check('the universal sort + filter are opted INTO, and every column can be judged', () => {
+  const raw = readFileSync(join(ROOT, 'app/(app)/inventory/rc-in/delivery-grid-v2.tsx'), 'utf8')
+  const src = stripComments(raw)
+
+  // Renzo's rule: a table on the universal module gets the universal
+  // sort/filter. `scope="endless"` defaults BOTH off, so this grid has to say
+  // so explicitly — and the assertion exists because deleting one of the two
+  // props is a silent removal of the affordance, not a build error.
+  assert.ok(src.includes('scope="endless"'), 'the scan target must still exist')
+  assert.match(src, /\benableSort\b/, 'the endless default is OFF — the opt-in must be explicit')
+  assert.match(src, /\benableFilter\b/)
+
+  // The opt-in is only HONEST while this grid has no server keyset. The moment
+  // it grows a pager, a client-side sort would reorder the loaded window only
+  // and `hasOlder`/`hasNewer` would describe an order that no longer exists.
+  for (const pager of ['startReached', 'endReached', 'firstItemIndex', 'initialTopMostItemIndex']) {
+    assert.equal(src.includes(pager), false,
+      `${pager} would make this a server keyset — re-read the enableSort note before keeping both`)
+  }
+
+  // Nothing opts a column out, so `sortable`/`filterable` default true on all
+  // of them (only `cellKind: 'derived'` opts out, and this grid declares none).
+  assert.equal(/\bsortable\s*:/.test(src), false, 'no column opts out of sorting')
+  assert.equal(/\bfilterable\s*:/.test(src), false, 'no column opts out of filtering')
+  assert.equal(src.includes("cellKind: 'derived'"), false)
+
+  // A column sorts and bounds by `numericValue` where it has one and by
+  // `clipboardValue` otherwise. So the FOUR numeric lanes declared inline plus
+  // the seven lab lanes built in the loop must all carry a `numericValue`, or
+  // WEIGHT would sort as text and put 9,000 above 18,000 — and MIN/MAX would
+  // not be offered at all, since the popover shows bounds only where a column
+  // declares one.
+  for (const key of ['sacks', 'weight_kg', 'cost_basis', 'php_total']) {
+    assert.match(
+      src,
+      new RegExp(`key: '${key}',[\\s\\S]{0,900}?numericValue:`),
+      `${key} must sort and bound as a NUMBER`,
+    )
+  }
+  assert.match(src, /for \(const lab of LAB_COLUMNS\)[\s\S]{0,900}?numericValue: \(row\) => labValueOf/,
+    'the seven lab lanes are built in a loop — the numericValue lives there')
+  assert.equal(LAB_FIELDS.length, 7)
+
+  // …and every TEXT lane falls through to `clipboardValue`, which is both the
+  // sort key and the string the filter's `contains` box searches. A column
+  // with neither would fall back to `storedText`, which a readonly column has
+  // nothing in.
+  for (const key of ['state', 'transaction_date', 'supplier', 'batch_code', 'block_loc', 'truck_plate', 'remarks']) {
+    assert.match(
+      src,
+      new RegExp(`key: '${key}',[\\s\\S]{0,900}?clipboardValue:`),
+      `${key} must be searchable and sortable as text`,
+    )
+  }
+})
 
 console.log(`\n${passed} assertions passed.`)

@@ -55,13 +55,6 @@ function pctNum(v: number | null): string {
   });
 }
 
-function t1(kg: number): string {
-  return (kg / 1000).toLocaleString("en-US", {
-    minimumFractionDigits: 1,
-    maximumFractionDigits: 1,
-  });
-}
-
 /** One concentration chip. No colour, no threshold — a magnitude and a name. */
 function Chip({
   label,
@@ -170,17 +163,17 @@ export function SupplierRoom({
           >
             Suppliers
           </h2>
-          <p className="text-[length:var(--bw-fs-12)] leading-relaxed text-muted-foreground">
-            Who we actually bought from in {data.year}, what share of the yard
-            each one is, and whether we paid them above or below the going rate.
-            Sun-drying returns and re-cooks are never counted as a purchase —
-            we already paid for those kilos once.
-          </p>
+          {/* ── R8 — THE INTRO PARAGRAPH AND THE TRUCKLOAD LINE ARE GONE ──
+              Renzo asked for both out. The paragraph described what the four
+              blocks below already show, and the population rule it ended on
+              ("returns and re-cooks are never a purchase") is not lost: it is
+              stated in `SUPPLIER_DICTIONARY`, reachable from the dictionary
+              strip under the concentration chips and from every ↩ returns chip
+              in the matrix, which is where a reader actually meets a returned
+              kilo. The `563 truckloads · 9,293.8 t` line went with it — the
+              same tonnage is the `Σ market` footer row of the matrix directly
+              below, printed there against the month columns it belongs to. */}
         </div>
-        <span className="shrink-0 text-[length:var(--bw-fs-115)] text-muted-foreground">
-          {data.totalDeliveries.toLocaleString("en-US")} truckloads ·{" "}
-          <span className="font-mono">{t1(data.totalKg)}</span> t
-        </span>
       </header>
 
       {/* ── Concentration ─────────────────────────────────────────────── */}

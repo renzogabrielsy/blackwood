@@ -43,8 +43,20 @@ import {
   resolveOrder,
 } from "@/lib/analytics/row-order";
 
-/** Versioned, so a future change of shape cannot be read as this one. */
-const STORAGE_PREFIX = "bw.analytics.roworder.v1.";
+/**
+ * Versioned, so a future change of shape cannot be read as this one.
+ *
+ * **R8 bumped v1 → v2.** The campaign registry lost five rows, so a saved
+ * order written before this round names keys that no longer exist. Property 2
+ * above already handles that exactly — `resolveOrder` DROPS a key that names
+ * no row and APPENDS a row the save never heard of, and it is asserted — so
+ * the bump is belt and braces rather than a fix for a live break. It is here
+ * because a stored order is the one piece of this page's state that outlives a
+ * deploy in a reader's browser, and "the saved value's shape changed" is
+ * precisely what a version is for. It costs the RC Inventory group's saved
+ * order too, which is a preference and not a figure.
+ */
+const STORAGE_PREFIX = "bw.analytics.roworder.v2.";
 
 function read(scope: string): string[] | null {
   try {

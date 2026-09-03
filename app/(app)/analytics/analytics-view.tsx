@@ -735,7 +735,6 @@ export function AnalyticsView({
         fedKgMismatches={campaignFold.fedKgMismatches}
         batches={data.productionBatches.rows}
         grades={data.productionGrades}
-        canViewPrices={data.canViewPrices}
         selected={metric}
         onSelect={setMetric}
         comparison={comparison}

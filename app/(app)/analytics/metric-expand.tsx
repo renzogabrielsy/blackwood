@@ -718,9 +718,18 @@ function InventorySplit({ month }: { month: AnalyticsMonth }) {
  * unvalued kilos are real charcoal the figure cannot describe.
  */
 function StockValueSplit({ month }: { month: AnalyticsMonth }) {
-  const positive = month.positiveBalanceKg ?? 0;
+  // ── R8 — THE POPULATION IS THE OPEN PILES, NOT EVERY POSITIVE ONE ───────
+  // `view_analytics_inventory_eom` now values OPEN piles only (migration
+  // `20260903013948`), and its `value_coverage_pct` is
+  // `valued_kg ÷ (valued_kg + unvalued_kg)` over THAT population. Multiplying
+  // it by `positiveBalanceKg` — which still counts closed-block residue,
+  // correctly, because the residue is physically in the yard — would apply an
+  // open-piles ratio to a whole-yard weight and overstate the valued kilos by
+  // the residue's share. `openKg` is the matching denominator, and the
+  // migration proves `valued_kg = open_kg` on 75 of 75 months.
+  const positive = month.openKg ?? month.positiveBalanceKg ?? 0;
   const coverage = month.valueCoveragePct;
-  // `valued_kg` is not on the wire, but it IS `positive × coverage%` by the
+  // `valued_kg` is not on the wire, but it IS `open × coverage%` by the
   // view's own definition — derived from two published figures for a rail
   // label, never used as a number anything is computed from.
   const valued = coverage == null ? positive : (positive * coverage) / 100;
@@ -766,15 +775,22 @@ function StockValueSplit({ month }: { month: AnalyticsMonth }) {
           a row of its own; it moved here because a total mostly tracks how much
           charcoal is standing, while the average tracks what it COST.
         </li>
+        {/* ── R8 — THE SAME PILES AS THE ROW ABOVE ────────────────────
+            This bullet used to disclose a gap: the valuation counted every
+            positive balance, closed-block residue included, while Ending
+            inventory had moved to the open-piles basis in R1. The view now
+            values OPEN piles only, so there is no gap left to disclose — and
+            a bullet that kept disclosing one would be the page describing a
+            difference that is no longer there. */}
         <li>
           <strong className="font-semibold text-foreground">
-            A wider set of piles than the row above.
+            The same piles as the row above.
           </strong>{" "}
-          The valuation is measured over every positive balance, closed-block
-          residue included, because the view it comes from has no notion of a
-          close date. Being a ratio, that moves this figure far less than it
-          moved the ₱ total — but it is a different population from Ending
-          inventory, and the page says so rather than implying they match.
+          Only OPEN piles are valued. Closed-block residue — the weight that
+          evaporated while a block sat — is loss already recognised, not stock
+          anyone can walk out and use, so it is out of both the kilos and the
+          money. That is what makes the current month agree with the weighted
+          average ₱/kg on the Blocking page.
         </li>
       </ul>
     </div>

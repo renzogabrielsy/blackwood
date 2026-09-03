@@ -29,7 +29,7 @@
 //     reader must not have to open anything to see it;
 //   • the row dividers, the drag/keyboard reorder and the group Print, which
 //     the shared matrix component already provides to every band;
-//   • the ₱ gate. Five of the sixteen rows are `price: true` and the adapter
+//   • the ₱ gate. Five of the eleven rows are `price: true` and the adapter
 //     already nulls every one of those fields server-side, so a restricted role
 //     gets `null` in the cell and the matrix renders the row locked. There is
 //     nothing to hide client-side because nothing arrived.
@@ -46,7 +46,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as React from "react";
-import { Boxes, Factory } from "lucide-react";
+import { Factory } from "lucide-react";
 import type { ComparisonMode, Matrix, MatrixRow } from "@/lib/analytics/matrix";
 import { SECTION_ACCENT } from "@/lib/analytics/metrics";
 import type { MetricKey, MetricSection } from "@/lib/analytics/metrics";
@@ -139,7 +139,7 @@ function Chip({
 }
 
 export interface CampaignRoomProps {
-  /** The merged fold — campaigns as columns, sixteen rows. */
+  /** The merged fold — campaigns as columns, eleven rows (sixteen until R8). */
   matrix: Matrix<CampaignMatrixRow>;
   /** EVERY campaign, in chronological order — the checklist lists them all. */
   campaigns: readonly CampaignMatrixRow[];
@@ -151,7 +151,16 @@ export interface CampaignRoomProps {
   /** The plant half on its own, for the grade fold. */
   batches: readonly ProductionBatchRow[];
   grades: ProductionGradeData;
-  canViewPrices: boolean;
+  /**
+   * R8 — `canViewPrices` NO LONGER ARRIVES HERE. Its only reader was the
+   * footnote under the table, which said "₱ rows are withheld for your role"
+   * to a reader who could already see four rows rendered locked with their own
+   * restricted panel. The gate itself is untouched and is exactly where it
+   * always was: the ADAPTER nulls every ₱ field before the payload leaves the
+   * server, and `AnalyticsMatrix` locks a `price: true` row from the fold's own
+   * `foldOptions.canViewPrices`. Nothing about the security boundary moved —
+   * one duplicate sentence about it did.
+   */
   /** The expanded metric, shared with the matrix at the top of the page. */
   selected: MetricKey | null;
   onSelect(key: MetricKey | null): void;
@@ -173,7 +182,6 @@ export function CampaignRoom({
   fedKgMismatches,
   batches,
   grades,
-  canViewPrices,
   selected,
   onSelect,
   comparison,
@@ -451,68 +459,34 @@ export function CampaignRoom({
           >
             By production batch
           </h2>
-          <p className="text-[length:var(--bw-fs-12)] leading-relaxed text-muted-foreground">
-            A campaign is the unit the plant actually runs, and it{" "}
-            <strong className="font-medium text-foreground">
-              spans calendar months
-            </strong>{" "}
-            — AUGUST closed and SEPTEMBER opened on the same day. So one column
-            answers the whole question about one batch: what it fed, what that
-            charcoal cost, what came out the other end and what the plant burned
-            doing it.
-          </p>
-          {/* ── R7 — THE CLARIFICATION, AT THE POINT OF USE ───────────────
-              A reader of a batch column is owed two things: why the columns are
-              batches at all, and which single figure on the table was mapped
-              rather than tagged. */}
-          <p className="mt-1 flex items-start gap-1.5 text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
-            <Boxes className="mt-0.5 size-3 shrink-0" aria-hidden />
-            <span>
+          {/* ── R8 — THE TWO EXPLANATORY PARAGRAPHS ARE GONE ─────────────
+              Renzo read the shipped page and asked for both to come out: the
+              "a campaign is the unit the plant actually runs" paragraph and
+              the "a column is a production batch, not a month" one, the
+              second of which also carried the "Filtered to N of M batches"
+              sentence. The COUNT survives — it is the small
+              `1 of 3 years · 10 of 34 batches` line beside the dropdowns
+              below, which is where a reader looks for it — and every
+              definition those paragraphs spelled out is still one click away
+              in the dictionary strip under the chips (the batch clock, the
+              reported-days denominator, the grade mix). Prose that repeats a
+              definition the page already carries is the thing that was cut,
+              never the definition.
+
+              ONE sentence stayed, because it is not an explanation: the merge
+              between the two source views CHECKS that they agree about how
+              much a campaign fed, and says so when they do not (measured 0 of
+              32 today). A finding is not prose. */}
+          {fedKgMismatches.length > 0 && (
+            <p className="mt-1 text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
               <strong className="font-medium text-foreground">
-                A column is a production batch, not a month.
+                The two source views disagree about how much{" "}
+                {fedKgMismatches.join(", ")} fed
               </strong>{" "}
-              A batch runs across month boundaries and a changeover day carries
-              two of them, so this is the clock the plant actually works to —
-              which is why{" "}
-              <strong className="font-medium text-foreground">
-                Charcoal fed
-              </strong>{" "}
-              here and{" "}
-              <strong className="font-medium text-foreground">Usage</strong> in
-              RC Inventory are the same kilos cut two different ways and will
-              not match month for month. Tonnage, downtime, days and bags are
-              grouped by a batch tag the records already carry;{" "}
-              <strong className="font-medium text-foreground">
-                electricity is the one mapped figure
-              </strong>{" "}
-              — meters record a date and no batch, so a day&rsquo;s power goes
-              to the batch that had most recently started.
-              {filtered && (
-                <>
-                  {" "}
-                  <strong className="font-medium text-foreground">
-                    Filtered to {summary.shownCount} of {campaigns.length}{" "}
-                    batches
-                    {shownYears.size < yearGroups.length
-                      ? ` across ${shownYears.size} of ${yearGroups.length} years`
-                      : ""}
-                  </strong>{" "}
-                  — the grade mix below follows the same selection.
-                </>
-              )}
-              {fedKgMismatches.length > 0 && (
-                <>
-                  {" "}
-                  <strong className="font-medium text-foreground">
-                    The two source views disagree about how much{" "}
-                    {fedKgMismatches.join(", ")} fed
-                  </strong>{" "}
-                  — the cost view&rsquo;s figure is the one shown, and this
-                  sentence exists because the merge checks rather than assumes.
-                </>
-              )}
-            </span>
-          </p>
+              — the cost view&rsquo;s figure is the one shown, and this sentence
+              exists because the merge checks rather than assumes.
+            </p>
+          )}
         </div>
         {/* ── The group's own controls ───────────────────────────────────
             R8 — TWO dropdowns, ONE selection. Year narrows the batch list
@@ -559,7 +533,12 @@ export function CampaignRoom({
       </header>
 
       {/* ── The selection at a glance ─────────────────────────────────── */}
-      <div className="grid grid-cols-2 gap-2 rounded-lg border bg-card p-2 sm:grid-cols-4">
+      {/* R8 — THREE chips, not four. The Power chip went with the Power row:
+          a selection chip is a headline for a row on the table beneath it, and
+          a headline for a figure that is no longer published is a figure with
+          nowhere to go and check. `sm:grid-cols-3` so three chips fill the
+          strip rather than leaving a gap where the fourth was. */}
+      <div className="grid grid-cols-2 gap-2 rounded-lg border bg-card p-2 sm:grid-cols-3">
         <Chip
           label="Fed"
           value={t1(summary.fedKg)}
@@ -578,20 +557,6 @@ export function CampaignRoom({
           unit="%"
           note={gradeSet.topGrade ?? undefined}
           title={`${gradeSet.topGrade ?? "—"} was ${pct1(gradeSet.topGradeSharePct)}% of everything made across the batches shown, out of ${gradeSet.gradeCount} grade${gradeSet.gradeCount === 1 ? "" : "s"}. A magnitude, not a verdict — nothing on this page turns amber because a share is high.`}
-        />
-        <Chip
-          label="Power"
-          value={summary.kwh.toLocaleString("en-US", { maximumFractionDigits: 0 })}
-          unit="kWh"
-          note={summary.suspectReadings > 0 ? "⚠" : undefined}
-          title={
-            (summary.suspectReadings > 0
-              ? `Metered consumption for the batches shown, published exactly as recorded — including ${summary.suspectReadings} reading${summary.suspectReadings === 1 ? "" : "s"} we can prove is mis-keyed. Nothing here corrects the underlying record; the power-intensity row is where the broken reading is taken out. `
-              : "Metered consumption for the batches shown, across every meter. ") +
-            (summary.unmappedKwh
-              ? `A further ${summary.unmappedKwh.toLocaleString("en-US", { maximumFractionDigits: 0 })} kWh was metered before the first batch was reported and belongs to no batch on this clock — it is not lost, it is readable by month in the calendar production view.`
-              : "")
-          }
         />
       </div>
 
@@ -621,31 +586,22 @@ export function CampaignRoom({
             entry={PRODUCTION_DICTIONARY.grade_mix.dictionary}
           />
         </span>
-        <span title={`Days production actually reported across the batches shown — the denominator behind the output-per-day row, deliberately NOT the yard's working days. A changeover day belongs to two batches and both really did run it, so these counts add to slightly more than the calendar.`}>
+        <span title={`Days production actually reported across the batches shown — the plant's own denominator, deliberately NOT the yard's working days. A changeover day belongs to two batches and both really did run it, so these counts add to slightly more than the calendar.`}>
           · {summary.reportedDays.toLocaleString("en-US")} reported days over{" "}
           {summary.reportedBatches} reporting batch
           {summary.reportedBatches === 1 ? "" : "es"}
         </span>
-        {summary.reasonOnly > 0 && (
-          <span
-            title={`${summary.reasonOnly} of the ${summary.downtimeRecords} downtime records in the batches shown named the repair and left the duration at zero. Those hours are missing from the Downtime row, which is why an affected cell is marked and can never be quoted as a record.`}
-          >
-            · {summary.reasonOnly} downtime record
-            {summary.reasonOnly === 1 ? "" : "s"} carry a repair with no duration
-          </span>
-        )}
-        {summary.unmappedKwh != null && summary.unmappedKwh > 0 && (
-          <span title="The meters ran for 192 days before the first batch was reported. That electricity belongs to no batch on this clock, so it appears in no column — it is not lost, and the totals reconcile exactly against the calendar production view.">
-            ·{" "}
-            {summary.unmappedKwh.toLocaleString("en-US", {
-              maximumFractionDigits: 0,
-            })}{" "}
-            kWh predates the first batch
-          </span>
-        )}
+        {/* R8 — the DOWNTIME and PRE-CAMPAIGN kWh notes were here, and they
+            went with the rows they annotated. Both were caveats ABOUT a
+            published figure ("those hours are missing from the Downtime row",
+            "that electricity belongs to no batch on this clock"), and a
+            caveat about a figure the table no longer prints points at
+            nothing. The measurements themselves are untouched in SQL and
+            still arrive on every `ProductionBatchRow`; the calendar
+            production views carry the same facts by month. */}
       </div>
 
-      {/* ── The sixteen rows, in the page's own table language ───────────
+      {/* ── The eleven rows, in the page's own table language ──────────
           Rendered by the SAME component as the matrix at the top, through the
           SAME fold machinery — so a purchase record, a campaign's cost and a
           production record are judged by identical rules, on their own
@@ -685,15 +641,19 @@ export function CampaignRoom({
         }
       />
 
-      <p className="text-[length:var(--bw-fs-115)] leading-relaxed text-muted-foreground">
-        A <span className="font-mono">~</span> marks a figure measured over only
-        part of the campaign — either blocks that are not yet closed and priced,
-        or kilos fed out of piles with no delivery record at all. A dash is never
-        a zero: hover it and it says what is missing.{" "}
-        {canViewPrices
-          ? "The two ₱ per produced kg rows are the same question asked twice — once at the block price, once at what the charcoal cost after the weight it lost."
-          : "₱ rows are withheld for your role; nothing was sent to this browser."}
-      </p>
+      {/* ── R8 — THE FOOTNOTE UNDER THE TABLE IS GONE ─────────────────────
+          It explained the `~` and the `—`, and it re-stated the two ₱ per
+          produced kg rows as "the same question asked twice". Renzo asked for
+          it out. The one load-bearing half — what the two marks MEAN — moved
+          into `MARK_LEGEND` in `lib/analytics/campaign-matrix.ts`, appended to
+          the dictionary caveat of the three rows that can actually print a
+          `~`, so the master `Definitions` switch still explains it and a
+          reader meets it beside the figure instead of below the table. The
+          other half was a restatement of two row labels that already say it.
+
+          NOTHING replaces it for a price-restricted reader either: the four ₱
+          rows already render locked with their own restricted panel, which is
+          a stronger statement than a sentence at the bottom of the page. */}
 
       {/* ── The grade mix ──────────────────────────────────────────────
           Same columns as the table above it, driven by the same checklist. */}

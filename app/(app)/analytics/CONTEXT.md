@@ -36,6 +36,13 @@
 > JAN/MAR/APR because blocks a campaign only *sun-dried* from are no longer counted as fed.
 > Every figure quoted elsewhere in this file for those four months is **pre-correction**.
 >
+> **OWNER FEEDBACK ROUND 8, SECOND TRANCHE — 2026-09-03. ⚠ THE CAMPAIGN TABLE IS ELEVEN
+> ROWS, NOT SIXTEEN.** Five rows came off it *for now* (Output per reported day · Downtime ·
+> Power · Power intensity · Bags counted), three prose blocks were removed, and
+> **`Stock avg cost` is now `RC Inventory Price`** over a view that values OPEN piles only.
+> Row lists and prose descriptions above this line predate it. See
+> **"Owner feedback round 8 (second tranche)"** near the end of this file.
+>
 > **OWNER FEEDBACK ROUND 8 APPLIED — 2026-09-03.** One change: the campaign table's
 > `Batches` checklist is now **TWO dropdowns — `Year` and `Batches`** — over the SAME
 > `?bhide=` selection. Thirty-two lines in one list was a wall; the batch list is now
@@ -922,8 +929,21 @@ selection.
 **Measured today:** ₱34,752,633 of ₱424,331,252 (8.19%) is closed-block residue.
 ```
 
-Until that lands, the two stock rows describe slightly different populations and the
-`inventory_value` dictionary caveat says so with the measured share in it.
+> ### ✅ ANSWERED AND SHIPPED — 2026-09-03, migration
+> `20260903013948_analytics_inventory_price_open_only`, commit `818fe3b`.
+> The backend went one better than the request: rather than ADDING an
+> `open_value_php` beside the old figure, it narrowed `ending_value_php` /
+> `avg_unit_cost_php_kg` / `valued_kg` / `unvalued_kg` / `value_coverage_pct` to open piles
+> and APPENDED the whole-yard figures under new names
+> (`all_positive_value_php`, `all_positive_avg_unit_cost_php_kg`, `closed_residue_value_php`
+> …), so no existing column name, type or position moved and nothing was lost. "Open" is
+> the aging view's own test, lifted verbatim — one definition, as asked. The row (renamed
+> **RC Inventory Price** in the same round) now publishes
+> **₱37.139967505327993986 over 10,527,344.00 kg across 170 blocks** on 2026-09-01 —
+> identical digits to the Blocking header, which is not a tautology: the grid reads live
+> tables and this view replays every month from events. 30 of 75 months moved, max
+> ₱1.1158/kg. The dictionary caveat that disclosed the 8.19% gap is gone, because the gap
+> is gone.
 
 ## Owner feedback round 3 — the big-screen scale, 2026-09-02
 
@@ -2021,6 +2041,120 @@ exercised rather than assumed.
 - **Gates**: `tsc --noEmit` clean · `npm run lint` 146 problems / 16 errors (the baseline,
   unmoved) · `npm run build` clean · `verify-table-core` 84 assertions · `npm run test:e2e`
   57 passed · `verify-campaign-selection` 11 assertions (new).
+
+## Owner feedback round 8 (second tranche) — prose out, five rows out, two renames, 2026-09-03
+
+Renzo read the shipped page and gave four items. Three are on this page; the first is not
+(it is the RC IN v2 grid — see `app/(app)/inventory/rc-in/CONTEXT.md`).
+
+**The page is now ELEVEN campaign rows, three campaign chips and three fewer paragraphs**,
+and the RC Inventory band's last row is called **RC Inventory Price**.
+
+### The three prose blocks that went, and what each owed
+
+Removing a paragraph is easy; removing the FACT inside it is the mistake. Each block was
+judged on whether it carried anything the page could not say elsewhere.
+
+| Removed | Carried nothing — it restated | Carried something — where it went |
+|---|---|---|
+| The campaign section's two paragraphs (`A campaign is the unit the plant actually runs…` / `A column is a production batch, not a month…`) | the dictionary strip under the chips (batch clock · reported days · grade mix), which is one click away and always was | the `Filtered to N of M batches` sentence → the small `1 of 3 years · 10 of 34 batches` line beside the dropdowns, which is where a reader looks for it. **The fed-kg mismatch sentence STAYED** and now renders on its own, only when it fires: the merge CHECKS that the two source views agree (measured 0 of 32) and a finding is not prose |
+| The footnote under the campaign table | its second half restated two row labels (`the two ₱ per produced kg rows are the same question asked twice`) and told a price-restricted reader something the four locked rows already say louder | its first half — what `~` and `—` mean → **`MARK_LEGEND`** in `lib/analytics/campaign-matrix.ts`, appended to the dictionary `caveat` of the three rows that can actually print a `~` (`delivered_fed_price`, and via `TRUE_PRICE_CAVEAT` both `true_fed_price` and `storage_uplift`). The master `Definitions` switch still explains it, beside the figure rather than below the table |
+| The suppliers intro paragraph + its `563 truckloads · 9,293.8 t` line | what the four blocks under it already show | the population rule (returns and re-cooks are never a purchase) → `SUPPLIER_DICTIONARY`, reachable from the dictionary strip and from every ↩ chip in the matrix. The tonnage → the `Σ market` footer row of the matrix directly beneath, against the month columns it belongs to |
+
+**`canViewPrices` stopped being passed into `CampaignRoom` entirely**, because the footnote
+was its only reader. **The GATE did not move**: the adapter still nulls every ₱ field before
+the payload leaves the server, and `AnalyticsMatrix` still locks a `price: true` row from the
+fold's own `foldOptions.canViewPrices`. One duplicate sentence about the boundary went; the
+boundary did not.
+
+### The five campaign rows, removed FOR NOW — and the data that did not move
+
+Gone from the table: **Output per reported day · Downtime · Power · Power intensity · Bags
+counted** — the whole fourth movement (what the plant BURNED). Eleven rows remain, in the
+same order, so a reader who had learned the table finds every survivor where it was.
+`Print 16` reads `Print 11` on its own, because that label was always `rows.length`.
+
+**"For now" was taken literally: not one query, view, adapter field or type moved.** Every
+figure those rows published still crosses the wire on `ProductionBatchRow`
+(`downtimeShiftsReasonOnly`, `kwhSuspectReadingCount`, `kwhSuspectKwh`,
+`kwhPerProducedKgExclSuspect`, `runsWithSacks` …) and is still folded by `campaign-room.tsx`
+for the selection strip. Restoring a row is a registry entry plus, for four of them, its
+annotation. What went with the rows is only what could no longer point at anything:
+
+- the four annotation helpers that existed for them alone (`downtimeAnnotation`,
+  `powerAnnotation`, `powerIntensityAnnotation`, `sacksAnnotation`) and `intensityUsable` —
+  a helper kept "in case" is a second, unexercised definition of a caveat;
+- the **Power chip** (a selection chip is a headline for a row on the table beneath it, and
+  a headline for a figure nobody can go and check is worse than no headline);
+- two sentences in the strip under the chips that named a removed row: *"those hours are
+  missing from the Downtime row"* and the pre-campaign-kWh reconciliation. The
+  reported-days sentence stayed and lost its reference to the row that is gone.
+
+**Deliberately KEPT:** the five keys stay in `MetricKey`, and `metric-expand.tsx`'s
+`DowntimeSplit` / `PowerSplit` rails stay mounted behind `BatchSideRail`. They are what a
+restored row would want back, a separate charts pass follows this round, and a union member
+with no registry entry cannot render anything by itself — **the matrix iterates the
+REGISTRY**.
+
+**A retired deep link resolves to the section top, not a crash.** `resolveMetric` in
+`page.tsx` tests `CAMPAIGN_METRIC_BY_KEY.has(...)`, which is built from the registry, so
+`?metric=power_kwh` is not "known" and returns null; the page renders whole with no row
+expanded. Verified for all five. **No alias was invented** — R7's `RETIRED_METRIC_ALIASES`
+exists for rows whose QUESTION moved to another row, and none of these five has a home to be
+redirected to; pointing one at a neighbour would be substituting a different figure for it.
+
+**The row-order storage key bumped `v1 → v2`** (`use-row-order.ts`). `resolveOrder` already
+drops a key naming no row and appends a row a save never heard of — that is asserted — so
+this is belt and braces rather than a fix for a live break. It is here because a stored order
+is the one piece of this page's state that outlives a deploy in a reader's browser, and "the
+saved value's shape changed" is exactly what a version is for. It costs the RC Inventory
+group's saved order too, which is a preference and not a figure.
+
+### Stock avg cost → RC Inventory Price
+
+**The METRIC KEY does not move** (`inventory_value`), exactly as it did not when R4 renamed
+"Delivered ₱/kg fed" to "Block price" — every `?metric=inventory_value` link still opens the
+row. A rename changes what a figure is CALLED, never what it is.
+
+The dictionary now states the basis Renzo asked for: **the balance-weighted arrival cost of
+every OPEN pile as of month-end, equal to the Blocking page's Wtd Avg ₱/kg on the current
+month, closed-pile residue excluded because it is loss and not stock.** That is true because
+migration `20260903013948` (commit `818fe3b`, the backend pass running alongside this one)
+landed on the same branch — see the answered backend request above. The caveat that
+disclosed the 8.19% gap is gone with the gap.
+
+**One arithmetic consequence had to be followed through, and it is the kind that goes
+unnoticed.** The expand's `StockValueSplit` rail derived its valued kilos as
+`positiveBalanceKg × value_coverage_pct`, which was right while both halves counted the same
+piles. `value_coverage_pct` is now `valued_kg ÷ (valued_kg + unvalued_kg)` over the OPEN
+population, while `positive_balance_kg` still counts closed-block residue — correctly,
+because that residue is physically in the yard and the stock line says so. Multiplying an
+open-piles ratio by a whole-yard weight would have overstated the rail by the residue's
+share. The denominator is now **`openKg`**, which is the matching one: the migration proves
+`valued_kg = open_kg` on 75 of 75 months.
+
+### Verified in the browser at 1512
+
+Throwaway harnesses under `app/dev/table-playground/` (`r8/` mounting the real
+`AnalyticsView` over fabricated data, `r8-rcin/` mounting the real RC IN v2 grid over 120
+fabricated deliveries), **both deleted before the commit** — the page itself needs a Supabase
+session and a Google sign-in.
+
+- The campaign section renders **no explanatory paragraph and no footnote**, three chips
+  (Fed · Made · Top grade), the two dropdowns with `1 years · 8 campaigns` beside them, and
+  **exactly 11 rows** — `Charcoal fed · Block price · True ₱/kg fed · Cost of storage time ·
+  Weight lost · Blocks closed · Produced · Yield · Process loss · ₱ per produced kg (×2)` —
+  over the `BLOCKS CLOSED / PRICED` footer, with the group action reading **`Print 11`**.
+- The suppliers section renders its `SUPPLIERS` heading straight into the concentration
+  chips: no intro paragraph, no truckload line.
+- The RC Inventory band's last row reads **`RC Inventory Price · ₱/kg on hand`**, and its
+  dictionary popover carries the open-piles basis, the Blocking equality and the
+  closed-residue exclusion verbatim.
+- `?metric=` for all five removed keys resolves to null (asserted directly against the two
+  registries), while `fed_kg`, `yield_rate` and `inventory_value` still resolve.
+- **Gates**: `tsc --noEmit` clean · `npm run lint` 146 problems / 16 errors (the baseline,
+  unmoved) · `npm run build` clean · `verify-table-core` 84 · `verify-rc-in-grid` **34**
+  (was 33) · `verify-campaign-selection` 11 · `npm run test:e2e` 57 passed.
 
 ## Dependencies
 

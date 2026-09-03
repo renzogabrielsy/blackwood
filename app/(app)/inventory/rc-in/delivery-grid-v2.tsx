@@ -1164,11 +1164,19 @@ export function DeliveryGridV2(props: DeliveryGridV2Props) {
                     no client-side predicate that could disagree with it. */}
                 <DeliverySearch search={props.search} />
 
+                {/* The inventory sentence, kept HONEST. `the column filters` left the
+                    "not built" list when the universal sort + filter were switched on
+                    below — every header now carries a sort caret and a funnel. What is
+                    still absent is the live table's OWN header controls (the STATE /
+                    Supplier / LOC popovers and their `?sx=` / `?sup=` / `?loc=` params),
+                    which are a different feature: they persist in the URL and auto-switch
+                    the year to All. Saying "filters are not built" over a header that
+                    plainly filters would be worse than saying nothing. */}
                 <span>
                     RC IN on the Blackwood Table — typing, saving, new rows, search, the Year + Month picker
-                    above, the right-click menu, the selection summary and column resize are live; the rest of
-                    the toolbar, the column filters, the row menu, delete and cell autocomplete are not built
-                    yet.{' '}
+                    above, per-column sort and filter, the right-click menu, the selection summary and column
+                    resize are live; the rest of the toolbar, the live table&rsquo;s own STATE/Supplier/LOC
+                    filters, the row menu, delete and cell autocomplete are not built yet.{' '}
                     <strong className="font-semibold">Classic</strong> above returns to the live table.
                 </span>
 
@@ -1247,6 +1255,35 @@ export function DeliveryGridV2(props: DeliveryGridV2Props) {
                 edits={edits}
                 storedText={storedText}
                 scope="endless"
+                // ── THE UNIVERSAL SORT + FILTER, TURNED ON DELIBERATELY ──────────
+                //
+                // Renzo: *"the columns in v2 table of deliveries don't have robust
+                // filtering/sorting as per my rule about universal table modules."*
+                //
+                // `scope="endless"` defaults BOTH off, and the reason it does is a real
+                // one: an endless grid's row order and its window are the SERVER's
+                // keyset, so a client-side sort would reorder only the rows currently
+                // loaded and `hasOlder` / `hasNewer` would become claims about an order
+                // that no longer exists. **This sheet has no such window.** It passes
+                // no `startReached`, no `firstItemIndex` and no pager at all — `page.tsx`
+                // hands it the WHOLE `?year=` scope (or all years) in one payload and
+                // `items` is filtered from that array in this file. The scope is
+                // `endless` here for the VIRTUALISER, not for a keyset. So the caveat
+                // the default protects against cannot arise, and the affordance is
+                // switched on explicitly rather than by changing the scope — which would
+                // silently change how the rows are rendered.
+                //
+                // Everything else comes from the platform and is not restated here:
+                // every column is sortable and filterable by default (only
+                // `cellKind: 'derived'` opts out, and this grid declares none), the
+                // comparison reads `numericValue` where a column has one and
+                // `clipboardValue` otherwise — so SKS / WEIGHT / the seven lab lanes /
+                // PHP/KG / PHP TOTAL sort and bound as NUMBERS while STATE / DATE /
+                // SUPPLIER / BATCH / LOC / TRUCK / REMARKS sort as case-insensitive
+                // text — the month headings and the Σ rule-off hide while either axis is
+                // active, and the blank rows at the bottom neither sort nor filter out.
+                enableSort
+                enableFilter
                 // The blank-row pool and its `Add N more rows` control. `enabled` is what
                 // also lets a paste taller than the sheet GROW into new rows, so it is off
                 // under a search for exactly the same reason the rows are.

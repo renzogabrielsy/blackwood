@@ -116,11 +116,24 @@ export type MetricKey =
   | "weight_lost"
   | "closed_blocks"
   | "production_output"
-  | "production_per_day"
   | "yield_rate"
   | "process_loss"
   | "php_per_produced_delivered"
   | "php_per_produced_true"
+  // ── R8 — THESE FIVE NAME NO ROW ANY MORE ────────────────────────────
+  // Renzo asked for Output per reported day, Downtime, Power, Power
+  // intensity and Bags counted off the campaign table **for now**. They are
+  // gone from `CAMPAIGN_METRIC_LIST`, and `CAMPAIGN_METRIC_BY_KEY` is built
+  // from that list — so `?metric=power_kwh` resolves to null and the page
+  // renders whole at the section top rather than crashing.
+  //
+  // The KEYS stay in this union deliberately. They are what
+  // `metric-expand.tsx`'s two surviving side rails (`DowntimeSplit`,
+  // `PowerSplit`) compare against, and those panels are left standing for
+  // the charts pass that follows this round and for the day a row comes
+  // back. A union member with no registry entry cannot render anything by
+  // itself — the registry is the only thing the matrix iterates.
+  | "production_per_day"
   | "downtime_hours"
   | "power_kwh"
   | "power_intensity"
@@ -702,8 +715,14 @@ const FLOW_METRICS: readonly Omit<MetricSpec, "section">[] = [
     // third definition of what a kilo cost — the exact thing `avg_cost` was
     // narrowed to prevent (BUG-018 / L-039). The key is unchanged, so every
     // `?metric=inventory_value` deep link still resolves.
+    // ── OWNER FEEDBACK R8: the LABEL is now Renzo's own name for it ──────
+    // *"Rename Stock avg cost → RC Inventory Price."* The METRIC KEY does not
+    // move, exactly as it did not when R4 renamed "Delivered ₱/kg fed" to
+    // "Block price": every `?metric=inventory_value` link shared out of this
+    // page still opens this row. A rename is a change to what a figure is
+    // CALLED, never to what it is.
     key: "inventory_value",
-    label: "Stock avg cost",
+    label: "RC Inventory Price",
     sublabel: "₱/kg on hand",
     unit: "php_per_kg",
     rollup: "periodEnd",
@@ -717,25 +736,32 @@ const FLOW_METRICS: readonly Omit<MetricSpec, "section">[] = [
     decimals: 2,
     dictionary: {
       definition:
-        "What the average kilo standing in the yard had COST us at month-end — not what it would fetch.",
+        "What the average kilo standing in the yard had COST us at month-end — not what it would fetch. On the current month it is the same figure the Blocking page prints as Wtd Avg ₱/kg.",
       basis:
-        "Every valued pile's remaining kilos at that pile's own weighted purchase cost, divided by those kilos. A weighted average, never the mean of the piles' prices.",
+        "The balance-weighted arrival cost of every OPEN pile as of month-end: each pile's remaining kilos at that pile's own weighted purchase cost, divided by those kilos. A weighted average, never the mean of the piles' prices.",
       exclusions:
-        "Piles with a negative balance, and kilos with no price at all — an unpriced truckload is in neither half rather than counted as free. It does not carry the extra cost of charcoal that shrank while it sat; that is the campaign panel's true price.",
+        "Closed-pile residue — the weight that evaporated while a block sat, which is LOSS already recognised and not stock anyone can walk out and use. Piles with a negative balance, and kilos with no price at all: an unpriced truckload is in neither half rather than counted as free. It does not carry the extra cost of charcoal that shrank while it sat; that is the campaign table's true price.",
       rollup: "The month-end figure. An average cost is a state, not a sum.",
       source: "view_analytics_inventory_eom.avg_unit_cost_php_kg",
-      // ── THE ONE PLACE THE TWO STOCK ROWS DO NOT AGREE, SAID OUT LOUD ──
-      // The Ending inventory row above moved to the OPEN-PILES basis in owner
-      // feedback R1; this row is measured over every POSITIVE balance, closed
-      // blocks included, because `view_analytics_inventory_eom` has no notion
-      // of a close date at all — it derives balances from `batch_code` deltas
-      // and never joins `batches`. Making the two agree is a new SQL column,
-      // not a client-side division. The gap is DISCLOSED, not papered over —
-      // and note it matters far LESS to an average than it did to the total it
-      // replaced: residue is 8.19% of the value against a similar share of the
-      // kilos, so it moves a ₱/kg figure barely at all.
+      // ── THE TWO STOCK ROWS NOW SHARE ONE POPULATION ──────────────────
+      // Until R8 this row was measured over every POSITIVE balance, closed
+      // blocks included, while `Ending inventory` above had moved to the
+      // OPEN-PILES basis in owner feedback R1 — so the two rows described
+      // slightly different yards and the gap (8.19% of the valued money) was
+      // DISCLOSED here rather than papered over. R8 closes it where it always
+      // had to be closed: `view_analytics_inventory_eom` values OPEN piles
+      // only, so the numerator and the denominator are the same charcoal the
+      // row above counts, and the current month equals what the Blocking page
+      // publishes as its weighted average ₱/kg.
+      //
+      // ⚠ THIS TEXT DESCRIBES THE VIEW AS OF THAT CHANGE. The column NAME and
+      // this file's read of it are unchanged (`avg_unit_cost_php_kg`) — the
+      // population underneath it narrowed. Nothing here divides two published
+      // figures: inventing an open-piles average in TypeScript would be the
+      // second definition of what a kilo cost that `avg_cost` was narrowed to
+      // prevent (BUG-018 / L-039), which is exactly why it is a SQL change.
       caveat:
-        "Measured over a slightly wider set of piles than the row above — closed-block residue is still in it, 8.19% of the valued money today. Being a ratio, that shifts the figure far less than it shifted the ₱ total this row replaced. The expand prints the valued and unvalued kilos and the ₱ total behind it.",
+        "Closed-pile residue is excluded, because it is loss rather than stock — evaporated weight that is still logged and that nobody can walk out and use. That is the same population the Ending inventory row above counts, so the two rows now describe one yard. The expand prints the valued and unvalued kilos and the ₱ total behind it.",
     },
   },
   // ── OWNER FEEDBACK R7 — `stock_age` and `over_120d` WERE HERE ──────────
