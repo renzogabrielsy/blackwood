@@ -1552,3 +1552,188 @@ app wrote reloads as a deep link with 2024 and 2025 `aria-checked="false"` and 2
 **Gates**: `tsc --noEmit` clean · `npm run lint` 146 problems / 16 errors (baseline,
 unmoved) · `npm run build` clean · `verify-table-core` 84 assertions · `npm run test:e2e` 57
 passed · `verify-campaign-selection` 11 assertions (new).
+
+---
+
+## 14. OWNER FEEDBACK ROUND 8 — 2026-09-03 (PROSE OUT, FIVE ROWS OUT, TWO RENAMES)
+
+The second tranche of round 8. §13.6 above split the campaign table's Batches checklist into
+two dropdowns; this is everything else on Renzo's list after he read the shipped page — plus
+one item that is not on `/analytics` at all.
+
+> ### ✅ SHIPPED — 2026-09-03, branch `feat/analytics-r8-cleanup`
+> Gates: `npx tsc --noEmit` clean · `npm run lint` **146 problems / 16 errors** (the
+> baseline, unmoved) · `npm run build` clean · `verify-table-core` **84** ·
+> `verify-rc-in-grid` **37** (was 33 — one check block for the sort/filter opt-in, three
+> for the header chrome budget) · `verify-campaign-selection`
+> **11** · `npm run test:e2e` **57 passed**. Browser-verified at 1512 in throwaway harnesses
+> under `app/dev/table-playground/` (`r8/` and `r8-rcin/`), both deleted before the commit.
+
+| # | Asked for | Where it landed |
+|---|---|---|
+| A | *"the columns in v2 table of deliveries don't have robust filtering/sorting as per my rule about universal table modules"* | `app/(app)/inventory/rc-in/delivery-grid-v2.tsx` — `enableSort` + `enableFilter` on the `BlackwoodTable`, plus four new check blocks in `scripts/verify-rc-in-grid.ts` (the opt-in, and the header chrome budget the opt-in made the columns owe) |
+| B | Remove three prose blocks — the campaign section's two paragraphs, the footnote under the campaign table, the suppliers intro + its truckload line | `campaign-room.tsx`, `supplier-room.tsx`; the footnote's one load-bearing fact moved into `MARK_LEGEND` in `lib/analytics/campaign-matrix.ts` |
+| C | Remove five campaign rows *for now* — Output per reported day, Downtime, Power, Power intensity, Bags counted | `lib/analytics/campaign-matrix.ts` (registry + their four annotation helpers), the Power chip in `campaign-room.tsx`, the row-order storage key bump in `use-row-order.ts` |
+| D | Rename **Stock avg cost → RC Inventory Price** | `lib/analytics/metrics.ts` (label + dictionary), `metric-expand.tsx`'s `StockValueSplit` (bullet AND its denominator) |
+
+### 14.1 Item A — the endless default is overridden, and the override is the honest one
+
+`scope="endless"` defaults `enableSort` and `enableFilter` **off**, and the reason is real: an
+endless grid's row order and its window are the SERVER's keyset, so a client-side sort would
+reorder only the loaded rows and `hasOlder` / `hasNewer` would become claims about an order
+that no longer exists.
+
+**The RC IN v2 grid has no such window.** It passes no `startReached`, no `endReached`, no
+`firstItemIndex` and no pager at all — `page.tsx` hands it the whole `?year=` scope in one
+payload and `items` is filtered from that array in the file. The scope is `endless` for the
+VIRTUALISER, not for a keyset. So the two props are set explicitly rather than the scope
+being changed, which would silently change how the rows are rendered. The new verify block
+asserts BOTH the opt-in and the absence of every pager prop, so the day someone adds one the
+gate fires and the note gets re-read.
+
+Everything else came from the platform with no per-column work: `sortable` / `filterable`
+default true (only `cellKind: 'derived'` opts out, and this grid declares none), and the
+comparison reads `numericValue` where a column has one and `clipboardValue` otherwise — so
+SKS, WEIGHT, the seven lab lanes, PHP/KG and PHP TOTAL sort and bound as **numbers** while
+STATE, DATE, SUPPLIER, BATCH, LOC, TRUCK and REMARKS sort as case-insensitive **text**.
+DATE sorts correctly as text because it is stored and rendered `yyyy-MM-dd`, which is
+chronological under the locale comparator; no `new Date()` was introduced anywhere near it.
+
+**Measured in the browser at 1512** (120 fabricated deliveries): a sort on DATE hides the
+month headings and the Σ rule-off and renders the rows flat ascending; a `MIN 20000` on
+WEIGHT leaves **59 of 120 rows**; the strip reads `59 of 120 rows · sorted by DATE ↑ ·
+Clear`; the funnel offers `contains…` plus MIN/MAX on WEIGHT and `contains…` alone on the
+text lanes; the blank rows stay at the bottom throughout.
+
+**The widths had to pay the chrome budget, and thirteen of eighteen headers clipped until
+they did.** CLAUDE.md's *"The header owes chrome, not just its label"* trap, hit for the
+fourth time (QC, RC Movement, now here): the sort caret and the filter funnel are
+`opacity-0` flex SIBLINGS of the label, so a column sized to its bare name loses **57px**
+(16 `px-2` + 32 for two 16px buttons + 8 for their two `gap-1` + 1 `border-r`) the moment
+they exist. Confirmed from the DOM rather than the class list — `columnWidth −
+labelBoxWidth === 57` on all eighteen. Every label was measured at the header's own type
+(`500 11px ui-sans-serif`, `letter-spacing: 0.275px`, uppercase) in Chromium at 1512, and
+every width is now `label + 57 + 1`; the 1px is a deliberate cushion, because `VM` sat at
+18.00 available against 18.00 needed on the first pass — passing, and one hundredth of a
+pixel from an ellipsis. Twelve columns grew (218px of sheet, which scrolls;
+`document.scrollWidth === clientWidth` at 1512), the seven lab lanes stopped sharing one
+width per decimal count because every lane is now floored by its own header, and three new
+check blocks in `verify-rc-in-grid.ts` (**37**) pin the measured table, the widest-real-value
+floors, and the 57 against `HeaderCell.tsx`'s own markup. Widening was the only honest fix:
+the alternative is `sortable: false` on the narrow lanes, and the ask was every column.
+
+**No `f_<column>` URL wiring was added, and none exists to copy.** The universal filter is
+VIEW state by design — `lib/table/CONTEXT.md` §3 states it never touches the URL — and the
+Cenapro grid's `filter: { kind, column }` spec is metadata for that module's OWN
+server-side filter feature, not a search-param convention of the platform. The v2 grid's
+`?search=` box is untouched and still owns the one param this screen writes.
+
+One sentence of chrome had to move with it: the `grid=v2` badge's inventory line said *"the
+column filters … are not built yet"* over a header that now plainly filters. It now names
+what is actually still absent — the live table's own STATE/Supplier/LOC popovers and their
+`?sx=` / `?sup=` / `?loc=` persistence, which are a different feature.
+
+### 14.2 Item B — what a removed paragraph owed, and where it went
+
+Three blocks came out. Two of them were pure restatement and left nothing behind; the third
+carried one fact that had to survive.
+
+- **The campaign section's two paragraphs** ("A campaign is the unit the plant actually
+  runs…" and "A column is a production batch, not a month…", the second of which also
+  carried "Filtered to 9 of 32 batches across 1 of 3 years"). The COUNT survives as the
+  small `1 of 3 years · 10 of 34 batches` line beside the dropdowns, which is where a reader
+  looks for it. Every definition the paragraphs spelled out is still one click away in the
+  dictionary strip under the chips — the batch clock, the reported-days denominator, the
+  grade mix. **One sentence stayed** and is not prose: the merge between the two source
+  views CHECKS that they agree about how much a campaign fed and says so when they do not
+  (measured 0 of 32), so it now renders on its own, only when it fires.
+- **The footnote under the campaign table.** Its load-bearing half — what `~` and `—` mean —
+  is now `MARK_LEGEND` in `campaign-matrix.ts`, appended to the dictionary `caveat` of the
+  three rows that can actually print a `~` (`delivered_fed_price` and, through
+  `TRUE_PRICE_CAVEAT`, `true_fed_price` and `storage_uplift`). The master `Definitions`
+  switch still explains it and a reader meets it beside the figure instead of below the
+  table. **A legend nobody scrolls to is not a legend.** Its other half restated two row
+  labels. Nothing replaces it for a price-restricted reader either — the four ₱ rows already
+  render locked with their own restricted panel, which is a stronger statement than a
+  sentence at the bottom of the page — and `canViewPrices` therefore stopped being passed
+  into `CampaignRoom` at all. The GATE did not move: the adapter still nulls every ₱ field
+  server-side and `AnalyticsMatrix` still locks a `price: true` row from the fold's own
+  `foldOptions.canViewPrices`.
+- **The suppliers intro paragraph and its `563 truckloads · 9,293.8 t` line.** The
+  population rule the paragraph ended on (returns and re-cooks are never a purchase) is
+  stated in `SUPPLIER_DICTIONARY`, reachable from the dictionary strip and from every ↩
+  returns chip. The tonnage is the `Σ market` footer row of the matrix directly beneath,
+  printed against the month columns it belongs to.
+
+### 14.3 Item C — five rows off the table, and NOT ONE FIGURE out of the data
+
+The campaign table is **eleven rows**, not sixteen: the whole fourth movement (what the
+plant BURNED) is gone. The order of what remains is untouched, so a reader who had learned
+the table finds every surviving row where it was, and `Print 16` reads `Print 11` on its
+own because that label was always `rows.length`.
+
+**"For now" was taken literally.** No query, no view, no adapter field and no type moved.
+Every figure those rows published still crosses the wire on `ProductionBatchRow` and is
+still folded by `campaign-room.tsx`. What went with the rows is only what could no longer
+point at anything:
+
+- the four annotation helpers that existed for them alone (`downtimeAnnotation`,
+  `powerAnnotation`, `powerIntensityAnnotation`, `sacksAnnotation`) plus `intensityUsable` —
+  a helper kept "in case" is a second, unexercised definition of a caveat;
+- the **Power selection chip** (a chip is a headline for a row on the table beneath it);
+- two sentences in the strip under the chips that named a removed row by name — *"those
+  hours are missing from the Downtime row"* and the pre-campaign kWh reconciliation.
+
+**Kept deliberately:** the five keys stay in `MetricKey`, and `metric-expand.tsx`'s
+`DowntimeSplit` / `PowerSplit` rails stay mounted behind `BatchSideRail`. They are what a
+restored row would want back, and a union member with no registry entry cannot render
+anything by itself — the matrix iterates the REGISTRY.
+
+**A retired deep link resolves to the section top, not a crash.** `resolveMetric` in
+`page.tsx` tests `CAMPAIGN_METRIC_BY_KEY.has(...)`, which is built from the registry, so
+`?metric=power_kwh` is simply not "known" and returns null; the page renders whole with no
+row expanded. Verified for all five. No alias was invented — R7's `RETIRED_METRIC_ALIASES`
+exists for rows whose QUESTION moved somewhere else, and none of these five has a home.
+
+**The row-order key was bumped `v1 → v2`.** `resolveOrder` already drops a key that names
+no row and appends a row a save never heard of, and that is asserted — so this is belt and
+braces, not a fix for a live break. It is here because a stored order is the one piece of
+this page's state that outlives a deploy in a reader's browser, and "the saved value's shape
+changed" is what a version is for. It costs the RC Inventory group's saved order too, which
+is a preference and not a figure.
+
+### 14.4 Item D — RC Inventory Price, and the disclosure that stopped being true
+
+The metric KEY does not move (`inventory_value`), exactly as it did not when R4 renamed
+"Delivered ₱/kg fed" to "Block price" — every `?metric=inventory_value` link still opens the
+row. A rename changes what a figure is CALLED, never what it is.
+
+The dictionary now states the basis Renzo asked for: **the balance-weighted arrival cost of
+every OPEN pile as of month-end, equal to the Blocking page's Wtd Avg ₱/kg on the current
+month, with closed-pile residue excluded because it is loss and not stock.**
+
+**That text is true because a SQL change landed beside it, on this same branch.** Until now
+this row was measured over every POSITIVE balance, closed blocks included, while `Ending
+inventory` above had moved to the open-piles basis in R1 — and the 8.19%-of-the-valued-money
+gap was DISCLOSED here and in the expand's rail rather than papered over. Migration
+`20260903013948_analytics_inventory_price_open_only` (commit `818fe3b`, written by the
+backend pass running alongside this one) closes it where it always had to be closed:
+`view_analytics_inventory_eom` values open piles only, keeping the column name
+`avg_unit_cost_php_kg` and APPENDING new columns rather than renaming any. **Nothing in
+TypeScript re-derives an open-piles average** — inventing one client-side would be the second
+definition of what a kilo cost that `avg_cost` was narrowed to prevent (BUG-018 / L-039),
+which is exactly why it is a SQL change. The published figure is now
+₱37.139967505327993986 over 10,527,344.00 kg across 170 blocks on 2026-09-01, identical
+digits to the Blocking header.
+
+**One arithmetic consequence had to be followed through, and it is the kind that would
+otherwise have gone unnoticed.** The expand's `StockValueSplit` rail derived its valued
+kilos as `positiveBalanceKg × value_coverage_pct`, which was right while both halves counted
+the same piles. `value_coverage_pct` is now `valued_kg ÷ (valued_kg + unvalued_kg)` over the
+OPEN population, while `positive_balance_kg` still counts closed-block residue — correctly,
+because that residue is physically in the yard and the stock line says so. Multiplying an
+open-piles ratio by a whole-yard weight would have overstated the rail by the residue's
+share. The denominator is now `openKg`, which is the matching one: the migration proves
+`valued_kg = open_kg` on 75 of 75 months. The two prose surfaces that disclosed the old gap
+(the dictionary caveat and the rail's second bullet) now state the shared population
+instead.

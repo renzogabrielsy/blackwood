@@ -301,7 +301,141 @@ a sheet that jumps to the top mid-keystroke is one you cannot read while typing.
 **Empty state under a search** says *No deliveries match "X" in any year.* rather than
 naming the period, because under a search the period is not why the sheet is empty.
 
-**Still not built:** the year dropdown + month strip (`DeliverySheetFooter`), the STATE/Supplier/LOC header filters and their `?sx=`/`?sup=`/`?loc=`/`?m=` URL persistence, the "All Years" auto-switch and pre-filter date restore, the Columns popover, the Settings dialog, the density toggle, Delete / Refresh, row-selection mode, the row context menu, `DeliveryHistoryDialog`, `TrueWeightPopover` (the Σ deduction marker), the `?editBatch=` deep link, expanded-mode annotations, per-column bold/italic/underline, and the mobile card layer. Because there is no month filter, **v2 shows the whole `?year=` scope at once** while the live table opens on the current month. Where a behaviour is not built this file renders NOTHING rather than a control that looks alive and does nothing.
+**Still not built:** the year dropdown + month strip (`DeliverySheetFooter`), the live table's OWN STATE/Supplier/LOC header filters and their `?sx=`/`?sup=`/`?loc=`/`?m=` URL persistence (the UNIVERSAL per-column sort and filter ARE built — see the section below), the "All Years" auto-switch and pre-filter date restore, the Columns popover, the Settings dialog, the density toggle, Delete / Refresh, row-selection mode, the row context menu, `DeliveryHistoryDialog`, `TrueWeightPopover` (the Σ deduction marker), the `?editBatch=` deep link, expanded-mode annotations, per-column bold/italic/underline, and the mobile card layer. Because there is no month filter, **v2 shows the whole `?year=` scope at once** while the live table opens on the current month. Where a behaviour is not built this file renders NOTHING rather than a control that looks alive and does nothing.
+
+### The universal sort and filter, switched on (owner feedback R8, 2026-09-03)
+
+Renzo: *"the columns in v2 table of deliveries don't have robust filtering/sorting as per my
+rule about universal table modules."*
+
+It is **two props** on the `BlackwoodTable` — `enableSort` and `enableFilter` — and no
+per-column work at all. Every column already declared what the platform needs.
+
+**Why the props are needed, and why the SCOPE was not changed instead.** `scope="endless"`
+defaults both OFF, and that default protects something real: an endless grid's row order and
+its window are the SERVER's keyset, so a client-side sort would reorder only the rows
+currently loaded and `hasOlder` / `hasNewer` — which mean "there are older/newer rows beyond
+this window **in the server's order**" — would become claims about an order that no longer
+exists.
+
+**This sheet has no such window.** It passes no `startReached`, no `endReached`, no
+`firstItemIndex` and no pager of any kind: `page.tsx` hands it the WHOLE `?year=` scope (or
+all years, under a search) in one payload and `items` is filtered from that array in this
+file. The scope is `endless` here for the VIRTUALISER, not for a keyset — so the caveat the
+default guards against cannot arise. The opt-in is explicit rather than a scope change,
+because changing the scope would silently change how the rows are RENDERED. A new check
+block in `scripts/verify-rc-in-grid.ts` (**34 assertions now, was 33**) asserts both the
+opt-in and the ABSENCE of every pager prop, so the day someone adds a pager the gate fires
+and this note gets re-read.
+
+**What each column does, and where that came from.** `sortable` / `filterable` default to
+true except on `cellKind: 'derived'`, and this grid declares no derived column — so all
+eighteen are sortable and filterable with nothing declared. The comparison reads
+`numericValue` where a column has one and `clipboardValue` otherwise:
+
+| Lanes | Compare as | Because |
+|---|---|---|
+| SKS · WEIGHT · MC · GRIT · VM · ASH · FC · BD ASTM · BD JIS · PHP/KG · PHP TOTAL | **numbers** (`numericValue`) | already declared for the selection-summary arithmetic. This is also what makes the funnel offer **MIN / MAX** — the popover shows bounds only where a column declares one |
+| STATE · DATE · SUPPLIER · BATCH · LOC · TRUCK · REMARKS | **case-insensitive text** (`clipboardValue`) | the same string a copy puts on the clipboard, so what the operator searches for is what they can see |
+
+**DATE sorts as a date and no `new Date()` was introduced.** `transaction_date` is stored
+AND rendered `yyyy-MM-dd`, which is chronological under
+`localeCompare(…, { numeric: true })` — the round trip through a `Date` is the classic place
+a timezone quietly moves a delivery to the previous day, and this grid still never does it.
+
+**Two platform rules the module gets for free, both verified rather than assumed:** the month
+group headings and the sticky Σ rule-off HIDE while a sort or a filter is active (a heading
+is a claim about a RUN of adjacent rows, and a sort destroys the run), and clearing both
+restores this file's own flatten byte for byte; and the blank draft rows never sort and never
+filter out, so a row being typed cannot jump to the top or vanish because it does not match
+yet.
+
+**No `f_<column>` URL wiring, and none exists to copy.** The universal filter is VIEW state
+by design — `lib/table/CONTEXT.md` §3 states it never touches the URL — and the Cenapro
+grid's `filter: { kind, column }` spec is metadata for THAT module's own server-side filter
+feature, not a search-param convention of the platform. The v2 grid's `?search=` box is
+untouched and still owns the one param this screen writes; a consumer whose filters live in
+search params keeps them, and this is a second, local axis beside them.
+
+**Measured in the browser at 1512** (120 fabricated deliveries in a throwaway harness, since
+deleted): a sort on DATE hides the month headings and renders the rows flat ascending; a
+`MIN 20000` on WEIGHT leaves **59 of 120 rows**; the strip under the sheet reads
+`59 of 120 rows · sorted by DATE ↑ · Clear`; the funnel offers `contains…` + MIN/MAX on
+WEIGHT and `contains…` alone on the text lanes.
+
+One sentence of chrome moved with it: the `grid=v2` badge's inventory line said *"the column
+filters … are not built yet"* over a header that now plainly filters. It now names what is
+actually still absent — the live table's own STATE/Supplier/LOC popovers and their URL
+persistence, which are a different feature.
+
+#### The widths had to pay the chrome budget — thirteen of eighteen headers clipped
+
+CLAUDE.md, *"The header owes chrome, not just its label"*. Switching sort + filter on
+**clipped thirteen headers without touching one width**: `STATE` → `STA…`, `WEIGHT` →
+`WEI…`, `TRUCK` → `TR…`, `LOC` → `L`, `BD ASTM` / `BD JIS` → `B…`, `PHP/KG` → `PHP…` and
+every 2-decimal lab lane down to a single letter. The two chrome buttons are `opacity-0`
+flex **siblings** of the label — unseen, but in layout on every render — so a column sized
+to its bare name loses 57px the moment they exist. This is the fourth screen to hit it
+(QC 2026-08-26, RC Movement 2026-08-29, now here).
+
+**57 = 16 (`px-2`) + 32 (two 16px buttons) + 8 (their two `gap-1`) + 1 (`border-r`)**, and
+it was CONFIRMED from the DOM rather than taken from the class list: on all eighteen
+columns `columnWidth − labelBoxWidth === 57` exactly. This grid pays the budget once and no
+more — it declares no `renderHeaderSlot` (which would add 4px) and no `subLabel`.
+
+Every label was measured at the header's own type (`500 11px ui-sans-serif`,
+`letter-spacing: 0.275px`, uppercase) in Chromium at 1512, off an unconstrained probe span.
+**Every width is `label + 57 + 1`.** The 1px is a deliberate cushion, not slack: the labels
+are measured to two decimals and the flex row lays out in sub-pixels, and on the first pass
+`VM` sat at **18.00 available against 18.00 needed** — passing, and one hundredth of a pixel
+from an ellipsis.
+
+| Column | Label px | Floor (+57+1) | Was | Now |
+|---|---:|---:|---:|---:|
+| STATE | 35.50 | 93.50 | 92 | **94** |
+| DATE | 29.53 | 87.53 | 98 | 98 |
+| SUPPLIER | 55.78 | 113.78 | 150 | 150 |
+| BATCH | 38.86 | 96.86 | 152 | 152 |
+| LOC | 23.59 | 81.59 | 62 | **82** |
+| TRUCK | 39.70 | 97.70 | 90 | **98** |
+| SKS | 22.48 | 80.48 | 58 | **81** |
+| WEIGHT | 46.27 | 104.27 | 96 | **105** |
+| MC | 18.39 | 76.39 | 58 | **77** |
+| GRIT | 27.16 | 85.16 | 58 | **86** |
+| VM | 18.00 | 76.00 | 58 | **76** |
+| ASH | 24.11 | 82.11 | 58 | **83** |
+| FC | 15.03 | 73.03 | 58 | **74** |
+| BD ASTM | 52.41 | 110.41 | 76 | **111** |
+| BD JIS | 36.91 | 94.91 | 76 | **95** |
+| PHP/KG | 42.81 | 100.81 | 92 | **101** |
+| PHP TOTAL | 63.80 | 121.80 | 128 | 128 |
+| REMARKS | 55.38 | 113.38 | 220 | 220 |
+
+**A width only ever GREW, so no widest-real-value floor can have been broken** — the
+`SEPTEMBER-26-BLK18` batch code (150), the `₱ 1,234,567.89` accounting total (118), the
+`yyyy-MM-dd` date (86) and REMARKS' 200px Excel-Standard truncate are all still satisfied,
+and a second check block asserts them beside the header floors rather than trusting the
+argument.
+
+**The seven lab lanes stopped sharing a width.** They were `decimals === 3 ? 76 : 58`,
+because a 3-decimal lane was floored by its header and a 2-decimal lane by its value. With
+the chrome charged **every lane is floored by its header**, and each header is its own
+number — `FC` needs 74 and `GRIT` needs 86 — so one width per decimal count is no longer
+expressible. `LAB_COLUMNS` now carries a measured `width` per field.
+
+The sheet is **218px wider** in total and scrolls, which is the rule ("never crush, always
+scroll"); `document.scrollWidth === clientWidth` at 1512 with the popover open, so the
+document itself never overflows. **Widening was the only honest fix** — the alternative the
+platform offers is `sortable: false, filterable: false` on the narrow lanes, and Renzo asked
+for sort and filter on *all* columns.
+
+Pinned by three new check blocks in `scripts/verify-rc-in-grid.ts` (**37 now**), in the
+idiom of `verify-qc-grid.ts` / `verify-rc-movement-grid.ts`: the measured label table lives
+in the script, the widths are parsed out of the grid's own source, an empty or partial
+extraction is a FAILURE rather than a vacuous pass (proven — dropping WEIGHT back to 96
+fails with *"declared 96px but the header needs 104.27px"*), and the 57 itself is asserted
+against `HeaderCell.tsx`'s markup so a change to the platform's two buttons fails here
+rather than silently invalidating every number above.
 
 ## See Also
 - [Blackwood Table — the universal table module](../../../../lib/table/CONTEXT.md) — the port (`ColumnSpec` / `RowKind.occupies` / `TableSettings`), the React half, and the `?grid=v2` recipe `delivery-grid-v2.tsx` follows.

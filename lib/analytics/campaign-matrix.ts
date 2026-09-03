@@ -1,9 +1,26 @@
 // =====================================================================
 // ICTC Owner Analytics — THE CAMPAIGN TABLE (owner feedback R7)
 // =====================================================================
-// ONE table, one clock, sixteen rows: what a production campaign FED, what
-// that charcoal COST, what the plant MADE from it and what it BURNED doing
-// so. It replaces two tables that sat one above the other.
+// ONE table, one clock, ELEVEN rows (sixteen until R8): what a production
+// campaign FED, what that charcoal COST and what the plant MADE from it. It
+// replaces two tables that sat one above the other.
+//
+// ── R8 TOOK FIVE ROWS OFF IT, AND ONLY OFF IT ─────────────────────────
+// Renzo, 2026-09-03, after reading the shipped page: remove Output per
+// reported day, Downtime, Power, Power intensity and Bags counted **for now**.
+// The words "for now" are load-bearing and the change obeys them literally —
+// **not one query, view, adapter field or type moved.** Every figure those
+// five rows published still crosses the wire on `ProductionBatchRow` and is
+// still folded by `campaign-room.tsx` for the selection strip. This is a
+// PRESENTATION removal, so restoring any of the five is one entry in the
+// registry below plus (for four of them) its annotation.
+//
+// A `?metric=` link naming a removed row resolves to NOTHING and the page
+// renders whole at the section top: `resolveMetric` in `page.tsx` tests
+// `CAMPAIGN_METRIC_BY_KEY.has(...)`, which is built from this registry, so a
+// key that names no row is simply not "known". No alias was invented for them
+// — R7's `RETIRED_METRIC_ALIASES` exists for rows whose QUESTION moved to
+// another row, and none of these five has a home to be redirected to.
 //
 // ── WHY THE MERGE ─────────────────────────────────────────────────────
 // Renzo, 2026-09-02: *"It doesn't make sense for it to be separated and have
@@ -63,7 +80,7 @@ import {
   type UnitRules,
 } from "./matrix";
 import { campaignMonthIndex, campaignSeq } from "./campaign";
-import type { MetricAnnotation, MetricSpecOf } from "./metrics";
+import type { MetricSpecOf } from "./metrics";
 import type { CampaignCost, ProductionBatchRow } from "./types";
 
 /** The band's fixed grain. Never selectable, never in `?g=`. */
@@ -109,23 +126,6 @@ function t(kg: number | null | undefined): number | null {
  */
 function pct(fraction: number | null | undefined): number | null {
   return fraction == null ? null : fraction * 100;
-}
-
-/** Plain number, for annotation copy. */
-function nfmt(v: number, decimals = 0): string {
-  return v.toLocaleString("en-US", {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-  });
-}
-
-function sumOf(
-  rows: readonly CampaignMatrixRow[],
-  pick: (r: CampaignMatrixRow) => number | null,
-): number {
-  let total = 0;
-  for (const r of rows) total += pick(r) ?? 0;
-  return total;
 }
 
 // ---------------------------------------------------------------------
@@ -267,24 +267,6 @@ function fedPriceUsable(r: CampaignMatrixRow): boolean {
 }
 
 /**
- * May this campaign contribute to a power-intensity rollup AT ALL?
- *
- * A weighted rollup sums numerator and denominator INDEPENDENTLY, so a campaign
- * with one and not the other adds to one side of the fraction and nothing to
- * the other. **22 of the 32 campaigns never reported production**, and the
- * eight pre-campaign metered months are excluded from this clock entirely
- * (`kwhUnmappedPreCampaign` carries them). The suspect test rides here too,
- * which is why a selection containing MARCH 2026 is measured over its
- * unaffected campaigns.
- */
-function intensityUsable(r: CampaignMatrixRow): boolean {
-  const b = r.batch;
-  if (!b) return false;
-  if ((b.kwhSuspectReadingCount ?? 0) > 0) return false;
-  return b.kwh != null && b.producedKg != null && b.producedKg > 0;
-}
-
-/**
  * May this campaign contribute to a YIELD (or process-loss) rollup AT ALL?
  *
  * The same predicate, for the same measured reason: the spine carries campaigns
@@ -304,125 +286,28 @@ function yieldUsable(r: CampaignMatrixRow): boolean {
 }
 
 // ---------------------------------------------------------------------
-// The three figures that need a caveat rather than a silent correction
+// R8 — THE FOUR ANNOTATION HELPERS THAT LIVED HERE ARE GONE
 // ---------------------------------------------------------------------
-
-/**
- * A downtime total of 0.00 hours can mean two completely different things.
- *
- * The AUGUST 2026 campaign reads 0.00 hours across 22 shifts that ALL filed a
- * repair reason and NONE recorded a duration. (The calendar month's 23
- * reason-only shifts split JULY 3 / AUGUST 22 here, because 2026-08-01 is
- * JULY's closing day — the clock working, not a discrepancy.)
- */
-function downtimeAnnotation(
-  rows: readonly CampaignMatrixRow[],
-): MetricAnnotation | null {
-  const reasonOnly = sumOf(rows, (r) => r.batch?.downtimeShiftsReasonOnly ?? null);
-  if (reasonOnly <= 0) return null;
-  const withDuration = sumOf(
-    rows,
-    (r) => r.batch?.downtimeShiftsWithDuration ?? null,
-  );
-  const records = sumOf(rows, (r) => r.batch?.downtimeShiftCount ?? null);
-  const shift = (n: number) => `${n} shift${n === 1 ? "" : "s"}`;
-  return {
-    mark: "⚠",
-    blocksCallout: true,
-    title:
-      withDuration === 0
-        ? `All ${shift(reasonOnly)} with a downtime record named the repair and left the duration at zero. This total is a gap in the report, not a campaign in which the plant never stopped. Shown as recorded; never quoted as a record.`
-        : `${reasonOnly} of the ${shift(records)} with a downtime record named the repair and left the duration at zero, so these hours are short by an unknown amount. Shown as recorded; never quoted as a record.`,
-  };
-}
-
-/**
- * ONE mis-keyed meter reading can be 97% of its campaign, and it does not look
- * wrong — it looks like a finding.
- *
- * The detector is STRUCTURAL and lives in SQL: a `start_kwh` of 0 is a genuine
- * meter reset only if the counter WRAPPED. Over all 818 readings it fires on
- * exactly one row (2026-03-01 / MAIN, ×120 multiplier), and on this clock that
- * row lands in the MARCH 2026 campaign — which therefore publishes 696,948 kWh
- * against a real ~20,004. Nothing is repaired: correcting the reading is
- * Renzo's call and a separate, audited write.
- */
-function powerAnnotation(
-  rows: readonly CampaignMatrixRow[],
-): MetricAnnotation | null {
-  const count = sumOf(rows, (r) => r.batch?.kwhSuspectReadingCount ?? null);
-  if (count <= 0) return null;
-  const suspect = sumOf(rows, (r) => r.batch?.kwhSuspectKwh ?? null);
-  const total = sumOf(rows, (r) => r.batch?.kwh ?? null);
-  const share = total > 0 ? (suspect / total) * 100 : null;
-  return {
-    mark: "⚠",
-    blocksCallout: true,
-    title:
-      `${count} meter reading${count === 1 ? "" : "s"} here ${count === 1 ? "is" : "are"} mis-keyed — a start left at zero against an end still climbing — and ${nfmt(suspect)} kWh of this total comes from ${count === 1 ? "it" : "them"}` +
-      (share == null ? "" : `, ${nfmt(share, 1)}% of the campaign`) +
-      `. Published exactly as metered: fixing the reading is a separate, audited write. Power intensity is where it is taken out. Never quoted as a record.`,
-  };
-}
-
-/**
- * The intensity's own annotation — the mirror image of the one above, and the
- * distinction between them is the whole rule. The kWh total is FACTUALLY WRONG,
- * so its ratio is suppressed; the total itself is still published as metered.
- * Suppressing a correct number is how a data layer starts lying, so the honest
- * estimate prints beside the ⚠ rather than being withheld.
- */
-function powerIntensityAnnotation(
-  rows: readonly CampaignMatrixRow[],
-): MetricAnnotation | null {
-  const base = powerAnnotation(rows);
-  if (!base) return null;
-  const only = rows.length === 1 ? rows[0] : null;
-  const excl = only?.batch?.kwhPerProducedKgExclSuspect ?? null;
-  const clean = rows.filter(
-    (r) => (r.batch?.kwhSuspectReadingCount ?? 0) === 0,
-  ).length;
-  return {
-    mark: "⚠",
-    blocksCallout: true,
-    alt:
-      excl == null
-        ? undefined
-        : { value: excl, label: "excl. the mis-keyed reading" },
-    title:
-      `Blank rather than wrong: this campaign holds a mis-keyed meter reading, and an intensity built on it reports an efficiency collapse that never happened (MARCH 2026 would read against neighbours at 0.03). ` +
-      (excl != null
-        ? `The figure beside the ⚠ is the same sum with the bad reading removed — an estimate, labelled as one.`
-        : clean > 0
-          ? `The figure above is measured over the ${clean} unaffected campaign${clean === 1 ? "" : "s"} only.`
-          : `Every campaign here is affected, so there is no honest figure to show.`),
-  };
-}
-
-/**
- * Bags did not exist before May 2026, so a run with no bag count is NULL rather
- * than 0 and a short-coverage campaign says what share it speaks for.
- */
-function sacksAnnotation(
-  rows: readonly CampaignMatrixRow[],
-): MetricAnnotation | null {
-  const runs = sumOf(rows, (r) => r.batch?.productionRunCount ?? null);
-  if (runs <= 0) return null;
-  const withSacks = sumOf(rows, (r) => r.batch?.runsWithSacks ?? null);
-  if (withSacks >= runs) return null;
-  if (withSacks === 0) {
-    return {
-      mark: "",
-      blocksCallout: true,
-      title: `None of the ${runs} production entries here recorded a bag count — bags were only counted from May 2026. Blank, never zero: "we did not count" and "we made none" are different answers.`,
-    };
-  }
-  return {
-    mark: "~",
-    blocksCallout: true,
-    title: `This speaks for ${withSacks} of the campaign's ${runs} production entries — ${nfmt((100 * withSacks) / runs, 1)}% coverage — so it is a floor, not the campaign's bags. Never quoted as a record.`,
-  };
-}
+//
+// `intensityUsable`, `downtimeAnnotation`, `powerAnnotation`,
+// `powerIntensityAnnotation` and `sacksAnnotation` existed for exactly the five
+// rows Renzo asked to be taken off the table in R8 — Output per reported day,
+// Downtime, Power, Power intensity and Bags counted. With no row declaring
+// them there is nothing left for them to annotate, and a helper kept "in case"
+// is a second, unexercised definition of a caveat.
+//
+// **NOTHING WAS LOST IN THE DATA.** `view_analytics_production_by_batch` is
+// untouched, every field still crosses the wire on `ProductionBatchRow`
+// (`downtimeShiftsReasonOnly`, `kwhSuspectReadingCount`, `kwhSuspectKwh`,
+// `kwhPerProducedKgExclSuspect`, `runsWithSacks` …), the adapter still reads
+// them, and `campaign-room.tsx` still folds them for the selection strip. The
+// PRESENTATION dropped; the measurement did not. Restoring a row is a registry
+// entry plus its annotation, and the facts each one needs are already here.
+//
+// The two side rails those rows opened (`DowntimeSplit` / `PowerSplit` in
+// `metric-expand.tsx`) are deliberately left in place for the same reason: a
+// separate charts pass follows this round, and they are the panels a restored
+// row would want back.
 
 /** "17 of 20 blocks closed, 16 priced" — the sentence a blank owes its reader. */
 export function coverageSentence(c: CampaignCost | null): string {
@@ -432,18 +317,39 @@ export function coverageSentence(c: CampaignCost | null): string {
   return `${c.blocksClosed ?? 0} of ${c.blocksFed} blocks closed, ${c.blocksInPrice ?? 0} fully priced.`;
 }
 
+/**
+ * R8 — THE MARK LEGEND, MOVED OUT OF THE FOOTNOTE AND INTO THE DEFINITIONS.
+ *
+ * The campaign table carried a paragraph under it explaining what a `~` and a
+ * `—` mean. Renzo asked for the paragraph to go; the FACT it carried is
+ * load-bearing, so it moved into the dictionary entry of every row that can
+ * actually print either mark, where the master `Definitions` switch still
+ * surfaces it and where a reader meets it beside the figure rather than three
+ * screens down. A legend nobody scrolls to is not a legend.
+ *
+ * Appended to a caveat rather than replacing one: a row's own reason for being
+ * partial is more specific than the mark's general meaning, and both are owed.
+ */
+const MARK_LEGEND =
+  " A ~ marks a figure measured over only part of the campaign — either blocks that are not yet closed and priced, or kilos fed out of piles with no delivery record at all. A dash is never a zero: hover it and it says what is missing.";
+
 const TRUE_PRICE_CAVEAT =
-  "The true price only exists once EVERY block the campaign fed has been closed AND priced — an open block has no final fed total, and a block with a truckload still awaiting its price has money missing from the sum. Blank rather than wrong.";
+  "The true price only exists once EVERY block the campaign fed has been closed AND priced — an open block has no final fed total, and a block with a truckload still awaiting its price has money missing from the sum. Blank rather than wrong." +
+  MARK_LEGEND;
 
 // ---------------------------------------------------------------------
-// The registry — sixteen rows, in the order Renzo asked for
+// The registry — eleven rows, in the order Renzo asked for
 // ---------------------------------------------------------------------
 //
 // The order is his: what went IN and what it cost (fed · block price · true
 // price · storage uplift · weight lost · blocks closed), then what came OUT
-// (produced · per day · yield · process loss), then what a kilo of product cost
-// on both bases, then what the plant burned (downtime · power · intensity ·
-// bags). It reads as one sentence about a campaign rather than as two tables.
+// (produced · yield · process loss), then what a kilo of product cost on both
+// bases. It reads as one sentence about a campaign rather than as two tables.
+//
+// R8 removed the fourth movement — what the plant BURNED (output per reported
+// day · downtime · power · power intensity · bags) — in full. The order of
+// what remains is untouched, so a reader who had learned the table finds every
+// surviving row exactly where it was.
 //
 // **Five rows are `price: true`, and the gate is the SAME one the RC Inventory
 // band's Market price row uses** — the adapter nulls every ₱ field before the
@@ -452,8 +358,9 @@ const TRUE_PRICE_CAVEAT =
 // nothing arrived.
 //
 // **No row is `perWorkingDay`, and that is structural.** The toggle is the
-// yard's normalisation; the plant's own denominator is `reportedDays`, which is
-// its own row and says so in its dictionary.
+// yard's normalisation and the plant's own denominator is `reportedDays` — a
+// distinction R8's removal of the per-reported-day row does not weaken, since
+// the answer stays "this table is never divided by the yard's activity".
 
 const CAMPAIGN_METRIC_LIST: readonly Omit<
   MetricSpecOf<CampaignMatrixRow>,
@@ -515,7 +422,8 @@ const CAMPAIGN_METRIC_LIST: readonly Omit<
         "A selection is total pesos ÷ total kilos fed, not the mean of the campaigns.",
       source: "view_analytics_batch_cost.delivered_php_kg_fed",
       caveat:
-        "Measured BY BATCH, not by calendar months. This is the same fact the old monthly Money row carried, read on the clock the plant actually runs on — which is why that row was retired in R4 rather than kept beside this one.",
+        "Measured BY BATCH, not by calendar months. This is the same fact the old monthly Money row carried, read on the clock the plant actually runs on — which is why that row was retired in R4 rather than kept beside this one." +
+        MARK_LEGEND,
     },
   },
   {
@@ -682,37 +590,6 @@ const CAMPAIGN_METRIC_LIST: readonly Omit<
     },
   },
   {
-    key: "production_per_day",
-    label: "Output per reported day",
-    sublabel: "tonnes / day reported",
-    unit: "tonnes",
-    rollup: "weighted",
-    read: (r) => t(r.batch?.producedPerReportedDay ?? null),
-    numerator: (r) => t(r.batch?.producedKg ?? null),
-    denominator: (r) => r.batch?.reportedDays ?? null,
-    deltaMode: "pct",
-    perWorkingDay: false,
-    price: false,
-    chart: "bar",
-    color: "var(--chart-1)",
-    avgColor: "var(--chart-3)",
-    decimals: 1,
-    dependsOn: ["production"],
-    dictionary: {
-      definition:
-        "How much the plant made on a day it was actually running — the fair way to compare a short campaign with a long one.",
-      basis:
-        "Tonnes produced ÷ the days that campaign reported production, using the same rule the home dashboard uses (a day with at least one production entry).",
-      exclusions:
-        "Days production did not report are out of the denominator, so a rest day cannot dilute the figure.",
-      rollup:
-        "A selection is total tonnes ÷ total reported days, not the mean of the campaigns.",
-      source: "view_analytics_production_by_batch.produced_per_reported_day",
-      caveat:
-        "A changeover day belongs to TWO campaigns and both really did run it, so day counts across campaigns add to slightly more than the calendar: 221 campaign-days over 214 dates, the difference being exactly the seven changeover days.",
-    },
-  },
-  {
     key: "yield_rate",
     label: "Yield",
     sublabel: "% of fed kilos",
@@ -852,125 +729,6 @@ const CAMPAIGN_METRIC_LIST: readonly Omit<
         "A selection is total pesos ÷ total kilos produced, not the mean of the campaigns.",
       source: "view_analytics_batch_cost.php_per_produced_kg_true",
       caveat: TRUE_PRICE_CAVEAT,
-    },
-  },
-  {
-    key: "downtime_hours",
-    label: "Downtime",
-    sublabel: "hours lost",
-    unit: "hours",
-    rollup: "sum",
-    read: (r) => r.batch?.downtimeHrs ?? null,
-    deltaMode: "abs",
-    perWorkingDay: false,
-    price: false,
-    chart: "bar",
-    color: "var(--chart-5)",
-    avgColor: "var(--chart-3)",
-    decimals: 2,
-    dependsOn: ["production"],
-    annotate: downtimeAnnotation,
-    dictionary: {
-      definition:
-        "How many hours the plant stood still during that campaign, as the shift reports recorded it.",
-      basis:
-        "The hours-and-minutes pair on each shift's downtime record, folded the same way the Daily production ledger folds it, over the shifts carrying that batch.",
-      exclusions:
-        "A shift that filed no downtime record is not counted as zero downtime — it is simply not in the sum.",
-      rollup: "A selection of batches is the plain sum of those batches.",
-      source: "view_analytics_production_by_batch.downtime_hrs",
-      caveat:
-        "A zero here means two different things, so read it with the ⚠. The AUGUST 2026 campaign reads 0.00 h across 22 shifts that all named a repair and none of which recorded how long it took: the work was recorded, the number stopped being.",
-    },
-  },
-  {
-    key: "power_kwh",
-    label: "Power",
-    sublabel: "kWh metered",
-    unit: "kwh",
-    rollup: "sum",
-    read: (r) => r.batch?.kwh ?? null,
-    deltaMode: "pct",
-    perWorkingDay: false,
-    price: false,
-    chart: "bar",
-    color: "var(--chart-3)",
-    avgColor: "var(--chart-4)",
-    decimals: 0,
-    // NO `dependsOn`: power is metered whether or not production reported, and
-    // blanking it would call real electricity "not reported".
-    annotate: powerAnnotation,
-    dictionary: {
-      definition:
-        "How much electricity the site drew during that campaign, across every meter.",
-      basis:
-        "Each daily reading's consumption, multiplier applied, added up over the campaign's date span.",
-      exclusions:
-        "The 192 metered days that precede the first campaign — 561,930 kWh — belong to no campaign on this clock and are not in any column. They are readable by month in the calendar production view, and the totals reconcile exactly.",
-      rollup: "A selection of batches is the plain sum of those batches.",
-      source: "view_analytics_production_by_batch.kwh",
-      caveat:
-        "THIS IS THE ONE MAPPED FIGURE ON THE TABLE. Meter readings carry a date and no batch, so a day's consumption goes to the campaign that had most recently STARTED — on a changeover day the power goes to the INCOMING batch. Every metered day from the first campaign onward belongs to exactly one campaign, so nothing is counted twice and nothing is lost. One reading on 1 March 2026 was mis-keyed and lands in MARCH 2026; it is marked ⚠ and NOT corrected here. Only the MAIN meter has reported since December 2025.",
-    },
-  },
-  {
-    key: "power_intensity",
-    label: "Power intensity",
-    sublabel: "kWh / kg made",
-    unit: "kwh_per_kg",
-    rollup: "weighted",
-    read: (r) => r.batch?.kwhPerProducedKg ?? null,
-    numerator: (r) => (intensityUsable(r) ? (r.batch?.kwh ?? null) : null),
-    denominator: (r) =>
-      intensityUsable(r) ? (r.batch?.producedKg ?? null) : null,
-    deltaMode: "pct",
-    perWorkingDay: false,
-    price: false,
-    chart: "line",
-    color: "var(--chart-4)",
-    avgColor: "var(--chart-3)",
-    decimals: 4,
-    dependsOn: ["production"],
-    annotate: powerIntensityAnnotation,
-    dictionary: {
-      definition:
-        "Units of electricity per kilo of product — whether the plant is getting more or less efficient.",
-      basis: "The campaign's metered kWh ÷ the kilos it produced.",
-      exclusions:
-        "A campaign holding a mis-keyed meter reading is left out entirely, here and in any selection it belongs to.",
-      rollup:
-        "A selection is total kWh ÷ total kilos produced across its clean campaigns, not the mean of the rates.",
-      source: "view_analytics_production_by_batch.kwh_per_produced_kg",
-      caveat:
-        "Blank rather than wrong on MARCH 2026, whose ⚠ carries the honest 0.0225 beside it. DECEMBER 2025 reads a high 0.0855 and is NOT suppressed: it is correct, and it is the only campaign with three live meters (the bunkhouse and pump meters stopped reporting on 12 December 2025). Suppressing a correct number is how a page starts lying.",
-    },
-  },
-  {
-    key: "sacks_counted",
-    label: "Bags counted",
-    sublabel: "sacks",
-    unit: "count",
-    glyph: "bags",
-    rollup: "sum",
-    read: (r) => r.batch?.sacks ?? null,
-    deltaMode: "pct",
-    perWorkingDay: false,
-    price: false,
-    chart: "bar",
-    color: "var(--chart-1)",
-    avgColor: "var(--chart-4)",
-    decimals: 0,
-    dependsOn: ["production"],
-    annotate: sacksAnnotation,
-    dictionary: {
-      definition: "How many bags the campaign's production entries recorded.",
-      basis: "The bag counts on the campaign's production runs, added up.",
-      exclusions:
-        "A run with no bag count is not counted as zero bags — it is simply not in the sum, and the ~ says how many such runs there were.",
-      rollup: "A selection of batches is the plain sum of those batches.",
-      source: "view_analytics_production_by_batch.sacks",
-      caveat:
-        "Bags were not counted before May 2026, so earlier campaigns are blank rather than zero.",
     },
   },
 ];

@@ -472,5 +472,212 @@ check('every error surface in the grid is the persistent, copyable one', () => {
   assert.equal(/\btoast\.error\s*\(/.test(src), false, 'sonner toast.error is forbidden — use errorToast')
 })
 
+check('the universal sort + filter are opted INTO, and every column can be judged', () => {
+  const raw = readFileSync(join(ROOT, 'app/(app)/inventory/rc-in/delivery-grid-v2.tsx'), 'utf8')
+  const src = stripComments(raw)
+
+  // Renzo's rule: a table on the universal module gets the universal
+  // sort/filter. `scope="endless"` defaults BOTH off, so this grid has to say
+  // so explicitly — and the assertion exists because deleting one of the two
+  // props is a silent removal of the affordance, not a build error.
+  assert.ok(src.includes('scope="endless"'), 'the scan target must still exist')
+  assert.match(src, /\benableSort\b/, 'the endless default is OFF — the opt-in must be explicit')
+  assert.match(src, /\benableFilter\b/)
+
+  // The opt-in is only HONEST while this grid has no server keyset. The moment
+  // it grows a pager, a client-side sort would reorder the loaded window only
+  // and `hasOlder`/`hasNewer` would describe an order that no longer exists.
+  for (const pager of ['startReached', 'endReached', 'firstItemIndex', 'initialTopMostItemIndex']) {
+    assert.equal(src.includes(pager), false,
+      `${pager} would make this a server keyset — re-read the enableSort note before keeping both`)
+  }
+
+  // Nothing opts a column out, so `sortable`/`filterable` default true on all
+  // of them (only `cellKind: 'derived'` opts out, and this grid declares none).
+  assert.equal(/\bsortable\s*:/.test(src), false, 'no column opts out of sorting')
+  assert.equal(/\bfilterable\s*:/.test(src), false, 'no column opts out of filtering')
+  assert.equal(src.includes("cellKind: 'derived'"), false)
+
+  // A column sorts and bounds by `numericValue` where it has one and by
+  // `clipboardValue` otherwise. So the FOUR numeric lanes declared inline plus
+  // the seven lab lanes built in the loop must all carry a `numericValue`, or
+  // WEIGHT would sort as text and put 9,000 above 18,000 — and MIN/MAX would
+  // not be offered at all, since the popover shows bounds only where a column
+  // declares one.
+  for (const key of ['sacks', 'weight_kg', 'cost_basis', 'php_total']) {
+    assert.match(
+      src,
+      new RegExp(`key: '${key}',[\\s\\S]{0,900}?numericValue:`),
+      `${key} must sort and bound as a NUMBER`,
+    )
+  }
+  assert.match(src, /for \(const lab of LAB_COLUMNS\)[\s\S]{0,900}?numericValue: \(row\) => labValueOf/,
+    'the seven lab lanes are built in a loop — the numericValue lives there')
+  assert.equal(LAB_FIELDS.length, 7)
+
+  // …and every TEXT lane falls through to `clipboardValue`, which is both the
+  // sort key and the string the filter's `contains` box searches. A column
+  // with neither would fall back to `storedText`, which a readonly column has
+  // nothing in.
+  for (const key of ['state', 'transaction_date', 'supplier', 'batch_code', 'block_loc', 'truck_plate', 'remarks']) {
+    assert.match(
+      src,
+      new RegExp(`key: '${key}',[\\s\\S]{0,900}?clipboardValue:`),
+      `${key} must be searchable and sortable as text`,
+    )
+  }
+})
+// ═══ THE HEADER CHROME BUDGET ═══════════════════════════════════════════════════
+//
+// CLAUDE.md, "The header owes chrome, not just its label". A Blackwood Table column with
+// the sort caret and the filter funnel pays 57px of INVISIBLE header chrome, because the
+// two buttons are `opacity-0` flex SIBLINGS of the label — unseen, but in layout on every
+// render. Switching sort + filter on (the R8 opt-in above) therefore CLIPPED thirteen of
+// this sheet's eighteen headers without touching one width: `STATE` → `STA…`, `WEIGHT` →
+// `WEI…`, `TRUCK` → `TR…`, `LOC` → `L`, `BD ASTM` / `BD JIS` → `B…`, `PHP/KG` → `PHP…`
+// and every 2-decimal lab lane down to a single letter.
+//
+// This is the same shape `verify-qc-grid.ts` and `verify-rc-movement-grid.ts` already
+// pin, and it is pinned the same way: a MEASURED label table here, the widths parsed out
+// of the grid's own source, and the floor asserted per column.
+
+/** 57 = 16 (`px-2`) + 32 (two 16px chrome buttons) + 8 (their two `gap-1`) + 1 (`border-r`). */
+const CHROME_WITH_CONTROLS = 57
+
+/**
+ * A 1px CUSHION on top, and it is deliberate rather than slack.
+ *
+ * `HEADER_PX` is measured to two decimals and the browser lays the header's flex row out
+ * in sub-pixels, so a column sized to exactly `label + 57` sits at ZERO slack — `VM`
+ * measured 18.00 against an available 18.00 on the first pass, which passes and is one
+ * hundredth of a pixel from drawing an ellipsis. This gate is therefore one pixel
+ * STRICTER than `verify-rc-movement-grid`'s, on purpose.
+ */
+const CUSHION_PX = 1
+
+/**
+ * Each label's width at the header's OWN type — `500 11px ui-sans-serif`,
+ * `letter-spacing: 0.275px` (`tracking-wide` at 11px), uppercase — rendered in Chromium at
+ * a 1512px viewport and measured off an unconstrained probe span, never estimated from a
+ * character count.
+ *
+ * The budget was CONFIRMED from the DOM in the same pass rather than taken from the class
+ * list: on all eighteen columns `columnWidth − labelBoxWidth === 57`, exactly.
+ */
+const HEADER_PX: Readonly<Record<string, number>> = {
+  state: 35.50,        // STATE
+  transaction_date: 29.53, // DATE
+  supplier: 55.78,     // SUPPLIER
+  batch_code: 38.86,   // BATCH
+  block_loc: 23.59,    // LOC
+  truck_plate: 39.70,  // TRUCK
+  sacks: 22.48,        // SKS
+  weight_kg: 46.27,    // WEIGHT
+  mc: 18.39,           // MC
+  grit: 27.16,         // GRIT
+  vm: 18.00,           // VM
+  ash: 24.11,          // ASH
+  fc: 15.03,           // FC
+  bd_astm: 52.41,      // BD ASTM
+  bd_jis: 36.91,       // BD JIS
+  cost_basis: 42.81,   // PHP/KG
+  php_total: 63.80,    // PHP TOTAL
+  remarks: 55.38,      // REMARKS
+}
+
+/** The seven lab lanes get their widths from one table in the loop, not from a `width:`. */
+const LAB_KEYS = new Set(['mc', 'grit', 'vm', 'ash', 'fc', 'bd_astm', 'bd_jis'])
+
+/** Every column's DECLARED width, parsed off the grid's own source. */
+function declaredWidths(): Map<string, number> {
+  const src = stripComments(
+    readFileSync(join(ROOT, 'app/(app)/inventory/rc-in/delivery-grid-v2.tsx'), 'utf8'))
+  const out = new Map<string, number>()
+
+  // The eleven inline columns: `key: 'x',` … `width: N,`.
+  for (const key of Object.keys(HEADER_PX)) {
+    if (LAB_KEYS.has(key)) continue
+    const m = new RegExp(`key: '${key}',[\\s\\S]{0,700}?width: (\\d+),`).exec(src)
+    assert.ok(m, `the declared width of ${key} must be findable`)
+    out.set(key, Number(m![1]))
+  }
+
+  // The seven lab lanes: one literal table, keyed by lab field.
+  const table = /width: \{ ([^}]+) \}\[key\],/.exec(src)
+  assert.ok(table, 'the lab width table must be findable')
+  for (const pair of table![1].split(',')) {
+    const [k, v] = pair.split(':').map((x) => x.trim())
+    out.set(k, Number(v))
+  }
+
+  assert.equal(
+    out.size,
+    Object.keys(HEADER_PX).length,
+    'an empty or partial extraction is a FAILURE, never a vacuous pass',
+  )
+  return out
+}
+
+check('every column is wide enough for its own HEADER plus the sort/filter chrome', () => {
+  const widths = declaredWidths()
+  for (const [key, label] of Object.entries(HEADER_PX)) {
+    const floor = label + CHROME_WITH_CONTROLS + CUSHION_PX
+    const declared = widths.get(key)!
+    assert.ok(
+      declared >= floor,
+      `${key}: declared ${declared}px but the header needs ${floor.toFixed(2)}px ` +
+        `(label ${label} + ${CHROME_WITH_CONTROLS} of chrome + ${CUSHION_PX} cushion) — ` +
+        `it would render truncated, or sit one sub-pixel from it`,
+    )
+  }
+})
+
+check('every column is still wide enough for its widest REAL value', () => {
+  // The other half of the same question, and the half a header-only fix forgets: a column
+  // wide enough for its name and too narrow for its numbers is not fixed. These floors
+  // predate R8 and are the ones the module's own comments record; the header pass only
+  // ever GREW a width, so none of them can have been broken by it.
+  const CELL_MIN_PX: Readonly<Record<string, number>> = {
+    batch_code: 150,        // `SEPTEMBER-26-BLK18` at 132.91 in the cell's mono font + 17
+    php_total: 118,         // `₱  1,234,567.89` in accounting layout + 17
+    transaction_date: 86,   // `2026-09-03` in mono + 17
+    remarks: 200,           // the Excel Standard's truncate width
+  }
+  const widths = declaredWidths()
+  for (const [key, floor] of Object.entries(CELL_MIN_PX)) {
+    const declared = widths.get(key)!
+    assert.ok(declared >= floor, `${key}: declared ${declared}px but its widest value needs ${floor}px`)
+  }
+})
+
+check('the 57 is stated against the PLATFORM markup that produces it', () => {
+  // The budget is not a constant this repo owns — it is two `HeaderCell` buttons and
+  // their gaps. If that markup changes, every width above is wrong, so the SHAPE is
+  // pinned where it lives rather than the number being trusted here.
+  const header = readFileSync(join(ROOT, 'components/shared/table/HeaderCell.tsx'), 'utf8')
+  assert.match(header, /className="flex h-full items-center gap-1 px-2 py-1"/,
+    'the header pads px-2 and gaps 1 — 16 + 8 of the 57')
+  assert.equal(
+    (header.match(/'shrink-0 rounded-sm p-0\.5 transition-colors duration-150 hover:text-foreground',/g) ?? []).length,
+    2,
+    'exactly two chrome buttons (sort + filter) sit beside the label — 32 of the 57',
+  )
+  assert.match(header, /<ListFilter className="size-3" \/>/,
+    'their icons are size-3 (12px), so each button is 12 + 2×2 of p-0.5 = 16px')
+  // …and they are laid out even while invisible, which is the whole trap.
+  assert.match(header, /opacity-0 group-hover\/th:opacity-100/)
+  // The label's own type, which is what HEADER_PX was measured at.
+  assert.match(header, /'block text-\[11px\] uppercase tracking-wide text-muted-foreground'/)
+
+  // This sheet pays the FULL budget and no more: no column carries a `renderHeaderSlot`
+  // (which would add the 4px `gap-1` before it) and no column has a `subLabel`.
+  const grid = stripComments(
+    readFileSync(join(ROOT, 'app/(app)/inventory/rc-in/delivery-grid-v2.tsx'), 'utf8'))
+  assert.equal(grid.includes('renderHeaderSlot'), false, 'a header slot would cost 4px more per column')
+  assert.equal(grid.includes('subLabel'), false)
+  // And it never answers a too-narrow header by wrapping it: the header row grows to its
+  // TALLEST cell, so one wrapped label raises all eighteen.
+  assert.equal(grid.includes('headerWrap'), false, 'widen the column; never wrap the name')
+})
 
 console.log(`\n${passed} assertions passed.`)
