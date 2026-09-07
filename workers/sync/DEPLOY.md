@@ -179,5 +179,6 @@ Redeploy the Vercel app. The **Run Sync** button now kicks the cloud worker.
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase → Settings → API → service_role key |
 | `DBOS_DATABASE_URL` | Session-mode pooler URL (port 5432) + Supabase DB password |
 | `SYNC_KICK_SECRET` | `openssl rand -hex 32` — must match Vercel |
+| `PRODUCTS_SHEET_ID` | **OPTIONAL.** The PRODUCTS INVENTORY Google Sheet's file id. Unset is normal — the id is version-controlled at `src/reports/products/download.ts::PRODUCTS_SHEET_ID_DEFAULT` (as gsheet's is), so this exists only to point the `products` report at a different sheet without shipping code: `fly secrets set PRODUCTS_SHEET_ID="…"`. The sheet must stay shared as **anyone with the link**, or the export returns an HTML login page and the run refuses it by ZIP magic number. |
 
 See `.env.example` in this folder for the full annotated list.

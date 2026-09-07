@@ -183,6 +183,13 @@ const SECTIONS: readonly SectionDef[] = [
     blurb: "Empty bag stock (replace-by-date)",
   },
   {
+    key: "products",
+    sheet: "Products",
+    reportKey: "products",
+    eventTypes: ["products"],
+    blurb: "Finished-product flecon inventory, one tab per grade",
+  },
+  {
     key: "run",
     sheet: "Run",
     reportKey: null,
@@ -368,6 +375,11 @@ const PROMOTED_KEYS = new Set([
   "occupying_batch_code",
   "occupying_balance_kg",
   "occupying_last_fed",
+  // products — consumed by Side A / Side B.
+  "previous_sheet_name",
+  "sheet_name",
+  "matched_on",
+  "overlap_pct",
 ]);
 
 interface Sides {
@@ -456,6 +468,29 @@ export function sidesForFinding(f: RunFinding): Sides {
     return {
       a: `wants ${block ? `${block}: ` : ""}${wanted}`,
       b: `already there: ${holderBits.join(", ")}`,
+    };
+  }
+
+  // products (2026-09-07): the name it used to have against the name it has now. This is
+  // the pair that lets a reader confirm a rename in one glance — a renamed grade with only
+  // ONE name on screen is exactly as unreadable as a price note with only one spelling.
+  if (f.kind === "product_grade_renamed") {
+    const prev = str(d.previous_sheet_name) ?? "(unknown)";
+    const now = str(d.sheet_name) ?? "(unknown)";
+    const pct = num(d.overlap_pct);
+    const how =
+      d.matched_on === "identical opening rows"
+        ? "identical opening rows"
+        : pct == null
+          ? "matched on existing movements"
+          : `${pct}% of its movements already filed`;
+    return { a: `was: ${prev}`, b: `now: ${now} (${how})` };
+  }
+  if (f.kind === "product_grade_ambiguous") {
+    const cands = Array.isArray(d.candidates) ? (d.candidates as unknown[]) : [];
+    return {
+      a: `new tab: ${str(d.sheet_name) ?? "(unknown)"}`,
+      b: cands.length ? `could be: ${cands.map((c) => String(c)).join(", ")}` : "",
     };
   }
 

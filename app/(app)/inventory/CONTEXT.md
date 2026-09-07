@@ -14,10 +14,12 @@
 | `/inventory/blocking` | Standalone warehouse grid + shared detail panel | **No** |
 | `/inventory/rc-movement` | Standalone campaign feed matrix | **No** |
 | `/inventory/flecon-bags` | Standalone FLECON bag inventory (balances + movement ledger) | **No** |
+| `/inventory/products` | Standalone finished-product (flecon) inventory — grade tabs + flec-first header + running tally | **No** |
 
 ## URL contracts
 - **`?tab=deliveries|usage`** — drives the logs tab (Phase 1). The URL is the source of truth (`useSearchParams` + `router.replace`, the project house style — NOT the nuqs library). localStorage (`inventory_active_tab`) is a **fallback only**: it seeds the tab on first load when no `?tab=` is present (written into the URL once, post-hydration). Default `deliveries`. Deep-linkable / shareable.
 - **`?block=<block_loc>`** — drives the open block on `/inventory/blocking` (Phase 2). Deep-linkable, refresh-safe, browser Back closes the panel. Click a cell to toggle; clicking the open cell or pressing Escape clears it.
+- **`?grade=<code>`** — drives the selected product on `/inventory/products` (e.g. `6X50`, `KURARAY 3X50`). Matched against the CODE first, then the display/sheet name, case-insensitively; **absent, misspelt or naming a retired grade all mean the first ACTIVE grade** — a typo can never half-select anything, exactly as `?grid=` and `?month=` behave. Deep-linkable, refresh-safe, Back returns to the previous grade. Written optimistically (`useOptimistic` + `useTransition`, the `?block=` pattern), so the rail and the header repaint on the click's own frame and only the ledger waits.
 - **`?campaign=<PRODUCTION_BATCH-YEAR>`** — drives the selected campaign on `/inventory/rc-movement` (e.g. `JUNE-2026`). Absent → the server action resolves the most recent campaign. The matrix owns the month/day-range via the campaign.
 - **`?grid=v1|v2`** — which implementation of BOTH tables renders. **On this page the default is `v2`** (the Blackwood Table) and `?grid=v1` reaches the classic tables; every other screen on the toggle still defaults to `v1`. An axis of the CLIENT only — see the flip section below.
 - **`?year=<yyyy>|all`** + **`?month=<1-12>|all`** — the **PERIOD axis** on the v2 grids (`lib/table/period-param.ts`, control `components/shared/table/PeriodPicker.tsx`). ONE pair for BOTH tabs. `year` bounds the server query and always has; `month` is client-side over rows already fetched. **Absent means this page's default** — the current calendar month of the current year, falling back to the year's latest month with data — so `all months` is written out loud as `?month=all` and is never absence. A month outside `1-12` (and `?month=aug`, `?month=0`, `?month=`) resolves to the default rather than half-selecting anything, exactly like `?grid=`. See the period section below.
@@ -28,7 +30,7 @@
 |------|------|
 | `layout.tsx` | **THIN** shared chrome for ALL `/inventory/*` routes — just the `bg-muted/20` full-bleed container + padded content area. It deliberately does NOT own the tab shell anymore (so the standalone routes don't inherit the Deliveries/Usage tab bar). |
 | `page.tsx` | Server component (the logs page). Fetches deliveries (year-scoped + paginated), batches, suppliers, locations; resolves `canViewPrices`. Wraps `<InventoryViewV2>` — or `<InventoryView>` at `?grid=v1` — in `<LogsShell>` inside a `<Suspense>` (the tab provider uses `useSearchParams`). Both branches get the identical payload. |
-| `loading.tsx` | Route-level skeleton (toolbar + header + 14 rows). Covers `/inventory` AND — by inheritance — `blocking` / `rc-movement` / `flecon-bags`, which have no loading file of their own (all dense grid surfaces, so one shape fits). Static pulses only — no row animation. |
+| `loading.tsx` | Route-level skeleton (toolbar + header + 14 rows). Covers `/inventory` AND — by inheritance — `blocking` / `rc-movement` / `flecon-bags` / `products`, which have no loading file of their own (all dense grid surfaces, so one shape fits). Static pulses only — no row animation. |
 | `components/logs-shell.tsx` | **NEW.** Client wrapper that owns the tab shell for the logs page ONLY: `InventoryTabProvider` + `Card` frame + `<InventorySheetTabs>` footer. Moved out of `layout.tsx` so the layout stays tab-shell-agnostic. |
 | `components/inventory-tab-context.tsx` | React context — `activeTab`/`setActiveTab`. **URL-driven (`?tab=`)** via `useSearchParams` + `router.replace`; localStorage fallback only. Tab union narrowed to `'deliveries' \| 'usage'`. **Hosts the navigation-event bridge:** a `window` listener for `INVENTORY_NAVIGATE_EVENT` (from the shared detail panel's "Edit All" when rendered in-shell) that flips the tab. The standalone routes wire `onNavigateToBatch` directly instead, so they don't depend on this bridge. |
 | `components/sheet-tabs.tsx` | Bottom tab bar with sliding indicator. Order: **Deliveries · Usage** (Blocking + Movement removed). |
@@ -44,6 +46,7 @@
 - **Usage:** lazy via `RcOutLazyTab` → `fetchRcOutTabData()` in `rc-out/actions.ts`.
 - **Blocking (standalone route):** `BlockingRouteView` → `fetchBlockingGridData()` in `blocking/actions.ts`.
 - **Movement (standalone route):** `RcMovementRouteView` → `fetchRcMovementMatrix(campaign?)` in `rc-movement/actions.ts`.
+- **Products (standalone route):** `page.tsx` → `getProductsData(?grade)` in `lib/products/queries.ts` — ONE server-side adapter over the four `view_product_*` views. **No `actions.ts`**: the page takes no action, and the sync worker is the sole writer of every table underneath it.
 
 ## Key Behaviors
 ### Tab system (logs page)
@@ -70,6 +73,7 @@ These routes are dynamic, so **every** `?param=` write costs a server round-trip
 | Usage (`?tab=usage`) | `rc-out/` | [RC OUT](./rc-out/CONTEXT.md) — Inventory Usage |
 | Movement (`/inventory/rc-movement`) | `rc-movement/` | [RC Movement](./rc-movement/CONTEXT.md) — Daily Feed Matrix |
 | Bag Inventory (`/inventory/flecon-bags`) | `flecon-bags/` | [FLECON Bags](./flecon-bags/CONTEXT.md) — packaging-material stock |
+| Products (`/inventory/products`) | `products/` | [Products](./products/CONTEXT.md) — finished-product flecon inventory (grade tabs + running tally; **no ₱ in the module at all**) |
 
 ## The Blackwood Table is this screen's DEFAULT (2026-08-21) — `?grid=v1` is the way back
 
@@ -190,5 +194,5 @@ At cutover — which is a SEPARATE, later decision from this flip — the bar, t
 - Tab state + block/campaign selection use `next/navigation` (`useSearchParams` / `useRouter` / `usePathname`).
 
 ## See Also
-- [Navbar](../../../components/NAVBAR.md) — breadcrumbs for `/inventory`, `/inventory/blocking`, `/inventory/rc-movement`, `/inventory/flecon-bags` + the nested Inventory module dropdown
+- [Navbar](../../../components/NAVBAR.md) — breadcrumbs for `/inventory`, `/inventory/blocking`, `/inventory/rc-movement`, `/inventory/flecon-bags`, `/inventory/products` + the nested Inventory module dropdown
 - [Auth Provider](../../../components/providers/AUTH.md) — permission model for cost visibility

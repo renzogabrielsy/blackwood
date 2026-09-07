@@ -42,6 +42,7 @@ import { runReport as runProduction } from "../reports/production/index.js";
 import { runReport as runFlecon } from "../reports/flecon/index.js";
 import { runReport as runRcMovementAudit } from "../reports/rc_movement_audit/index.js";
 import { runReport as runGsheet } from "../reports/gsheet/index.js";
+import { runReport as runProducts } from "../reports/products/index.js";
 
 /** The report types the run orchestrates. Note `rc_movement_audit` here maps to the
  *  panel's `rc_movement` card (types.ts) — the parent labels events with this key. */
@@ -51,6 +52,7 @@ export type RunReportType =
   | "rc_out"
   | "production"
   | "flecon"
+  | "products"
   | "rc_movement_audit";
 
 export interface ReportWorkflowParams {
@@ -207,6 +209,19 @@ async function runOneReport(params: ReportWorkflowParams): Promise<ReportEnvelop
         classify: r.classify,
         apply: dryRun ? null : r.apply,
         classifyExtra: { per_mode: r.classify.per_mode },
+      });
+    }
+    case "products": {
+      // products downloads its OWN Google Sheet (no manifest file, no Gmail thread and
+      // therefore nothing to label). Deps are db + progress + fetchImpl, exactly like
+      // gsheet. In dryRun the download and classify still run (both read-only) and apply
+      // is skipped — so a dry run is a genuine preview of what the sheet would do.
+      const r = await runProducts({ db, progress, fetchImpl: undefined }, runId, {}, { dryRun });
+      return toReportResult({
+        reportType: "products",
+        classify: r.classify,
+        apply: dryRun ? null : r.apply,
+        classifyExtra: { per_grade: r.classify.per_grade },
       });
     }
     case "rc_movement_audit": {

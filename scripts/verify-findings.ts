@@ -37,6 +37,7 @@ import type {
   DeliveryHumanEdit,
   HeldRow,
   PriceNote,
+  ProductNote,
   ReportNotReceived,
   SourceTabNote,
   SingleSourceOverdue,
@@ -1495,6 +1496,148 @@ check('batch_location_conflict: fingerprint IS the durable case fingerprint, and
   const laterId = findingIdentity(later)
   assert.equal(laterId.fingerprint, id.fingerprint, 'the identity must survive the numbers moving')
   assert.notEqual(laterId.contentHash, id.contentHash, 'a changed balance IS a changed situation')
+})
+
+
+// ============================================================================
+// products (2026-09-07) — the PRODUCTS INVENTORY sheet's own SHAPE
+// ============================================================================
+// The thing these pin is the ONE decision the feature exists to get right: a tab it has
+// not seen before is either a NEW product or an OLD one renamed, and it must never be
+// decided by how the names look. So the assertions are about EVIDENCE, not wording — an
+// identical fingerprint is quiet, an inferred overlap is louder and shows its number, and
+// an ambiguous match is louder still and NAMES what it refused to choose between.
+
+function productsRun(...notes: ProductNote[]) {
+  return {
+    reports: {
+      products: {
+        apply: {
+          report_type: 'products',
+          ok: true,
+          held: [],
+          labeled: false,
+          watermark_updated: true,
+          errors: [],
+          product_notes: notes,
+        },
+      },
+    },
+  } as unknown as SyncRunResult
+}
+
+check('products: a new grade is info, files under the products section, carries no ₱', () => {
+  const [f] = flattenRunFindings(
+    productsRun({ kind: 'product_grade_added', sheet_name: '3X50', code: '3X50', movement_count: 12, inserted: 12 }),
+  )
+  assert.equal(f.kind, 'product_grade_added')
+  assert.equal(f.severity, 'info')
+  assert.equal(f.section, 'products')
+  assert.equal(f.data.code, '3X50')
+  assert.equal(f.data.movement_count, 12)
+  for (const k of Object.keys(f.data)) assert.ok(!isCostKey(k), `cost-ish key on a product finding: ${k}`)
+})
+
+check('products: a fingerprint rename is INFO and names both spellings', () => {
+  const [f] = flattenRunFindings(
+    productsRun({
+      kind: 'product_grade_renamed',
+      sheet_name: 'KURARAY 3X50 (NEW)',
+      code: 'KURARAY 3X50 (NEW)',
+      previous_sheet_name: 'Kuraray 3x50',
+      previous_code: 'KURARAY 3X50',
+      rename_evidence: 'fingerprint',
+      movement_count: 127,
+      inserted: 0,
+      deleted: 0,
+    }),
+  )
+  assert.equal(f.severity, 'info', 'an identical fingerprint is certainty, not a worry')
+  assert.equal(f.badges, undefined, 'certainty earns no qualifying chip')
+  assert.ok(f.title.includes('Kuraray 3x50') && f.title.includes('KURARAY 3X50 (NEW)'),
+    'both spellings must be in the headline — one name alone explains nothing')
+  assert.equal(f.data.matched_on, 'identical opening rows')
+})
+
+check('products: an INFERRED rename is attention, badged, and shows the percentage', () => {
+  const [f] = flattenRunFindings(
+    productsRun({
+      kind: 'product_grade_renamed',
+      sheet_name: '6X50 A',
+      code: '6X50 A',
+      previous_sheet_name: '6X50',
+      previous_code: '6X50',
+      rename_evidence: 'row_overlap',
+      rename_overlap_pct: 94.3,
+      movement_count: 331,
+      inserted: 19,
+      deleted: 0,
+    }),
+  )
+  assert.equal(f.severity, 'attention', 'an inference is louder than a certainty')
+  assert.equal(f.data.overlap_pct, 94.3)
+  assert.ok(f.reason.includes('94.3%'), 'the number that drove the inference must be readable')
+  assert.equal(f.badges?.length, 1)
+  assert.equal(f.badges?.[0].tone, 'caution')
+})
+
+check('products: an AMBIGUOUS match renames nothing and names every candidate', () => {
+  const [f] = flattenRunFindings(
+    productsRun({
+      kind: 'product_grade_ambiguous',
+      sheet_name: '2X6 B',
+      code: '2X6 B',
+      candidates: ['2X6', '2X6 OLD'],
+      movement_count: 216,
+    }),
+  )
+  assert.equal(f.severity, 'attention')
+  assert.deepEqual(f.data.candidates, ['2X6', '2X6 OLD'])
+  assert.ok(f.reason.includes('"2X6"') && f.reason.includes('"2X6 OLD"'),
+    'refusing to guess is only useful if it says what it refused to choose between')
+})
+
+check('products: a missing tab is attention and says nothing was deleted', () => {
+  const [f] = flattenRunFindings(
+    productsRun({ kind: 'product_sheet_missing', sheet_name: '8X50', code: '8X50' }),
+  )
+  assert.equal(f.severity, 'attention')
+  assert.ok(/deleted/i.test(f.reason), 'the operator must be told the data is still there')
+})
+
+check('products: every note yields two 64-hex strings, and no two collide', () => {
+  const notes: ProductNote[] = [
+    { kind: 'product_grade_added', sheet_name: '3X50', code: '3X50' },
+    { kind: 'product_grade_renamed', sheet_name: 'A', code: 'A', previous_sheet_name: 'B', previous_code: 'B', rename_evidence: 'fingerprint' },
+    { kind: 'product_grade_ambiguous', sheet_name: 'C', code: 'C', candidates: ['X', 'Y'] },
+    { kind: 'product_sheet_missing', sheet_name: 'D', code: 'D' },
+  ]
+  const ids = flattenRunFindings(productsRun(...notes)).map((f) => findingIdentity(f))
+  assert.equal(ids.length, 4)
+  for (const id of ids) {
+    assert.match(id.fingerprint, HEX64)
+    assert.match(id.contentHash, HEX64)
+  }
+  assert.equal(new Set(ids.map((i) => i.fingerprint)).size, 4, 'four distinct problems, four identities')
+})
+
+check('products: an acknowledged rename does NOT re-alarm when only the run changes', () => {
+  const note: ProductNote = {
+    kind: 'product_grade_renamed',
+    sheet_name: '6X50 A',
+    code: '6X50 A',
+    previous_sheet_name: '6X50',
+    previous_code: '6X50',
+    rename_evidence: 'row_overlap',
+    rename_overlap_pct: 94.3,
+    movement_count: 331,
+    inserted: 19,
+    deleted: 0,
+  }
+  const a = findingIdentity(flattenRunFindings(productsRun(note))[0])
+  const b = findingIdentity(flattenRunFindings(productsRun({ ...note }))[0])
+  assert.equal(a.fingerprint, b.fingerprint)
+  assert.equal(a.contentHash, b.contentHash, 'the same sheet, twice, is the same answer')
 })
 
 

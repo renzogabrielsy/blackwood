@@ -20,6 +20,7 @@ export const RUN_REPORT_TYPES = [
   "rc_out",
   "production",
   "flecon",
+  "products",
   "rc_movement_audit",
 ] as const;
 
