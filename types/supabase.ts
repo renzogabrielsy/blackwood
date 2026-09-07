@@ -4184,6 +4184,7 @@ export type Database = {
           ayag_flecs: number | null
           blended_flecs: number | null
           computed_running: Json | null
+          date_out_of_sheet_order: boolean | null
           display_name: string | null
           final_flecs: number | null
           flec_delta: number | null
@@ -4236,6 +4237,7 @@ export type Database = {
           ayag_flecs: number | null
           blended_flecs: number | null
           content_fingerprint: string | null
+          date_out_of_order_count: number | null
           display_name: string | null
           final_flecs: number | null
           final_kg: number | null
@@ -4261,6 +4263,7 @@ export type Database = {
           prod_flecs: number | null
           reclass_flecs: number | null
           sheet_name: string | null
+          sheet_running_disagreement_count: number | null
           shippable_flecs: number | null
           sort_order: number | null
           stage_count: number | null

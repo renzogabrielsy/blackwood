@@ -73,6 +73,7 @@ const BREADCRUMB_REGISTRY: BreadcrumbEntry[] = [
     { test: prefix('/inventory/blocking'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Blocking', pageDescription: 'Warehouse grid — block occupancy & balances' },
     { test: prefix('/inventory/rc-movement'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Movement', pageDescription: 'Daily feed matrix — campaign-scoped day × block' },
     { test: prefix('/inventory/flecon-bags'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Bag Inventory', pageDescription: 'FLECON bag stock — balances & movement ledger' },
+    { test: prefix('/inventory/products'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Products', pageDescription: 'Finished goods — flec stock by grade & running tally' },
     { test: prefix('/inventory'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Inventory', pageDescription: 'Raw charcoal deliveries, usage & tracking' },
     // NOTE (2026-08-28): the `/production/schedule` and `/production/setups` entries
     // were removed with the production plan — both routes are gone. See
@@ -149,6 +150,7 @@ const ICTC_INVENTORY: Module[] = [
     { name: 'Usage', href: '/inventory?tab=usage' },
     { name: 'Movement', href: '/inventory/rc-movement' },
     { name: 'Bag Inventory', href: '/inventory/flecon-bags' },
+    { name: 'Products', href: '/inventory/products' },
 ];
 
 // ICTC / Davao top-level modules shown as siblings BELOW the Inventory sub-group.

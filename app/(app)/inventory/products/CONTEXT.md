@@ -1,10 +1,8 @@
 # Products — finished-product (flecon) inventory
 
-**Status (2026-09-07): DATA LAYER ONLY.** The schema, views, sync report and types are live
-and carrying real data. **There is no page yet** — `page.tsx`, the server actions and the
-components are the next agent's work. This file documents the data half so that agent does
-not have to re-derive any of it; fill in the Files / Key Behaviors / Dependencies sections
-as the UI lands.
+**Status (2026-09-07): SHIPPED.** The schema, views and sync report landed first (they are
+documented under **Data** below, unchanged); the page at **`/inventory/products`** landed on
+the same branch and is documented under **Files** and **Key Behaviors**.
 
 > **NO PESO ANYWHERE IN THIS MODULE.** There is no cost, price or value column on any table,
 > view or function below, and none is derivable from them. So — unlike RC IN, Blocking,
@@ -139,6 +137,172 @@ An inactive grade (`active = false`) can only be set by hand — the sync never 
 anything — so a page listing grades should filter on `active` and offer no automatic
 retirement.
 
+## Files
+
+| File | Role |
+|------|------|
+| `page.tsx` | Async **Server Component**. Reads `?grade=`, makes ONE adapter call (`getProductsData`) and hands the whole `ProductsData` to the client shell inside a `<Suspense>` (the shell reads `useSearchParams`). Thin: the navbar owns the title, so nothing is rendered here. No tab shell — a standalone inventory route like Blocking and Movement. |
+| `components/products-view.tsx` | **The client shell.** Owns the page container, the portfolio line, the sync chips, the grade rail and the `?grade=` URL contract. Renders no number it was not given. |
+| `components/grade-tabs.tsx` | The **BIG** grade rail — 60px cards, name at 15px semibold, `FINAL n flec · v vans` in mono 11px beneath. Horizontally scrollable. |
+| `components/products-header.tsx` | The **flec-first** header strip: shippable-flec hero, vans, the stage strip, the thresholds/dates column, and the once-per-grade source notes. Also exports `shortDate`. |
+| `products-ledger-grid.tsx` | The **running tally** on the Blackwood Table — read-only, sort + filter on. Also exports `STAGE_DOT` / `stageDot`, which the header strip reuses so the two surfaces cannot disagree about a stage's colour. |
+| `../../../../lib/products/types.ts` | The **PORT** — `ProductsData` and everything in it. No React, no Supabase. |
+| `../../../../lib/products/queries.ts` | The **ADAPTER** — `server-only`. `getProductsData(gradeParam)` + the pure, exported `resolveGrade`. |
+| `../../../../scripts/verify-products-grid.ts` | **25 assertions, must stay green.** The measured header/cell width tables, the no-peso scan, the URL contract, the two source-defect rules, and a guard that the throwaway dev fixture was deleted. Run: `npx tsx scripts/verify-products-grid.ts`. |
+
+**There is no `actions.ts`.** The page makes one read and takes no action; the sync worker is
+the sole writer of every table underneath it, through three `service_role`-only RPCs the app
+must never name.
+
+## Key Behaviors
+
+### `?grade=<code>` is the selection
+
+Deep-linkable, refresh-safe, browser Back returns to the previous grade — the `?block=`
+pattern from `blocking-route-view.tsx`. It is matched case-insensitively against the CODE
+first (the canonical identity, so `?grade=KURARAY%203X50` works) and then against the
+display / sheet name (so `?grade=Kuraray%203x50` works too). **A value naming no grade — a
+typo, a retired code, a stale bookmark — resolves to the first active grade rather than
+half-selecting anything**, exactly as `?grid=` and `?month=` do elsewhere. Every other param
+in the URL survives a grade change (`URLSearchParams` copy, one key touched).
+
+**The selection is OPTIMISTIC, and the split is the point.** This route is dynamic, so
+writing the param costs a server round-trip. `ProductsData.grades` already carries every
+active grade's full summary, so the **rail and the header strip repaint on the same frame as
+the click** and only the LEDGER waits — dimmed `opacity-50` (compositor-only, nothing
+reflows) while `selectedCode !== serverCode`. The ledger itself is always rendered for the
+**server-selected** grade, never the optimistic one: showing one grade's rows under another
+grade's name for the length of a round trip would be worse than waiting.
+
+### The header strip is FLEC-FIRST
+
+Renzo, on the approved Option A mockup: *"I would prefer the header info to be more flecon
+amount forward (the final and shippable flecon bag amounts, with the total vans as an
+additional info and the total tons as some kind of subtext). Also make the grade tabs
+bigger."*
+
+So the hero is **shippable flecs** (`final_flecs`) at 34px — the biggest type on the page,
+asserted as such against every size the two presentation files declare. **Vans ready** sits
+beside it at 22px as secondary, with `× 44 flec / van`. The **tonnage**, which the mockup
+led with, is muted 11px subtext under the hero. Then the stage strip: one cell per stage
+with a **non-zero balance**, flecs large and tons small, each with its stage dot.
+
+### The running tally, on the Blackwood Table
+
+`scope="endless"` with **`enableSort` + `enableFilter` switched on explicitly**. That scope
+defaults both OFF because an endless grid's window is usually the SERVER's keyset — this
+sheet has no such window (no pager, no `startReached`, no `firstItemIndex`; the adapter
+hands it the selected grade's whole ledger), so the caveat the default protects against
+cannot arise. Month headings and their spacers hide on their own while either axis is
+active (`applyTableView`), which is correct: a heading naming a run of adjacent rows is a
+lie the moment a sort destroys the run.
+
+**The running lanes are per grade.** They are the stages that grade has ever used — read
+from `view_product_stage_balance`, so a stage with movements and a zero balance (6X50's
+SUNDRY, 10 movements) still gets a lane and `OLD PROD` appears on Kuraray and nowhere else.
+A column of blanks on the other four grades would be a coordinate space with a phantom in it.
+
+**The eight running lanes declare `sortable: false` + `filterable: false`**, and that is
+about meaning before pixels: sorting a running balance reorders the very sequence that makes
+it a running balance. They therefore pay the BARE 17px header chrome rather than 57, which
+is also what lets all eight share one 92px width.
+
+**Column widths pay the chrome budget** (CLAUDE.md → *"The header owes chrome, not just its
+label"*). Measured in Chrome at the real computed fonts and pinned in the verify script:
+labels at `500 11px Geist` + `letter-spacing 0.275px` uppercase — `DATE` 29.52 · `TYPE` 29.60
+· `FLEC` 28.70 · `KG` 15.92 · `REMARKS` 55.37 · the widest stage name `OLD PROD` 59.75. The
+`DATE` lane is the one sized by its CELL rather than its header: `2026-09-05` at
+`700 12px Geist` is 73.78 and an out-of-order row adds a ⚠, so 105.5 governs against a header
+floor of 86.52. (`DATE` measures 29.52 here and 29.52 in `verify-rc-movement-grid.ts`,
+measured independently months apart — which is what says the two tables agree about the font.)
+
+### The footer totals the LOADED rows, and says so
+
+Sort and filter live inside `BlackwoodTable`, and no seam hands a consumer the rows that
+survived them — so a footer claiming to total *"what is shown"* would be wrong the instant a
+filter is on. It reads **`Σ N movements loaded`** with the deltas, and the note lane says
+*"Totals cover every loaded row — a filter changes what is listed, not what is totalled."*
+The platform's own view strip renders immediately beneath and reports **"N of M rows"**
+whenever a filter is active, so the difference is never hidden; it is stated by the surface
+that actually knows it.
+
+It is deliberately **not a balance** either: a balance is `opening + Σ delta`, which is
+`view_product_stage_balance`'s definition and what the header strip reads. Printing a
+"balance" here that ignored the opening would be a second, wrong definition of the number
+this page exists to show.
+
+### The two source defects are quiet, and said ONCE
+
+Neither is an error in the app and neither is painted red (CONTEXT → *Six things* #4 and #5).
+
+- **Sheet-running drift** — a muted `~` on the row, and the count in the header note. **A
+  marker that would land on EVERY row is not drawn at all**: on 6X50 it is 14 of 331 and the
+  mark is exactly the right instrument; on 2X6 it is 216 of 216, where it singles out
+  nothing and the count is the whole message. The note then reads *"…on every one of its 216
+  rows — so no per-row mark is drawn"*. Same reasoning as a month heading naming the only
+  month present.
+- **Out-of-order dates** — the date renders muted with a ⚠ and a `title`; the count is in the
+  header note. Nothing anywhere rewrites a `transaction_date`, and no `new Date()` is
+  constructed on this page at all (dates are sliced from `yyyy-MM-dd`), because parsing a
+  stored date back to ask its month is where a timezone moves a row to the previous day.
+
+Two more notes ride in the same block when they apply: **`other_flecs > 0`** (a stage with no
+column here — counted in the total by SQL, so it is surfaced rather than silently lost) and
+**`kg_per_flec_distinct_count > 1`** (the rate has moved; the figure shown is the latest).
+
+### The sync chips
+
+If the latest finished run raised `products`-section findings, they render as one chip row
+above the tabs, linking to `/sync/cases?run=<id>`. It is the **same `flattenRunFindings` over
+the same latest-run read** that `app/(app)/sync/needs-you.ts` makes, filtered to
+`section === 'products'` on the server — so a chip can never disagree with the panel about
+what the run said. **PRIVILEGED only** (Owner / Admin / Dev via `getUserRole()`, so the
+dev-impersonation cookie is respected), because every action a chip could offer already
+exists in `/sync` and only those roles can take it. It **fails quiet**: every failure path
+returns no chips, since a missing chip costs a click into the panel while a fabricated one
+sends somebody hunting for work that is not there.
+
+### The reads
+
+One `Promise.all` — `view_product_onhand` (ordered by `sort_order`), the `(grade_id, stage)`
+projection of `view_product_stage_balance`, `view_product_portfolio`, the `products`
+`ingestion_watermarks` row, and `auth.getUser()`. Then the **ledger for the selected grade
+only** (331 rows at the widest today against 808 in total) through `fetchAllRows`, so a grade
+that one day outgrows PostgREST's 1000-row cap pages rather than being silently truncated to
+its OLDEST 1000 rows. Ordered `transaction_date DESC, source_row DESC` — newest first, which
+is what an operator checks.
+
+**Only ACTIVE grades are listed.** The sync never deactivates anything — `active = false` can
+only be set by hand — so that filter honours a human decision rather than performing an
+automatic retirement.
+
+A ledger failure is **surfaced, never thrown**: `ProductsData.error` fires a persistent
+`errorToast()` (Copy button, HARD RULE) *and* renders an inline banner with its own Copy
+button, because a toast the operator dismissed leaves no trace of why the tally is empty.
+
+### The ONE piece of arithmetic on this page
+
+`flecs × kg_per_flec / 1000`, for a per-stage tonnage. It is the formula
+`view_product_onhand` itself publishes (`total_tons`, `final_tons`) applied to a balance the
+DATABASE computed — a unit conversion of a published number, never a second definition of a
+balance. The verify script pins it by proving the conversion reproduces the view's own
+`final_tons` on all five grades and that the results sum to the portfolio row.
+
+## Dependencies
+
+- `@/lib/supabase/server` — `createClient()` for the five reads
+- `@/lib/supabase/paginate` — `fetchAllRows()` for the ledger (DUP-1)
+- `@/types/supabase` — `Tables<'view_product_onhand' | 'view_product_ledger' | 'view_product_stage_balance' | 'view_product_portfolio'>`
+- `@/lib/auth` + `@/types/auth` — `getUserRole()` / `PRIVILEGED_ROLES`, for the sync chips ONLY (there is no price gate here)
+- `@/lib/sync/findings` — `flattenRunFindings`; `@/app/(app)/sync/types` — `SyncRunResult` (type-only)
+- `@/components/shared/table` — `BlackwoodTable`, `TableSummaryRow`, `TableChromeRowApi`
+- `@/lib/table` — `needsGroupSpacer`, `pinnedOffsets`, `ColumnSpec` / `GridRow` / `RowKind` / `TableSettings`
+- `@/lib/hooks/use-table-edits` — the module's single writer port (held idle; this grid never writes)
+- `@/lib/toast` — `errorToast()` (persist + Copy, HARD RULE); `@/components/ui/button` — the banner's Copy
+- `@/lib/utils` — `cn()`
+- `next/navigation` — `useRouter` / `usePathname` / `useSearchParams` for `?grade=`
+- `app/globals.css` — the `--bw-year-*` data-viz series the stage dots read
+
 ## See Also
 
 - `workers/sync/specs/products.md` — extraction rules, the rename ladder, findings, and the
@@ -146,5 +310,8 @@ retirement.
 - `supabase/migrations/20260907060924_products_inventory.sql` (+ `…062522_…row_hash…`,
   `…063310_…disagreement_columns`) — the schema, with the reasoning in DB comments.
 - `app/(app)/inventory/CONTEXT.md` — the inventory route map.
-- `components/shared/grid/CONTEXT.md` — the Blackwood Table primitive, and the **57 px
-  header-chrome budget** any column width must account for.
+- `components/shared/grid/CONTEXT.md` + `lib/table/CONTEXT.md` — the Blackwood Table
+  primitive, and the **57 px header-chrome budget** any column width must account for.
+- `app/(app)/inventory/flecon-bags/CONTEXT.md` — the closest sibling surface (a per-type
+  balance strip over a movement ledger), and the other module in the app with no ₱ in it.
+- `components/NAVBAR.md` — the breadcrumb and the Inventory sub-group entry.
