@@ -309,6 +309,103 @@ export class DbClient {
     };
   }
 
+  // -- products (finished-goods flecon inventory, 2026-09-07) ---------------
+  /**
+   * The three `products` write RPCs. All are SECURITY INVOKER and granted to
+   * `service_role` only — the sync worker is the sole writer of these tables and the app
+   * reads them exclusively through the four `view_product_*` views.
+   *
+   * Each returns the RPC's jsonb verbatim-ish, coerced: a BUSINESS refusal comes back as
+   * `{ok:false, reason, message}` written for a human and is NOT thrown, while a
+   * transport/permission failure IS thrown — the same split every RPC wrapper here makes.
+   */
+  async upsertProductGrade(args: {
+    sheetName: string;
+    thresholds: Record<string, unknown>;
+    openingAsOf: string | null;
+    fingerprint: string;
+  }): Promise<{
+    ok: boolean;
+    gradeId: string | null;
+    code: string;
+    created: boolean;
+    reason?: string;
+  }> {
+    const { data, error } = await this.sb.rpc("fn_upsert_product_grade", {
+      p_sheet_name: args.sheetName,
+      p_thresholds: args.thresholds ?? {},
+      p_opening_as_of: args.openingAsOf,
+      p_fingerprint: args.fingerprint,
+    });
+    if (error) {
+      throw new Error(
+        `fn_upsert_product_grade RPC failed ${error.code ?? ""}: ${sliceMsg(error.message)}`
+      );
+    }
+    const o = (data ?? {}) as Record<string, unknown>;
+    return {
+      ok: o.ok === true,
+      gradeId: typeof o.grade_id === "string" ? o.grade_id : null,
+      code: typeof o.code === "string" ? o.code : "",
+      created: o.created === true,
+      ...(typeof o.reason === "string" ? { reason: o.reason } : {}),
+    };
+  }
+
+  async renameProductGrade(
+    gradeId: string,
+    newSheetName: string
+  ): Promise<{ ok: boolean; renamed: boolean; reason?: string; message?: string }> {
+    const { data, error } = await this.sb.rpc("fn_rename_product_grade", {
+      p_grade_id: gradeId,
+      p_new_sheet_name: newSheetName,
+    });
+    if (error) {
+      throw new Error(
+        `fn_rename_product_grade RPC failed ${error.code ?? ""}: ${sliceMsg(error.message)}`
+      );
+    }
+    const o = (data ?? {}) as Record<string, unknown>;
+    return {
+      ok: o.ok === true,
+      renamed: o.renamed === true,
+      ...(typeof o.reason === "string" ? { reason: o.reason } : {}),
+      ...(typeof o.message === "string" ? { message: o.message } : {}),
+    };
+  }
+
+  async replaceProductGrade(
+    gradeId: string,
+    openings: Row[],
+    movements: Row[]
+  ): Promise<{
+    ok: boolean;
+    inserted: number;
+    deleted: number;
+    unchanged: number;
+    reason?: string;
+  }> {
+    const { data, error } = await this.sb.rpc("fn_replace_product_grade", {
+      p_grade_id: gradeId,
+      p_openings: openings,
+      p_movements: movements,
+    });
+    if (error) {
+      throw new Error(
+        `fn_replace_product_grade RPC failed ${error.code ?? ""}: ${sliceMsg(error.message)}`
+      );
+    }
+    const o = (data ?? {}) as Record<string, unknown>;
+    const n = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+    return {
+      ok: o.ok === true,
+      inserted: n(o.inserted),
+      deleted: n(o.deleted),
+      unchanged: n(o.unchanged),
+      ...(typeof o.reason === "string" ? { reason: o.reason } : {}),
+    };
+  }
+
   /**
    * Idempotent, RACE-SAFE batch creation (2026-07-11 auto-create policy). Upserts one
    * `batches` row keyed on the UNIQUE `batch_code` column with ON CONFLICT DO NOTHING

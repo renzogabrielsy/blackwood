@@ -30,9 +30,9 @@ describe("workflow ids", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("covers exactly the 6 report types runSync launches", () => {
+  it("covers exactly the 7 report types runSync launches", () => {
     expect([...RUN_REPORT_TYPES].sort()).toEqual(
-      ["deliveries", "flecon", "gsheet", "production", "rc_movement_audit", "rc_out"].sort(),
+      ["deliveries", "flecon", "gsheet", "production", "products", "rc_movement_audit", "rc_out"].sort(),
     );
   });
 });

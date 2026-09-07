@@ -1101,6 +1101,164 @@ export type Database = {
           },
         ]
       }
+      product_grade_openings: {
+        Row: {
+          as_of: string | null
+          flecs: number
+          grade_id: string
+          stage: string
+        }
+        Insert: {
+          as_of?: string | null
+          flecs: number
+          grade_id: string
+          stage: string
+        }
+        Update: {
+          as_of?: string | null
+          flecs?: number
+          grade_id?: string
+          stage?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_grade_openings_grade_id_fkey"
+            columns: ["grade_id"]
+            isOneToOne: false
+            referencedRelation: "product_grades"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_grade_openings_grade_id_fkey"
+            columns: ["grade_id"]
+            isOneToOne: false
+            referencedRelation: "view_product_onhand"
+            referencedColumns: ["grade_id"]
+          },
+          {
+            foreignKeyName: "product_grade_openings_grade_id_fkey"
+            columns: ["grade_id"]
+            isOneToOne: false
+            referencedRelation: "view_product_stage_balance"
+            referencedColumns: ["grade_id"]
+          },
+        ]
+      }
+      product_grades: {
+        Row: {
+          active: boolean
+          aliases: string[]
+          code: string
+          content_fingerprint: string | null
+          created_at: string
+          display_name: string
+          first_seen_at: string
+          id: string
+          last_seen_at: string
+          opening_as_of: string | null
+          sheet_name: string
+          sort_order: number
+          thresholds: Json
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          aliases?: string[]
+          code: string
+          content_fingerprint?: string | null
+          created_at?: string
+          display_name: string
+          first_seen_at?: string
+          id?: string
+          last_seen_at?: string
+          opening_as_of?: string | null
+          sheet_name: string
+          sort_order?: number
+          thresholds?: Json
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          aliases?: string[]
+          code?: string
+          content_fingerprint?: string | null
+          created_at?: string
+          display_name?: string
+          first_seen_at?: string
+          id?: string
+          last_seen_at?: string
+          opening_as_of?: string | null
+          sheet_name?: string
+          sort_order?: number
+          thresholds?: Json
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      product_movements: {
+        Row: {
+          created_at: string
+          flec_delta: number
+          grade_id: string
+          id: string
+          kg_delta: number | null
+          remarks: string | null
+          row_hash: string
+          sheet_running: Json | null
+          source_row: number
+          stage: string
+          transaction_date: string
+        }
+        Insert: {
+          created_at?: string
+          flec_delta: number
+          grade_id: string
+          id?: string
+          kg_delta?: number | null
+          remarks?: string | null
+          row_hash: string
+          sheet_running?: Json | null
+          source_row: number
+          stage: string
+          transaction_date: string
+        }
+        Update: {
+          created_at?: string
+          flec_delta?: number
+          grade_id?: string
+          id?: string
+          kg_delta?: number | null
+          remarks?: string | null
+          row_hash?: string
+          sheet_running?: Json | null
+          source_row?: number
+          stage?: string
+          transaction_date?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_movements_grade_id_fkey"
+            columns: ["grade_id"]
+            isOneToOne: false
+            referencedRelation: "product_grades"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_movements_grade_id_fkey"
+            columns: ["grade_id"]
+            isOneToOne: false
+            referencedRelation: "view_product_onhand"
+            referencedColumns: ["grade_id"]
+          },
+          {
+            foreignKeyName: "product_movements_grade_id_fkey"
+            columns: ["grade_id"]
+            isOneToOne: false
+            referencedRelation: "view_product_stage_balance"
+            referencedColumns: ["grade_id"]
+          },
+        ]
+      }
       production_downtime: {
         Row: {
           created_at: string
@@ -4019,6 +4177,142 @@ export type Database = {
         }
         Relationships: []
       }
+      view_product_ledger: {
+        Row: {
+          active: boolean | null
+          agrees_with_sheet: boolean | null
+          ayag_flecs: number | null
+          blended_flecs: number | null
+          computed_running: Json | null
+          display_name: string | null
+          final_flecs: number | null
+          flec_delta: number | null
+          grade_code: string | null
+          grade_id: string | null
+          kg_delta: number | null
+          magnet_flecs: number | null
+          movement_id: string | null
+          old_prod_flecs: number | null
+          prod_flecs: number | null
+          reclass_flecs: number | null
+          remarks: string | null
+          running_kg: number | null
+          sheet_running: Json | null
+          source_row: number | null
+          stage: string | null
+          sundry_flecs: number | null
+          total_flecs: number | null
+          transaction_date: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_movements_grade_id_fkey"
+            columns: ["grade_id"]
+            isOneToOne: false
+            referencedRelation: "product_grades"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_movements_grade_id_fkey"
+            columns: ["grade_id"]
+            isOneToOne: false
+            referencedRelation: "view_product_onhand"
+            referencedColumns: ["grade_id"]
+          },
+          {
+            foreignKeyName: "product_movements_grade_id_fkey"
+            columns: ["grade_id"]
+            isOneToOne: false
+            referencedRelation: "view_product_stage_balance"
+            referencedColumns: ["grade_id"]
+          },
+        ]
+      }
+      view_product_onhand: {
+        Row: {
+          active: boolean | null
+          aliases: string[] | null
+          ash_max: number | null
+          ayag_flecs: number | null
+          blended_flecs: number | null
+          content_fingerprint: string | null
+          display_name: string | null
+          final_flecs: number | null
+          final_kg: number | null
+          final_tons: number | null
+          first_movement_date: string | null
+          first_seen_at: string | null
+          grade_code: string | null
+          grade_id: string | null
+          kg_per_flec: number | null
+          kg_per_flec_as_of: string | null
+          kg_per_flec_distinct_count: number | null
+          last_movement_date: string | null
+          last_seen_at: string | null
+          ledger_kg_net: number | null
+          magnet_flecs: number | null
+          me50_under: number | null
+          movement_count: number | null
+          movements_missing_kg: number | null
+          old_prod_flecs: number | null
+          opening_as_of: string | null
+          opening_flecs: number | null
+          other_flecs: number | null
+          prod_flecs: number | null
+          reclass_flecs: number | null
+          sheet_name: string | null
+          shippable_flecs: number | null
+          sort_order: number | null
+          stage_count: number | null
+          sundry_flecs: number | null
+          thresholds: Json | null
+          total_flecs: number | null
+          total_kg: number | null
+          total_tons: number | null
+          updated_at: string | null
+          vans_ready: number | null
+          vm_max: number | null
+        }
+        Relationships: []
+      }
+      view_product_portfolio: {
+        Row: {
+          active_grade_count: number | null
+          final_flecs: number | null
+          final_kg: number | null
+          final_tons: number | null
+          grade_count: number | null
+          grades_without_rate: number | null
+          last_movement_date: string | null
+          movement_count: number | null
+          total_flecs: number | null
+          total_kg: number | null
+          total_tons: number | null
+          vans_ready: number | null
+        }
+        Relationships: []
+      }
+      view_product_stage_balance: {
+        Row: {
+          active: boolean | null
+          balance_flecs: number | null
+          display_name: string | null
+          first_movement_date: string | null
+          grade_code: string | null
+          grade_id: string | null
+          last_movement_date: string | null
+          movement_count: number | null
+          movement_flecs: number | null
+          movement_kg: number | null
+          movements_missing_kg: number | null
+          opening_as_of: string | null
+          opening_flecs: number | null
+          sheet_name: string | null
+          sort_order: number | null
+          stage: string | null
+        }
+        Relationships: []
+      }
       view_production_daily: {
         Row: {
           bf_kg: number | null
@@ -5054,6 +5348,10 @@ export type Database = {
         Returns: Json
       }
       fn_is_close_remark: { Args: { p_remarks: string }; Returns: boolean }
+      fn_product_grade_fingerprint: {
+        Args: { p_payload: Json }
+        Returns: string
+      }
       fn_recompute_batch_state: {
         Args: { p_batch_code: string }
         Returns: undefined
@@ -5073,6 +5371,14 @@ export type Database = {
       fn_release_delivery_rows: { Args: { p_ids: string[] }; Returns: Json }
       fn_release_production_rows: {
         Args: { p_ids: string[]; p_table: string }
+        Returns: Json
+      }
+      fn_rename_product_grade: {
+        Args: { p_grade_id: string; p_new_sheet_name: string }
+        Returns: Json
+      }
+      fn_replace_product_grade: {
+        Args: { p_grade_id: string; p_movements?: Json; p_openings?: Json }
         Returns: Json
       }
       fn_restore_archive_batch: {
@@ -5100,6 +5406,15 @@ export type Database = {
       }
       fn_update_blend_proposal_header: {
         Args: { p_expected_row_version: number; p_id: string; p_patch?: Json }
+        Returns: Json
+      }
+      fn_upsert_product_grade: {
+        Args: {
+          p_fingerprint?: string
+          p_opening_as_of?: string
+          p_sheet_name: string
+          p_thresholds?: Json
+        }
         Returns: Json
       }
       is_admin: { Args: { user_id: string }; Returns: boolean }

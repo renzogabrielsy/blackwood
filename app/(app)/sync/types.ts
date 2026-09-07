@@ -19,6 +19,7 @@ export type SyncReportType =
   | 'rc_out'
   | 'production'
   | 'flecon'
+  | 'products'
   | 'rc_movement'
 
 /** Static catalog describing each employee card in the panel. */
@@ -78,6 +79,13 @@ export const SYNC_REPORTS: readonly SyncReportMeta[] = [
     readOnly: false,
   },
   {
+    type: 'products',
+    script: 'sync_products.ts',
+    label: 'Products',
+    blurb: 'Finished-product flecon inventory from the PRODUCTS INVENTORY sheet.',
+    readOnly: false,
+  },
+  {
     type: 'rc_movement',
     script: 'audit_rc_movement.py',
     label: 'RC Movement Audit',
@@ -92,6 +100,7 @@ export const PARALLEL_WRITERS: readonly SyncReportType[] = [
   'rc_out',
   'production',
   'flecon',
+  'products',
 ]
 
 export function metaFor(type: SyncReportType): SyncReportMeta {
@@ -563,6 +572,46 @@ export interface SourceTabNote {
   source_left_unconsumed: boolean
 }
 
+/**
+ * ONE thing the `products` report noticed about the SHAPE of the PRODUCTS INVENTORY
+ * sheet — a grade appearing, a grade renamed, a grade whose tab has gone (2026-09-07).
+ *
+ * WHY THIS CHANNEL EXISTS. A product grade IS a tab, and a tab name is typed by a person.
+ * So the sync has to answer a question no name can answer: is this new tab a new product,
+ * or the same product renamed? It answers from CONTENT (an identical content fingerprint,
+ * or an overwhelming overlap of the movements already filed) and NEVER from name
+ * similarity — the guess that would merge two products' ledgers. Every one of those
+ * decisions has to be visible, including the one it REFUSED to make: when two candidates
+ * match, nothing is renamed, a new grade is created (the reversible direction) and the
+ * candidates are named here so a human can settle it.
+ *
+ * Never held and never a durable case: the moment the tab names line up again these stop
+ * firing on their own. Carries no ₱ — this feature has no price data at all.
+ */
+export interface ProductNote {
+  kind:
+    | 'product_grade_added'
+    | 'product_grade_renamed'
+    | 'product_grade_ambiguous'
+    | 'product_sheet_missing'
+  /** The tab as currently named (for `product_sheet_missing`, as last known). */
+  sheet_name: string
+  /** Canonical code: upper, trimmed, whitespace-collapsed. */
+  code: string
+  previous_sheet_name?: string | null
+  previous_code?: string | null
+  /** Which rung of the rename ladder decided it. `fingerprint` is certainty;
+   *  `row_overlap` is an inference and carries its percentage. */
+  rename_evidence?: 'fingerprint' | 'row_overlap' | null
+  /** 0-100, one decimal. Present only for a `row_overlap` rename. */
+  rename_overlap_pct?: number | null
+  /** Every absent grade that matched, when the rename was REFUSED as ambiguous. */
+  candidates?: string[]
+  movement_count?: number
+  inserted?: number
+  deleted?: number
+}
+
 export interface ApplyResult {
   report_type: string
   ok: boolean
@@ -608,6 +657,11 @@ export interface ApplyResult {
    *  contract as `auto_created_batches` — read it as `apply?.source_tab_notes ?? []` (see
    *  `collectSourceTabNotes`). Only the `rc_out` report fills it today. */
   source_tab_notes?: SourceTabNote[]
+  /** What the `products` report noticed about the shape of the PRODUCTS INVENTORY sheet
+   *  — a grade added, renamed, ambiguous, or gone (2026-09-07). Same optionality
+   *  contract as `auto_created_batches` — read it as `apply?.product_notes ?? []` (see
+   *  `collectProductNotes`). Only the `products` report ever fills it. */
+  product_notes?: ProductNote[]
   /** Set ONLY when this report's source file never arrived (L-044). Absent on every
    *  ordinary run, so the KEY'S PRESENCE is the fact — never an array with a length to
    *  check. Read it via `collectReportsNotReceived`. */

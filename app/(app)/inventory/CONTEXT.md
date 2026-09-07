@@ -14,6 +14,7 @@
 | `/inventory/blocking` | Standalone warehouse grid + shared detail panel | **No** |
 | `/inventory/rc-movement` | Standalone campaign feed matrix | **No** |
 | `/inventory/flecon-bags` | Standalone FLECON bag inventory (balances + movement ledger) | **No** |
+| `/inventory/products` | Finished-product (flecon) inventory — **DATA LAYER ONLY as of 2026-09-07, no page yet** | **No** |
 
 ## URL contracts
 - **`?tab=deliveries|usage`** — drives the logs tab (Phase 1). The URL is the source of truth (`useSearchParams` + `router.replace`, the project house style — NOT the nuqs library). localStorage (`inventory_active_tab`) is a **fallback only**: it seeds the tab on first load when no `?tab=` is present (written into the URL once, post-hydration). Default `deliveries`. Deep-linkable / shareable.
@@ -70,6 +71,7 @@ These routes are dynamic, so **every** `?param=` write costs a server round-trip
 | Usage (`?tab=usage`) | `rc-out/` | [RC OUT](./rc-out/CONTEXT.md) — Inventory Usage |
 | Movement (`/inventory/rc-movement`) | `rc-movement/` | [RC Movement](./rc-movement/CONTEXT.md) — Daily Feed Matrix |
 | Bag Inventory (`/inventory/flecon-bags`) | `flecon-bags/` | [FLECON Bags](./flecon-bags/CONTEXT.md) — packaging-material stock |
+| Products (`/inventory/products`) | `products/` | [Products](./products/CONTEXT.md) — finished-product flecon inventory (**data layer only; the page is the next pass**) |
 
 ## The Blackwood Table is this screen's DEFAULT (2026-08-21) — `?grid=v1` is the way back
 

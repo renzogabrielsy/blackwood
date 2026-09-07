@@ -16,6 +16,7 @@ import type {
   BlockDiff,
   HeldRow,
   PriceNote,
+  ProductNote,
   ProductionBatchStart,
   ProductionHumanEdit,
   DeliveryHumanEdit,
@@ -207,6 +208,27 @@ export function collectAwaitingBatchAssignments(
  * and `collectAwaitingBatchAssignments` these are NOT folded into durable cases: the moment
  * the tab names parse the finding stops firing, so there would be nothing to close by hand.
  */
+/**
+ * Flatten every note the `products` report raised about the SHAPE of the PRODUCTS
+ * INVENTORY sheet (`result.reports.products.apply.product_notes`, 2026-09-07).
+ *
+ * Like `collectSourceTabNotes` and `collectPriceNotes` these are NOT folded into durable
+ * cases: a grade added, renamed, or gone is a fact about the sheet's tabs, and the moment
+ * the tabs line up again the note stops firing, so there would be nothing to close by hand.
+ */
+export function collectProductNotes(result: SyncRunResult): ProductNote[] {
+  const reports = result.reports
+  if (!reports) return []
+
+  const out: ProductNote[] = []
+  for (const key of Object.keys(reports) as SyncReportType[]) {
+    const report = reports[key]
+    if (!report) continue
+    for (const note of report.apply?.product_notes ?? []) out.push(note)
+  }
+  return out
+}
+
 export function collectSourceTabNotes(result: SyncRunResult): SourceTabNote[] {
   const reports = result.reports
   if (!reports) return []

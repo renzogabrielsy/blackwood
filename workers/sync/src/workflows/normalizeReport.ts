@@ -291,6 +291,29 @@ export interface SourceTabNoteEntry {
 }
 
 /**
+ * ONE thing the `products` report noticed about the SHAPE of the PRODUCTS INVENTORY
+ * sheet (2026-09-07). Mirror of the frontend `ProductNote`, built by
+ * `reports/productNotes.ts` — a grade added, renamed, ambiguous, or gone.
+ *
+ * `rename_overlap_pct` is NULLABLE and must NOT be coerced with `num()`: 0% and "this
+ * rename was decided on an identical fingerprint, so there is no percentage" are
+ * different facts, and a 0 would read as an inference made on no evidence at all.
+ */
+export interface ProductNoteEntry {
+  kind: string;
+  sheet_name: string;
+  code: string;
+  previous_sheet_name?: string | null;
+  previous_code?: string | null;
+  rename_evidence?: string | null;
+  rename_overlap_pct?: number | null;
+  candidates?: string[];
+  movement_count?: number;
+  inserted?: number;
+  deleted?: number;
+}
+
+/**
  * The report's source file did not arrive at all (2026-08-18, L-044). Mirror of the
  * frontend `ReportNotReceived`, built by `reports/reportNotReceived.ts`.
  *
@@ -354,6 +377,9 @@ export interface ApplyResult {
   /** Source workbooks this run opened and could not fully read (L-048). ALWAYS present
    *  (default []), so an ordinary run's shape does not depend on nothing going wrong. */
   source_tab_notes: SourceTabNoteEntry[];
+  /** What the `products` report noticed about the PRODUCTS INVENTORY sheet's shape
+   *  (2026-09-07). ALWAYS present (default []). */
+  product_notes: ProductNoteEntry[];
   /** Set ONLY when this report's source file never arrived (L-044). Absent otherwise. */
   report_not_received?: ReportNotReceivedNote;
 }
@@ -432,6 +458,8 @@ interface RawApply {
   awaiting_batch_assignment?: unknown;
   /** rc_out only (today) — workbooks opened whose tab names could not all be read (L-048). */
   source_tab_notes?: unknown;
+  /** products only — grades added, renamed, ambiguous or gone (2026-09-07). */
+  product_notes?: unknown;
   /** Set only when this report's source file never arrived at all (L-044). */
   report_not_received?: unknown;
 }
@@ -720,6 +748,34 @@ function toSourceTabNotes(v: unknown): SourceTabNoteEntry[] {
   return Array.isArray(v) ? v.map(toSourceTabNote) : [];
 }
 
+/** Coerce one raw products note. Every field is guarded; `rename_overlap_pct` is kept
+ *  NULLABLE on purpose (see ProductNoteEntry) rather than being flattened to 0. */
+function toProductNote(v: unknown): ProductNoteEntry {
+  const o = (v ?? {}) as Record<string, unknown>;
+  const nullableStr = (x: unknown): string | null =>
+    typeof x === "string" && x.trim() ? x : null;
+  const pct = o.rename_overlap_pct;
+  const out: ProductNoteEntry = {
+    kind: str(o.kind),
+    sheet_name: str(o.sheet_name),
+    code: str(o.code),
+    previous_sheet_name: nullableStr(o.previous_sheet_name),
+    previous_code: nullableStr(o.previous_code),
+    rename_evidence: nullableStr(o.rename_evidence),
+    rename_overlap_pct:
+      typeof pct === "number" && Number.isFinite(pct) ? pct : null,
+    movement_count: num(o.movement_count),
+    inserted: num(o.inserted),
+    deleted: num(o.deleted),
+  };
+  if (Array.isArray(o.candidates)) out.candidates = strArray(o.candidates);
+  return out;
+}
+
+function toProductNotes(v: unknown): ProductNoteEntry[] {
+  return Array.isArray(v) ? v.map(toProductNote) : [];
+}
+
 /**
  * Coerce a raw "the report never arrived" note → ReportNotReceivedNote, or null (L-044).
  *
@@ -837,6 +893,7 @@ export function normalizeApply(
     unpriced_overdue: toUnpricedOverdues(raw.unpriced_overdue),
     awaiting_batch_assignment: toAwaitingBatchAssignments(raw.awaiting_batch_assignment),
     source_tab_notes: toSourceTabNotes(raw.source_tab_notes),
+    product_notes: toProductNotes(raw.product_notes),
     // L-044 — spread, not assigned: the KEY'S PRESENCE is the fact ("no report arrived"),
     // so an ordinary run must keep the byte-identical shape it had before this existed.
     ...(notReceived ? { report_not_received: notReceived } : {}),
@@ -909,6 +966,7 @@ export function failedReportResult(
       unpriced_overdue: [],
       awaiting_batch_assignment: [],
       source_tab_notes: [],
+      product_notes: [],
     },
     status: "error",
     error: message,

@@ -36,6 +36,7 @@ import type {
   SlowGmailSearch,
   SourceDiff,
   SourceTabNote,
+  ProductNote,
   StaleStream,
   StaleStreamCheck,
   SyncReportType,
@@ -57,6 +58,7 @@ import {
   collectReportArtifact,
   collectReportsNotReceived,
   collectScheduleConflicts,
+  collectProductNotes,
   collectSingleSourceOverdue,
   collectSlowGmailSearches,
   collectSourceDiffs,
@@ -90,6 +92,7 @@ export type FindingSection =
   | 'rc_out'
   | 'production'
   | 'flecon'
+  | 'products'
   | 'rc_movement'
   | 'blocking'
   | 'run'
@@ -181,6 +184,7 @@ const REPORT_SOURCE_LABEL: Record<SyncReportType, string> = {
   rc_out: 'Proposed daily report (RC OUT)',
   production: 'Production report',
   flecon: 'FLECON bag report',
+  products: 'PRODUCTS INVENTORY sheet',
   rc_movement: 'Movement sheet',
 }
 
@@ -1645,7 +1649,164 @@ function fromSourceTabNote(n: SourceTabNote): RunFinding {
       `same thing (a full stop after the month, a different abbreviation) rather than a ` +
       `mistake — compare the two lists above and the pattern is usually obvious.`,
     severity: whole ? 'high' : 'attention',
-    section: 'rc_out',
+    // DERIVED from the note's own `report_type`, not hardcoded. `rc_out` was the only
+    // producer when this was written and is still the fallback, so every existing note
+    // files exactly where it always did; `products` (2026-09-07) is the second producer
+    // and would otherwise have landed in the wrong section of the Excel report.
+    section: sourceTabSection(n.report_type),
+  }
+}
+
+/** Map a source-tab note's `report_type` onto a finding section. Unknown types fall back
+ *  to `rc_out`, the historical (and for years only) producer of these notes. */
+function sourceTabSection(reportType: string): FindingSection {
+  switch (reportType) {
+    case 'gsheet':
+    case 'deliveries':
+    case 'rc_out':
+    case 'production':
+    case 'flecon':
+    case 'products':
+    case 'rc_movement':
+      return reportType
+    default:
+      return 'rc_out'
+  }
+}
+
+/**
+ * ONE thing the `products` report noticed about the SHAPE of the PRODUCTS INVENTORY
+ * sheet (2026-09-07).
+ *
+ * A product grade IS a tab and a tab name is typed by a person, so every run has to
+ * decide whether a tab it has not seen before is a NEW product or an old one under a new
+ * name. It decides from CONTENT — an identical content fingerprint, or an overwhelming
+ * overlap with the movements already filed — and never from name similarity, which is
+ * the guess that would merge two products' ledgers into one. Four things can come out of
+ * that and all four are reported:
+ *
+ *   added      — a new product, created and ingested. `info`: this is the feature working.
+ *   renamed    — the same product under a new name. `info` on an identical fingerprint
+ *                (nothing is in doubt), `attention` when it was decided on a row overlap,
+ *                WITH the percentage, because that rung is an inference and the number
+ *                that drove it is exactly what a person needs to judge it.
+ *   ambiguous  — two or more products matched, so NOTHING was renamed and a new grade was
+ *                created instead (the reversible direction). `attention`, naming every
+ *                candidate: the machine correctly refused to guess and a human can settle
+ *                it in one glance.
+ *   missing    — a product whose tab is no longer in the workbook. `attention`. Nothing
+ *                is deleted and nothing is deactivated: a tab can be hidden, moved to
+ *                another file, or renamed in a way the ladder does not recognise, and
+ *                none of those is a reason for a machine to retire a product.
+ *
+ * Never held: the moment the tabs line up again these stop firing on their own. Carries
+ * no ₱ — this sheet has no price data in it at all.
+ */
+function fromProductNote(n: ProductNote): RunFinding {
+  const sheet = str(n.sheet_name) ?? str(n.code) ?? 'a product'
+  const code = str(n.code) ?? sheet
+  const moves = num(n.movement_count)
+  const prev = str(n.previous_sheet_name)
+  const pct = num(n.rename_overlap_pct)
+  const candidates = Array.isArray(n.candidates) ? n.candidates.map(String) : []
+  const byFingerprint = n.rename_evidence === 'fingerprint'
+
+  const base = {
+    key: `product:${n.kind}:${code}`,
+    kind: n.kind,
+    source: 'PRODUCTS INVENTORY sheet',
+    location: sheet,
+    severity: 'info' as FindingSeverity,
+    section: 'products' as FindingSection,
+  }
+
+  if (n.kind === 'product_grade_renamed') {
+    return {
+      ...base,
+      kindLabel: 'Product renamed',
+      title: `"${prev ?? 'a product'}" is now called "${sheet}"`,
+      data: {
+        sheet_name: sheet,
+        code,
+        previous_sheet_name: prev,
+        previous_code: str(n.previous_code),
+        matched_on: byFingerprint ? 'identical opening rows' : 'existing movements',
+        overlap_pct: pct,
+        movement_count: moves,
+        added: num(n.inserted),
+        removed: num(n.deleted),
+      },
+      reason: byFingerprint
+        ? `This tab has never been seen under this name, but its opening balances and first ` +
+          `movements are identical to "${prev}" — which is no longer in the workbook. That is ` +
+          `not a resemblance, it is the same product: the whole history stays where it was and ` +
+          `only the name has moved. Nothing was created and nothing was lost.`
+        : `This tab has never been seen under this name. ${pct == null ? 'Most' : `${pct}%`} of ` +
+          `its movements are already filed under "${prev}", which is no longer in the workbook, ` +
+          `so it has been treated as the same product renamed rather than a new one. That is a ` +
+          `judgement from the numbers, not a certainty — if these are genuinely two different ` +
+          `products, say so and the history can be separated again.`,
+      severity: byFingerprint ? 'info' : 'attention',
+      badges: byFingerprint
+        ? undefined
+        : [
+            {
+              label: 'MATCHED ON THE NUMBERS',
+              tone: 'caution' as const,
+              hint:
+                'The rename was inferred from an overlap of existing movements, not from an ' +
+                'identical opening. Worth a glance if two products could look alike.',
+            },
+          ],
+    }
+  }
+
+  if (n.kind === 'product_grade_ambiguous') {
+    return {
+      ...base,
+      kindLabel: 'Could not tell which product this is',
+      title: `"${sheet}" matches ${candidates.length} products that are no longer in the sheet`,
+      data: { sheet_name: sheet, code, candidates, movement_count: moves },
+      reason:
+        `This tab looks like more than one product that has gone missing from the workbook ` +
+        `(${candidates.map((c) => `"${c}"`).join(', ')}), so nothing was renamed — merging a ` +
+        `ledger into the wrong product is not something a later run could undo. It has been ` +
+        `recorded as a NEW product instead, which changes nothing about the old ones and can ` +
+        `be corrected. Say which one it is and its history can be joined up.`,
+      severity: 'attention',
+    }
+  }
+
+  if (n.kind === 'product_sheet_missing') {
+    return {
+      ...base,
+      kindLabel: 'Product tab is gone',
+      title: `"${sheet}" is no longer a tab in the PRODUCTS INVENTORY sheet`,
+      data: { sheet_name: sheet, code },
+      reason:
+        `This product is in the system but its tab was not in the workbook this run. Nothing ` +
+        `has been deleted and nothing has been switched off — a tab can be hidden, moved to ` +
+        `another file, or renamed in a way that could not be matched, and none of those is a ` +
+        `reason to retire a product automatically. Its balances are unchanged and simply stop ` +
+        `moving until the tab comes back.`,
+      severity: 'attention',
+    }
+  }
+
+  return {
+    ...base,
+    kindLabel: 'New product added',
+    title: `"${sheet}" is a new product — added with ${moves ?? 0} movement${moves === 1 ? '' : 's'}`,
+    data: {
+      sheet_name: sheet,
+      code,
+      movement_count: moves,
+      added: num(n.inserted),
+    },
+    reason:
+      `A tab appeared that does not match any product already in the system, by name or by ` +
+      `content, so it has been added and its whole ledger read in. This is the sheet growing, ` +
+      `not a problem — it is listed so a new product never arrives silently.`,
   }
 }
 
@@ -1758,6 +1919,11 @@ export function flattenRunFindings(result: SyncRunResult): RunFinding[] {
   //      from opposite ends — nothing came in, versus something came in and told us
   //      nothing — and a run can legitimately raise both.
   for (const n of collectSourceTabNotes(result)) out.push(fromSourceTabNote(n))
+
+  // 12e. What the PRODUCTS INVENTORY sheet's own SHAPE did this run — a product added,
+  //      renamed, ambiguous, or gone (2026-09-07). Beside the source-tab notes because
+  //      both are statements about the tabs of a workbook rather than about its numbers.
+  for (const n of collectProductNotes(result)) out.push(fromProductNote(n))
 
   // 12c. Reports whose SOURCE FILE never arrived (L-044). Immediately before the stale
   //      streams because it is the other half of the same sentence: this says the email is
@@ -2137,6 +2303,10 @@ const SHORT_KIND: Record<string, string> = {
   price_overdue_check_failed: 'price check failed',
   report_not_received: 'report never arrived',
   source_tabs_unreadable: 'report unreadable',
+  product_grade_added: 'new product',
+  product_grade_renamed: 'product renamed',
+  product_grade_ambiguous: 'rename not certain',
+  product_sheet_missing: 'product tab gone',
   stale_stream_check_failed: 'freshness check failed',
   price_fuzzy_match: 'price spelling differs',
   price_fuzzy_ambiguous: 'price match not unique',

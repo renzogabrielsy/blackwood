@@ -142,8 +142,21 @@ export interface RunSyncResult {
   status: "succeeded" | "partial";
 }
 
-/** The panel's parallel writers (types.ts PARALLEL_WRITERS), run after gsheet. */
-const PARALLEL_WRITERS: RunReportType[] = ["deliveries", "rc_out", "production", "flecon"];
+/**
+ * The panel's parallel writers (types.ts PARALLEL_WRITERS), run after gsheet.
+ *
+ * `products` (2026-09-07) joins them because it is genuinely INDEPENDENT of all four: a
+ * different Google Sheet, its own three tables, no batch lookup, no rc_out, no shared
+ * watermark. There is nothing for it to race with, so making it a serial stage would only
+ * add its download to every run's wall-clock time for no ordering guarantee in return.
+ */
+const PARALLEL_WRITERS: RunReportType[] = [
+  "deliveries",
+  "rc_out",
+  "production",
+  "flecon",
+  "products",
+];
 
 async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
   const { runId } = params;
