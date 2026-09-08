@@ -54,10 +54,33 @@ export interface HeldRow {
   source_index?: string | number;
 }
 
+/**
+ * ONE date a gate found at odds, with both sides' totals. Mirror of the frontend
+ * `GateDriftDate`. Pure kg — never a ₱/cost field.
+ */
+export interface GateDriftDate {
+  date: string;
+  proposed_kg?: number | null;
+  movement_kg?: number | null;
+  diff_kg?: number | null;
+  db_sum_kg?: number | null;
+  excess_kg?: number | null;
+  note?: string;
+}
+
 /** Mirror of the frontend `GateFailure`. */
 export interface GateFailure {
   gate: string;
   detail: string;
+  /**
+   * L-049 (2026-09-07) — the dates that drove the gate. This USED TO BE DROPPED here:
+   * `toGateFailures` coerced every gate failure down to `{gate, detail}`, so the auditor's
+   * per-date `{date, db_sum_kg, movement_kg, excess_kg}` — which it had already built —
+   * never reached the panel or the workbook, and the operator read the sentence
+   * "2 drift date(s); max_severity=serious". Omitted (not `[]`) when the producer sent
+   * none, so a gate failure that never had dates keeps byte-identical shape.
+   */
+  drift_dates?: GateDriftDate[];
 }
 
 /** Mirror of the frontend `ClassifyCounts`. */
@@ -114,6 +137,41 @@ export interface AutoCreatedBatchNote {
   mode?: "rc_in" | "rc_out";
   transaction_date: string | null;
   block_loc: string | null;
+  source_row: string | number | null;
+}
+
+/**
+ * One below-watermark feeding the sync WROTE because a second witness corroborated the
+ * gap (2026-09-07, L-049). Mirror of the frontend `RcOutBackfill`. Pure kg — `rc_out`
+ * has no ₱ column at all.
+ */
+export interface RcOutBackfillNote {
+  transaction_date: string;
+  batch_code: string | null;
+  block_loc: string | null;
+  destination: string;
+  weight_kg: number | null;
+  movement_kg: number;
+  db_kg_before: number;
+  gap_kg: number;
+  applied_kg: number;
+  applied_row_count: number;
+  source_row: string | number | null;
+}
+
+/**
+ * One row filed against the batch already occupying its block, because the derived code
+ * differed from it only in the two-digit YEAR (2026-09-07, L-049). Mirror of the frontend
+ * `BatchAliasNote`. Pure kg.
+ */
+export interface BatchAliasNoteEntry {
+  kind: string;
+  derived_batch_code: string;
+  resolved_batch_code: string;
+  block_loc: string | null;
+  occupying_status: string | null;
+  occupying_balance_kg: number | null;
+  transaction_date: string | null;
   source_row: string | number | null;
 }
 
@@ -359,6 +417,12 @@ export interface ApplyResult {
   watermark_updated: boolean;
   errors: string[];
   auto_created_batches: AutoCreatedBatchNote[];
+  /** Below-watermark feedings this apply WROTE on a second witness's corroboration
+   *  (L-049). ALWAYS present (default []). */
+  rc_out_backfills: RcOutBackfillNote[];
+  /** Rows filed against the pile already in their block because the derived code differed
+   *  only by the year (L-049). ALWAYS present (default []). */
+  batch_alias_notes: BatchAliasNoteEntry[];
   /** Production-batch changeovers this apply announced. ALWAYS present (default []). */
   production_batch_starts: ProductionBatchStartNote[];
   /** Production rows the sync refused to overwrite. ALWAYS present (default []). */
@@ -422,7 +486,7 @@ export interface SyncRunReportResult {
 interface RawClassify {
   report_type?: string;
   ok?: boolean;
-  gate_failures?: ReadonlyArray<{ gate?: unknown; detail?: unknown }>;
+  gate_failures?: ReadonlyArray<{ gate?: unknown; detail?: unknown; drift_dates?: unknown }>;
   counts?: { noop?: number; insert?: number; update?: number; flagged?: number };
   watermark?: string | null;
 }
@@ -445,6 +509,10 @@ interface RawApply {
   errors?: unknown;
   /** gsheet (top-level) / rc_out — batches auto-created this apply. */
   auto_created_batches?: unknown;
+  /** rc_out only — below-watermark feedings written on corroboration (L-049). */
+  rc_out_backfills?: unknown;
+  /** rc_out only — rows filed against the block's existing occupant (L-049). */
+  batch_alias_notes?: unknown;
   /** production only — batch changeovers announced this apply. */
   production_batch_starts?: unknown;
   /** production only — rows the sync refused to overwrite (human-edit latch). */
@@ -525,6 +593,57 @@ function toAutoCreatedBatch(v: unknown): AutoCreatedBatchNote {
 /** Coerce a raw auto-created-batches array → AutoCreatedBatchNote[]. */
 function toAutoCreatedBatches(v: unknown): AutoCreatedBatchNote[] {
   return Array.isArray(v) ? v.map(toAutoCreatedBatch) : [];
+}
+
+/** `number | null` — a non-finite / absent value becomes null, NEVER 0 (a kg figure of
+ *  zero and "not recorded" are different answers; the NULL≠0 rule). */
+function numOrNull(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+/** Coerce one raw corroborated-backfill entry → RcOutBackfillNote. Every field guarded. */
+function toRcOutBackfill(v: unknown): RcOutBackfillNote {
+  const o = (v ?? {}) as Record<string, unknown>;
+  const sourceRow =
+    typeof o.source_row === "string" || typeof o.source_row === "number" ? o.source_row : null;
+  return {
+    transaction_date: str(o.transaction_date),
+    batch_code: typeof o.batch_code === "string" ? o.batch_code : null,
+    block_loc: typeof o.block_loc === "string" ? o.block_loc : null,
+    destination: str(o.destination) || "MAIN",
+    weight_kg: numOrNull(o.weight_kg),
+    movement_kg: num(o.movement_kg),
+    db_kg_before: num(o.db_kg_before),
+    gap_kg: num(o.gap_kg),
+    applied_kg: num(o.applied_kg),
+    applied_row_count: num(o.applied_row_count),
+    source_row: sourceRow,
+  };
+}
+
+function toRcOutBackfills(v: unknown): RcOutBackfillNote[] {
+  return Array.isArray(v) ? v.map(toRcOutBackfill) : [];
+}
+
+/** Coerce one raw year-alias entry → BatchAliasNoteEntry. Every field guarded. */
+function toBatchAliasNote(v: unknown): BatchAliasNoteEntry {
+  const o = (v ?? {}) as Record<string, unknown>;
+  const sourceRow =
+    typeof o.source_row === "string" || typeof o.source_row === "number" ? o.source_row : null;
+  return {
+    kind: str(o.kind) || "year_alias_of_block_occupant",
+    derived_batch_code: str(o.derived_batch_code),
+    resolved_batch_code: str(o.resolved_batch_code),
+    block_loc: typeof o.block_loc === "string" ? o.block_loc : null,
+    occupying_status: typeof o.occupying_status === "string" ? o.occupying_status : null,
+    occupying_balance_kg: numOrNull(o.occupying_balance_kg),
+    transaction_date: typeof o.transaction_date === "string" ? o.transaction_date : null,
+    source_row: sourceRow,
+  };
+}
+
+function toBatchAliasNotes(v: unknown): BatchAliasNoteEntry[] {
+  return Array.isArray(v) ? v.map(toBatchAliasNote) : [];
 }
 
 /** Coerce a raw batch-changeover entry → contract ProductionBatchStartNote. Every
@@ -818,12 +937,35 @@ function toReportNotReceived(v: unknown): ReportNotReceivedNote | null {
   };
 }
 
-/** Coerce a raw gate_failures array → contract GateFailure[]. */
+/** Coerce one raw drift date → GateDriftDate. Only the keys that were actually present
+ *  are carried, so a P-vs-M entry does not sprout empty O-vs-M fields (and vice versa). */
+function toGateDriftDate(v: unknown): GateDriftDate {
+  const o = (v ?? {}) as Record<string, unknown>;
+  const out: GateDriftDate = { date: str(o.date) };
+  if ("proposed_kg" in o) out.proposed_kg = numOrNull(o.proposed_kg);
+  if ("movement_kg" in o) out.movement_kg = numOrNull(o.movement_kg);
+  if ("diff_kg" in o) out.diff_kg = numOrNull(o.diff_kg);
+  if ("db_sum_kg" in o) out.db_sum_kg = numOrNull(o.db_sum_kg);
+  if ("excess_kg" in o) out.excess_kg = numOrNull(o.excess_kg);
+  if (typeof o.note === "string") out.note = o.note;
+  return out;
+}
+
+/** Coerce a raw gate_failures array → contract GateFailure[].
+ *
+ *  L-049: `drift_dates` is CARRIED now. It used to be dropped here, which is the whole
+ *  reason a serious movement drift reached the operator as a bare count. Spread, not
+ *  assigned — a producer that sends none keeps the exact `{gate, detail}` shape it had. */
 function toGateFailures(v: unknown): GateFailure[] {
   if (!Array.isArray(v)) return [];
   return v.map((g) => {
     const o = (g ?? {}) as Record<string, unknown>;
-    return { gate: str(o.gate), detail: str(o.detail) };
+    const drift = Array.isArray(o.drift_dates) ? o.drift_dates.map(toGateDriftDate) : null;
+    return {
+      gate: str(o.gate),
+      detail: str(o.detail),
+      ...(drift && drift.length ? { drift_dates: drift } : {}),
+    };
   });
 }
 
@@ -886,6 +1028,8 @@ export function normalizeApply(
     watermark_updated: Boolean(raw.watermark_updated),
     errors: strArray(raw.errors),
     auto_created_batches: toAutoCreatedBatches(raw.auto_created_batches),
+    rc_out_backfills: toRcOutBackfills(raw.rc_out_backfills),
+    batch_alias_notes: toBatchAliasNotes(raw.batch_alias_notes),
     production_batch_starts: toProductionBatchStarts(raw.production_batch_starts),
     production_human_edits: toProductionHumanEdits(raw.production_human_edits),
     delivery_human_edits: toDeliveryHumanEdits(raw.delivery_human_edits),
@@ -959,6 +1103,8 @@ export function failedReportResult(
       watermark_updated: false,
       errors: [message],
       auto_created_batches: [],
+      rc_out_backfills: [],
+      batch_alias_notes: [],
       production_batch_starts: [],
       production_human_edits: [],
       delivery_human_edits: [],

@@ -101,6 +101,49 @@ for r in all_rows:
 - **This is informational-only in the sense that there is no apply phase to halt** — `ok:false` here simply tells the calling UI/human "something's off", it does not block any write (since this auditor never writes anything, by construction).
 - Severity 1 ("warning") still surfaces `drift` entries in `rows_preview` but keeps `ok:true`.
 
+### § The drift NAMES ITS DATES (2026-09-07, L-049)
+
+**The regression this closes.** On 2026-09-07 the auditor flagged exactly two days — DB
+27,141 vs sheet 35,299 on 2026-09-03, and DB 21,618 vs sheet 31,255 on 2026-09-04, gaps of
+precisely 8,158 and 9,637 kg, which the rc_out writer was HOLDING rows for. What reached
+the operator was one sentence: **"2 drift date(s); max_severity=serious"**. A count, about
+days it could name, describing kilograms it had already measured.
+
+Two things caused that, and both are fixed:
+
+1. **The dates were computed and then dropped.** `auditDriftDates()` already built
+   `{date, db_sum_kg, movement_kg, excess_kg}` per day and hung it on the gate failure —
+   and `workflows/normalizeReport.ts::toGateFailures` coerced every gate failure down to
+   `{gate, detail}` at the assembly boundary. `GateFailure.drift_dates` now rides through
+   (spread, not assigned, so a producer that sends none keeps the exact old shape).
+2. **A WARNING-level drift raised no gate failure at all, and therefore said nothing.**
+   `runReport` now publishes **`rc_movement_drifts`** on the classify block via
+   `classifyExtra` — `{date, db_kg, sheet_kg, delta_kg, excess_kg?, severity, note?}`, one
+   entry per drifting day at ANY severity. It is deliberately NOT folded into
+   `gate_failures`: a gate failure settles the panel card to `gate-failed`, and a 200 kg
+   disagreement is information, not a reason to stop writing. `gate_failures` still means
+   exactly what it always meant.
+
+**Severity is decided with the reconciler's OWN thresholds** (`> 500` serious, `> 50`
+warning) — `auditDrifts()` invents no second definition, and a day inside tolerance is
+excluded even though the reconciler files any noted row under `drift_dates`. A day with no
+movement line at all is published as a `warning` carrying `note: "no movement entry"` — no
+second witness is a fact worth saying, not silence.
+
+**The finding cross-references the held rows.** `lib/sync/cases-fold.ts::collectRcMovementDrifts`
+pairs each drifting day with the `rc_out` rows the SAME run held on that day, and
+`findings.ts::fromRcMovementDrift` says *"the held row … accounts for it"* when their
+weights sum to the gap within the auditor's own 50 kg tolerance. Joining the two halves is
+the whole point: they were both computed, published in different places, and never put in
+one sentence. The finding lands in `section: 'rc_movement'`, so the Excel report's **RC
+Movement** sheet lists one row per drifting day — it listed **zero** on the run that
+started all this.
+
+Carries no ₱ and none is derivable: this lane is pure kg.
+
+**Tests:** `test/reports/rc_movement_audit.test.ts` describe `"L-049 — auditDrifts"`;
+app side `scripts/verify-findings.ts` (the `L-049:` checks).
+
 ---
 
 ## 5. Apply spec
@@ -135,6 +178,7 @@ was never designed to provide.
 | reconcile-drift-math | reconcile_rc_movement.py (shared) | Exact severity thresholds (`tolerance_kg=50` default, `serious_drift_kg=500` default — note `audit_rc_movement.py` does NOT override these via CLI args the way `sync_rc_out.py` explicitly passes `50`/`500`; it relies on the reconciler's own argparse defaults, which happen to be the same values) reproduce the documented severity classification. |
 | L-019 (duplication signature) | reconcile_rc_movement.py `o_vs_m_excess` logic | `O > M` by more than tolerance → flagged; `O < M` → silent, never flagged. |
 | L-024 (cross-month-boundary false-positive on a settled date) | **NOT codified in this auditor** — the "surface, don't auto-halt" nuance from L-024 was a manual rc-out-manager judgment call, not implemented in `audit_rc_movement.py`'s severity logic. This auditor will report ANY serious drift the same way regardless of how old/settled the date is. Flag for a human decision: should the TS port add an "is this date well outside the current window" softening the way L-024 describes for rc-out-manager, or leave this auditor's severity purely mechanical? |
+| L-049 (the drift names its dates) | `rc_movement_audit/index.ts::auditDrifts` + `normalizeReport.ts::toGateFailures` + `findings.ts::fromRcMovementDrift` | A serious drift yields ONE finding per day carrying `{date, db_kg, sheet_kg, delta_kg}` and both totals in its title; a warning-level drift yields the same at `attention`; a day inside the 50 kg tolerance yields nothing; a day with no movement line is a warning noted `no movement entry`; a held rc_out row on the same day whose kg match the gap is named as the explanation. |
 | never writes / never labels | audit_rc_movement.py main() | Confirm the TS port's CLI literally rejects any phase other than classify, and the module has zero calls to any DB-write helper or Gmail-label helper. |
 
 ---

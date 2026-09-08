@@ -179,7 +179,21 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
   - RETIRED: `runSyncClassify` / `runSyncApply` (child_process spawn) + the SYNC_MOCK
     plumbing. Classify/apply now run in the worker.
 - `cases.ts` (`'use server'`) — the **case-persistence fan-out** (Smart-Adjudicator P1). Turns
-  a terminal run's held rows into durable `sync_held_cases` rows so they survive past the modal:
+  a terminal run's held rows into durable `sync_held_cases` rows so they survive past the modal.
+
+  > **⚠️ IT IS NO LONGER THE ONLY WRITER, AND IT NEVER SHOULD HAVE BEEN THE ONLY ONE
+  > (2026-09-07, L-049).** This action runs only when a human reaches it — the sync modal's
+  > finalize hook (gated on `SYNC_AI_REVIEW_ENABLED`, deliberately OFF since 2026-07-11) or a
+  > `/sync/cases?run=<id>` deep link. So a **scheduled run that nobody watched projected
+  > NOTHING**: on 2026-09-07 two real feedings had been held for four days, `sync_held_cases`
+  > had no row since Sept 4, and the Excel report's "Awaiting Review" sheet — which reads that
+  > table — listed zero rows. The worker now does the projection itself in
+  > `workers/sync/src/workflows/persistCases.ts` (Stage 3f, before the Excel stage), for EVERY
+  > held row of EVERY kind, using **THE same `caseFingerprint`** reached through
+  > `findingsBridge.ts`. The two writers are therefore idempotent against each other: this
+  > action still runs, still refreshes, and — because `occurrence_count` bumps only when a
+  > DIFFERENT run re-raises a case — never double-counts what the worker already wrote.
+  > The run records what it did in `result.reconciliation.held_case_persistence`.
   - **`ensureCasesForRun(runId)`** → `{created, refreshed, knownMatched, caseIds}`.
     requirePrivileged → service-role load of the run → no-op unless status is terminal
     (`succeeded|failed|partial`) AND (`result.reports` OR `result.reconciliation` exists).
@@ -903,6 +917,35 @@ Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerpri
     **downgrade to `info` with a different sentence, never a suppression** — silence would be the
     reassuring line above in a new costume — and an unreadable/absent bookkeeping row leaves the
     finding at full volume, because an unknown must never quieten an alarm.
+  - **`rc_movement_drift`** (`section: 'rc_movement'`, `collectRcMovementDrifts(result)` →
+    `result.reports.rc_movement.classify.rc_movement_drifts` → `fromRcMovementDrift`, 2026-09-07,
+    L-049). **ONE finding per drifting day, naming the day and BOTH totals** — `high` at serious
+    (> 500 kg), `attention` at warning (> 50 kg). It exists because this lane published a COUNT:
+    the auditor had already built `{date, db_sum_kg, movement_kg, excess_kg}` per day and hung it
+    on its gate failure, and `normalizeReport.ts::toGateFailures` coerced that down to
+    `{gate, detail}` at the assembly boundary, so what reached the operator on 2026-09-07 was
+    *"2 drift date(s); max_severity=serious"* — about two days it could name and two gaps it had
+    measured (DB 27,141 vs sheet 35,299; DB 21,618 vs 31,255). A warning-level drift raised no gate
+    failure at all and said nothing whatsoever. **The finding CROSS-REFERENCES the run's own held
+    rows**: each drifting day is paired with the `rc_out` rows the same run held on that day, and
+    when their weights sum to the gap within the auditor's own 50 kg tolerance it says so — "the
+    held row for D-8A accounts for it". Joining those two halves was the whole fix; both were
+    already computed, in different places, and never put in one sentence. Structurally ₱-free (the
+    rc_movement lane has no money in it), so the Excel **RC Movement** sheet finally lists rows —
+    it listed zero on the run that started this.
+  - **`rc_out_backfill_corroborated`** (`info`, `section: 'rc_out'`, `collectRcOutBackfills(result)`
+    → `result.reports.rc_out.apply.rc_out_backfills`, 2026-09-07, L-049). A below-watermark feeding
+    the sync WROTE because a second witness said the day was short by exactly that much. Not a
+    problem — a **record of a decision**: the L-019 guard normally holds such a row as a suspected
+    duplicate, and this names the two witnesses that overruled it (the movement sheet's daily total
+    and the database's). Nothing to do; nothing held.
+  - **`batch_year_alias`** (`attention`, `section: 'rc_out'`, `collectBatchAliasNotes(result)` →
+    `result.reports[type].apply.batch_alias_notes`, 2026-09-07, L-049). A row filed against the pile
+    already in its block because the derived code differed from it **only in the two-digit year**
+    (`NOV-26-BLK13` derived from a mistyped BLOCK DATE cell, against `NOV-25-BLK13` standing in
+    D-8A). **`attention`, never `info`** — the sync made a judgement about which pile this is on a
+    human's behalf, and the finding names BOTH codes plus the occupant's status and balance so it
+    can be overruled.
   - **`source_tabs_unreadable`** (`section: 'rc_out'`, `collectSourceTabNotes(result)` →
     `result.reports[type].apply.source_tab_notes ?? []` → `fromSourceTabNote`, 2026-09-03, L-048).
     **The opposite end of the same question `report_not_received` asks**: nothing came in, versus

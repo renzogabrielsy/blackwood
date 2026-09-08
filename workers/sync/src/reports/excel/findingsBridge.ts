@@ -37,6 +37,25 @@
  * `tsc --noEmit`).
  */
 export {
+  collectHeldRows,
+  type CollectedHeld,
+} from "../../../../../lib/sync/cases-fold";
+
+/**
+ * `caseFingerprint` — THE definition of "is this the same discrepancy we have seen
+ * before" (2026-09-07, L-049). The worker now writes durable `sync_held_cases` rows
+ * itself (see `workflows/persistCases.ts`), and a second implementation of this hash would
+ * mean a case created by the worker and the same case created by the app's own fan-out
+ * would be two rows for one problem — the exact drift this bridge exists to prevent.
+ *
+ * `lib/sync/fingerprint.ts` is portable for the same reasons the rest of the closure is:
+ * it imports `node:crypto` (the worker IS Node) and TYPES from `app/(app)/sync/types.ts`,
+ * and nothing else. It joins the Dockerfile COPY and `.dockerignore` allow-list with this
+ * export; `npm run verify:container-build` is what makes forgetting either a red build.
+ */
+export { caseFingerprint } from "../../../../../lib/sync/fingerprint";
+
+export {
   flattenRunFindings,
   formatFindingData,
   isCostKey,

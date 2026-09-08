@@ -33,11 +33,14 @@ import {
 import { caseFingerprint } from '../lib/sync/fingerprint'
 import { canonicalHashPortable, sha256Hex } from '../lib/sync/portable-hash'
 import type {
+  BatchAliasNote,
   BlockDiff,
   DeliveryHumanEdit,
   HeldRow,
   PriceNote,
   ProductNote,
+  RcMovementDrift,
+  RcOutBackfill,
   ReportNotReceived,
   SourceTabNote,
   SingleSourceOverdue,
@@ -1638,6 +1641,216 @@ check('products: an acknowledged rename does NOT re-alarm when only the run chan
   const b = findingIdentity(flattenRunFindings(productsRun({ ...note }))[0])
   assert.equal(a.fingerprint, b.fingerprint)
   assert.equal(a.contentHash, b.contentHash, 'the same sheet, twice, is the same answer')
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// L-049 (2026-09-07) — the incident where the run flagged the right things in
+// three different places and the operator saw a COUNT.
+//
+// Block D-8A holds NOV-25-BLK13. A mistyped BLOCK DATE derived NOV-26-BLK13, the
+// auto-create was refused by the DB, two feedings were held; MC corrected the cell and
+// the sub-watermark guard then held the corrected copies; the movement audit flagged
+// exactly those two dates. Nothing became a durable case and the drift finding said
+// "2 drift date(s); max_severity=serious".
+// ═══════════════════════════════════════════════════════════════════════════
+
+function backfillRun(...backfills: RcOutBackfill[]): SyncRunResult {
+  return {
+    reports: {
+      rc_out: {
+        classify: null,
+        apply: {
+          report_type: 'rc_out',
+          ok: true,
+          applied: { inserts: backfills.length, updates: 0, replaced_dates: 0 },
+          held: [],
+          labeled: true,
+          watermark_updated: true,
+          errors: [],
+          rc_out_backfills: backfills,
+        },
+      },
+    },
+  } as unknown as SyncRunResult
+}
+
+const BACKFILL: RcOutBackfill = {
+  transaction_date: '2026-09-03',
+  batch_code: 'NOV-25-BLK13',
+  block_loc: 'D-8A',
+  destination: 'MAIN',
+  weight_kg: 8158,
+  movement_kg: 35299,
+  db_kg_before: 27141,
+  gap_kg: 8158,
+  applied_kg: 8158,
+  applied_row_count: 1,
+  source_row: 12,
+}
+
+check('L-049: a corroborated backfill is INFO, names BOTH witnesses, and carries no ₱', () => {
+  const [f] = flattenRunFindings(backfillRun(BACKFILL))
+  assert.equal(f.kind, 'rc_out_backfill_corroborated')
+  assert.equal(f.severity, 'info')
+  assert.equal(f.section, 'rc_out')
+  assert.match(f.title, /8,158 kg/)
+  assert.match(f.reason, /35,299 kg/, 'the movement sheet total must be named')
+  assert.match(f.reason, /27,141 kg/, 'the database total must be named')
+  assert.equal(f.data.gap_kg, 8158)
+  for (const k of Object.keys(f.data)) assert.ok(!isCostKey(k), `${k} is a cost key`)
+})
+
+function aliasRun(...notes: BatchAliasNote[]): SyncRunResult {
+  return {
+    reports: {
+      rc_out: {
+        classify: null,
+        apply: {
+          report_type: 'rc_out',
+          ok: true,
+          applied: { inserts: notes.length, updates: 0, replaced_dates: 0 },
+          held: [],
+          labeled: true,
+          watermark_updated: true,
+          errors: [],
+          batch_alias_notes: notes,
+        },
+      },
+    },
+  } as unknown as SyncRunResult
+}
+
+const ALIAS: BatchAliasNote = {
+  kind: 'year_alias_of_block_occupant',
+  derived_batch_code: 'NOV-26-BLK13',
+  resolved_batch_code: 'NOV-25-BLK13',
+  block_loc: 'D-8A',
+  occupying_status: 'IN-USE',
+  occupying_balance_kg: 61234,
+  transaction_date: '2026-09-03',
+  source_row: 12,
+}
+
+check('L-049: a year-alias resolution is ATTENTION and names BOTH batch codes', () => {
+  const [f] = flattenRunFindings(aliasRun(ALIAS))
+  assert.equal(f.kind, 'batch_year_alias')
+  assert.equal(f.severity, 'attention', 'an identity call made for a human must be read, not filed')
+  assert.equal(f.section, 'rc_out')
+  assert.match(f.title, /NOV-26-BLK13/)
+  assert.match(f.title, /NOV-25-BLK13/)
+  assert.match(f.reason, /D-8A/)
+  assert.equal(f.data.derived_batch_code, 'NOV-26-BLK13')
+  assert.equal(f.data.resolved_batch_code, 'NOV-25-BLK13')
+})
+
+function driftRun(drifts: RcMovementDrift[], rcOutHeld: HeldRow[] = []): SyncRunResult {
+  return {
+    reports: {
+      rc_movement: {
+        classify: {
+          report_type: 'rc_movement_audit',
+          ok: false,
+          gate_failures: [],
+          counts: { noop: 0, insert: 0, update: 0, flagged: drifts.length },
+          rows_preview: [],
+          classified_path: '',
+          source: {},
+          watermark: null,
+          rc_movement_drifts: drifts,
+        },
+        apply: null,
+      },
+      rc_out: {
+        classify: null,
+        apply: {
+          report_type: 'rc_out',
+          ok: true,
+          applied: { inserts: 0, updates: 0, replaced_dates: 0 },
+          held: rcOutHeld,
+          labeled: true,
+          watermark_updated: true,
+          errors: [],
+        },
+      },
+    },
+  } as unknown as SyncRunResult
+}
+
+const SERIOUS_DRIFT: RcMovementDrift = {
+  date: '2026-09-03',
+  db_kg: 27141,
+  sheet_kg: 35299,
+  delta_kg: -8158,
+  severity: 'serious',
+}
+
+check('L-049: the drift finding NAMES its day and both totals (never just a count)', () => {
+  const findings = flattenRunFindings(driftRun([SERIOUS_DRIFT]))
+  const f = findings.find((x) => x.kind === 'rc_movement_drift')!
+  assert.ok(f, 'a serious drift must produce a finding of its own')
+  assert.equal(f.severity, 'high')
+  assert.equal(f.section, 'rc_movement')
+  assert.equal(f.location, '2026-09-03')
+  assert.match(f.title, /27,141 kg/)
+  assert.match(f.title, /35,299 kg/)
+  assert.equal(f.data.delta_kg, -8158)
+  assert.ok(!/drift date\(s\)/.test(f.title), 'a count is not a finding')
+  for (const k of Object.keys(f.data)) assert.ok(!isCostKey(k), `${k} is a cost key`)
+})
+
+check('L-049: a WARNING-level drift is surfaced at attention — the severity that used to say nothing', () => {
+  const f = flattenRunFindings(
+    driftRun([{ date: '2026-07-04', db_kg: 1200, sheet_kg: 1000, delta_kg: 200, severity: 'warning' }]),
+  ).find((x) => x.kind === 'rc_movement_drift')!
+  assert.equal(f.severity, 'attention')
+})
+
+check('L-049: a held rc_out row on the same day is CROSS-REFERENCED as the explanation', () => {
+  const held: HeldRow = {
+    reason: 'flagged',
+    natural_key: '2026-09-03 · NOV-25-BLK13 · MAIN · 8,158 kg',
+    detail: 'sub-watermark NEW',
+    kind: 'sub_watermark_suspected_dup',
+    row: { transaction_date: '2026-09-03', weight_kg: 8158, block_loc: 'D-8A' },
+  }
+  const f = flattenRunFindings(driftRun([SERIOUS_DRIFT], [held])).find(
+    (x) => x.kind === 'rc_movement_drift',
+  )!
+  assert.equal(f.data.held_rows_on_date, 1)
+  assert.equal(f.data.held_kg_on_date, 8158)
+  assert.equal(f.data.held_rows_explain_gap, true)
+  assert.match(f.reason, /accounts for it/)
+  assert.match(f.reason, /NOV-25-BLK13/)
+})
+
+check('L-049: with NOTHING held on the day the finding says so instead of implying a hold', () => {
+  const f = flattenRunFindings(driftRun([SERIOUS_DRIFT])).find(
+    (x) => x.kind === 'rc_movement_drift',
+  )!
+  assert.equal(f.data.held_rows_on_date, 0)
+  assert.equal(f.data.held_rows_explain_gap, false)
+  assert.match(f.reason, /No feeding on that day is held/)
+})
+
+check('L-049: each new finding yields two 64-hex identity strings, and the day IS the identity', () => {
+  const a = findingIdentity(
+    flattenRunFindings(driftRun([SERIOUS_DRIFT])).find((x) => x.kind === 'rc_movement_drift')!,
+  )
+  const b = findingIdentity(
+    flattenRunFindings(
+      driftRun([{ ...SERIOUS_DRIFT, db_kg: 30000, delta_kg: -5299 }]),
+    ).find((x) => x.kind === 'rc_movement_drift')!,
+  )
+  assert.match(a.fingerprint, HEX64)
+  assert.match(a.contentHash, HEX64)
+  assert.equal(a.fingerprint, b.fingerprint, 'the same day is the same problem')
+  assert.notEqual(a.contentHash, b.contentHash, 'a different gap must re-surface an acknowledgement')
+})
+
+check('L-049: a run with none of these channels is completely unchanged', () => {
+  assert.deepEqual(flattenRunFindings(backfillRun()), [])
+  assert.deepEqual(flattenRunFindings(aliasRun()), [])
+  assert.deepEqual(flattenRunFindings(driftRun([])), [])
 })
 
 

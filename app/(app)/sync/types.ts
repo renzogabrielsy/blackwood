@@ -113,9 +113,63 @@ export function metaFor(type: SyncReportType): SyncReportMeta {
 // CLI contract — classify phase
 // ============================================================
 
+/**
+ * ONE date a gate found at odds, with BOTH totals. Mirrors the worker's
+ * `GateDriftDate` (rc_out/apply.ts and rc_movement_audit/index.ts each declare their
+ * own local copy — the scope fence forbids one importing the other). Pure kg totals,
+ * NEVER a ₱/cost field.
+ *
+ * L-049 (2026-09-07): this used to be DROPPED at the assembly boundary
+ * (`normalizeReport.ts::toGateFailures` coerced a gate failure down to `{gate, detail}`),
+ * so the only thing that reached the operator was the `detail` sentence — literally
+ * *"2 drift date(s); max_severity=serious"*. A count is not a finding. The dates ride
+ * through now.
+ */
+export interface GateDriftDate {
+  date: string
+  proposed_kg?: number | null
+  movement_kg?: number | null
+  diff_kg?: number | null
+  db_sum_kg?: number | null
+  excess_kg?: number | null
+  note?: string
+}
+
 export interface GateFailure {
   gate: string
   detail: string
+  /** The specific dates that drove this gate, each with both sides' totals. Optional
+   *  only so pre-L-049 runs and hand-built fixtures still type-check. */
+  drift_dates?: GateDriftDate[]
+}
+
+/**
+ * ONE day on which the RC MOVEMENT sheet and the `rc_out` table disagree, at ANY
+ * severity (2026-09-07, L-049).
+ *
+ * WHY IT IS SEPARATE FROM `GateFailure`. A gate failure fires only at SERIOUS severity
+ * (> 500 kg) and flips the card to `gate-failed`; a WARNING-level drift (> 50 kg) is
+ * real information and must reach the panel WITHOUT changing a single card's status. So
+ * the auditor publishes every drifting day here, on its own classify field, and keeps
+ * `gate_failures` meaning exactly what it always meant.
+ *
+ * Pure kg totals — the whole rc_movement lane carries no ₱ and none is derivable.
+ */
+export interface RcMovementDrift {
+  /** The operating day, ISO `YYYY-MM-DD`. */
+  date: string
+  /** What `rc_out` holds for the day. */
+  db_kg: number | null
+  /** What the RC MOVEMENT sheet reports fed for the day. */
+  sheet_kg: number | null
+  /** db − sheet, signed. NEGATIVE means the database is SHORT of the sheet. */
+  delta_kg: number | null
+  /** db − sheet when the database is materially ABOVE the sheet (suspected duplicate). */
+  excess_kg?: number | null
+  /** `serious` (> 500 kg) or `warning` (> 50 kg). */
+  severity: 'warning' | 'serious'
+  /** e.g. "no movement entry" when the sheet has no row for the day. */
+  note?: string
 }
 
 export interface ClassifyCounts {
@@ -140,6 +194,13 @@ export interface ClassifyResult {
   classified_path: string
   source: Record<string, unknown>
   watermark: string | null
+  /**
+   * `rc_movement` (the read-only auditor) ONLY — every day the movement sheet and the
+   * `rc_out` totals disagree, at any severity (L-049). Optional so every other report,
+   * and every pre-L-049 run, keeps byte-identical shape. Read it via
+   * `collectRcMovementDrifts`.
+   */
+  rc_movement_drifts?: RcMovementDrift[]
 }
 
 // ============================================================
@@ -548,6 +609,81 @@ export interface ReportNotReceived {
  * Never held and never a durable case: the moment the names parse it stops firing, so
  * there is nothing to close by hand. Carries no ₱ and nothing derivable into one.
  */
+/**
+ * ONE feeding the sync wrote even though its date is at or below the watermark, because
+ * a SECOND witness said the database was short by exactly that much (2026-09-07, L-049).
+ *
+ * WHY THIS IS NOT A DUPLICATE. The sub-watermark guard (L-019) exists because a row on a
+ * settled date with no natural-key match is USUALLY a duplicate — the same feeding under
+ * a different attribution. But on 2026-09-03/04 the report's own BLOCK DATE cell was
+ * mistyped, the derived batch did not exist, both feedings were held, and MC then
+ * CORRECTED the cell. By the time the corrected copy arrived the watermark had moved past
+ * those days, so the guard held the corrected rows too — while the RC MOVEMENT sheet
+ * independently reported the database SHORT by exactly 8,158 kg and 9,637 kg on those two
+ * days. Two independent witnesses agreeing that a specific amount is missing is the
+ * reconciliation model's definition of AGREEMENT, and agreement writes.
+ *
+ * Recorded as an `info` finding, never held: the point is that the panel and the workbook
+ * both say a below-watermark row was written and exactly why.
+ *
+ * Pure kg totals — `rc_out` has no ₱ column at all.
+ */
+export interface RcOutBackfill {
+  /** The operating day the row belongs to. */
+  transaction_date: string
+  /** The pile it was filed against (the resolved batch code). */
+  batch_code: string | null
+  /** The block it was fed from, when the report named one. */
+  block_loc: string | null
+  destination: string
+  /** This row's own weight. */
+  weight_kg: number | null
+  /** What the RC MOVEMENT sheet reports fed on the day — the second witness. */
+  movement_kg: number
+  /** What `rc_out` held for the day BEFORE this write. */
+  db_kg_before: number
+  /** movement − database: the hole the applied row(s) fill. */
+  gap_kg: number
+  /** Total kg written on this date by this decision (a day may hold more than one row). */
+  applied_kg: number
+  applied_row_count: number
+  /** Which row of the report it came from. */
+  source_row: string | number | null
+}
+
+/**
+ * ONE row whose derived batch code did not exist, and which the sync filed against the
+ * batch ALREADY OCCUPYING that block because the two codes differ only in the two-digit
+ * YEAR (2026-09-07, L-049).
+ *
+ * WHY IT IS NEVER A CREATE. `NOV-26-BLK13` derived from a mistyped BLOCK DATE cell while
+ * `NOV-25-BLK13` was standing in D-8A holding real charcoal. Auto-creating the derived
+ * code puts two active batches in one block, which the database refuses outright
+ * (`idx_unique_active_batch_per_location`), so the row was held with a raw Postgres error
+ * for days. Pointing at the occupant borrows L-033b's safety property verbatim: a re-spell
+ * may only ever resolve to a batch that ALREADY EXISTS, and never overrides a code that
+ * already resolves.
+ *
+ * `attention`, never `info`: the sync made a judgement about identity, and it names BOTH
+ * codes so a human can overrule it. Carries no ₱.
+ */
+export interface BatchAliasNote {
+  /** `year_alias_of_block_occupant` today — a field, not a literal, so a second flavour of
+   *  "we resolved this code to an existing batch" can join without a second channel. */
+  kind: string
+  /** The code the report's own cells derived. */
+  derived_batch_code: string
+  /** The code it was filed under instead — the batch already active in the block. */
+  resolved_batch_code: string
+  /** The block both codes point at. */
+  block_loc: string | null
+  /** The occupant's status and balance, so the note can be judged without a query. */
+  occupying_status: string | null
+  occupying_balance_kg: number | null
+  transaction_date: string | null
+  source_row: string | number | null
+}
+
 export interface SourceTabNote {
   /** `source_tabs_unreadable` today. A field, not a literal, so a second flavour of
    *  "the file is here and unreadable" can join without a second channel. */
@@ -627,6 +763,15 @@ export interface ApplyResult {
    *  field still type-check. Consumers should read it as `apply?.auto_created_batches
    *  ?? []` (see `collectAutoCreatedBatches`). */
   auto_created_batches?: AutoCreatedBatch[]
+  /** Below-watermark feedings this apply WROTE because a second witness corroborated the
+   *  gap (L-049). Same optionality contract as `auto_created_batches` — read it as
+   *  `apply?.rc_out_backfills ?? []` (see `collectRcOutBackfills`). Only the `rc_out`
+   *  report ever fills it. */
+  rc_out_backfills?: RcOutBackfill[]
+  /** Rows filed against the batch already occupying their block because the derived code
+   *  differed from it only by the two-digit year (L-049). Same optionality contract —
+   *  read it as `apply?.batch_alias_notes ?? []` (see `collectBatchAliasNotes`). */
+  batch_alias_notes?: BatchAliasNote[]
   /** Production-batch changeovers this apply announced. Same optionality contract as
    *  `auto_created_batches` — read it as `apply?.production_batch_starts ?? []`
    *  (see `collectProductionBatchStarts`). Only the `production` report ever fills it. */
@@ -1179,6 +1324,25 @@ export interface ReconciliationChannel {
    * FINDING only when `ok` is false.
    */
   report_artifact?: ReportArtifact
+  /**
+   * How this run's held rows were projected into durable `sync_held_cases` (2026-09-07,
+   * L-049 — `workers/sync/src/workflows/persistCases.ts`). Present ONLY when the run held
+   * something, so a clean run keeps byte-identical shape.
+   *
+   * WHY IT IS RECORDED. Until L-049 the projection happened ONLY when a human opened the
+   * Sync Review page with a `?run=` deep link (or the dormant AI auto-trigger fired), so an
+   * unwatched scheduled run produced held rows and no cases at all. This field is what
+   * separates "the review page is empty because nothing was held" from "the review page is
+   * empty because nobody looked".
+   */
+  held_case_persistence?: {
+    ok: boolean
+    held: number
+    created: number
+    refreshed: number
+    failed: number
+    errors: string[]
+  }
 }
 
 // ============================================================

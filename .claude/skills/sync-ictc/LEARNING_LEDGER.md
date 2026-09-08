@@ -1216,3 +1216,99 @@ workbooks (`260828`, `270826`) still yield 92 and 88 rows with 22 / 21 tabs pars
 unparsed. Gates: worker `tsc` clean, 885 tests (37 new), parity 12/12 clean,
 `verify:container-build` OK, `verify-findings` 58 checks, root `tsc` clean, lint at its
 146/16 baseline.
+
+---
+
+## L-049 — A HOLD THAT IS NEVER SHOWN IS A SILENT FAILURE; A CORRECTED ROW A SECOND WITNESS CONFIRMS IS AGREEMENT, NOT A DUPLICATE (2026-09-07)
+
+**Everything worked, and nobody was told.** Block **D-8A** holds `NOV-25-BLK13`. MC's
+PROPOSED reports `260903` and `260904` carried a BLOCK DATE cell reading `2026-11-01` for
+that section, so the extractor derived **`NOV-26-BLK13`** — a batch that does not exist. The
+auto-create policy tried to open it at D-8A; the database refused
+(`23505 idx_unique_active_batch_per_location`, because `NOV-25-BLK13` is still active
+there); both feedings — 2026-09-03 **8,158 kg** and 2026-09-04 **9,637 kg** — were held with
+the raw Postgres refusal in `row.db_error`.
+
+MC then **corrected the cell**. By the time the corrected copy arrived the rc_out watermark
+stood at 2026-09-05, so the **L-019 sub-watermark guard** held the corrected rows too — as
+`sub_watermark_suspected_dup`, *"suspected duplicate"*, about the two rows in the workbook
+that were the exact opposite of duplicates.
+
+And the RC MOVEMENT audit, entirely independently, flagged those two dates and nothing else:
+DB **27,141** vs sheet **35,299**, DB **21,618** vs sheet **31,255** — gaps of **precisely
+8,158 and 9,637 kg**.
+
+Three parts of the system each knew something true. What the operator saw was:
+**`sync_held_cases` empty since Sept 4**, the Excel report's **"Awaiting Review" sheet with
+zero rows**, and one sentence — **"2 drift date(s); max_severity=serious"**. Four days.
+
+### Four rules
+
+**1. A HOLD THAT IS NEVER SHOWN IS A SILENT FAILURE.** Held rows lived only inside
+`sync_runs.result` until the app's `ensureCasesForRun` server action ran — and that is
+reached from the sync modal's finalize hook (gated on `SYNC_AI_REVIEW_ENABLED`, deliberately
+OFF since 2026-07-11) or from a `/sync/cases?run=<id>` deep link. **A scheduled run that
+nobody sat and watched projected NOTHING.** The projection now happens where the run happens:
+`workflows/persistCases.ts`, a DBOS step at Stage 3f, writing EVERY held row of EVERY kind
+through THE `caseFingerprint` (reached via `findingsBridge.ts`, not re-implemented, so a case
+written by the worker and the same case written later by the app are one row). It runs
+BEFORE the Excel stage, because the workbook reads `sync_held_cases` by `last_run_id` and a
+case written after it is a case it cannot list. Same family as **L-044** (an alarm behind a
+bare `catch` that had never once fired) and **L-048** (an unread file reported as a
+successful empty day): *the channel, not the check, is where these die.*
+
+**2. A CORRECTED ROW THAT A SECOND WITNESS CONFIRMS IS AGREEMENT, NOT A DUPLICATE.** L-019
+holds a below-watermark row because such a row is *usually* the same feeding under another
+attribution. "Usually" is a prior; a second witness is evidence. `applyRcOut` now tests every
+below-watermark candidate, **GROUPED BY DATE**, against the movement sheet's own daily total
+and the database's: when `movement − database` equals the group's total within the existing
+**50 kg** tolerance, the rows are written, with an `info` `rc_out_backfill_corroborated`
+finding naming both witnesses. This is not a weakening of L-019 — it is `CLAUDE.md` → Sync
+Integrity applied to it: **agreement writes, disagreement holds.** Refused with no movement
+report, with no movement line for the day, on a quarantined date, when the database is AHEAD
+of the sheet (that is GATE 2's duplication signal), and on any group total that does not
+match — **never a subset of a date's rows**, which would be a guess about which one is real.
+The test is per DATE and not per ROW because the witnesses only know daily totals: 8,158 and
+9,637 on one day would each fail alone while together explaining 17,795 exactly.
+
+**3. A COUNT IS NOT A FINDING.** The auditor had already built
+`{date, db_sum_kg, movement_kg, excess_kg}` per drifting day — and
+`normalizeReport.ts::toGateFailures` coerced every gate failure down to `{gate, detail}` at
+the assembly boundary, so the dates were computed and then thrown away one layer later.
+Worse, a WARNING-level drift raises no gate failure at all and therefore said **nothing**.
+Both fixed: `GateFailure.drift_dates` rides through, and the auditor publishes
+`rc_movement_drifts` on its classify block at every severity, which becomes one finding per
+day naming both totals — cross-referenced to the rc_out rows the same run held on that day
+("the held row for D-8A accounts for it"). **Joining the two halves was the whole fix**: they
+were both already true, published in different places, and never put in one sentence.
+
+**4. A NAME WITH THE YEAR MISTYPED IS NOT A NEW PILE.** `NOV-26-BLK13` and `NOV-25-BLK13`
+differ in nothing but two digits, and the second was standing in the block. Creating the
+first is a create the database will always refuse. `ensureBatch` now resolves to the
+occupant when three conditions ALL hold: the block has an ACTIVE occupant, the codes differ
+**only in the year** (via the ONE alias table — `NOV` ↔ `NOVEMBER` collapses, `JULY` vs
+`JUNE` does not), and the **derived code's month is in the FUTURE relative to the row's own
+date** while the occupant's is not. That third condition is the safety: a pile cannot be fed
+before it exists, and a GENUINE year rollover (`JAN-26-BLK5` in January 2026 at a block
+holding `JAN-25-BLK5`) fails it and keeps the old `batch_location_conflict` hold, which is
+the right answer for "close the old block first". It borrows **L-033b's** property verbatim:
+a re-spell may only ever point at a batch that ALREADY EXISTS. Reported at `attention`, never
+`info` — the sync made a judgement about identity on a human's behalf, and that should be
+read, not filed. **Fail-closed elsewhere**: gsheet and deliveries pass no `rowDate`, so the
+rung cannot fire there at all.
+
+### Scope
+
+Apply-layer and orchestrator only. `classify.ts` is byte-identical in both engines, the
+Python oracle still holds unconditionally, no fixture exercises either new branch (the
+harness calls `classifyCase`, which has neither a database nor a witness), and **parity
+stayed 12/12 with no oracle rebuild**. `lib/sync/fingerprint.ts` joined the container
+closure (Dockerfile + `.dockerignore`); `verify:container-build` green.
+
+Files: `workers/sync/src/reports/rc_out/{apply,index}.ts`,
+`workers/sync/src/lib/{batchCodeAlias,batchAutoCreate,db}.ts`,
+`workers/sync/src/workflows/{persistCases,runSync,normalizeReport,reportWorkflow}.ts`,
+`workers/sync/src/reports/rc_movement_audit/index.ts`,
+`workers/sync/src/reports/excel/findingsBridge.ts`, `lib/sync/{findings,cases-fold}.ts`,
+`app/(app)/sync/types.ts`. Specs: `rc_out.md` §4c/§4d, `rc_movement_audit.md` §4,
+`PORTING_DECISIONS.md`.

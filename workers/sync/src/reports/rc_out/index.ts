@@ -198,6 +198,8 @@ export async function runReport(
       errors: [],
       source_tab_notes: [],
       auto_created_batches: [],
+      rc_out_backfills: [],
+      batch_alias_notes: [],
     };
     return {
       classify: {
@@ -312,11 +314,17 @@ export async function runReport(
   const gateFailures: GateFailureDetail[] = [];
   const quarantinedDates = new Map<string, QuarantinedDate[]>();
   const gateSoftWarnings: string[] = [];
+  // L-049 — the movement sheet's own daily fed totals, hoisted out of the gate block so
+  // the SECOND witness is available to the sub-watermark backfill decision below. Null
+  // when no RC MOVEMENT report arrived: an absent witness is not corroboration, and
+  // nothing below the watermark is ever written on one source alone.
+  let movementFedKg: Record<string, number> | null = null;
   if (movementAtt) {
     await emit?.("reconcile", "Cross-checking feeding totals against the movement sheet…", 42);
     const movementPath = await deps.fetchToLocalPath(movementAtt.storagePath);
     const movementWb = await loadWorkbook(await readFile(movementPath));
     const movement = extractMovement(movementWb);
+    movementFedKg = movement.date_to_fed_kls ?? null;
 
     // DB sums fetched ONCE — feed both GATE 2 (O-vs-M excess) and GATE 1's witness-
     // corroboration check (does the DB already match the movement sheet on a date
@@ -398,6 +406,19 @@ export async function runReport(
     dbRows,
     watermark,
   });
+
+  // L-049 — the two witnesses the corroborated backfill is decided from. `db_kg` is
+  // computed from the COMPARE-SET rows just fetched (not a third query, and not the
+  // gates' narrower `since` window — every extracted row's date is inside `compareSince`
+  // by construction, so a sub-watermark date always has its true total here). Both maps
+  // are pure kg; `rc_out` has no ₱ column at all.
+  const subWatermarkWitnesses = movementFedKg
+    ? {
+        tolerance_kg: TOLERANCE_KG,
+        movement_kg: movementFedKg,
+        db_kg: rcOutSumsFromRows(dbRows as Array<Record<string, unknown>>),
+      }
+    : null;
   const s = classified.summary;
 
   const gateTripped = gateFailures.length > 0;
@@ -423,6 +444,7 @@ export async function runReport(
     watermark,
     gate_failures: gateFailures,
     quarantined_dates: Array.from(quarantinedDates.values()).flat(),
+    sub_watermark_witnesses: subWatermarkWitnesses,
     source: {
       email_subject: primaryAtt.emailSubject ?? null,
       email_uid: primaryAtt.emailUid,

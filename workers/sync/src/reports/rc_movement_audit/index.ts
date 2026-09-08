@@ -216,6 +216,32 @@ export interface GateFailureDetail {
   drift_dates?: GateDriftDate[];
 }
 
+/**
+ * ONE day the RC MOVEMENT sheet and the `rc_out` table disagree, at ANY severity
+ * (2026-09-07, L-049). Mirror of the frontend `RcMovementDrift`.
+ *
+ * WHY THIS EXISTS BESIDE `gate_failures`. A gate failure fires only at SERIOUS severity
+ * and settles the panel card to `gate-failed`; a WARNING-level drift (> 50 kg, the
+ * reconciler's own tolerance) is real information that must reach the operator WITHOUT
+ * changing any card's status. Publishing every drifting day on its own classify field
+ * keeps `gate_failures` meaning exactly what it always meant while ending the silence.
+ *
+ * Pure kg totals — this lane carries no ₱ and none is derivable.
+ */
+export interface RcMovementDrift {
+  date: string;
+  /** What `rc_out` holds for the day. */
+  db_kg: number | null;
+  /** What the movement sheet reports fed for the day. */
+  sheet_kg: number | null;
+  /** db − sheet, signed. NEGATIVE = the database is SHORT of the sheet. */
+  delta_kg: number | null;
+  /** db − sheet when the database is materially ABOVE the sheet. */
+  excess_kg?: number | null;
+  severity: "warning" | "serious";
+  note?: string;
+}
+
 export interface RunReportResult {
   report_type: string;
   ok: boolean;
@@ -226,6 +252,13 @@ export interface RunReportResult {
   watermark: string | null;
   audit_since: string | null;
   severity: "none" | "warning" | "serious" | null;
+  /**
+   * Every day the sheet and the table disagree, at ANY severity (L-049). Rides on the
+   * classify block (`classifyExtra`) so it reaches `lib/sync/findings.ts` and the Excel
+   * RC Movement sheet — which listed ZERO rows on the run that started all this, while
+   * this very list sat computed inside the auditor.
+   */
+  rc_movement_drifts: RcMovementDrift[];
   codified_rules_applied: readonly string[];
   note?: string;
 }
@@ -271,6 +304,7 @@ export async function runReport(
       watermark,
       audit_since: since,
       severity: null,
+      rc_movement_drifts: [],
       codified_rules_applied: CODIFIED_RULES,
       note: "No RC MOVEMENT email found in window — nothing to audit.",
     };
@@ -328,6 +362,7 @@ export async function runReport(
     watermark,
     audit_since: since,
     severity: severityWord,
+    rc_movement_drifts: auditDrifts(audit),
     codified_rules_applied: CODIFIED_RULES,
   };
 }
@@ -387,6 +422,46 @@ function auditDriftDates(audit: AuditEnvelope): GateDriftDate[] {
       movement_kg: e.rc_movement_kg,
       diff_kg: e.drift_p_vs_m_kg,
       ...(e.excess_o_vs_m_kg !== null ? { excess_kg: e.excess_o_vs_m_kg } : {}),
+      ...(missingMovement ? { note: "no movement entry" } : {}),
+    });
+  }
+  return out;
+}
+
+/**
+ * EVERY day the reconciler flagged, turned into the operator-facing drift list (L-049).
+ *
+ * Unlike `auditDriftDates` (which feeds the SERIOUS-only gate failure) this keeps the
+ * warning-level days too, because a 200 kg disagreement is a fact about the yard even
+ * though it is not a reason to stop writing. Severity is decided with the reconciler's
+ * OWN thresholds — no second definition of "serious" is invented here.
+ *
+ * The auditor feeds the rc_out sums BOTH as "proposed" and as the gate input, so
+ * `proposed_sum_kg === rc_out_existing_kg` by construction and `drift_p_vs_m_kg` IS
+ * (database − sheet). `rc_out_existing_kg` is preferred for `db_kg` because it is the
+ * column that literally means "what the table holds".
+ */
+export function auditDrifts(audit: AuditEnvelope): RcMovementDrift[] {
+  const out: RcMovementDrift[] = [];
+  for (const e of audit.reconcile.drift_dates) {
+    const missingMovement = e.proposed_sum_kg !== null && e.rc_movement_kg === null;
+    const diff = e.drift_p_vs_m_kg;
+    const excess = e.excess_o_vs_m_kg;
+    const seriousGap = diff !== null && Math.abs(diff) > SERIOUS_DRIFT_KG;
+    const seriousExcess = excess !== null && excess > SERIOUS_DRIFT_KG;
+    const measurable =
+      (diff !== null && Math.abs(diff) > TOLERANCE_KG) ||
+      (excess !== null && excess > TOLERANCE_KG);
+    // Nothing beyond tolerance and a movement entry present → the day agrees; the entry
+    // only reached `drift_dates` because the reconciler files any noted row there.
+    if (!missingMovement && !measurable) continue;
+    out.push({
+      date: e.date,
+      db_kg: e.rc_out_existing_kg ?? e.proposed_sum_kg,
+      sheet_kg: e.rc_movement_kg,
+      delta_kg: diff,
+      ...(excess !== null ? { excess_kg: excess } : {}),
+      severity: seriousGap || seriousExcess ? "serious" : "warning",
       ...(missingMovement ? { note: "no movement entry" } : {}),
     });
   }

@@ -26,7 +26,7 @@ import type { DbClient } from "../../lib/db.js";
 import type { ProgressEmitter } from "../../lib/progress.js";
 import type { FieldDiff } from "./classify.js";
 import type { ProposedRow } from "./extract.js";
-import { type HeldRow, type HeldKind, rcOutKey } from "../held.js";
+import { type HeldRow, type HeldKind, fmtKg, rcOutKey } from "../held.js";
 import type { SourceTabNote } from "../sourceTabs.js";
 import { operatorError } from "../../lib/operatorError.js";
 import {
@@ -40,6 +40,7 @@ import {
   autoCreateMessage,
   displayLocationRef,
   type AutoCreatedBatchNote,
+  type BatchAliasNote,
 } from "../../lib/batchAutoCreate.js";
 
 /**
@@ -88,6 +89,175 @@ export interface QuarantinedDate {
   detail: GateDriftDate;
 }
 
+/**
+ * The two witnesses a below-watermark NEW row is tested against (2026-09-07, L-049).
+ *
+ * `movement_kg` is the RC MOVEMENT sheet's own fed total per day; `db_kg` is what `rc_out`
+ * held for that day BEFORE this apply. Both are pure kg — `rc_out` has no ₱ column.
+ * ABSENT (null) whenever the movement cross-check did not arrive this run, in which case
+ * nothing is ever backfilled: an absent witness is not corroboration (the settlement
+ * ledger's rule, applied here).
+ */
+export interface SubWatermarkWitnesses {
+  /** The SAME tolerance the gates and the settlement ledger use — 50 kg. Passed in rather
+   *  than redeclared so this can never become a second threshold. */
+  tolerance_kg: number;
+  movement_kg: Record<string, number>;
+  db_kg: Record<string, number>;
+}
+
+/** One below-watermark row that is a candidate for the corroborated backfill. */
+export interface BackfillCandidate {
+  index: string | number | undefined;
+  row: ProposedRow;
+}
+
+/** The decision for ONE date: the gap the two witnesses agree on, and the rows that fill
+ *  it exactly. Present in the plan ONLY when the date is approved. */
+export interface BackfillDecision {
+  date: string;
+  movement_kg: number;
+  db_kg_before: number;
+  /** movement − database: the hole. */
+  gap_kg: number;
+  /** Σ of the approved rows' weights — equal to `gap_kg` within tolerance, by definition. */
+  applied_kg: number;
+  rows: BackfillCandidate[];
+}
+
+/** One feeding written below the watermark because both witnesses agreed it was missing.
+ *  Mirror of the frontend `RcOutBackfill`. NEVER a ₱/cost field. */
+export interface RcOutBackfillNote {
+  transaction_date: string;
+  batch_code: string | null;
+  block_loc: string | null;
+  destination: string;
+  weight_kg: number | null;
+  movement_kg: number;
+  db_kg_before: number;
+  gap_kg: number;
+  applied_kg: number;
+  applied_row_count: number;
+  source_row: string | number | null;
+}
+
+/**
+ * Is this classifier reason the L-019 sub-watermark guard? ONE definition, used by both
+ * the held-kind refinement and the L-049 backfill candidate filter — two places testing
+ * the same prose with two literals is exactly how they drift apart.
+ */
+export function isSubWatermarkReason(reason: string | null | undefined): boolean {
+  return (reason ?? "").startsWith("sub-watermark NEW");
+}
+
+/** The row's own weight, the same `weight_kg ?? day_total_kg` fallback every other reader
+ *  of a proposed row uses. Null when neither is a finite number. */
+function rowKg(r: ProposedRow): number | null {
+  const v = r.weight_kg ?? r.day_total_kg ?? null;
+  const n = typeof v === "number" ? v : v == null ? NaN : Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * THE corroborated-backfill decision (PURE — no DB, no clock), L-049.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * THE RULE, IN ONE SENTENCE
+ * ─────────────────────────────────────────────────────────────────────────────
+ * A below-watermark NEW row is written when a SECOND, INDEPENDENT witness says the
+ * database is short by exactly what that row weighs.
+ *
+ * The sub-watermark guard (L-019) exists because a row on a settled date with no
+ * natural-key match is USUALLY the same feeding under a different attribution. It is not
+ * always. On 2026-09-03/04 the report's own BLOCK DATE cell was mistyped, both feedings
+ * were held, MC corrected the cell — and by the time the corrected copy arrived the
+ * watermark had moved past those days, so the guard held the CORRECTED rows too. Meanwhile
+ * the RC MOVEMENT sheet reported the database short by 8,158 kg and 9,637 kg on exactly
+ * those two days. That is not a duplicate; that is two sources agreeing, which is the
+ * platform's own definition of when a write is allowed (CLAUDE.md → Sync Integrity:
+ * agreement writes, disagreement holds).
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * WHY THE TEST IS PER DATE AND NOT PER ROW
+ * ─────────────────────────────────────────────────────────────────────────────
+ * The witnesses only know DAILY totals. Two held rows of 8,158 and 9,637 on one day would
+ * each fail an individual comparison against a 17,795 kg gap while together they explain it
+ * exactly. So the candidates on a date are tested AS A GROUP, and the whole group is
+ * approved or the whole group keeps holding — never a subset, which would be a guess about
+ * which of them is real.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * WHAT IS REFUSED
+ * ─────────────────────────────────────────────────────────────────────────────
+ *   - no witnesses at all (no movement sheet this run) → nothing is written;
+ *   - no movement entry for the date → no second witness, so nothing is written;
+ *   - the date is QUARANTINED by a gate → the gate wins, unchanged;
+ *   - any candidate row without a resolved `batch_id`, or without a weight → the whole
+ *     date is refused (a partial group cannot prove a total);
+ *   - a gap that is zero, negative, or does not match the group's total within
+ *     `tolerance_kg` → refused. The database being AHEAD of the sheet is the duplication
+ *     signal GATE 2 exists for; it is never a reason to write more.
+ */
+export function planSubWatermarkBackfill(
+  candidates: BackfillCandidate[],
+  witnesses: SubWatermarkWitnesses | null | undefined,
+  isQuarantined: (date: string) => boolean,
+): Map<string, BackfillDecision> {
+  const plan = new Map<string, BackfillDecision>();
+  if (!witnesses) return plan;
+  const tol = Number.isFinite(witnesses.tolerance_kg) ? witnesses.tolerance_kg : 50;
+
+  const byDate = new Map<string, BackfillCandidate[]>();
+  for (const c of candidates) {
+    const d = c.row.transaction_date;
+    if (!d) continue;
+    const list = byDate.get(d);
+    if (list) list.push(c);
+    else byDate.set(d, [c]);
+  }
+
+  for (const [date, rows] of byDate) {
+    if (isQuarantined(date)) continue;
+    if (!Object.prototype.hasOwnProperty.call(witnesses.movement_kg, date)) continue;
+    const movement = witnesses.movement_kg[date];
+    if (!Number.isFinite(movement)) continue;
+    const dbRaw = Object.prototype.hasOwnProperty.call(witnesses.db_kg, date)
+      ? witnesses.db_kg[date]
+      : 0;
+    const dbBefore = Number.isFinite(dbRaw) ? dbRaw : 0;
+    const gap = round2(movement - dbBefore);
+    if (gap <= 0) continue;
+
+    let total = 0;
+    let usable = true;
+    for (const c of rows) {
+      const kg = rowKg(c.row);
+      if (kg === null || !c.row.batch_id) {
+        usable = false;
+        break;
+      }
+      total += kg;
+    }
+    if (!usable) continue;
+    const applied = round2(total);
+    if (Math.abs(gap - applied) > tol) continue;
+
+    plan.set(date, {
+      date,
+      movement_kg: movement,
+      db_kg_before: dbBefore,
+      gap_kg: gap,
+      applied_kg: applied,
+      rows,
+    });
+  }
+  return plan;
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
 /** The compact hand-off from classify → apply (sync_rc_out.py compact object). */
 export interface RcOutCompact {
   report_type: string;
@@ -99,6 +269,9 @@ export interface RcOutCompact {
    *  appears here; every other date writes normally. Empty when no gate tripped (or the
    *  movement cross-check was unavailable this run). */
   quarantined_dates?: QuarantinedDate[];
+  /** L-049 — the two daily witnesses a below-watermark NEW row is tested against. Null
+   *  when the RC MOVEMENT cross-check did not arrive; nothing is backfilled then. */
+  sub_watermark_witnesses?: SubWatermarkWitnesses | null;
   source: { email_subject?: string | null; email_uid?: number | string | null; email_thread_id?: string | null };
   /**
    * L-048 — set ONLY when the workbook opened and NOT ONE of its day tabs could be read.
@@ -149,6 +322,12 @@ export interface ApplyResult {
   /** Batches auto-created this apply from a pattern-valid unmapped batch_code
    *  (2026-07-11 policy — see lib/batchAutoCreate.ts). Empty when none. */
   auto_created_batches: AutoCreatedBatchNote[];
+  /** L-049 — below-watermark feedings written because both witnesses agreed the day was
+   *  short by exactly that much. ALWAYS present (default []). */
+  rc_out_backfills: RcOutBackfillNote[];
+  /** L-049 — rows filed against the batch already in their block because the derived code
+   *  differed from it only by the two-digit year. ALWAYS present (default []). */
+  batch_alias_notes: BatchAliasNote[];
 }
 
 const REPORT_TYPE = "rc_out";
@@ -273,6 +452,22 @@ export async function applyRcOut(compact: RcOutCompact, deps: ApplyDeps): Promis
     else quarantineByDate.set(q.date, [q]);
   }
   const claimedQuarantineDates = new Set<string>();
+  const isQuarantined = (d: string) => (quarantineByDate.get(d)?.length ?? 0) > 0;
+
+  // L-049 — decide, BEFORE any write, which below-watermark rows a second witness says
+  // are genuinely missing. Pure and date-grouped; see `planSubWatermarkBackfill`.
+  const subWatermarkCandidates: BackfillCandidate[] = (compact.actionable.flagged ?? [])
+    .filter((f) => isSubWatermarkReason((f as { reason?: string }).reason))
+    .map((f) => f as { index?: unknown; reason?: string; row?: ProposedRow })
+    .filter((f): f is { index?: unknown; reason?: string; row: ProposedRow } => Boolean(f.row))
+    .map((f) => ({ index: f.index as string | number | undefined, row: f.row }));
+  const backfillPlan = planSubWatermarkBackfill(
+    subWatermarkCandidates,
+    compact.sub_watermark_witnesses,
+    isQuarantined,
+  );
+  const backfills: RcOutBackfillNote[] = [];
+  const batchAliasNotes: BatchAliasNote[] = [];
 
   let inserts = 0;
   let updates = 0;
@@ -418,6 +613,12 @@ export async function applyRcOut(compact: RcOutCompact, deps: ApplyDeps): Promis
 
   // flagged / malformed → held, never auto-written (unmapped has its OWN loop below —
   // it may now auto-create + write, see lib/batchAutoCreate.ts).
+  //
+  // L-049 — with ONE exception, which is not a weakening of the sub-watermark guard but
+  // the reconciliation model applied to it: a below-watermark row on a date where the
+  // MOVEMENT SHEET independently says the database is short by exactly what these rows
+  // weigh is CORROBORATED, and agreement writes. Everything else on this path is
+  // unchanged, including every below-watermark row the plan did not approve.
   const buckets: Array<[keyof RcOutCompact["actionable"], string]> = [
     ["flagged", "flagged"],
     ["malformed", "malformed"],
@@ -431,9 +632,65 @@ export async function applyRcOut(compact: RcOutCompact, deps: ApplyDeps): Promis
       // malformed/flagged.
       let kind: HeldKind;
       if (bucket === "malformed") kind = "malformed";
-      else if ((item.reason ?? "").startsWith("sub-watermark NEW"))
-        kind = "sub_watermark_suspected_dup";
+      else if (isSubWatermarkReason(item.reason)) kind = "sub_watermark_suspected_dup";
       else kind = "flagged";
+
+      // The corroborated backfill. `insertIfAbsent` on the natural key is what makes a
+      // second run harmless: once written, the row MATCHES and never reaches this branch
+      // again — and if it somehow does, the insert is skipped and held `already_exists`.
+      const decision =
+        kind === "sub_watermark_suspected_dup" && row ? backfillPlan.get(row.transaction_date) : undefined;
+      if (decision && row) {
+        const writeRes = await writeNewRcOutRow(db, row, item.index, runTs);
+        if (writeRes.ok) {
+          inserts += 1;
+          const note: RcOutBackfillNote = {
+            transaction_date: row.transaction_date,
+            batch_code: row.batch_code_resolved ?? row.batch_code_primary ?? null,
+            block_loc: row.block_loc ?? null,
+            destination: row.destination || "MAIN",
+            weight_kg: rowKg(row),
+            movement_kg: decision.movement_kg,
+            db_kg_before: decision.db_kg_before,
+            gap_kg: decision.gap_kg,
+            applied_kg: decision.applied_kg,
+            applied_row_count: decision.rows.length,
+            source_row: (item.index as string | number) ?? null,
+          };
+          backfills.push(note);
+          await emit?.(
+            "apply",
+            `Filled in ${fmtKg(note.weight_kg)} kg fed on ${row.transaction_date} — the movement ` +
+              `sheet reports ${fmtKg(decision.movement_kg)} kg that day against ` +
+              `${fmtKg(decision.db_kg_before)} kg saved, so this feeding really was missing.`,
+            88,
+            undefined,
+            "info",
+          );
+          continue;
+        }
+        if (writeRes.reason === "already_exists") {
+          held.push({
+            reason: "already_exists",
+            natural_key: rcOutKey(row),
+            detail: "corroborated backfill; idempotent skip (natural key already in DB)",
+            kind: "already_exists",
+            row: rcOutHeldRow(row),
+            source_index: item.index as string | number,
+          });
+          continue;
+        }
+        errors.push(
+          operatorError(
+            `The movement sheet says the feeding on row ${item.index} of the Proposed Daily ` +
+              `Report (${describeFeeding(row)}) is missing from the database, but it could not ` +
+              `be saved — the database refused it. The email stays unprocessed so the next run ` +
+              `tries it again.`,
+            writeRes.message,
+          ),
+        );
+        continue;
+      }
 
       held.push({
         reason,
@@ -460,7 +717,65 @@ export async function applyRcOut(compact: RcOutCompact, deps: ApplyDeps): Promis
     const quarantined = row ? quarantineByDate.get(row.transaction_date) : undefined;
 
     if (row && !(quarantined && quarantined.length) && isPatternValidBatchCode(primaryCode)) {
-      const outcome = await ensureBatch(db, primaryCode, row.block_loc, batchLookup);
+      // L-049 — `rowDate` enables the year-alias rung inside ensureBatch: when the block
+      // already holds THIS batch with the year mistyped, the row is filed against the
+      // occupant instead of attempting a create the database would refuse outright.
+      const outcome = await ensureBatch(db, primaryCode, row.block_loc, batchLookup, {
+        rowDate: row.transaction_date,
+      });
+
+      // The year-alias resolution: nothing was created, the row writes against the pile
+      // that is actually there, and the identity call is REPORTED (attention, never info —
+      // the sync decided which pile this is on a human's behalf).
+      if (outcome.status === "year_alias_of_occupant") {
+        row.batch_id = outcome.batchId;
+        row.batch_code_resolved = outcome.resolvedCode;
+        const note: BatchAliasNote = {
+          kind: "year_alias_of_block_occupant",
+          derived_batch_code: outcome.attemptedCode,
+          resolved_batch_code: outcome.resolvedCode,
+          block_loc: row.block_loc ?? outcome.locationRef,
+          occupying_status: outcome.occupant.status,
+          occupying_balance_kg: outcome.occupant.current_weight_kg,
+          transaction_date: row.transaction_date ?? null,
+          source_row: (item.index as string | number) ?? null,
+        };
+        batchAliasNotes.push(note);
+        await emit?.(
+          "apply",
+          `"${note.derived_batch_code}" does not exist — ${note.block_loc ?? "that block"} is ` +
+            `held by "${note.resolved_batch_code}" and the two differ only in the year, so this ` +
+            `feeding was filed against the pile that is actually there.`,
+          88,
+          undefined,
+          "warn",
+        );
+
+        const aliasWrite = await writeNewRcOutRow(db, row, item.index, runTs);
+        if (aliasWrite.ok) {
+          inserts += 1;
+        } else if (aliasWrite.reason === "already_exists") {
+          held.push({
+            reason: "already_exists",
+            natural_key: rcOutKey(row),
+            detail: "filed against the block's existing batch; idempotent skip (already in DB)",
+            kind: "already_exists",
+            row: rcOutHeldRow(row),
+            source_index: item.index as string | number,
+          });
+        } else {
+          errors.push(
+            operatorError(
+              `The feeding on row ${item.index} of the Proposed Daily Report ` +
+                `(${describeFeeding(row)}) was matched to ${outcome.resolvedCode}, the pile ` +
+                `already in ${note.block_loc ?? "that block"}, but could not be saved — the ` +
+                `database refused it. The next run will try again.`,
+              aliasWrite.message,
+            ),
+          );
+        }
+        continue;
+      }
       // BUG-027 (2026-08-25) — the block is still held by an ACTIVE batch. This used to
       // throw straight out of applyRcOut; it is an arbitration between two batches, so it
       // holds THIS ROW ONLY and the loop carries on (held rows never block the watermark;
@@ -639,6 +954,8 @@ export async function applyRcOut(compact: RcOutCompact, deps: ApplyDeps): Promis
     gate_failures: gateFailures.length ? gateFailures : undefined,
     source_tab_notes: compact.source_tab_notes ?? [],
     auto_created_batches: autoCreatedBatches,
+    rc_out_backfills: backfills,
+    batch_alias_notes: batchAliasNotes,
   };
 }
 

@@ -172,6 +172,23 @@ export interface ReconciliationChannel {
    * tool, so generation never fails a run — it just says so.
    */
   report_artifact?: ReportArtifact;
+  /**
+   * How this run's held rows were projected into durable `sync_held_cases` (2026-09-07,
+   * L-049 — `workflows/persistCases.ts`). Carried ONLY when the run actually held
+   * something, so a clean run's shape is unchanged.
+   *
+   * It exists because the projection USED TO NOT HAPPEN AT ALL on an unwatched run, and a
+   * counted, durable record of it is the difference between "the review page is empty
+   * because nothing was held" and "the review page is empty because nobody looked".
+   */
+  held_case_persistence?: {
+    ok: boolean;
+    held: number;
+    created: number;
+    refreshed: number;
+    failed: number;
+    errors: string[];
+  };
 }
 
 const MAIN = "MAIN";

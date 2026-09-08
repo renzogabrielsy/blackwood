@@ -21,6 +21,7 @@ import type {
   AttributionDiff,
   AutoCreatedBatch,
   AwaitingBatchAssignment,
+  BatchAliasNote,
   BatchClose,
   BlockDiff,
   HeldRow,
@@ -28,6 +29,7 @@ import type {
   ProductionBatchStart,
   ProductionHumanEdit,
   DeliveryHumanEdit,
+  RcOutBackfill,
   RcOutSource,
   ReportArtifact,
   ReportNotReceived,
@@ -48,6 +50,7 @@ import {
   collectAttributionDiffs,
   collectAutoCreatedBatches,
   collectAwaitingBatchAssignments,
+  collectBatchAliasNotes,
   collectBatchCloses,
   collectBlockDiffs,
   collectHeldRows,
@@ -59,6 +62,8 @@ import {
   collectReportsNotReceived,
   collectScheduleConflicts,
   collectProductNotes,
+  collectRcMovementDrifts,
+  collectRcOutBackfills,
   collectSingleSourceOverdue,
   collectSlowGmailSearches,
   collectSourceDiffs,
@@ -67,6 +72,7 @@ import {
   collectStaleStreams,
   collectUnpricedOverdue,
   collectUnresolvedBatches,
+  type CollectedRcMovementDrift,
 } from './cases-fold'
 import { canonicalHashPortable } from './portable-hash'
 
@@ -505,6 +511,174 @@ function fromAutoCreatedBatch(reportType: SyncReportType, note: AutoCreatedBatch
       `the database, so the sync created it and wrote the row automatically — nothing to do here.`,
     severity: 'info',
     section: reportType,
+  }
+}
+
+/**
+ * A below-watermark feeding the sync WROTE because a second witness corroborated the gap
+ * (2026-09-07, L-049). `info`: nothing is pending, and the point is that the decision is
+ * on the record — the panel and the Excel workbook both say a settled-date row was written
+ * and exactly which two witnesses agreed it was missing.
+ */
+function fromRcOutBackfill(b: RcOutBackfill): RunFinding {
+  const kg = num(b.weight_kg)
+  const where = [b.block_loc, b.batch_code].filter(Boolean).join(' · ')
+  return {
+    key: `rc_out_backfill:${b.transaction_date}:${b.batch_code ?? ''}:${b.source_row ?? ''}`,
+    kind: 'rc_out_backfill_corroborated',
+    kindLabel: 'Missing feeding filled in (both sources agreed)',
+    source: 'Proposed daily report (RC OUT)',
+    title:
+      `Wrote ${fmtKg(kg)} kg fed on ${b.transaction_date}` +
+      (where ? ` (${where})` : '') +
+      ` — the movement sheet showed it missing`,
+    location: [b.transaction_date, where].filter(Boolean).join(' · ') || b.transaction_date,
+    data: {
+      transaction_date: b.transaction_date,
+      batch_code: b.batch_code,
+      block_loc: b.block_loc,
+      destination: b.destination,
+      weight_kg: kg,
+      movement_sheet_kg: num(b.movement_kg),
+      database_kg_before: num(b.db_kg_before),
+      gap_kg: num(b.gap_kg),
+      applied_kg: num(b.applied_kg),
+      applied_row_count: num(b.applied_row_count),
+      source_row: b.source_row,
+    },
+    reason:
+      `This day is at or before the point the sync had already reached, so a feeding with no ` +
+      `matching record is normally held back as a suspected duplicate. Here it was not a ` +
+      `duplicate: the movement sheet reports ${fmtKg(num(b.movement_kg))} kg fed on ` +
+      `${b.transaction_date} while the database held ${fmtKg(num(b.db_kg_before))} kg — short by ` +
+      `${fmtKg(num(b.gap_kg))} kg, which is exactly what ` +
+      `${b.applied_row_count === 1 ? 'this row weighs' : `these ${b.applied_row_count} rows weigh together`}. ` +
+      `Two separate sources agreeing that a specific amount is missing is agreement, not a ` +
+      `duplicate, so it was written. Nothing to do — this is a record of the decision.`,
+    severity: 'info',
+    section: 'rc_out',
+  }
+}
+
+/**
+ * A row filed against the batch already holding its block, because the code the report
+ * derived differed from that batch only in the two-digit YEAR (2026-09-07, L-049).
+ *
+ * `attention`, deliberately: the sync made a judgement about which pile this is, and the
+ * finding names BOTH codes so a person can overrule it. It is never `info` — an identity
+ * decision taken on a human's behalf should be read, not filed.
+ */
+function fromBatchAliasNote(n: BatchAliasNote): RunFinding {
+  const bal = num(n.occupying_balance_kg)
+  return {
+    key: `batch_alias:${n.kind}:${n.derived_batch_code}:${n.block_loc ?? ''}:${n.source_row ?? ''}`,
+    kind: 'batch_year_alias',
+    kindLabel: 'Filed against the pile already in the block',
+    source: 'Proposed daily report (RC OUT)',
+    title:
+      `"${n.derived_batch_code}" does not exist — filed against "${n.resolved_batch_code}", ` +
+      `the pile already in ${n.block_loc ?? 'that block'}`,
+    location: [n.transaction_date, n.block_loc].filter(Boolean).join(' · ') || n.derived_batch_code,
+    data: {
+      derived_batch_code: n.derived_batch_code,
+      resolved_batch_code: n.resolved_batch_code,
+      block_loc: n.block_loc,
+      occupying_status: n.occupying_status,
+      occupying_balance_kg: bal,
+      transaction_date: n.transaction_date,
+      source_row: n.source_row,
+    },
+    reason:
+      `The report's own date cell produced "${n.derived_batch_code}", which no pile in the ` +
+      `database is called. ${n.block_loc ?? 'That block'} is currently held by ` +
+      `"${n.resolved_batch_code}"` +
+      (bal != null ? ` with ${fmtKg(bal)} kg left` : '') +
+      `, and the two names differ only in the year — so this is the same pile with the year ` +
+      `mistyped, and the row was filed against it rather than opening a second pile in an ` +
+      `occupied block. Check the date cell in the report if you want the two to agree.`,
+    severity: 'attention',
+    section: 'rc_out',
+  }
+}
+
+/**
+ * ONE day the RC MOVEMENT sheet and the `rc_out` table disagree — WITH BOTH NUMBERS AND
+ * THE DAY (2026-09-07, L-049).
+ *
+ * THE REGRESSION THIS PINS. The auditor already knew the dates: it built
+ * `{date, db_sum_kg, movement_kg, excess_kg}` per drifting day and hung them off its gate
+ * failure. The assembly boundary then coerced that gate failure down to `{gate, detail}`,
+ * so the only thing that survived to the operator was the sentence *"2 drift date(s);
+ * max_severity=serious"* — a count, about days it could name, describing kilograms it had
+ * measured. And a WARNING-level drift produced no gate failure at all, so it said nothing
+ * whatsoever.
+ *
+ * The cross-reference is the other half. When the same run HELD rc_out rows on the same
+ * day, those rows are very often the whole gap; saying so turns two disconnected alarms
+ * into one explanation.
+ */
+function fromRcMovementDrift(c: CollectedRcMovementDrift): RunFinding {
+  const { drift, heldOnDate } = c
+  const db = num(drift.db_kg)
+  const sheet = num(drift.sheet_kg)
+  const delta = num(drift.delta_kg)
+  const short = delta != null && delta < 0
+
+  // The held rows' own weights, and whether they add up to the gap. `50 kg` is the
+  // auditor's OWN tolerance — reused, never a second threshold (the B2 residual rule).
+  const heldKg = heldOnDate.reduce((sum, h) => sum + (num(h.row?.weight_kg) ?? 0), 0)
+  const explains =
+    delta != null && heldOnDate.length > 0 && Math.abs(Math.abs(delta) - heldKg) <= 50
+  const heldLabels = heldOnDate.map((h) => h.natural_key).filter(Boolean)
+
+  const gapPhrase =
+    delta == null
+      ? 'the two could not be compared'
+      : short
+        ? `the database is ${fmtKg(Math.abs(delta))} kg SHORT of the sheet`
+        : `the database is ${fmtKg(Math.abs(delta))} kg ABOVE the sheet`
+
+  return {
+    key: `rc_movement_drift:${drift.date}`,
+    kind: 'rc_movement_drift',
+    kindLabel: "Feeding totals don't match the movement sheet",
+    source: 'Movement sheet',
+    title:
+      `${drift.date}: database ${fmtKg(db)} kg vs movement sheet ${fmtKg(sheet)} kg` +
+      (delta != null ? ` (${short ? '−' : '+'}${fmtKg(Math.abs(delta))} kg)` : ''),
+    location: drift.date,
+    data: {
+      date: drift.date,
+      db_kg: db,
+      sheet_kg: sheet,
+      delta_kg: delta,
+      ...(drift.excess_kg != null ? { excess_kg: num(drift.excess_kg) } : {}),
+      severity: drift.severity,
+      ...(drift.note ? { note: drift.note } : {}),
+      held_rows_on_date: heldOnDate.length,
+      held_kg_on_date: heldOnDate.length ? heldKg : null,
+      held_rows_explain_gap: explains,
+      ...(heldLabels.length ? { held_rows: heldLabels } : {}),
+    },
+    reason:
+      (drift.note === 'no movement entry'
+        ? `The movement sheet has no line for ${drift.date} at all, so the ` +
+          `${fmtKg(db)} kg the database holds for that day has no second witness. `
+        : `On ${drift.date} the movement sheet reports ${fmtKg(sheet)} kg fed and the database ` +
+          `holds ${fmtKg(db)} kg — ${gapPhrase}. `) +
+      (explains
+        ? `The ${heldOnDate.length === 1 ? 'feeding' : `${heldOnDate.length} feedings`} held for ` +
+          `review on that day ${heldOnDate.length === 1 ? 'weighs' : 'weigh'} ${fmtKg(heldKg)} kg — ` +
+          `which accounts for it${heldLabels.length ? ` (${heldLabels.join('; ')})` : ''}. Release ` +
+          `${heldOnDate.length === 1 ? 'that row' : 'those rows'} and the day balances.`
+        : heldOnDate.length
+          ? `${heldOnDate.length} feeding(s) on that day are held for review ` +
+            `(${fmtKg(heldKg)} kg${heldLabels.length ? `: ${heldLabels.join('; ')}` : ''}), which ` +
+            `does not by itself close the gap — check the day sheet as well.`
+          : `No feeding on that day is held for review, so the difference is not something the ` +
+            `sync is sitting on — compare the day's block sections against the movement sheet.`),
+    severity: drift.severity === 'serious' ? 'high' : 'attention',
+    section: 'rc_movement',
   }
 }
 
@@ -1212,6 +1386,10 @@ const PRICE_KIND_LABEL: Record<string, string> = {
   price_tab_ambiguous: 'Price file has two tabs for the same month',
   price_file_unreadable: 'Price file could not be read',
   price_file_missing: 'No price file arrived',
+  // L-049 (2026-09-07).
+  rc_out_backfill_corroborated: 'Missing feeding filled in (both sources agreed)',
+  batch_year_alias: 'Filed against the pile already in the block',
+  rc_movement_drift: "Feeding totals don't match the movement sheet",
   price_no_row_matched: 'Nothing matched the price file — wrong workbook?',
   price_fuzzy_match: 'Priced, but the two sheets spell it differently',
   price_fuzzy_ambiguous: 'Could not price — more than one possible match',
@@ -1883,6 +2061,22 @@ export function flattenRunFindings(result: SyncRunResult): RunFinding[] {
     out.push(fromAutoCreatedBatch(reportType, note))
   }
 
+  // 6b. Below-watermark feedings this run WROTE because a second witness corroborated the
+  //     gap (L-049). Beside the auto-created batches because both are records of a decision
+  //     the sync took on its own — info-level, nothing pending.
+  for (const b of collectRcOutBackfills(result)) out.push(fromRcOutBackfill(b))
+
+  // 6c. Rows filed against the pile already in their block because the derived code
+  //     differed only by the year (L-049). Immediately after 6b because the two came from
+  //     one incident and a single run can raise both about the same day.
+  for (const n of collectBatchAliasNotes(result)) out.push(fromBatchAliasNote(n))
+
+  // 6d. Days the RC MOVEMENT sheet and the rc_out table disagree, each NAMING its day and
+  //     both totals, cross-referenced to any rc_out row this run held on the same day
+  //     (L-049). This lane published nothing at all before — a serious drift reached the
+  //     operator as the sentence "2 drift date(s)" and a warning-level drift as silence.
+  for (const d of collectRcMovementDrifts(result)) out.push(fromRcMovementDrift(d))
+
   // 7. Batches closed from a Google Sheet RC OUT close remark (R4b close-scan) — info for
   //    an actual close, attention for a close asserted against an unknown batch.
   for (const bc of collectBatchCloses(result)) out.push(fromBatchClose(bc))
@@ -2316,6 +2510,10 @@ const SHORT_KIND: Record<string, string> = {
   awaiting_batch_assignment: 'no pile yet',
   report_generation_failed: 'no excel report',
   gmail_slow_search: 'gmail slow',
+  // L-049 (2026-09-07).
+  rc_out_backfill_corroborated: 'missing feeding filled in',
+  batch_year_alias: 'year mistyped',
+  rc_movement_drift: 'movement sheet differs',
 }
 
 /** Plain phrase for synthetic (non-held) case/finding kinds, on top of HELD_KIND_LABEL. */

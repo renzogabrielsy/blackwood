@@ -12,6 +12,7 @@ import type {
   AttributionDiff,
   AutoCreatedBatch,
   AwaitingBatchAssignment,
+  BatchAliasNote,
   BatchClose,
   BlockDiff,
   HeldRow,
@@ -20,6 +21,8 @@ import type {
   ProductionBatchStart,
   ProductionHumanEdit,
   DeliveryHumanEdit,
+  RcMovementDrift,
+  RcOutBackfill,
   ReportArtifact,
   ReportNotReceived,
   ScheduleConflict,
@@ -38,6 +41,13 @@ import type {
 export interface CollectedHeld {
   reportType: SyncReportType
   held: HeldRow
+}
+
+/** One drifting movement day, paired with the rc_out rows the same run held on it. */
+export interface CollectedRcMovementDrift {
+  drift: RcMovementDrift
+  /** rc_out rows this run HELD on the same day — the likely explanation of the gap. */
+  heldOnDate: HeldRow[]
 }
 
 export interface CollectedAutoCreatedBatch {
@@ -227,6 +237,72 @@ export function collectProductNotes(result: SyncRunResult): ProductNote[] {
     for (const note of report.apply?.product_notes ?? []) out.push(note)
   }
   return out
+}
+
+/**
+ * Every below-watermark feeding a run WROTE because a second witness corroborated the
+ * gap (`result.reports.rc_out.apply.rc_out_backfills`, 2026-09-07, L-049). Only the
+ * `rc_out` report fills it, but the fold is generic + guarded so a pre-feature or
+ * hand-built result simply yields []. Pure — panel-visibility only; NOT a durable case
+ * (nothing is pending: the row was written).
+ */
+export function collectRcOutBackfills(result: SyncRunResult): RcOutBackfill[] {
+  const reports = result.reports
+  if (!reports) return []
+
+  const out: RcOutBackfill[] = []
+  for (const key of Object.keys(reports) as SyncReportType[]) {
+    const report = reports[key]
+    if (!report) continue
+    for (const note of report.apply?.rc_out_backfills ?? []) out.push(note)
+  }
+  return out
+}
+
+/**
+ * Every row a run filed against the batch already occupying its block because the derived
+ * code differed only by the two-digit year (`result.reports[type].apply.batch_alias_notes`,
+ * 2026-09-07, L-049). Guarded + generic; pure. Not a durable case — the row was written,
+ * and the note exists so a human can overrule the identity call.
+ */
+export function collectBatchAliasNotes(result: SyncRunResult): BatchAliasNote[] {
+  const reports = result.reports
+  if (!reports) return []
+
+  const out: BatchAliasNote[] = []
+  for (const key of Object.keys(reports) as SyncReportType[]) {
+    const report = reports[key]
+    if (!report) continue
+    for (const note of report.apply?.batch_alias_notes ?? []) out.push(note)
+  }
+  return out
+}
+
+/**
+ * One entry per day the RC MOVEMENT sheet and `rc_out` disagree, paired with the rc_out
+ * rows this SAME run HELD on that day (2026-09-07, L-049).
+ *
+ * The pairing is the whole point. On 2026-09-03 the auditor reported the database 8,158 kg
+ * short and the rc_out writer held a row for exactly 8,158 kg — two halves of one sentence
+ * that were published in different places and never joined, so the operator read a bare
+ * count. Joining them here (a pure fold over the run result) means the finding can say
+ * "the held row for D-8A accounts for it" instead of "2 drift date(s)".
+ */
+export function collectRcMovementDrifts(result: SyncRunResult): CollectedRcMovementDrift[] {
+  const drifts = result.reports?.rc_movement?.classify?.rc_movement_drifts ?? []
+  if (!drifts.length) return []
+
+  // Every rc_out row this run held, indexed by the day it belongs to.
+  const heldByDate = new Map<string, HeldRow[]>()
+  for (const h of result.reports?.rc_out?.apply?.held ?? []) {
+    const d = h.row?.transaction_date
+    if (typeof d !== 'string' || !d) continue
+    const list = heldByDate.get(d)
+    if (list) list.push(h)
+    else heldByDate.set(d, [h])
+  }
+
+  return drifts.map((drift) => ({ drift, heldOnDate: heldByDate.get(drift.date) ?? [] }))
 }
 
 export function collectSourceTabNotes(result: SyncRunResult): SourceTabNote[] {
