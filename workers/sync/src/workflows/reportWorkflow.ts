@@ -242,7 +242,15 @@ async function runOneReport(params: ReportWorkflowParams): Promise<ReportEnvelop
           watermark: r.watermark,
         },
         apply: null, // read-only auditor — no apply, ever.
-        classifyExtra: { severity: r.severity, audit_since: r.audit_since, note: r.note },
+        // L-049: `rc_movement_drifts` rides the classify block so every drifting day — at
+        // WARNING severity too, which raises no gate failure at all — reaches
+        // `lib/sync/findings.ts` and the Excel RC Movement sheet.
+        classifyExtra: {
+          severity: r.severity,
+          audit_since: r.audit_since,
+          note: r.note,
+          rc_movement_drifts: r.rc_movement_drifts,
+        },
       });
     }
     default: {

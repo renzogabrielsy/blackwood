@@ -109,3 +109,52 @@ export function resolveKnownBatchCodeAlias(
   }
   return null;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SAME BATCH, WRONG YEAR (2026-09-07, L-049)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// A batch code is `<MONTH>-<YY>-<KIND><N>`. The PROPOSED report derives one from its own
+// BLOCK DATE cell, and that cell is typed by a person — on 2026-09-03/04 it read
+// `2026-11-01` where the block was opened `2025-11-01`, so the extractor derived
+// `NOV-26-BLK13` for a block standing under `NOV-25-BLK13`. Everything else about the two
+// codes is byte-identical.
+//
+// This is NOT a fuzzy matcher and it invents nothing: `JULY-26-BLK9` vs `JUNE-26-BLK9`
+// (the L-033 month-boundary phantom) differs in the MONTH and is untouched, and
+// `NOV-25-BLK13` vs `NOV-25-BLK14` differs in the block number and is untouched. Only the
+// two year digits may differ, and the month prefix may differ only by a spelling the
+// existing alias table already recognises (`NOV` ↔ `NOVEMBER`).
+
+const BATCH_CODE_SHAPE_RE = /^([A-Z]+)-(\d{2})-([A-Z]+\d+)$/;
+
+/** `<MONTH>-<YY>-<KIND><N>` split into its three parts, or null when the code is not that
+ *  shape at all. Upper-cased + trimmed first. */
+export function splitBatchCode(
+  code: unknown,
+): { month: string; year: string; suffix: string } | null {
+  const n = normCode(code);
+  if (n === null) return null;
+  const m = BATCH_CODE_SHAPE_RE.exec(n);
+  return m ? { month: m[1], year: m[2], suffix: m[3] } : null;
+}
+
+/**
+ * Are `a` and `b` the same batch code EXCEPT for the two-digit year?
+ *
+ * The month prefix is compared through `batchCodeAliasEqual` — the ONE alias definition —
+ * by rewriting `a` with `b`'s year and asking whether the two codes are then merely
+ * spelling variants of each other. So `NOV-26-BLK13` vs `NOVEMBER-25-BLK13` is true and
+ * nothing else in the codebase has to learn the alias table a second time.
+ *
+ * Requires BOTH codes to parse, and the years to actually DIFFER (an identical pair is
+ * not a "year alias" — it is the same code, which `batchCodeAliasEqual` already answers).
+ */
+export function batchCodeDiffersOnlyByYear(a: unknown, b: unknown): boolean {
+  const pa = splitBatchCode(a);
+  const pb = splitBatchCode(b);
+  if (pa === null || pb === null) return false;
+  if (pa.year === pb.year) return false;
+  if (pa.suffix !== pb.suffix) return false;
+  return batchCodeAliasEqual(`${pa.month}-${pb.year}-${pa.suffix}`, `${pb.month}-${pb.year}-${pb.suffix}`);
+}

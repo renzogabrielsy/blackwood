@@ -85,6 +85,7 @@ import {
   type StaleStreamRead,
 } from "../lib/streamStaleness.js";
 import { generateRunReport } from "../reports/excel/generate.js";
+import { persistHeldCases } from "./persistCases.js";
 import type { AppSyncRunResult } from "../reports/excel/findingsBridge.js";
 
 /** True if a per-report envelope carries any failure (either phase ok:false). */
@@ -384,6 +385,44 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
     ...(reconciliation ? { reconciliation } : {}),
     status,
   };
+  // Named separately only so the Stage 3f step below reads as what it is: the run result
+  // as it stands, projected into durable cases before the workbook is built from it.
+  const baseResultForCases: unknown = baseResult;
+
+  // ── Stage 3f: EVERY held row becomes a durable case (L-049, 2026-09-07).
+  //
+  // Held rows used to live only inside `sync_runs.result` until somebody opened the Sync
+  // Review page with a `?run=` deep link — so a scheduled run that nobody watched produced
+  // ZERO rows in `sync_held_cases`, and the Excel workbook's "Awaiting Review" sheet, which
+  // reads that table, listed nothing. Two real feedings sat held for four days that way. A
+  // hold that is never shown is a silent failure, so the projection happens HERE, in the
+  // run, for every kind of hold without exception.
+  //
+  // BEFORE Stage 4 deliberately: the workbook reads `sync_held_cases` filtered on
+  // `last_run_id`, so a case written after it is a case it cannot list. Never throws — the
+  // writes are all done by now and a failure here is reported, not raised.
+  const casesOutcome = await DBOS.runStep(
+    () => persistHeldCases(DbClient.fromEnv(), runId, baseResultForCases),
+    { name: "persistHeldCases" },
+  );
+  if (casesOutcome.held > 0) {
+    await DBOS.runStep(
+      () =>
+        emitProgress(
+          runId,
+          "finalize",
+          casesOutcome.ok
+            ? `${casesOutcome.held} row(s) held for review — ${casesOutcome.created} new, ` +
+              `${casesOutcome.refreshed} seen before. They are on the Sync Review page.`
+            : `${casesOutcome.failed} of ${casesOutcome.held} held row(s) could not be recorded ` +
+              `for review: ${casesOutcome.errors.join(" | ")}`,
+          98,
+          undefined,
+          casesOutcome.ok ? "info" : "warn",
+        ),
+      { name: "progress:persistHeldCases" },
+    );
+  }
 
   // ── Stage 4: the Excel sync report — the LAST thing the run does, and the only stage
   // whose failure is guaranteed to be harmless. It renders `baseResult` (the exact object
@@ -409,6 +448,9 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
     reconciliation: {
       ...(reconciliation ?? {}),
       report_artifact: reportArtifact,
+      // L-049 — carried ONLY when this run actually held something, so a clean run keeps
+      // byte-identical shape (the `report_not_received` discipline).
+      ...(casesOutcome.held > 0 ? { held_case_persistence: casesOutcome } : {}),
     },
   };
 

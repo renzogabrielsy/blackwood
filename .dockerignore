@@ -41,10 +41,14 @@ workers/sync/*
 !workers/sync/src/**
 
 # ---- the ONE worker->app crossing --------------------------------------------
-# Transitive closure of workers/sync/src/reports/excel/findingsBridge.ts. FOUR files, and
-# four only: findings.ts imports cases-fold + portable-hash + the contract types,
-# cases-fold imports the contract types, and portable-hash and the contract types import
-# nothing at all.
+# Transitive closure of workers/sync/src/reports/excel/findingsBridge.ts. FIVE files, and
+# five only: findings.ts imports cases-fold + portable-hash + the contract types,
+# cases-fold imports the contract types, fingerprint.ts imports node:crypto + the contract
+# types, and portable-hash and the contract types import nothing at all.
+#
+# `fingerprint.ts` joined the closure on 2026-09-07 (L-049), when the worker started
+# writing durable `sync_held_cases` rows itself and therefore needed THE one
+# `caseFingerprint` rather than a second copy of the hash.
 #
 # `portable-hash.ts` joined the closure on 2026-08-19 when `findings.ts` grew the
 # finding-ACK fingerprint, and this file was not updated with it — so the deploy gate was
@@ -58,6 +62,7 @@ lib/sync/*
 !lib/sync/findings.ts
 !lib/sync/cases-fold.ts
 !lib/sync/portable-hash.ts
+!lib/sync/fingerprint.ts
 
 !app
 app/*

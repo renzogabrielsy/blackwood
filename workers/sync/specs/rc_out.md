@@ -401,6 +401,117 @@ the SAME batch on the SAME date — leaves only the non-patio row on the write p
 
 ---
 
+## 4c. § Corroborated sub-watermark backfill (2026-09-07, L-049)
+
+**APPLY-ONLY.** `classify.ts` is untouched and the sub-watermark guard (§3, FLAGGED kind 1)
+still routes every below-watermark NEW row to `flagged` exactly as it always did. What
+changed is what APPLY does with one of them.
+
+### The incident
+
+Block **D-8A** holds `NOV-25-BLK13`. MC's PROPOSED reports `260903` and `260904` carried a
+BLOCK DATE cell for that section reading `2026-11-01`, so `derive_batch_codes` produced
+**`NOV-26-BLK13`** — a batch that does not exist. The auto-create policy tried to open it
+at D-8A, the database refused with `23505 idx_unique_active_batch_per_location`, and both
+feedings (2026-09-03 **8,158 kg**; 2026-09-04 **9,637 kg**) were held.
+
+MC then **corrected the cell** (`2025-11-01` → resolves to `NOV-25-BLK13`). By the time
+the corrected copy arrived the rc_out watermark stood at 2026-09-05, so the L-019 guard
+held the corrected rows too — as `sub_watermark_suspected_dup`, i.e. *"suspected
+duplicate"*, about rows that were the exact opposite of duplicates.
+
+Meanwhile the RC MOVEMENT audit flagged those two dates and nothing else:
+DB **27,141** vs sheet **35,299**, and DB **21,618** vs sheet **31,255** — gaps of
+**precisely 8,158 and 9,637 kg**.
+
+### The rule
+
+> **A below-watermark NEW row is written when a SECOND, INDEPENDENT witness says the
+> database is short by exactly what that row weighs.**
+
+This is not a weakening of L-019; it is `CLAUDE.md` → Sync Integrity applied to it.
+Agreement between two witnesses writes; disagreement holds. The guard exists because such
+a row is *usually* the same feeding under another attribution — "usually" is a prior, and a
+second witness is evidence.
+
+### Mechanics
+
+- `reports/rc_out/index.ts` hoists the movement extract's `date_to_fed_kls` out of the gate
+  block and passes `compact.sub_watermark_witnesses = { tolerance_kg: 50, movement_kg, db_kg }`.
+  **`db_kg` is computed from the COMPARE-SET rows already fetched for classify** — not a
+  third query, and deliberately not the gates' narrower `since` window: every extracted
+  row's date is inside `compareSince` by construction (L-034), so a sub-watermark date
+  always has its true total there.
+- `apply.ts::planSubWatermarkBackfill` is **PURE** (no DB, no clock) and separately unit
+  tested — the `workflows/settlement.ts::computeQualifyingSettlements` idiom.
+- **THE TEST IS PER DATE, NOT PER ROW.** The witnesses only know daily totals, so two held
+  rows of 8,158 and 9,637 on one day would each fail an individual comparison against a
+  17,795 kg gap while together explaining it exactly. The candidates on a date are approved
+  or refused **as a group** — never a subset, which would be a guess about which of them is
+  real.
+- **Refused, in every one of these cases:** no movement report this run · no movement line
+  for that day (an absent witness is not corroboration — the settlement ledger's rule) ·
+  the date is QUARANTINED by a gate (the gate still wins) · the database is AHEAD of the
+  sheet (that is GATE 2's duplication signal, never a reason to write more) · any candidate
+  without a resolved `batch_id` or without a weight · a group total that misses the gap by
+  more than the **existing 50 kg tolerance** (reused, never a second threshold).
+- **Idempotency is the existing one.** The write goes through `writeNewRcOutRow` →
+  `insertIfAbsent` on `(transaction_date, batch_id, destination)`, so once the row is in
+  the table it MATCHES on the next run and never reaches this branch again; a race lands as
+  an `already_exists` hold.
+- **The decision is REPORTED, never silent:** `apply.rc_out_backfills[]` →
+  `lib/sync/cases-fold.ts::collectRcOutBackfills` → `lib/sync/findings.ts::fromRcOutBackfill`,
+  severity `info`, naming the day, the block, the pile, the row's kg, the movement total and
+  the database total. Carries no ₱ (rc_out has no ₱ column at all).
+
+**Tests:** `test/reports/rc_out-corroborated-backfill.test.ts` (the pure decision at every
+refusal boundary, plus `applyRcOut` end-to-end incl. the idempotent re-run).
+**Parity:** unaffected — the harness calls `classifyCase`, which has no DB and no witnesses,
+so no fixture exercises this branch. 12/12, no oracle rebuild.
+
+---
+
+## 4d. § A wrong-YEAR derived code resolves to the block's occupant (2026-09-07, L-049)
+
+Same incident, the half that caused it. `NOV-26-BLK13` and `NOV-25-BLK13` differ in
+**nothing but the two-digit year**, and the second one was standing in D-8A holding real
+charcoal. Opening the first would put two active batches in one block, which the database
+refuses outright — so the row was held behind a raw Postgres error for four days.
+
+`lib/batchAutoCreate.ts::ensureBatch` gained an optional `{ rowDate }` and a rung that
+fires **only when all three hold**:
+
+1. the block has an **ACTIVE occupant** (i.e. the create would be refused anyway);
+2. the derived code differs from it **only in the year** —
+   `lib/batchCodeAlias.ts::batchCodeDiffersOnlyByYear`, which compares the month prefix
+   through the **ONE** alias table (`NOV` ↔ `NOVEMBER` collapses; `JULY-26-BLK9` vs
+   `JUNE-25-BLK9`, the L-033 phantom, does not) and requires a byte-identical kind+number;
+3. the **DERIVED code's month is in the FUTURE relative to the row's own date**, and the
+   occupant's is not.
+
+**Condition 3 is the safety.** A pile cannot be fed before it exists, so `NOV-2026` on a
+`2026-09-03` row is impossible on its face. A GENUINE year rollover — a new `JAN-26-BLK5`
+arriving in January 2026 at a block still holding `JAN-25-BLK5` — has its derived month
+EQUAL to the row's month, fails the condition, and keeps today's behaviour exactly: a
+`batch_location_conflict` hold naming both sides, which is the right answer for "close the
+old block first".
+
+It borrows **L-033b's property verbatim**: a re-spell may only ever point at a batch that
+**ALREADY EXISTS**, never invent one, and never override a code that already resolves (the
+rung runs only after `resolveAgainstLookup` came back empty).
+
+**Fail-closed for every other caller.** `gsheet/apply.ts` and `deliveries/apply.ts` pass no
+`rowDate`, so the rung cannot fire there and their behaviour is byte-identical.
+
+Reported as an **`attention`** `batch_year_alias` finding naming BOTH codes, the block, and
+the occupant's status and balance — never `info`: the sync made a judgement about identity
+on a human's behalf, and that should be read, not filed.
+
+**Tests:** `test/reports/rc_out-year-alias.test.ts` (the incident; the genuine rollover; a
+different month; an empty block; a CLOSED occupant; a quarantined date).
+
+---
+
 ## 5. Apply spec
 
 **TS worker note (2026-07-11):** this section describes the Python reference's write order,
@@ -459,6 +570,8 @@ Only if `not errors` (note: this does NOT check for `held` rows the way deliveri
 | L-010 (batch-slot remap to ACTIVE occupant) | NOT codified | judgment only, human-resolved |
 | L-011/L-012 (misattributed feed reassignment/dedup) | NOT codified | judgment only, human-resolved |
 | L-019 (full-span dedup + sub-watermark guard) | classify_rc_out.py:236-252 | A settled-date row with no natural-key match is FLAGGED, never INSERTed, when `--watermark` is passed. |
+| L-049 (corroborated sub-watermark backfill) | `apply.ts::planSubWatermarkBackfill` + `index.ts` witness plumbing | A below-watermark row whose date the MOVEMENT sheet says the DB is short by exactly that much is WRITTEN with an `info` `rc_out_backfill_corroborated` finding; the same row with no movement line, no movement report, a quarantined date, a DB above the sheet, or a group total that misses by >50 kg is still HELD; a re-run inserts nothing. |
+| L-049 (wrong-year derived code) | `lib/batchCodeAlias.ts::batchCodeDiffersOnlyByYear` + `lib/batchAutoCreate.ts::ensureBatch` | A row deriving `NOV-26-BLK13` at a block held by an ACTIVE `NOV-25-BLK13`, dated BEFORE November 2026, is filed against the occupant with an `attention` finding and NO create attempt; a genuine rollover (`JAN-26-BLK5` on a January-2026 row at a block holding `JAN-25-BLK5`) still attempts the create and still holds `batch_location_conflict`. |
 | L-048 (unreadable day tabs) | `extract.ts::SHEET_NAME_RE` + `reports/sourceTabs.ts` + `index.ts`/`apply.ts` | `Aug. 29` / `Sep. 1` / `SEP. 2` / `AUG.29` / `Sept 1` all resolve; `SUMMARY`, `Sheet1`, `Aug 32`, `JANUARY 2026` all refuse; a workbook with 0 readable tabs raises ONE `high` `source_tabs_unreadable` finding naming both lists AND leaves `labeled=false` / `watermark_updated=false`; a partial failure is `attention` and still labels. |
 | L-037 (balance-integrity guard) | `classify_rc_out.py::balance_integrity` + `classify.ts::balanceIntegrity` | A two-leg same-batch same-day sheet whose legs are internally consistent yields BOTH legs' own DAY TOTALs ([10,813, 20,932], never [10,813, 31,745]); a leg whose DAY TOTAL disagrees with STRT−END is FLAGGED ("cross-block cumulative"); a same-slot section whose STRT ≠ the prior leg's END is FLAGGED ("slot continuity"); a blank-balance section is never held; a corrupt DAY TOTAL matching a corrected DB row is FLAGGED, not VALUE_CHANGED. |
 | L-020 (idempotent insert) | sync_rc_out.py:265 | Re-running apply twice on the same classified file inserts nothing the second time. |

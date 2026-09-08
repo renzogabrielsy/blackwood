@@ -17,6 +17,7 @@ import { describe, it, expect } from "vitest";
 
 import { reconcile } from "../../src/reports/rc_movement_audit/reconcile.js";
 import { extractMovement } from "../../src/reports/rc_movement_audit/extract.js";
+import { auditDrifts } from "../../src/reports/rc_movement_audit/index.js";
 import type { LoadedWorkbook, LoadedSheet, CellValue } from "../../src/lib/xlsx.js";
 
 // ---------------------------------------------------------------------------
@@ -254,3 +255,80 @@ function mkWorkbook(specs: SheetSpec[]): LoadedWorkbook {
     sheetAt: (i: number) => (names[i] ? (sheets.get(names[i]) ?? null) : null),
   };
 }
+
+// ---------------------------------------------------------------------------
+// L-049 (2026-09-07) — the drift list the OPERATOR sees.
+//
+// THE REGRESSION. The auditor already knew the dates and both totals; the only thing that
+// reached the panel was the `detail` sentence on its gate failure — "2 drift date(s);
+// max_severity=serious" — because the assembly boundary coerced a gate failure down to
+// `{gate, detail}` and a WARNING-level drift raised no gate failure at all. `auditDrifts`
+// is the list that now rides on the classify block at EVERY severity.
+// ---------------------------------------------------------------------------
+describe("L-049 — auditDrifts: the operator-facing drift list", () => {
+  /** Build the audit envelope for a set of (date → [db, movement]) pairs. */
+  function envelopeFor(rows: Record<string, [number, number | null]>) {
+    const sums: Record<string, number> = {};
+    const fed: Record<string, number> = {};
+    for (const [d, [o, m]] of Object.entries(rows)) {
+      sums[d] = o;
+      if (m !== null) fed[d] = m;
+    }
+    const rep = reconcile(
+      { rows: Object.entries(sums).map(([d, v]) => ({ transaction_date: d, weight_kg: v })) },
+      { date_to_fed_kls: fed },
+      sums,
+      50,
+      500,
+    );
+    return {
+      ok: rep.severity < 2,
+      reconcile: { summary: rep.summary, drift_dates: rep.drift_dates, ok_dates: rep.ok_dates },
+      severity: rep.severity,
+    } as const;
+  }
+
+  it("NAMES the incident's two days with both totals and the signed gap", () => {
+    // The measured run: 2026-09-03 DB 27,141 vs sheet 35,299; 09-04 DB 21,618 vs 31,255.
+    const drifts = auditDrifts(
+      envelopeFor({ "2026-09-03": [27141, 35299], "2026-09-04": [21618, 31255] }),
+    );
+    expect(drifts).toHaveLength(2);
+    expect(drifts[0]).toMatchObject({
+      date: "2026-09-03",
+      db_kg: 27141,
+      sheet_kg: 35299,
+      delta_kg: -8158, // NEGATIVE — the database is SHORT of the sheet
+      severity: "serious",
+    });
+    expect(drifts[1]).toMatchObject({ date: "2026-09-04", delta_kg: -9637, severity: "serious" });
+  });
+
+  it("publishes a WARNING-level drift too — the severity that used to say nothing at all", () => {
+    const drifts = auditDrifts(envelopeFor({ "2026-07-04": [1200, 1000] }));
+    expect(drifts).toHaveLength(1);
+    expect(drifts[0]).toMatchObject({ date: "2026-07-04", delta_kg: 200, severity: "warning" });
+  });
+
+  it("stays silent on a day inside tolerance — no second threshold is invented here", () => {
+    expect(auditDrifts(envelopeFor({ "2026-07-04": [1050, 1000] }))).toEqual([]);
+    expect(auditDrifts(envelopeFor({ "2026-07-04": [1051, 1000] }))).toHaveLength(1);
+  });
+
+  it("reports a day with NO movement line as a warning, and says why", () => {
+    const drifts = auditDrifts(envelopeFor({ "2026-07-04": [1000, null] }));
+    expect(drifts).toHaveLength(1);
+    expect(drifts[0]).toMatchObject({
+      date: "2026-07-04",
+      db_kg: 1000,
+      sheet_kg: null,
+      note: "no movement entry",
+      severity: "warning",
+    });
+  });
+
+  it("carries the O-vs-M excess when the database is materially ABOVE the sheet", () => {
+    const drifts = auditDrifts(envelopeFor({ "2026-07-04": [2000, 1000] }));
+    expect(drifts[0]).toMatchObject({ excess_kg: 1000, severity: "serious" });
+  });
+});

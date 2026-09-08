@@ -959,6 +959,109 @@ export class DbClient {
     }
   }
 
+  /**
+   * Upsert ONE durable held case by fingerprint (2026-09-07, L-049).
+   *
+   * ─────────────────────────────────────────────────────────────────────────────
+   * WHY THE WORKER WRITES THESE AT ALL
+   * ─────────────────────────────────────────────────────────────────────────────
+   * `sync_held_cases` is what Sync Review lists and what the Excel report's "Awaiting
+   * Review" sheet reads. Until now the ONLY thing that ever wrote a row was the app's
+   * `ensureCasesForRun` server action — reached from the sync modal's finalize hook (which
+   * is gated on `SYNC_AI_REVIEW_ENABLED`, deliberately OFF since 2026-07-11) and from a
+   * `/sync/cases?run=<id>` deep link. So a scheduled run that nobody watched produced held
+   * rows inside `sync_runs.result` and NOT ONE durable case: on 2026-09-07 two real
+   * feedings had been held for four days, the cases table had nothing since Sept 4, and
+   * the workbook's Awaiting Review sheet listed zero rows. A hold that is never shown is a
+   * silent failure, and the fan-out has to happen where the run happens.
+   *
+   * IDEMPOTENT, and byte-compatible with the app's own fan-out: same fingerprint (the ONE
+   * `caseFingerprint`), same insert shape, same `occurrence_count` discipline (bumped only
+   * when a DIFFERENT run re-raises the case, so the app re-running the fan-out over the
+   * same run never double-counts). Also pre-annotates from `sync_case_rulings` exactly as
+   * `ensureCasesForRun` does, so a case created here is indistinguishable from one created
+   * there.
+   *
+   * Returns which branch it took so the caller can report created-vs-refreshed counts.
+   */
+  async upsertHeldCase(args: {
+    runId: string;
+    fingerprint: string;
+    reportType: string;
+    kind: string;
+    naturalKey: string;
+    reason: string | null;
+    detail: string | null;
+    row: Row | null;
+  }): Promise<"created" | "refreshed"> {
+    const now = new Date().toISOString();
+
+    const { data: existing, error: exErr } = await this.sb
+      .from("sync_held_cases")
+      .select("id, last_run_id, occurrence_count")
+      .eq("fingerprint", args.fingerprint)
+      .maybeSingle();
+    if (exErr) {
+      throw new Error(
+        `case lookup failed ${exErr.code ?? ""}: ${sliceMsg(exErr.message)}`
+      );
+    }
+
+    if (existing) {
+      const row = existing as { id: string; last_run_id: string | null; occurrence_count: number | null };
+      const patch: Row = { last_run_id: args.runId, last_seen_at: now, updated_at: now };
+      // Bump ONLY when a DIFFERENT run re-raised it — the same guard the app uses, which
+      // is what makes the worker step and a later app fan-out safe to both run.
+      if (row.last_run_id !== args.runId) {
+        patch.occurrence_count = (row.occurrence_count ?? 1) + 1;
+      }
+      const { error: upErr } = await this.sb
+        .from("sync_held_cases")
+        .update(patch)
+        .eq("id", row.id);
+      if (upErr) {
+        throw new Error(`case refresh failed ${upErr.code ?? ""}: ${sliceMsg(upErr.message)}`);
+      }
+      return "refreshed";
+    }
+
+    // A prior RULING on this exact fingerprint pre-annotates the new case (never silences
+    // it — `status` is still 'open').
+    const { data: ruling, error: rulErr } = await this.sb
+      .from("sync_case_rulings")
+      .select("id")
+      .eq("fingerprint", args.fingerprint)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (rulErr) {
+      throw new Error(`ruling lookup failed ${rulErr.code ?? ""}: ${sliceMsg(rulErr.message)}`);
+    }
+
+    const { error: insErr } = await this.sb.from("sync_held_cases").insert({
+      fingerprint: args.fingerprint,
+      report_type: args.reportType,
+      kind: args.kind,
+      natural_key: args.naturalKey,
+      reason: args.reason,
+      detail: args.detail,
+      row: args.row,
+      first_run_id: args.runId,
+      last_run_id: args.runId,
+      occurrence_count: 1,
+      last_seen_at: now,
+      status: "open",
+      known_ruling_id: (ruling as { id: string } | null)?.id ?? null,
+    });
+    if (insErr) {
+      // A UNIQUE violation means a concurrent writer (the app fan-out, or a retried step)
+      // created it a moment ago — that is success, not a failure.
+      if (String(insErr.code ?? "") === "23505") return "refreshed";
+      throw new Error(`case insert failed ${insErr.code ?? ""}: ${sliceMsg(insErr.message)}`);
+    }
+    return "created";
+  }
+
   async createSyncRun(args: {
     requestedBy?: string | null;
   } = {}): Promise<{ id: string }> {

@@ -57,10 +57,14 @@
  */
 import type { DbClient } from "./db.js";
 import { batchCodeFallbacks } from "../reports/gsheet/extract.js";
+import { batchCodeDiffersOnlyByYear, splitBatchCode } from "./batchCodeAlias.js";
+import { monthNumberFromToken } from "./months.js";
 import {
   type BatchLocationConflict,
+  type LocationOccupant,
   describeBatchLocationConflict,
   isLocationCollision,
+  lookupLocationOccupant,
 } from "./batchLocationConflict.js";
 
 // Mirrors gsheet/extract.ts::MONTH_PREFIX_ALIASES' KEYS (+ "MAY", which has no
@@ -175,12 +179,95 @@ export function resolveAgainstLookup(
   return null;
 }
 
+/**
+ * The batch code's own month, as `YYYY-MM`. Two-digit years are 20xx (every batch code in
+ * this system is). Null when the code is not `<MONTH>-<YY>-<KIND><N>` or the month token
+ * is unrecognised — in which case the year-alias rung below simply does not fire.
+ */
+function batchCodeMonth(code: string): string | null {
+  const parts = splitBatchCode(code);
+  if (parts === null) return null;
+  const m = monthNumberFromToken(parts.month);
+  if (m === null) return null;
+  return `20${parts.year}-${String(m).padStart(2, "0")}`;
+}
+
+/**
+ * L-049 rung — "the derived code is this block's batch with the YEAR mistyped".
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * WHAT IT DECIDES, AND WHAT IT REFUSES TO DECIDE
+ * ─────────────────────────────────────────────────────────────────────────────
+ * On 2026-09-03/04 MC's BLOCK DATE cell for D-8A read `2026-11-01` where the block was
+ * opened `2025-11-01`, so the extractor derived `NOV-26-BLK13` while `NOV-25-BLK13` stood
+ * in that block with real charcoal. The auto-create policy then tried to open a SECOND
+ * active batch in an occupied block, the database refused it (23505 on
+ * `idx_unique_active_batch_per_location`), and two real feedings — 8,158 kg and 9,637 kg —
+ * were held behind a raw Postgres error for four days.
+ *
+ * Pointing at the occupant borrows L-033b's safety property verbatim: a re-spell may only
+ * ever resolve to a batch that ALREADY EXISTS, never invent one, and never override a code
+ * that already resolves (this runs only after `resolveAgainstLookup` came back empty).
+ *
+ * THREE CONDITIONS, ALL REQUIRED — and the third is the one that makes it safe:
+ *   1. The block has an ACTIVE occupant (i.e. the create would be refused anyway).
+ *   2. The two codes differ ONLY in the two-digit year (`batchCodeDiffersOnlyByYear` —
+ *      same month family via the ONE alias table, byte-identical kind + number).
+ *   3. The DERIVED code's month is in the FUTURE relative to the row's own date, and the
+ *      OCCUPANT's month is not. A pile cannot be fed, or delivered into, before it exists,
+ *      so a `NOV-2026` code on a `2026-09-03` row is impossible on its face — whereas a
+ *      genuine year rollover (`JAN-26-BLK5` arriving in January 2026 at a block still
+ *      holding `JAN-25-BLK5`) has its derived month EQUAL to the row's month, fails this
+ *      condition, and keeps today's behaviour exactly: a `batch_location_conflict` hold
+ *      naming both sides, which is the right answer for "close the old block first".
+ *
+ * Fail-closed everywhere: no `rowDate`, no valid `location_ref`, no occupant, an
+ * unparseable code, or an occupant this run cannot resolve to an id → null, and the caller
+ * proceeds exactly as before. Never throws (`lookupLocationOccupant` swallows its own
+ * failures by design).
+ */
+async function resolveYearAliasOccupant(
+  db: DbClient,
+  primaryCode: string,
+  locationRef: string,
+  rowDate: string,
+  lookup: Readonly<Record<string, string>>,
+): Promise<{ batchId: string; resolvedCode: string; occupant: LocationOccupant } | null> {
+  const derivedMonth = batchCodeMonth(primaryCode);
+  const rowMonth = rowDate.slice(0, 7);
+  if (derivedMonth === null || rowMonth.length !== 7) return null;
+  // Condition 3a — the derived pile would have to have been opened AFTER this row happened.
+  if (derivedMonth <= rowMonth) return null;
+
+  const occupant = await lookupLocationOccupant(db, locationRef);
+  if (!occupant || !occupant.batch_code) return null;
+  // Condition 2 — same batch, different year, nothing else.
+  if (!batchCodeDiffersOnlyByYear(primaryCode, occupant.batch_code)) return null;
+  // Condition 3b — the occupant, unlike the derived code, is not in the future.
+  const occupantMonth = batchCodeMonth(occupant.batch_code);
+  if (occupantMonth === null || occupantMonth > rowMonth) return null;
+
+  const resolved = resolveAgainstLookup(occupant.batch_code, lookup);
+  if (!resolved) return null;
+  return { batchId: resolved.batchId, resolvedCode: resolved.resolvedCode, occupant };
+}
+
 export type EnsureBatchOutcome =
   | { status: "invalid_pattern" }
   | { status: "existing_alias"; batchId: string; resolvedCode: string }
   | { status: "created"; batchId: string; resolvedCode: string; fields: DerivedBatchFields }
   | { status: "race_lost_to_sibling"; batchId: string; resolvedCode: string; fields: DerivedBatchFields }
-  | { status: "location_conflict"; attemptedCode: string; conflict: BatchLocationConflict };
+  | { status: "location_conflict"; attemptedCode: string; conflict: BatchLocationConflict }
+  | {
+      /** L-049 — the derived code is the block occupant's code with the year mistyped, so
+       *  the row was filed against the occupant and NOTHING was created. */
+      status: "year_alias_of_occupant";
+      batchId: string;
+      resolvedCode: string;
+      attemptedCode: string;
+      locationRef: string;
+      occupant: LocationOccupant;
+    };
 
 /**
  * Ensure a batch exists for `primaryCode`, auto-creating it from the template when
@@ -206,6 +293,12 @@ export async function ensureBatch(
   primaryCode: string | null | undefined,
   blockLoc: string | null | undefined,
   lookup: Record<string, string>,
+  /**
+   * L-049. `rowDate` (the row's own `transaction_date`) ENABLES the year-alias rung below;
+   * without it the rung cannot check its safety condition and is skipped entirely, so a
+   * caller that does not pass one behaves exactly as it did before this existed.
+   */
+  opts: { rowDate?: string | null } = {},
 ): Promise<EnsureBatchOutcome> {
   if (!primaryCode) return { status: "invalid_pattern" };
 
@@ -218,6 +311,31 @@ export async function ensureBatch(
   if (!isPatternValidBatchCode(primaryCode)) return { status: "invalid_pattern" };
 
   const fields = deriveBatchFields(primaryCode, blockLoc);
+
+  // L-049 — before creating anything, ask whether this block already holds the SAME batch
+  // with the year mistyped. Runs only for a caller that supplied the row's date and a
+  // block that is a real coded location; see `resolveYearAliasOccupant` for why the
+  // future-month condition is what keeps a genuine year rollover on the old path.
+  if (opts.rowDate && fields.location_ref) {
+    const alias = await resolveYearAliasOccupant(
+      db,
+      primaryCode,
+      fields.location_ref,
+      opts.rowDate,
+      lookup,
+    );
+    if (alias) {
+      lookup[primaryCode] = alias.batchId;
+      return {
+        status: "year_alias_of_occupant",
+        batchId: alias.batchId,
+        resolvedCode: alias.resolvedCode,
+        attemptedCode: primaryCode,
+        locationRef: fields.location_ref,
+        occupant: alias.occupant,
+      };
+    }
+  }
   let res: { id: string; batch_code: string; created: boolean };
   try {
     res = await db.upsertBatchIfAbsent(fields as unknown as Record<string, unknown>);
@@ -244,6 +362,23 @@ export async function ensureBatch(
   return res.created
     ? { status: "created", batchId: res.id, resolvedCode: primaryCode, fields }
     : { status: "race_lost_to_sibling", batchId: res.id, resolvedCode: primaryCode, fields };
+}
+
+/**
+ * A note describing ONE row filed against the batch already occupying its block, because
+ * the derived code differed from it only by the two-digit year (L-049). Mirror of the
+ * frontend `BatchAliasNote`. NEVER a ₱/cost field.
+ */
+export interface BatchAliasNote {
+  /** `year_alias_of_block_occupant` today — a field so a second flavour can join later. */
+  kind: string;
+  derived_batch_code: string;
+  resolved_batch_code: string;
+  block_loc: string | null;
+  occupying_status: string | null;
+  occupying_balance_kg: number | null;
+  transaction_date: string | null;
+  source_row: string | number | null;
 }
 
 /** A note describing one auto-created batch — carried on the apply result (info

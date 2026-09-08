@@ -50,13 +50,16 @@ COPY workers/sync/src ./src
 #   lib/sync/findings.ts      imports ./cases-fold + ./portable-hash + app/(app)/sync/types
 #   lib/sync/cases-fold.ts    imports app/(app)/sync/types              (nothing else)
 #   lib/sync/portable-hash.ts ZERO imports (that is the whole point of it)
+#   lib/sync/fingerprint.ts   imports node:crypto + app/(app)/sync/types (joined 2026-09-07,
+#                             L-049: the worker writes durable sync_held_cases rows itself
+#                             and must use THE one caseFingerprint, not a second copy)
 #   app/(app)/sync/types.ts   ZERO imports
 # If that closure ever grows, this COPY and .dockerignore must grow with it; the
 # verify:container-build gate is what makes forgetting that a red build instead of a
 # broken deploy — and on 2026-08-19 it did exactly that: `portable-hash.ts` joined the
 # closure with the finding-ACK fingerprint and neither this COPY nor .dockerignore
 # followed, so the gate was already failing before the BUG-026 work started.
-COPY lib/sync/findings.ts lib/sync/cases-fold.ts lib/sync/portable-hash.ts /repo/lib/sync/
+COPY lib/sync/findings.ts lib/sync/cases-fold.ts lib/sync/portable-hash.ts lib/sync/fingerprint.ts /repo/lib/sync/
 COPY ["app/(app)/sync/types.ts", "/repo/app/(app)/sync/"]
 
 # Build identity. Passed in by the deploy wrapper (`--build-arg BUILD_SHA=$(git rev-parse
