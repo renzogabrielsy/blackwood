@@ -58,6 +58,25 @@ export interface UnpricedOverdue {
   sacks: number | null;
   /** operational_date − transaction_date, in days. Always ≥ 2 for an overdue row. */
   days_pending: number;
+  /**
+   * Did a price workbook actually reach this run (2026-09-12, L-050)?
+   *
+   * Without it the finding can only say "still unpriced — either it is missing from her
+   * file or the sync could not match it", which on 2026-09-12 was true and useless: the
+   * real answer was a THIRD thing the sentence could not express — the sync had not
+   * looked, because the price step only ran inside the RC DELIVERIES email report and no
+   * report had arrived. `false` now means "her file was not in the mailbox window";
+   * `true` means the file was read and this row still did not match.
+   *
+   * Optional, so a payload written before this existed still normalizes.
+   */
+  looked_in_file?: boolean;
+  /**
+   * The worksheet tabs any price step of this run resolved and read. A row whose own month
+   * is absent from this list was not skipped — its month has no tab, which is a different
+   * problem with a different fix.
+   */
+  tabs_read?: string[];
 }
 
 /**

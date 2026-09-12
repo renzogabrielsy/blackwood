@@ -434,6 +434,13 @@ export interface PriceNote {
    * happen to be named `AUGUST 2026` satisfies every other check in this list, and did,
    * for two weeks. `price_overdue_check_failed` — the unpriced-delivery check itself
    * could not be run, so the run cannot say whether any are overdue.
+   *
+   * 2026-09-12 (L-050) added two more, both from the RE-PRICE PASS — the step that prices
+   * a delivery already in the database, whoever inserted it, whenever the price workbook
+   * is present. `price_repriced` — a row that was carrying the ₱0 placeholder has now been
+   * priced (info: nothing is wrong, something was FIXED, and it is durable because the
+   * sync changed a value on an existing row). `price_reprice_failed` — a price WAS found
+   * and could not be saved, so the row stays at the placeholder.
    */
   kind: string
   /** Plain-English specifics, already operator-facing. */
@@ -494,6 +501,28 @@ export interface UnpricedOverdue {
   sacks: number | null
   /** operational_date − transaction_date, in days. Always ≥ 2 for an overdue row. */
   days_pending: number
+  /**
+   * Did a price workbook actually reach this run (2026-09-12, L-050)?
+   *
+   * `false` — Czarina's file was not in the mailbox window, so nothing could match.
+   * `true`  — it was read, and this row still did not match.
+   * `null`  — unknown (a payload written before this field existed). NEVER read a null as
+   *           `false`: "we don't know whether the sync looked" and "the sync looked and
+   *           found nothing" send an operator to two different places.
+   *
+   * It exists because the old wording — "either it is missing from Czarina's file, or the
+   * sync could not match it" — was TRUE on 2026-09-12 and completely misleading. The real
+   * answer was a third thing it could not express: price enrichment only ran inside the RC
+   * DELIVERIES email report, no report had arrived since 09-09, and eleven Sheet-inserted
+   * deliveries were being chased by an alarm about a lookup the sync was declining to do.
+   */
+  looked_in_file?: boolean | null
+  /**
+   * The worksheet tabs any price step of this run resolved and read. A row whose own month
+   * is absent from a non-empty list was not skipped — her file has no tab for that month,
+   * which is a different problem with a different fix.
+   */
+  tabs_read?: string[]
 }
 
 /**

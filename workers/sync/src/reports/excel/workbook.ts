@@ -441,6 +441,21 @@ export function sidesForFinding(f: RunFinding): Sides {
     };
   }
 
+  // A price back-filled onto a row that was already in the database (L-050): the truckload
+  // against the workbook row it was matched to. The RATE is deliberately on neither side —
+  // this channel is not price-gated.
+  if (f.kind === "price_repriced") {
+    const sheet = str(d.matched_sheet);
+    const matchedRow = num(d.matched_row);
+    const ours = [str(d.transaction_date), str(d.truck_plate), str(d.batch_code)]
+      .filter(Boolean)
+      .join(" · ");
+    return {
+      a: ours ? `ours: ${ours}` : "ours: (row not identified)",
+      b: sheet ? `Czarina: "${sheet}"${matchedRow == null ? "" : ` row ${matchedRow}`}` : "",
+    };
+  }
+
   // A report that never arrived (L-044): what we have against what day it is.
   if (f.kind === "report_not_received") {
     const through = str(d.through_date);

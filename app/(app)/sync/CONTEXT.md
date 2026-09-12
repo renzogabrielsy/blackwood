@@ -875,6 +875,46 @@ Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerpri
   `scripts/verify-awaiting-batch-assignment-fold.ts`. MALFORMED still reports separately and louder
   (an **orphan wet-recovery sub-row** stays there on purpose — see
   `workers/sync/specs/deliveries.md` §11.3).
+  **THE PRICE STEP THAT COULD NOT RUN (2026-09-12, L-050).** Two kinds joined, and one existing
+  finding learned to say WHICH SIDE is missing. Eleven deliveries dated 2026-09-08 … 09-11 sat at
+  `cost_basis = 0` (run `8500acc9`) while Czarina's workbook — already fetched into
+  `sync-inbox/<run>/deliveries_czarina/` — held every one of their rates, and `apply.price_notes`
+  was **`[]`**. Nothing below was broken; `enrichPrices` simply lived in ONE place, inside the RC
+  DELIVERIES email report, and no report had arrived since 09-09, so every row the Google Sheet had
+  inserted was priced by nobody — while `unpriced_overdue` named them every run. **L-044 one level
+  up**: there a DB-backed check sat behind a mailbox-shaped guard; here the STEP did.
+  - **`price_repriced`** (`info`, `section: 'deliveries'`) — one per row the new RE-PRICE PASS
+    (`workers/sync/src/reports/deliveries/reprice.ts`) moved off the ₱0 placeholder. The quietest
+    tier there is, because nothing is wrong — something was FIXED — but **durable**, because the
+    sync wrote a value onto a row that was already in the database. Names date · plate · sacks and
+    the tab + row it matched; **never the rate** (this channel is not price-gated). Excel Side A/B =
+    `ours: <date · plate · pile>` vs `Czarina: "<tab>" row <n>`.
+  - **`price_reprice_failed`** (`attention`) — a price WAS found and could not be saved. File-level
+    (it names a COUNT; each affected row is already named by `unpriced_overdue`), and never `high`:
+    nothing is known to be wrong with any delivery. A re-price failure is a NOTE and never an
+    `errors[]` entry — `errors[]` blocks the watermark bump and the Gmail label, and a price that
+    could not be back-filled is not a reason to re-ingest a correctly ingested report.
+  - **`unpriced_overdue` now says WHICH SIDE is missing.** The old reason offered two possibilities
+    — *"either it is missing from Czarina's file, or the sync could not match it"* — and on
+    2026-09-12 the truth was a third: the sync had not looked. `UnpricedOverdue` gained
+    **`looked_in_file`** (`false` = her file was not in the mailbox window · `true` = it was read
+    and this truckload still did not match · **`null` = unknown, on an older payload, and MUST NOT
+    be read as `false`**) and **`tabs_read`** (a `true` with an empty list means no month tab
+    resolved — a third sentence again). Both are **in `VOLATILE_DATA_KEYS`**, so they never reach
+    `content_hash`: they describe the RUN's mailbox, not the delivery, and the mailbox's weather
+    must not expire an acknowledgement.
+  - **…and a `recook_refeed` delivery is reported at `info`.** `public.fn_delivery_class` is THE
+    definition of what kind of arrival a row is; re-cooked/re-fed material was bought once already
+    and what Czarina records against it is ₱1.50–₱1.75 — a PROCESSING FEE, not a market rate. It is
+    still chased (an unpriced row is an incomplete record whatever it cost) but never escalates
+    beside a real purchase nobody has priced. The class comes from **`deliveryClass()` in
+    `lib/sync/findings.ts`** — a portable mirror, because this module is client-safe and five client
+    components import it (the `supplierCanon.ts` situation) — pinned by `scripts/verify-findings.ts`
+    against the rows migration `20260901115129`'s own comment enumerates, and proven against the
+    live function on **all 1,123 distinct `(batch_code, supplier, remarks)` triples in `deliveries`,
+    zero disagreements**. Only the `recook_refeed` arm is acted on, and that arm reads exactly the
+    two fields this channel carries.
+
   **THE WRONG WORKBOOK, AND THE REPORT THAT NEVER CAME (2026-08-18, L-044).** Four channels were
   added after the sync spent two weeks reading a bank cheque-requisition workbook as the charcoal
   price list and reported **nothing** — four truckloads (2026-08-14, 69,900 kg) at ₱0 on a run that

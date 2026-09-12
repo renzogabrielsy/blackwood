@@ -311,6 +311,16 @@ export interface UnpricedOverdueNote {
   weight_kg: number | null;
   sacks: number | null;
   days_pending: number;
+  /**
+   * Did a price workbook actually reach this run (2026-09-12, L-050)? `false` = "her file
+   * was not in the mailbox window"; `true` = it was read and this row still did not match.
+   * Before this existed the finding could only say "either it is missing from her file or
+   * the sync could not match it" — and on 2026-09-12 the truth was a third thing: the price
+   * step only ran inside the RC DELIVERIES email report, and no report had arrived.
+   */
+  looked_in_file: boolean | null;
+  /** The worksheet tabs any price step of this run resolved and read. */
+  tabs_read: string[];
 }
 
 /**
@@ -810,6 +820,11 @@ function toUnpricedOverdue(v: unknown): UnpricedOverdueNote {
     weight_kg: nnum(o.weight_kg),
     sacks: nnum(o.sacks),
     days_pending: num(o.days_pending),
+    // NULL, never false (L-050): "we don't know whether the sync looked" and "the sync
+    // looked and found nothing" are different answers, and only one of them is a reason to
+    // go and chase Czarina. A payload written before this field existed reads null.
+    looked_in_file: typeof o.looked_in_file === "boolean" ? o.looked_in_file : null,
+    tabs_read: strArray(o.tabs_read),
   };
 }
 

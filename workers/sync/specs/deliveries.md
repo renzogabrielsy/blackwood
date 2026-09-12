@@ -582,6 +582,97 @@ time still re-prices them in that same run. But once a delivery dated **2026-08-
 record, `since` becomes 2026-08-15+ and those rows leave the window **permanently** — after that they
 need a manual re-price.
 
+> **SUPERSEDED 2026-09-12 (§9.14).** The window is no longer the constraint and no manual
+> re-price is needed: the RE-PRICE PASS reads unpriced rows straight out of the database over a
+> **45-day** floor, so a row that has left the report window is still reachable. The paragraph
+> above is kept because its DIAGNOSIS is what §9.14 was built from — the self-heal path was real
+> and its reach was the report's window, not the price's.
+
+---
+
+## 9.14 RULE 6 — CZARINA'S FILE PRICES EVERY UNPRICED DELIVERY IT CAN, WHOEVER INSERTED THE ROW (2026-09-12, L-050)
+
+> **The email is a WITNESS to a delivery, not a GATE on its price.**
+>
+> Code: `src/reports/deliveries/reprice.ts` (the pass), `index.ts` (the two call sites and the
+> one-load price file), `enrich.ts::PriceMatchProvenance` (per-row match bookkeeping).
+> Tests: `test/reports/deliveries-reprice.test.ts`. Findings: `lib/sync/findings.ts`,
+> `scripts/verify-findings.ts`.
+
+**WHAT BROKE.** On 2026-09-12 eleven deliveries dated 2026-09-08 … 09-11 sat at `cost_basis = 0`
+(run `8500acc9`). Czarina's `RAW CHARCOAL PURCHASES -Daily(1).xlsx` WAS in the mailbox, WAS
+downloaded to `sync-inbox/<run>/deliveries_czarina/`, and its `Sept. 2026` tab carried every one
+of their rates. `apply.price_notes` was `[]` on both the deliveries and the gsheet section.
+
+Nothing was wrong with the file, the tab resolver (§9.2), the month span (§9.3), the ladder
+(§9.4), the aliases (§9.6) or the bands (§9.7). **The price step was not REACHABLE.**
+`enrichPrices` ran in exactly one place — inside the RC DELIVERIES email report, over THAT
+EMAIL'S extracted rows — and no RC DELIVERIES email had arrived since 2026-09-09
+(`manifest.reports.deliveries = []`). Every one of those rows had been inserted by the Google
+Sheet path, which writes the ₱0 placeholder and a comment reading *"deliveries-manager to enrich
+from Czarina/email"*. Nobody enriched them. §9.11 moved the unpriced CHECK out from behind the
+mailbox guard; the price STEP was still behind it, so the check chased rows the sync itself was
+declining to price.
+
+**THE PASS.** Whenever a price workbook reached the run — with or without an RC DELIVERIES email
+— every `deliveries` row that is still `cost_basis = 0` and `human_edited_at IS NULL`, within
+`min(report since, today −45d)`, goes back through the SAME `enrichPrices` ladder, and every match
+is written through `fn_apply_delivery_upstream`. It runs at the end of BOTH branches of
+`runReport`: AFTER apply (so a row inserted unpriced this run is a candidate immediately) and
+BEFORE the overdue read (so §9.8's chase reflects what it just fixed). The no-email branch is the
+one it was built for — that is precisely the run in which the Sheet is the only writer.
+
+| # | Rule | Why |
+|---|---|---|
+| 1 | **ONE matcher.** It calls `enrichPrices`; it does not reimplement a rung. | A second matcher is a second definition of "the same truckload". |
+| 2 | **ONE write path.** `fn_apply_delivery_upstream`, never `db.update`. | The latch is the control; the `human_edited_at IS NULL` in the candidate READ is only a courtesy. |
+| 3 | **ONE definition of unpriced.** `cost_basis = 0`, the L-008 placeholder. | The same predicate `view_digest_unpriced_deliveries` owns. |
+| 4 | **It only ever moves a row from ₱0 to a rate.** A priced row is not a candidate. | Which is also what makes it IDEMPOTENT — the second pass over the same workbook writes nothing and says nothing. |
+| 5 | **45 days, and only ever WIDER than the report window.** `min(since, today−45d)`. | Her tabs are monthly, so 45 days is "this month and the one before it, always". Beyond that a row is not waiting on a price, it is a data problem — and has been `high` in §9.8 for six weeks. |
+
+**WHICH NOTES IT RAISES — and the two it deliberately does not.** `enrichPrices` is written for
+the EMAIL population; this population is its opposite (every row has already failed to price at
+least once, and every row that matters is already named by id, every run, by `unpriced_overdue`).
+
+| kind | kept? | severity | why |
+|---|---|---|---|
+| `price_repriced` | **yes** | `info` | NEW. One per row it priced. Nothing is wrong — something was FIXED — but the sync wrote a value onto a row already in the database, and that deserves a trail. Names date/plate/sacks and the tab+row it matched; **never the rate**. |
+| `price_reprice_failed` | **yes** | attention | NEW. A price WAS found and could not be saved. File-level (it names a count; the rows are each already named). Never `high` — nothing is wrong with any delivery. |
+| `price_fuzzy_match` | yes | attention | Priced, both spellings shown, alias EARNED — §9.4/§9.6 unchanged. |
+| `price_out_of_band` | yes | attention | Priced at a rate unlike this supplier's — §9.7 unchanged. |
+| `price_tab_unresolved` / `_ambiguous` / `price_file_unreadable` | yes, **deduped** | high | Only when this run has not already raised the same `(kind, looked_for)`. With no email this pass is the only price step, and §9.5's rule stands: a tab miss is the loudest thing a deliveries run can say. |
+| `price_fuzzy_ambiguous`, `price_date_drift` | **NO** | — | A refusal here means "this row is still unpriced", which `unpriced_overdue` says about the same row, by id, in the same run, at an escalating severity. Two voices about one fact is how an operator learns to stop reading the list. |
+| `price_no_row_matched` | **NO** | — | §9.10's justification is that the email window ALWAYS contains several days that ARE in her file, so 0-of-N is structural evidence of the wrong workbook. **That argument does not survive the change of population**: these rows are by construction the ones that did not price, and on a normal day none of them will, because she records the PAYMENT date. Firing it here would be a threshold that trips on an ordinary Tuesday. The email path still watches it where the argument holds. |
+
+**§9.8's chase now says WHICH SIDE IS MISSING.** `UnpricedOverdue` gained `looked_in_file`
+(boolean, **null on an older payload — never read a null as false**) and `tabs_read`. The old
+sentence offered two possibilities — *"either it is missing from Czarina's file, or the sync could
+not match it"* — and on 2026-09-12 the truth was a third: the sync had not looked. Both fields are
+**excluded from `contentHash`** (they describe the RUN's mailbox, not the delivery), so the
+mailbox's weather can never expire an acknowledgement.
+
+**AND A RE-COOK IS A PROCESSING FEE, NOT A PURCHASE.** `public.fn_delivery_class` is THE
+definition of what kind of arrival a row is; a `recook_refeed` row was bought once already and
+what Czarina records against it is ₱1.50–₱1.75, a fee. It is still chased — an unpriced row is an
+incomplete record whatever it cost — but at `info`, saying so, and it never escalates. The class
+is decided by a portable mirror in `lib/sync/findings.ts::deliveryClass` (the finding is built
+client-safe, with no database in reach — the `supplierCanon.ts` situation), **pinned** by
+`scripts/verify-findings.ts` against the rows migration `20260901115129`'s own comment enumerates
+and **proven against the live function**: over all **1,123 distinct `(batch_code, supplier,
+remarks)` triples in `deliveries` (1,751 rows), the mirror and `fn_delivery_class` agree on every
+one** — the same 41 non-market triples, the same classes. Only the `recook_refeed` arm is acted
+on, and that arm reads exactly the two fields this channel carries.
+
+**MEASURED, on the incident's own data.** Against the real workbook and the real eleven rows:
+**10 of 11 priced — 9 on the exact key, 1 on the uniqueness-gated fallback** (`LEA932` hers vs
+`LEA  9232` ours, which also EARNS the alias). The eleventh is the RE-COOKED fee row and it
+correctly stays unpriced: her only row with that date/weight/sacks names LABAO and neither side
+carries a plate, so §9.4 rung 3's independent-corroboration rule refuses it.
+
+**NO PYTHON ORACLE COVERS THIS.** `enrich` was never part of the classify oracle (§9 header), and
+the Python prices only the email's own rows. Recorded in `PORTING_DECISIONS.md` under
+*Apply-phase deviations*; `classify.ts` is byte-identical and parity stayed **12/12**.
+
 ---
 
 ## 10. The human-edit latch (2026-08-08) — a warning written as a comment is not a control

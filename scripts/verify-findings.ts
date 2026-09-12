@@ -20,6 +20,7 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 
 import {
+  deliveryClass,
   findingIdentity,
   flattenRunFindings,
   isCostKey,
@@ -1851,6 +1852,153 @@ check('L-049: a run with none of these channels is completely unchanged', () => 
   assert.deepEqual(flattenRunFindings(backfillRun()), [])
   assert.deepEqual(flattenRunFindings(aliasRun()), [])
   assert.deepEqual(flattenRunFindings(driftRun([])), [])
+})
+
+
+// ── L-050 (2026-09-12): the re-price pass, and WHICH SIDE is missing. ─────────
+//
+// THE REGRESSION THESE PIN: eleven deliveries sat at cost_basis = 0 while Czarina's
+// workbook — already downloaded into Storage — held every one of their rates. Price
+// enrichment ran ONLY inside the RC DELIVERIES email report, no report had arrived since
+// 09-09, and the `unpriced_overdue` alarm chased rows the sync itself was declining to
+// price while saying "either it is missing from Czarina's file, or the sync could not
+// match it" — two possibilities, neither of them what had happened.
+
+const overdueRow = (over: Partial<UnpricedOverdue> = {}): UnpricedOverdue => ({
+  id: 'dddddddd-0000-0000-0000-00000000000a',
+  transaction_date: '2026-09-09',
+  supplier: 'Ornales',
+  batch_code: 'SEPT-26-BLK3',
+  truck_plate: 'AAV 6111',
+  weight_kg: 17_985,
+  sacks: 520,
+  days_pending: 3,
+  ...over,
+})
+
+const overdueFinding = (over: Partial<UnpricedOverdue> = {}) =>
+  flattenRunFindings(priceRun([], [overdueRow(over)])).find((f) => f.kind === 'unpriced_overdue')!
+
+check('L-050: an overdue row says the sync NEVER LOOKED when no price file reached the run', () => {
+  const f = overdueFinding({ looked_in_file: false })
+  assert.match(f.reason, /was not in this run's mailbox window/)
+  assert.doesNotMatch(f.reason, /could not match it/)
+  assert.equal(f.data.looked_in_file, false)
+})
+
+check('L-050: …and says it DID look, naming the tabs, when the file was read', () => {
+  const f = overdueFinding({ looked_in_file: true, tabs_read: ['Sept. 2026'] })
+  assert.match(f.reason, /DID read Czarina's file this run \(Sept\. 2026\)/)
+  assert.deepEqual(f.data.tabs_read, ['Sept. 2026'])
+})
+
+check('L-050: a file read with NO month tab resolved is its own third answer', () => {
+  const f = overdueFinding({ looked_in_file: true, tabs_read: [] })
+  assert.match(f.reason, /resolved no month tab/)
+  assert.match(f.reason, /2026-09/)
+})
+
+check('L-050: an older payload (looked_in_file absent) keeps the ORIGINAL wording', () => {
+  const f = overdueFinding()
+  assert.match(f.reason, /Either it is missing from Czarina's file, or the sync could not match it/)
+  assert.equal('looked_in_file' in f.data, false)
+})
+
+check('L-050: a RE-COOK is a processing fee — chased, said so, and never escalated', () => {
+  const fee = overdueFinding({
+    supplier: 'RE-COOKED',
+    batch_code: 'SEPT-26-RECOOKED1',
+    truck_plate: null,
+    days_pending: 9,
+  })
+  assert.equal(fee.data.delivery_class, 'recook_refeed')
+  assert.equal(fee.severity, 'info', 'a fee must not out-shout an unpriced purchase')
+  assert.match(fee.reason, /PROCESSING FEE, not a purchase price/)
+  // …while an ordinary purchase at the same age still reads `high`.
+  assert.equal(overdueFinding({ days_pending: 9 }).severity, 'high')
+  assert.equal(overdueFinding({ days_pending: 9 }).data.delivery_class, 'market')
+})
+
+check('L-050: the mailbox weather never expires an acknowledgement', () => {
+  const looked = findingIdentity(overdueFinding({ looked_in_file: true, tabs_read: ['Sept. 2026'] }))
+  const didnt = findingIdentity(overdueFinding({ looked_in_file: false, tabs_read: [] }))
+  assert.equal(looked.fingerprint, didnt.fingerprint, 'same delivery, same problem')
+  assert.equal(
+    looked.contentHash,
+    didnt.contentHash,
+    'whether her file was in the window is about the RUN, not about this delivery',
+  )
+})
+
+check('L-050: a re-priced row is the quietest finding there is, and carries no rate', () => {
+  const f = flattenRunFindings(
+    priceRun([
+      priceNote({
+        kind: 'price_repriced',
+        transaction_date: '2026-09-10',
+        supplier: 'Paquibot',
+        truck_plate: 'MAN 3625',
+        sacks: 485,
+        weight_kg: 20_235,
+        matched_sheet: 'Sept. 2026',
+        matched_row: 21,
+        via: 'exact',
+        detail: 'This delivery was recorded without a price and has now been priced.',
+      }),
+    ]),
+  )[0]
+  assert.equal(f.kind, 'price_repriced')
+  assert.equal(f.severity, 'info')
+  assert.match(f.title, /has now been priced/)
+  assert.equal(f.location, `2026-09-10 ${'\u00B7'} MAN 3625`)
+  assert.equal(isCostKey('cost_basis'), true)
+  for (const k of Object.keys(f.data)) assert.equal(isCostKey(k), false, k)
+})
+
+check('L-050: a re-price that could not be SAVED is file-level and never `high`', () => {
+  const f = flattenRunFindings(
+    priceRun([priceNote({ kind: 'price_reprice_failed', rows_considered: 11 })]),
+  )[0]
+  assert.equal(f.severity, 'attention', 'nothing is wrong with any delivery')
+  assert.match(f.title, /could not save them/)
+  assert.match(f.title, /11 checked/)
+})
+
+// ── The `fn_delivery_class` mirror, pinned against the rows the migration enumerates. ──
+//
+// `public.fn_delivery_class` is THE definition. This copy exists because the finding is
+// built client-safe with no database in reach (the `supplierCanon.ts` situation). A mirror
+// without a drift check is worse than no mirror, so every case below is one the migration's
+// own comment (20260901115129) names as MEASURED, including the ones it deliberately calls
+// `market`. If SQL changes, change the mirror AND this corpus — the DB is authoritative.
+check('L-050: the delivery-class mirror reproduces fn_delivery_class on its documented rows', () => {
+  const cases: Array<[string | null, string | null, string | null, string]> = [
+    // recook_refeed — the batch code says so.
+    ['RECOOKED', null, null, 'recook_refeed'],
+    ['SEPT-26-RECOOKED1', 'RE-COOKED', null, 'recook_refeed'],
+    ['JULY-26-REFEED1', null, null, 'recook_refeed'],
+    // …and the two rows whose ONLY re-cook signal is in the SUPPLIER field.
+    ['NOV-24-BLK4', 'Re-cook', null, 'recook_refeed'],
+    ['OCT-25-FEED1', 'Re-cook/Lapayag bernie', null, 'recook_refeed'],
+    // sundry_reentry — and the one remark that takes a SUNDRY batch back out of it.
+    ['JAN-26-SUNDRY2', 'Layupan', null, 'sundry_reentry'],
+    ['NOV-25-SUNDRY4', 'Ornales', 'FOR SUNDRYING', 'market'],
+    // market — the FEEDING family is a PURCHASE, decided from evidence.
+    ['FEED', 'Paquibot', null, 'market'],
+    ['FEEDING # 2', 'Paquibot', null, 'market'],
+    ['AUG-26-FEED3', 'Ornales', null, 'market'],
+    ['FEED-PAQUIBOT', 'Paquibot', null, 'market'],
+    // …and the deliberate near-miss: '%SUNDR%' does not match 'SUN5'.
+    ['DEC-25-SUN5', 'Ornales', null, 'market'],
+    ['SEPT-26-BLK3', 'Ornales', null, 'market'],
+    [null, null, null, 'market'],
+  ]
+  for (const [batch, supplier, remarks, want] of cases) {
+    assert.equal(deliveryClass(batch, supplier, remarks), want, `${batch} / ${supplier}`)
+  }
+  // The two-argument call is the SQL function's own DEFAULTed call, so a NULL remark must
+  // leave a SUNDRY batch classed as a re-entry.
+  assert.equal(deliveryClass('JAN-26-SUNDRY2', 'Layupan'), 'sundry_reentry')
 })
 
 
