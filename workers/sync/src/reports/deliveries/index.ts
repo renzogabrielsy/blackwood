@@ -54,6 +54,10 @@ import {
   type ApplyResult,
   type UnpricedOverdue,
 } from "./apply.js";
+import {
+  repriceUnpricedDeliveries,
+  type RepriceResult,
+} from "./reprice.js";
 import { reportNotReceivedNote } from "../reportNotReceived.js";
 import { findStreamStatus } from "../../lib/streamStaleness.js";
 
@@ -209,6 +213,101 @@ export async function runReport(
   const primaryAtt = firstAttachment(manifest, "deliveries");
   const czarinaAtt = firstAttachment(manifest, "deliveries_czarina");
 
+  // ---------------------------------------------------------------------------
+  // THE PRICE FILE HAS TWO CONSUMERS NOW (2026-09-12, L-050).
+  //
+  // `deliveries_czarina` is fetched by the mail clerk INDEPENDENTLY of the RC DELIVERIES
+  // email — it always was — but until now only the email enrichment below could reach it.
+  // So on 2026-09-12, with no RC DELIVERIES report since 09-09, this function returned at
+  // the branch below, the price workbook was downloaded into Storage and thrown away, and
+  // eleven deliveries the Google Sheet had inserted sat at ₱0 while her `Sept. 2026` tab
+  // held every one of their rates. The email is a WITNESS to a delivery, not a GATE on its
+  // price. The file is therefore loaded ONCE here, lazily, and used by BOTH the email
+  // enrichment and the re-price pass that now runs at the end of BOTH branches.
+  // ---------------------------------------------------------------------------
+  let czarinaLoaded: { buf: Buffer; filename: string } | null = null;
+  let czarinaError: string | null = null;
+  let czarinaTried = false;
+  const loadCzarina = async (): Promise<{ buf: Buffer; filename: string } | null> => {
+    if (czarinaTried) return czarinaLoaded;
+    czarinaTried = true;
+    if (!czarinaAtt) return null;
+    try {
+      const path = await deps.fetchToLocalPath(czarinaAtt.storagePath);
+      czarinaLoaded = { buf: await readFile(path), filename: czarinaAtt.filename };
+    } catch (err) {
+      // Recorded, never thrown: the caller turns it into a note. A Storage failure on the
+      // price file must not take down a run that ingested deliveries correctly.
+      czarinaError = err instanceof Error ? err.message : String(err);
+      czarinaLoaded = null;
+    }
+    return czarinaLoaded;
+  };
+
+  // Rung 2 of the match ladder (learned aliases) and the result sanity check (per-supplier
+  // bands) both read the DB. Read ONCE and shared by both consumers of the ladder, so the
+  // two can never disagree about which spellings are known or what a supplier normally
+  // charges — the whole point of there being one matcher.
+  let priceInputs: { aliases: SourceAlias[]; priceBands: Map<string, PriceBand> } | null = null;
+  const loadPriceInputs = async (): Promise<{
+    aliases: SourceAlias[];
+    priceBands: Map<string, PriceBand>;
+  }> => {
+    if (!priceInputs) {
+      const [aliases, priceBands] = await Promise.all([
+        readSourceAliases(db),
+        readSupplierPriceBands(db, since),
+      ]);
+      priceInputs = { aliases, priceBands };
+    }
+    return priceInputs;
+  };
+
+  /**
+   * THE RE-PRICE PASS — ONE call site's worth of glue, used by both branches.
+   *
+   * Runs AFTER any apply (so a row this run inserted unpriced is a candidate immediately)
+   * and BEFORE the overdue read (so that alarm reflects what this just fixed). Returns the
+   * notes to add plus the context the overdue finding needs to say WHICH side is missing.
+   */
+  const runRepricePass = async (
+    alreadyNoted: readonly PriceNote[],
+  ): Promise<{ notes: PriceNote[]; result: RepriceResult | null }> => {
+    const czarina = await loadCzarina();
+    if (!czarina) return { notes: [], result: null };
+    const { aliases, priceBands } = await loadPriceInputs();
+    const result = await repriceUnpricedDeliveries({
+      db,
+      czarina,
+      aliases,
+      priceBands,
+      alreadyNoted,
+      since,
+      progress: emit,
+      runTs: deps.runTs,
+    });
+    await recordEarnedAliases(db, result.learned);
+    const notes = [...result.notes];
+    // A re-price FAILURE is a note, never an error: `errors[]` blocks the watermark bump
+    // and the Gmail label, and a price that could not be back-filled is not a reason to
+    // re-ingest a report that was ingested correctly. The row simply stays unpriced, and
+    // `unpriced_overdue` is already naming it.
+    if (result.errors.length) {
+      notes.push({
+        kind: "price_reprice_failed",
+        rows_considered: result.considered,
+        source_filename: czarina.filename,
+        tabs_loaded: result.tabs_read,
+        detail:
+          `The sync tried to fill in the price on deliveries that were recorded without ` +
+          `one, and could not finish: ${result.errors.join(" | ")} Nothing else in this ` +
+          `run is affected — those rows are still unpriced and will be tried again next ` +
+          `run.`,
+      });
+    }
+    return { notes, result };
+  };
+
   if (!primaryAtt) {
     // -------------------------------------------------------------------------
     // NO RC DELIVERIES REPORT AT ALL (L-044). This branch used to emit
@@ -241,13 +340,36 @@ export async function runReport(
       watermarkRow: wmRead.row,
     });
 
-    const overdueRead = await readUnpricedOverdue(db);
+    // -------------------------------------------------------------------------
+    // THE RE-PRICE PASS RUNS HERE TOO — AND THIS IS THE BRANCH IT WAS BUILT FOR
+    // (2026-09-12, L-050). A run with no RC DELIVERIES email is EXACTLY the run in
+    // which the Sheet is the only writer of `deliveries`, so it is exactly the run in
+    // which nothing else will ever price those rows. The same argument L-044 made about
+    // the overdue check applies with more force to the price step itself: reading the
+    // database and reading a workbook that is already in Storage have nothing to do with
+    // whether MC sent her report today.
+    // -------------------------------------------------------------------------
     const emptyNotes: PriceNote[] = [];
+    if (!czarinaAtt) {
+      // Said here as well as in the normal branch: with no email AND no price file, this
+      // run had no way to price anything at all, and silence would look like a quiet day.
+      emptyNotes.push(priceFileMissingNote(null));
+    }
+    const repricedEmpty = await runRepricePass(emptyNotes);
+    emptyNotes.push(...repricedEmpty.notes);
+    if (czarinaError) emptyNotes.push(priceFileFetchFailedNote(czarinaError));
+
+    const overdueRead = await readUnpricedOverdue(db);
     if (overdueRead.error) emptyNotes.push(unpricedCheckFailedNote(overdueRead.error));
+    const emptyOverdue = withPriceFileContext(
+      overdueRead.rows,
+      czarinaLoaded !== null,
+      repricedEmpty.result?.tabs_read ?? [],
+    );
 
     // Overdue first (pct 99), then the closing beat (pct 100) — the emitter keeps pct
     // monotonic, so a 99 emitted after a 100 would be clamped and read out of order.
-    await emitOverdueBeat(emit, overdueRead.rows);
+    await emitOverdueBeat(emit, emptyOverdue);
 
     const missed = notReceived.missed_working_days;
     await emit?.(
@@ -275,8 +397,10 @@ export async function runReport(
       watermark_updated: false,
       errors: [],
       price_notes: emptyNotes,
-      unpriced_overdue: overdueRead.rows,
-      delivery_human_edits: [],
+      unpriced_overdue: emptyOverdue,
+      // A row claimed by a human between this pass's read and its write. Normally empty;
+      // reported through the same constructor the email path uses, with the ₱ redacted.
+      delivery_human_edits: repricedEmpty.result?.human_edits ?? [],
       awaiting_batch_assignment: [],
       report_not_received: notReceived,
     };
@@ -336,17 +460,7 @@ export async function runReport(
   if (!czarinaAtt) {
     // Outcome 1 — an honest, materially different message from "the file broke".
     if (windowRows.length) {
-      priceNotes.push({
-        kind: "price_file_missing",
-        rows_considered: windowRows.length,
-        detail:
-          `No price file was found in the mailbox window, so none of the ${windowRows.length} ` +
-          `deliveries in this run could be priced — new rows carry the unpriced placeholder. ` +
-          `The sync looks for a workbook named "RAW CHARCOAL PURCHASES -Daily" from Czarina ` +
-          `within the last 5 days and deliberately ignores her other attachments, so this ` +
-          `means either nothing arrived or what arrived was named differently. Prices are ` +
-          `not supposed to lag — chase the file.`,
-      });
+      priceNotes.push(priceFileMissingNote(windowRows.length));
       await emit?.(
         "extract",
         "No price file came with today's report — new deliveries will be recorded unpriced.",
@@ -358,23 +472,22 @@ export async function runReport(
   } else if (windowRows.length) {
     await emit?.("extract", "Matching delivery prices from Czarina's file…", 40);
     try {
-      const czarinaPath = await deps.fetchToLocalPath(czarinaAtt.storagePath);
-      const czBuf = await readFile(czarinaPath);
+      // Loaded ONCE for the whole run (L-050) — the re-price pass at the end of this
+      // function reads the same bytes rather than fetching the workbook a second time.
+      const czarina = await loadCzarina();
+      if (!czarina) throw new Error(czarinaError ?? "the price file could not be fetched");
 
       // Rung 2 of the match ladder + the result sanity check both read the DB, so they
       // are gathered HERE and passed in as data — enrich itself stays pure/offline.
-      const [aliases, priceBands] = await Promise.all([
-        readSourceAliases(db),
-        readSupplierPriceBands(db, since),
-      ]);
+      const { aliases, priceBands } = await loadPriceInputs();
 
       // The FILENAME goes in with the bytes (L-044): `enrich` never matches on it, but
       // the finding it raises when nothing matched has to be able to say which workbook
       // it read, and that is the one fact this pipeline could not previously state.
-      priceSummary = await enrichPrices(czBuf, windowRows, {
+      priceSummary = await enrichPrices(czarina.buf, windowRows, {
         aliases,
         priceBands,
-        filename: czarinaAtt.filename,
+        filename: czarina.filename,
       });
       priceNotes.push(...priceSummary.notes);
 
@@ -500,17 +613,45 @@ export async function runReport(
   // `view_digest_unpriced_recent` count is now a thin projection of that same view),
   // so the sync and the Home digest can never disagree about what "unpriced" means.
   // ---------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
+  // THE RE-PRICE PASS (2026-09-12, L-050) — after apply, before the overdue read.
+  //
+  // AFTER apply so a row this very run inserted unpriced is a candidate immediately
+  // rather than a day later; BEFORE the overdue read so the chase below reflects what
+  // this pass just fixed instead of naming rows the same run has priced. It covers the
+  // rows the email's own window cannot reach: anything the Google Sheet inserted, and
+  // anything that has been waiting for a price longer than `watermark − 3 days` (the
+  // permanent-escape case measured in specs/deliveries.md §9.13).
+  // -------------------------------------------------------------------------
+  const repriced = await runRepricePass(priceNotes);
+  priceNotes.push(...repriced.notes);
+  if (repriced.result?.human_edits.length) {
+    apply.delivery_human_edits = [
+      ...apply.delivery_human_edits,
+      ...repriced.result.human_edits,
+    ];
+  }
+
   const overdueRead = await readUnpricedOverdue(db);
   // A FAILED read is reported, never swallowed (L-044). The bare `catch { return [] }`
   // this replaces made a broken check indistinguishable from a clean bill of health —
   // the exact shape of the "Price file unavailable" lie L-039 was written about.
   if (overdueRead.error) priceNotes.push(unpricedCheckFailedNote(overdueRead.error));
 
+  // WHICH SIDE IS MISSING (L-050). "Still unpriced" used to be all the chase could say,
+  // so an operator could not tell "her file does not have it yet" from "the sync never
+  // looked". Both facts are known here; both ride along.
+  const overdueRows = withPriceFileContext(
+    overdueRead.rows,
+    czarinaLoaded !== null,
+    unionTabs(priceSummary?.tabs_loaded, repriced.result?.tabs_read),
+  );
+
   // Attach both price channels to the apply envelope, so they become durable run
   // findings (lib/sync/findings.ts) rather than dying with the progress feed.
   apply.price_notes = priceNotes;
-  apply.unpriced_overdue = overdueRead.rows;
-  await emitOverdueBeat(emit, overdueRead.rows);
+  apply.unpriced_overdue = overdueRows;
+  await emitOverdueBeat(emit, overdueRows);
 
   return {
     classify: {
@@ -702,6 +843,73 @@ async function readUnpricedOverdue(
   } catch (err) {
     return { rows: [], error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/**
+ * "No price file in the mailbox window." Worded once, so the branch with an RC DELIVERIES
+ * report and the branch without one say the same thing about the same absence.
+ *
+ * `rowsConsidered` is null in the no-email branch: there are no extracted rows to count,
+ * and the deliveries that went unpriced are the ones already in the database — which
+ * `unpriced_overdue` names individually.
+ */
+function priceFileMissingNote(rowsConsidered: number | null): PriceNote {
+  const scope =
+    rowsConsidered === null
+      ? `no delivery could be priced this run`
+      : `none of the ${rowsConsidered} deliveries in this run could be priced — new rows ` +
+        `carry the unpriced placeholder`;
+  return {
+    kind: "price_file_missing",
+    rows_considered: rowsConsidered,
+    detail:
+      `No price file was found in the mailbox window, so ${scope}. The sync looks for a ` +
+      `workbook named "RAW CHARCOAL PURCHASES -Daily" within the last 5 days and ` +
+      `deliberately ignores other attachments, so this means either nothing arrived or ` +
+      `what arrived was named differently. Prices are not supposed to lag — chase the file.`,
+  };
+}
+
+/**
+ * The price workbook was in the manifest and could not be FETCHED out of Storage. A
+ * different fact from "no price file arrived" and from "the file is not a workbook", and
+ * the only one of the three that is an infrastructure problem rather than a mailbox one.
+ */
+function priceFileFetchFailedNote(message: string): PriceNote {
+  return {
+    kind: "price_file_unreadable",
+    detail:
+      `The price file was in this run's mailbox but could not be downloaded, so nothing ` +
+      `could be priced from it: ${message}. Deliveries already in the database keep the ` +
+      `unpriced placeholder until a later run can read it.`,
+  };
+}
+
+/** The tabs any price step read this run, in first-seen order and without repeats. */
+function unionTabs(...lists: Array<readonly string[] | undefined>): string[] {
+  const seen = new Set<string>();
+  for (const l of lists) for (const t of l ?? []) seen.add(t);
+  return [...seen];
+}
+
+/**
+ * Stamp every overdue row with WHAT THE SYNC ACTUALLY DID about it this run (L-050).
+ *
+ * The finding used to say only "still unpriced … either it is missing from Czarina's file,
+ * or the sync could not match it" — a sentence that was TRUE on 2026-09-12 and completely
+ * misleading, because the real answer was a third thing it could not express: the sync had
+ * not looked at all. These two fields are what let `lib/sync/findings.ts` tell the three
+ * apart, and they are per-row only because the finding is per-row; the facts are run-level.
+ *
+ * Neither field is a ₱ value and neither name is cost-ish (`isCostKey` would strip a key
+ * containing "price"), so both survive the findings channel intact.
+ */
+function withPriceFileContext(
+  rows: readonly UnpricedOverdue[],
+  lookedInFile: boolean,
+  tabsRead: readonly string[],
+): UnpricedOverdue[] {
+  return rows.map((r) => ({ ...r, looked_in_file: lookedInFile, tabs_read: [...tabsRead] }));
 }
 
 /**

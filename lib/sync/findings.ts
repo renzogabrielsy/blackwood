@@ -1396,6 +1396,9 @@ const PRICE_KIND_LABEL: Record<string, string> = {
   price_date_drift: 'Could not price — the only match is months away',
   price_out_of_band: 'Priced, but the rate is unlike this supplier',
   price_overdue_check_failed: 'The unpriced-delivery check could not run',
+  // L-050 (2026-09-12) — the re-price pass.
+  price_repriced: 'Price filled in on a delivery recorded without one',
+  price_reprice_failed: 'Found the price but could not save it',
 }
 
 /**
@@ -1414,6 +1417,11 @@ const PRICE_KIND_LABEL: Record<string, string> = {
  */
 function priceSeverity(kind: string): FindingSeverity {
   switch (kind) {
+    // L-050: a row that WAS unpriced and now is not. The quietest tier there is, because
+    // nothing is wrong — something was repaired — but still a durable finding, because the
+    // sync wrote a value onto a row that was already in the database.
+    case 'price_repriced':
+      return 'info'
     case 'price_tab_unresolved':
     case 'price_tab_ambiguous':
     case 'price_file_unreadable':
@@ -1442,7 +1450,10 @@ function fromPriceNote(n: PriceNote): RunFinding {
     kind === 'price_file_unreadable' ||
     kind === 'price_file_missing' ||
     kind === 'price_no_row_matched' ||
-    kind === 'price_overdue_check_failed'
+    kind === 'price_overdue_check_failed' ||
+    // L-050: names a COUNT of rows, not one truckload — each row it could not save is
+    // already named individually by `unpriced_overdue`.
+    kind === 'price_reprice_failed'
 
   // Location: the month for a file-level failure, else the delivery's date + plate.
   const rowLoc = [str(n.transaction_date), str(n.truck_plate)].filter(Boolean) as string[]
@@ -1475,6 +1486,18 @@ function fromPriceNote(n: PriceNote): RunFinding {
       ' — is that the right workbook?'
   } else if (kind === 'price_overdue_check_failed') {
     title = 'Could not check for unpriced deliveries — this run cannot say there are none'
+  } else if (kind === 'price_reprice_failed') {
+    // L-050. Names the count, not the rows: `unpriced_overdue` names each row by id in the
+    // same run, and this is the one sentence that says WHY they are all still at zero.
+    const considered = num(n.rows_considered)
+    title =
+      `Found prices for deliveries recorded without one, but could not save them` +
+      (considered == null ? '' : ` (${considered} checked)`)
+  } else if (kind === 'price_repriced') {
+    // L-050. The ONLY price finding that reports a REPAIR, so it is worded as one — and
+    // like every other note on this channel it names the truckload, never the rate.
+    const who = [str(n.supplier), str(n.truck_plate)].filter(Boolean).join(' ') || 'A delivery'
+    title = `${who}: was recorded without a price, and has now been priced`
   } else {
     const who = [str(n.supplier), str(n.truck_plate)].filter(Boolean).join(' ') || 'a delivery'
     // Never say "priced" for a kind that refused — `price_fuzzy_ambiguous` and
@@ -1553,6 +1576,43 @@ function fromPriceNote(n: PriceNote): RunFinding {
 function fromUnpricedOverdue(o: UnpricedOverdue): RunFinding {
   const who = [str(o.supplier), str(o.truck_plate)].filter(Boolean).join(' ') || 'A delivery'
   const days = o.days_pending === 1 ? '1 day' : `${o.days_pending} days`
+  const cls = deliveryClass(o.batch_code, o.supplier)
+  const tabs = (o.tabs_read ?? []).filter(Boolean)
+
+  // WHICH SIDE IS MISSING (2026-09-12, L-050). The old sentence — "either it is missing
+  // from Czarina's file, or the sync could not match it" — offered two possibilities and
+  // the truth was a THIRD: on 2026-09-12 the sync had not looked at all, because price
+  // enrichment only ran inside the RC DELIVERIES email report and no report had arrived
+  // since 09-09. Eleven Sheet-inserted deliveries were chased by an alarm about a lookup
+  // the sync itself was declining to perform. `looked_in_file` now decides the sentence,
+  // and `null` (an older payload) keeps the original wording rather than guessing.
+  let cause: string
+  if (o.looked_in_file === false) {
+    cause =
+      `Czarina's price file was not in this run's mailbox window, so nothing could be ` +
+      `matched against it — chase the file rather than this row.`
+  } else if (o.looked_in_file === true) {
+    cause = tabs.length
+      ? `The sync DID read Czarina's file this run (${tabs.join(', ')}) and still could not ` +
+        `find this truckload in it, so either it has not been entered on her side yet or ` +
+        `the two records spell it differently.`
+      : `The sync read Czarina's file this run but resolved no month tab out of it, so this ` +
+        `row was never compared against anything — check that her file has a tab for ` +
+        `${str(o.transaction_date)?.slice(0, 7) ?? 'that month'}.`
+  } else {
+    cause = `Either it is missing from Czarina's file, or the sync could not match it.`
+  }
+
+  // A RE-COOK IS A PROCESSING FEE, NOT A PURCHASE (L-050). `fn_delivery_class` is the ONE
+  // definition of what kind of arrival a row is; `recook_refeed` material was bought once
+  // already and what Czarina records against it is a fee of a peso or two, not a market
+  // rate. It is still chased — an unpriced row is an incomplete record whatever it cost —
+  // but it never escalates, because nothing about it is dragging a purchase average.
+  const isFee = cls === 'recook_refeed'
+  const feeNote = isFee
+    ? ` This is re-cooked or re-fed material, so what is missing is a PROCESSING FEE, not a ` +
+      `purchase price — it is reported for completeness and is deliberately not escalated.`
+    : ''
 
   return {
     key: `unpriced_overdue:${o.id}`,
@@ -1570,15 +1630,68 @@ function fromUnpricedOverdue(o: UnpricedOverdue): RunFinding {
       weight_kg: num(o.weight_kg),
       sacks: num(o.sacks),
       days_pending: o.days_pending,
+      delivery_class: cls,
+      // Neither key is cost-ish (`isCostKey` strips anything matching /cost|price|php|peso/),
+      // so both survive the findings channel — which is why they are not named `price_*`.
+      ...(o.looked_in_file == null ? {} : { looked_in_file: o.looked_in_file }),
+      ...(tabs.length ? { tabs_read: tabs } : {}),
     },
     reason:
       `This delivery has been in the database for ${days} with no price. Prices are not ` +
-      `supposed to lag — either it is missing from Czarina's file, or the sync could not ` +
-      `match it. Until a price lands, the batch's average cost is calculated from its ` +
-      `priced deliveries only, so this row is not dragging that figure down.`,
-    severity: o.days_pending >= 4 ? 'high' : 'attention',
+      `supposed to lag — ${cause} Until a price lands, the batch's average cost is ` +
+      `calculated from its priced deliveries only, so this row is not dragging that figure ` +
+      `down.${feeNote}`,
+    severity: isFee ? 'info' : o.days_pending >= 4 ? 'high' : 'attention',
     section: 'deliveries',
   }
+}
+
+/**
+ * WHAT KIND OF ARRIVAL a delivery row is — a portable mirror of the database's
+ * `public.fn_delivery_class(p_batch_code, p_supplier, p_remarks)`, which is THE definition
+ * and which every analytics view reads.
+ *
+ * ONLY the `recook_refeed` arm is acted on here, and that arm reads exactly the two fields
+ * this channel carries (`batch_code`, `supplier`). `remarks` is not published by
+ * `view_digest_unpriced_deliveries` and affects ONLY the `sundry_reentry` arm, so calling
+ * the SQL function with two arguments — which its own DEFAULTs make a legal call — is what
+ * this reproduces, exactly. A `sundry_reentry` verdict from here is therefore advisory and
+ * nothing branches on it.
+ *
+ * WHY A MIRROR AT ALL: the finding is built client-safe, in a module five client components
+ * import, with no database in reach — the same constraint that produced
+ * `supplierCanon.ts`'s mirror of `canonical_supplier()`. Like that one it is PINNED, not
+ * trusted: `scripts/verify-findings.ts` asserts it against the rows the migration's own
+ * comment enumerates (the RE-COOKED batch, the two deliveries whose only re-cook signal is
+ * in the supplier field, the FEEDING family that is deliberately `market`, and the
+ * `DEC-25-SUN5` near-miss). If the SQL changes, change this and that corpus with it — the
+ * database is authoritative, never this copy.
+ */
+export function deliveryClass(
+  batchCode: string | null | undefined,
+  supplier: string | null | undefined,
+  remarks?: string | null,
+): 'market' | 'sundry_reentry' | 'recook_refeed' {
+  const b = (batchCode ?? '').toUpperCase()
+  const s = (supplier ?? '').toUpperCase()
+  if (
+    b.includes('RECOOK') ||
+    b.includes('REFEED') ||
+    s.includes('REFEED') ||
+    s.includes('RE-FEED') ||
+    s.includes('RE FEED') ||
+    s.includes('RECOOK') ||
+    s.includes('RE-COOK') ||
+    s.includes('RE COOK')
+  ) {
+    return 'recook_refeed'
+  }
+  // `COALESCE(p_remarks, '') NOT ILIKE '%FOR SUNDR%'` — a NULL remark satisfies it, which
+  // is what makes the two-argument call behave identically to the SQL's own default.
+  if (b.includes('SUNDR') && !(remarks ?? '').toUpperCase().includes('FOR SUNDR')) {
+    return 'sundry_reentry'
+  }
+  return 'market'
 }
 
 /**
@@ -2236,6 +2349,14 @@ const VOLATILE_DATA_KEYS = new Set([
   'missed_working_days',
   'generated_at',
   'settled_at',
+  // L-050. Both describe THIS RUN's price step, not the delivery: whether a price
+  // workbook happened to be in the mailbox window and which month tabs it resolved. They
+  // belong in the finding because they tell an operator WHERE to go, but they must not
+  // expire an acknowledgement — "still unpriced, and today her file was not in the window"
+  // is the same situation an operator already answered, and re-alarming on the mailbox's
+  // weather is exactly the nagging this ledger exists to end.
+  'looked_in_file',
+  'tabs_read',
 ])
 
 /**
@@ -2289,7 +2410,10 @@ function isFileLevelPriceKind(kind: string): boolean {
     kind === 'price_file_unreadable' ||
     kind === 'price_file_missing' ||
     kind === 'price_no_row_matched' ||
-    kind === 'price_overdue_check_failed'
+    kind === 'price_overdue_check_failed' ||
+    // L-050: names a COUNT of rows, not one truckload — each row it could not save is
+    // already named individually by `unpriced_overdue`.
+    kind === 'price_reprice_failed'
   )
 }
 
@@ -2506,6 +2630,8 @@ const SHORT_KIND: Record<string, string> = {
   price_fuzzy_ambiguous: 'price match not unique',
   price_date_drift: 'price match too old',
   price_out_of_band: 'unusual rate',
+  price_repriced: 'price filled in',
+  price_reprice_failed: 'price not saved',
   unpriced_overdue: 'no price yet',
   awaiting_batch_assignment: 'no pile yet',
   report_generation_failed: 'no excel report',
@@ -2538,6 +2664,8 @@ const EXTRA_KIND_LABEL: Record<string, string> = {
   price_file_missing: 'No price file arrived',
   price_no_row_matched: 'Nothing matched the price file — wrong workbook?',
   price_overdue_check_failed: 'The unpriced-delivery check could not run',
+  price_repriced: 'Price filled in on a delivery recorded without one',
+  price_reprice_failed: 'Found the price but could not save it',
   report_not_received: 'The daily report never arrived',
   stale_stream_check_failed: 'The report-freshness check could not run',
   unpriced_overdue: 'Delivery still has no price',

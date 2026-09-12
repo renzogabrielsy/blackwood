@@ -215,7 +215,21 @@ export type PriceNoteKind =
   | "price_fuzzy_ambiguous"
   | "price_date_drift"
   | "price_out_of_band"
-  | "price_overdue_check_failed";
+  | "price_overdue_check_failed"
+  /**
+   * Raised by `reprice.ts`, not by this module: a delivery that was already in the
+   * database carrying the L-008 placeholder has now been priced from the workbook
+   * (2026-09-12, L-050). `info` — nothing is wrong, something was fixed — but durable,
+   * because the sync changed a value on an existing row.
+   */
+  | "price_repriced"
+  /**
+   * Also raised by `reprice.ts`: a price WAS found for a delivery already in the database
+   * and could not be saved (2026-09-12, L-050). `attention`, never `high` — nothing is
+   * wrong with the delivery, the row simply stays at the placeholder and
+   * `unpriced_overdue` keeps naming it.
+   */
+  | "price_reprice_failed";
 
 /**
  * One thing the price step wants a human to see. NEVER carries a ₱/cost value — the
@@ -279,6 +293,25 @@ export interface EnrichDeps {
   filename?: string | null;
 }
 
+/**
+ * Where ONE row's price came from. `index` is that row's position in the `rows` argument.
+ *
+ * Additive bookkeeping (2026-09-12, L-050), returned rather than written onto the row: the
+ * re-price pass has to be able to say "priced from <tab> row <n>" in an audit comment for a
+ * delivery that was ALREADY in the database, and the caller's rows are handed straight to
+ * `applyDeliveries`. Mutating them further would put matcher bookkeeping inside the payload
+ * of the write path; returning it keeps `enrichPrices`' only side effect the one it has
+ * always had — `row.cost_basis`.
+ */
+export interface PriceMatchProvenance {
+  index: number;
+  sheet: string;
+  row: number;
+  via: "exact" | "alias" | "fallback";
+  /** Set only on the fallback rung — how many days of drift its key allowed. */
+  date_tolerance_days: number | null;
+}
+
 export interface CzarinaMatch {
   /** FALSE only when the price file could not be used AT ALL (unreadable, or not one
    *  requested month resolved to a tab). A partial failure — some months resolved,
@@ -297,6 +330,8 @@ export interface CzarinaMatch {
   months_requested: string[];
   notes: PriceNote[];
   learned: EarnedAlias[];
+  /** One entry per row this call priced, in row order (L-050). Empty when nothing matched. */
+  matches: PriceMatchProvenance[];
 }
 
 // ---------------------------------------------------------------------------
@@ -459,6 +494,7 @@ export async function enrichPrices(
 ): Promise<CzarinaMatch> {
   const notes: PriceNote[] = [];
   const learned: EarnedAlias[] = [];
+  const matches: PriceMatchProvenance[] = [];
   const months = monthsSpanned(rows.map((r) => String(r.transaction_date)));
   const monthsRequested = months.map((m) => `${m.year}-${String(m.month).padStart(2, "0")}`);
 
@@ -474,6 +510,7 @@ export async function enrichPrices(
     months_requested: monthsRequested,
     notes,
     learned,
+    matches,
   });
 
   // -- open the workbook ----------------------------------------------------
@@ -590,7 +627,8 @@ export async function enrichPrices(
   let aliasHits = 0;
   let fallbackHits = 0;
 
-  for (const row of rows) {
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+    const row = rows[rowIndex];
     const ourDate = String(row.transaction_date).slice(0, 10);
     const ourCanon = canonicalSupplier(row.supplier);
     const ourPlate = normTruck(row.truck_plate as CellValue);
@@ -686,6 +724,13 @@ export async function enrichPrices(
 
     // ---- accept ----------------------------------------------------------
     row.cost_basis = hit.php_per_kg;
+    matches.push({
+      index: rowIndex,
+      sheet: hit._sheet,
+      row: hit._source_row,
+      via,
+      date_tolerance_days: fallbackTolerance,
+    });
     matched++;
     if (via === "exact") exactHits++;
     else if (via === "alias") aliasHits++;
@@ -832,6 +877,7 @@ export async function enrichPrices(
     months_requested: monthsRequested,
     notes,
     learned,
+    matches,
   };
 }
 
