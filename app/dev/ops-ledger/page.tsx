@@ -1,18 +1,20 @@
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
 import { ArrowRight } from 'lucide-react';
+
+import { requireDraftAccess } from './_shared/gate';
 
 // ═════════════════════════════════════════════════════════════════════════════════
 // /dev/ops-ledger — three interactive DRAFTS of the plant operations ledger.
 //
-// DEV ONLY, and gated exactly the way `/dev/table-playground` is: `notFound()` here in
-// production unless `TABLE_PLAYGROUND` is set, and the path is only added to the
-// middleware's `PUBLIC_PATHS` under the same condition. Two independent locks, either one
-// of which alone keeps these off the live site.
+// DEV DRAFTS, and they are meant to be REVIEWED ON THE LIVE SITE — which is why the gate
+// is an auth gate rather than `/dev/table-playground`'s env gate. In production these
+// render only for a signed-in Owner / Admin / Dev: an anonymous visitor is stopped by the
+// middleware's login wall, and a signed-in under-privileged one gets a 404. Locally they
+// are unrestricted. One definition, in `_shared/gate.ts`, called by all four pages.
 //
 // They read NOTHING. No Supabase client, no server action, no `view_*`: the whole thing
 // hangs off a deterministic in-memory mock in `_mock/`, so it is purely a conversation
-// about layout.
+// about layout — and there is no data behind the gate to leak even in principle.
 // ═════════════════════════════════════════════════════════════════════════════════
 
 export const dynamic = 'force-dynamic';
@@ -60,8 +62,8 @@ const DRAFTS: Draft[] = [
     },
 ];
 
-export default function OpsLedgerIndexPage() {
-    if (process.env.NODE_ENV === 'production' && !process.env.TABLE_PLAYGROUND) notFound();
+export default async function OpsLedgerIndexPage() {
+    await requireDraftAccess();
 
     return (
         <main className="min-h-dvh bg-background text-foreground">

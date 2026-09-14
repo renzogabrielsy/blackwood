@@ -1,11 +1,11 @@
-import { notFound } from 'next/navigation';
-
+import { requireDraftAccess } from '../_shared/gate';
 import { LedgerDraftC } from './ledger-c';
 
-// DEV ONLY. Same two independent locks as `/dev/table-playground`.
+// DEV DRAFT. In production this renders only for a signed-in Owner / Admin / Dev.
+// See `_shared/gate.ts`.
 export const dynamic = 'force-dynamic';
 
-export default function OpsLedgerDraftCPage() {
-    if (process.env.NODE_ENV === 'production' && !process.env.TABLE_PLAYGROUND) notFound();
+export default async function OpsLedgerDraftCPage() {
+    await requireDraftAccess();
     return <LedgerDraftC />;
 }

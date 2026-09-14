@@ -17,10 +17,30 @@ be able to:
 4. (later, prototyped here) **drop down on a single-row date** to see a breakdown of
    production — the second shift's stats and so on.
 
-**DEV ONLY, and it reads NOTHING.** No Supabase client, no server action, no `view_*`, no
-tenant module. Every figure comes from a deterministic in-memory mock. Gated twice, exactly
-as `/dev/table-playground` is: `notFound()` in production unless `TABLE_PLAYGROUND` is set,
-**and** the path is only added to the middleware's `PUBLIC_PATHS` under the same condition.
+**DEV DRAFTS, and they read NOTHING.** No Supabase client, no server action, no `view_*`,
+no tenant module. Every figure comes from a deterministic in-memory mock.
+
+**They are gated by ROLE, not by environment — deliberately, and it is the one place these
+differ from `/dev/table-playground`.** An env gate is right for a Playwright fixture, which
+must run with no credentials and must never be reachable in production. It is wrong for a
+design draft, because the person the drafts exist for reviews on the **live Vercel site**,
+where `NODE_ENV` is `production` and `TABLE_PLAYGROUND` is not set — every page would 404 on
+the only machine that matters. So, in production:
+
+1. **`middleware.ts` stops anonymous visitors.** `/dev/ops-ledger` is NOT in `PUBLIC_PATHS`,
+   so it sits behind the ordinary login wall like every other page and an unauthenticated
+   request is redirected to `/login`.
+2. **`_shared/gate.ts` stops under-privileged ones.** `requireDraftAccess()` calls
+   `isPrivileged()` — the canonical Owner/Admin/Dev gate in `lib/auth.ts`, the sibling of
+   `canViewPrices()` — and `notFound()`s otherwise. A 404 rather than a 403 on purpose: an
+   unfinished draft should not advertise that it exists to someone who may not open it.
+   Because it resolves the EFFECTIVE role via `getUserRole()`, an Owner "viewing as
+   Production" through the dev-role switcher is correctly refused.
+3. **There is no data behind the gate to leak** even in principle.
+
+**Outside production the gate returns immediately** — local work on a layout draft should
+not need a role. The middleware's login wall still applies locally, because removing the
+public-path entry removed it everywhere; that is the intended trade.
 
 ## THE UNIFICATION THESIS
 
@@ -49,6 +69,7 @@ app/dev/ops-ledger/
 │   │                        CampaignRollup, OpsLedgerData. No layout imports Supabase.
 │   └── data.ts              the static ADAPTER: deterministic generator + OPS_LEDGER_DATA
 ├── _shared/
+│   ├── gate.ts              requireDraftAccess() — THE gate, called by all four pages
 │   ├── format.ts            kg · tons · php · phpM · pctFromFraction · hours · count
 │   ├── aggregate.ts         GroupDefinition, GROUP_PRESETS, groupRollup()
 │   ├── column-groups.ts     COLUMN_GROUPS registry + LENS_PRESETS (the thesis, as data)
@@ -62,9 +83,15 @@ app/dev/ops-ledger/
 └── c/{page.tsx, ledger-c.tsx}   Draft C — Split lens
 ```
 
-**Nothing outside this directory changed except `middleware.ts`** (one `PUBLIC_PATHS.push`
-inside the existing dev-gate block). No file under `components/shared/`, `components/ui/`,
-`lib/` or any tenant module was touched.
+**Nothing outside this directory changed except `middleware.ts`**, and there the net effect
+is a comment: the drafts are not added to `PUBLIC_PATHS` at all, and the
+`/dev/table-playground` entry beside them is untouched. No file under `components/shared/`,
+`components/ui/`, `lib/` or any tenant module was modified — `lib/auth.ts` is *read* by the
+gate, not changed.
+
+The gate lives in one shared function rather than four copies of the same three lines, for
+the reason `isPrivileged()`'s own docstring gives: *"a gate that is copied is a gate that
+gets forgotten."* A fifth draft page added later calls `requireDraftAccess()` and is covered.
 
 ## What each draft explores
 
@@ -149,10 +176,16 @@ Rendered in Chromium at **1512 light**, **1512 dark** and **375**, with an expan
 on each draft and the RC Movement lens on each — 19 screenshots, zero page errors, zero
 horizontal overflow.
 
+**Note for anyone automating against these pages:** they now sit behind the login wall in
+every environment, so a headless run needs a session — the screenshots above were taken
+while the route was still public. `/dev/table-playground` is unaffected and remains the
+credential-free fixture the Playwright suite drives.
+
 ## Dependencies
 
 `@/components/shared/table` (A and B), `@/lib/table`, `@/lib/hooks/use-table-edits`,
-`@/components/ui/{popover,input,sheet}`, `@/lib/utils`, `lucide-react`. Nothing else.
+`@/components/ui/{popover,input,sheet}`, `@/lib/utils`, `@/lib/auth` (the gate only),
+`lucide-react`. Nothing else.
 
 ## See also
 

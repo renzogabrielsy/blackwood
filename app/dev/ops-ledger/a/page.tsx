@@ -1,12 +1,12 @@
-import { notFound } from 'next/navigation';
-
+import { requireDraftAccess } from '../_shared/gate';
 import { LedgerDraftA } from './ledger-a';
 
-// DEV ONLY. Same two independent locks as `/dev/table-playground`: this `notFound()`, and
-// the middleware only adding `/dev/ops-ledger` to `PUBLIC_PATHS` under the same condition.
+// DEV DRAFT. In production this renders only for a signed-in Owner / Admin / Dev; an
+// anonymous visitor never gets here (the middleware's login wall), and a signed-in
+// under-privileged one gets a 404. See `_shared/gate.ts` for the full reasoning.
 export const dynamic = 'force-dynamic';
 
-export default function OpsLedgerDraftAPage() {
-    if (process.env.NODE_ENV === 'production' && !process.env.TABLE_PLAYGROUND) notFound();
+export default async function OpsLedgerDraftAPage() {
+    await requireDraftAccess();
     return <LedgerDraftA />;
 }

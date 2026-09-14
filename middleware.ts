@@ -51,17 +51,15 @@ export async function middleware(request: NextRequest) {
   // identical condition and 404s, so the two locks are independent and either one alone
   // keeps it off the live site.
   //
-  // `/dev/ops-ledger` (the three plant-operations-ledger drafts) is gated by the SAME
-  // condition and for the same reason: it is three layout drafts mounted on a deterministic
-  // in-memory mock, with no Supabase client, no server action and no tenant import anywhere
-  // beneath it. Its own `page.tsx` files each carry the identical `notFound()`, so the two
-  // locks stay independent.
+  // Note `/dev/ops-ledger` is deliberately NOT here. Those pages are design drafts meant to
+  // be reviewed on the live site, so they are gated by ROLE rather than by environment
+  // (`app/dev/ops-ledger/_shared/gate.ts`) and sit behind this login wall like every other
+  // page. A fixture needs to run with no credentials; a draft does not.
   if (
     process.env.NODE_ENV !== 'production' ||
     process.env.TABLE_PLAYGROUND
   ) {
     PUBLIC_PATHS.push('/dev/table-playground')
-    PUBLIC_PATHS.push('/dev/ops-ledger')
   }
 
   const isPublic = PUBLIC_PATHS.some((p) =>
