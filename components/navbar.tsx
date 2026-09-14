@@ -82,6 +82,10 @@ const BREADCRUMB_REGISTRY: BreadcrumbEntry[] = [
     // Owner analytics — the month-on-month room. The digest at `/` is the daily
     // gateway; this is where a KPI is read across months, quarters and years.
     { test: prefix('/analytics'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Analytics', pageDescription: 'ICTC month-on-month KPIs — price, volume, stock & runway' },
+    // The plant operations ledger — Renzo's `Q3` day sheet + its `EOQ` rollup, on the
+    // production-batch clock. Sibling of Analytics: that room reads a KPI across
+    // months, this one reads a DAY inside a campaign.
+    { test: prefix('/operations'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Operations', pageDescription: 'Plant operations ledger — day rows on the campaign clock, with the EOQ rollup' },
     { test: prefix('/summaries'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Summaries', pageDescription: 'Delivery price & volume analysis — by period or supplier' },
     // Shipments — export-doc readiness + ZIP download (Trello-backed). Detail route
     // (`/shipments/<cardId>`) matches the same prefix; the shared title is fine.
@@ -156,6 +160,7 @@ const ICTC_INVENTORY: Module[] = [
 // ICTC / Davao top-level modules shown as siblings BELOW the Inventory sub-group.
 const ICTC_MODULES: Module[] = [
     { name: 'Analytics', href: '/analytics' },
+    { name: 'Operations', href: '/operations' },
     { name: 'Production', href: '/production' },
     { name: 'Summaries', href: '/summaries' },
     { name: 'Shipments', href: '/shipments' },

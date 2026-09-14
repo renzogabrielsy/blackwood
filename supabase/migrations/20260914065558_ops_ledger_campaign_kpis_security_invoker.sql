@@ -1,0 +1,14 @@
+-- REPAIR (2026-09-14). `20260914033037_ops_ledger.sql` §10 sets security_invoker on
+-- all EIGHT view_ops_ledger_* views, but the live DB carried it on only seven:
+-- `view_ops_ledger_campaign_kpis` had NO reloptions at all, i.e. it was running as
+-- its OWNER for every caller. Found by the new fn_ops_ledger_verify_posture()
+-- (not_security_invoker = 1 of 8) — the first thing the replacement probe caught.
+--
+-- This matters more on this view than on any of its siblings: it is the one that
+-- carries seven ₱ columns, and a definer-semantics view applies the OWNER's
+-- privileges to every relation underneath it regardless of who is asking. That is
+-- precisely the shape CLAUDE.md's L-044 rule forbids ("do NOT fix a grant problem
+-- by re-rooting a view to security_definer"), arrived at by accident rather than
+-- by decision. ALTER VIEW … SET does not touch grants, so the existing
+-- authenticated-SELECT / anon-REVOKE / no-service_role posture is unchanged.
+alter view public.view_ops_ledger_campaign_kpis set (security_invoker = true);
