@@ -69,12 +69,20 @@ describe("PD-5 / L-014 — dt_mins>=60 split", () => {
     expect(split(125)).toEqual({ dt_hrs: 2, dt_mins: 5 });
   });
 
-  it("the real edge workbook (07-04-26, 125 min) emits the split, DB-CHECK-valid", async () => {
+  it("the real edge workbook (07-04-26) emits the split, DB-CHECK-valid", async () => {
+    // L-051 MOVED THE INPUT. This sheet's DURATION cell says "60 MINUTES / 65 MINUTES"
+    // (125) while its own time ranges — 8:00-9:00 and 10:00-10:30 — add up to 90. The
+    // ranges are now the reading, so the split is 1 h 30, not 2 h 05, and the run raises
+    // a `downtime_duration_mismatch` note naming both figures. PD-5 itself is unchanged:
+    // 90 >= 60, so it still splits, and dt_mins is still < 60.
     const mc = extractMc(await loadMc("production_mc_edge.xlsx"), 2026, "2026-01-01");
     expect(mc.downtime).toHaveLength(1);
     const dt = mc.downtime[0] as DowntimeRow;
-    expect(dt.dt_hrs).toBe(2);
-    expect(dt.dt_mins).toBe(5);
+    expect(dt.dt_hrs).toBe(1);
+    expect(dt.dt_mins).toBe(30);
+    expect(dt._duration_mins).toBe(125);
+    expect(dt._ranges_mins).toBe(90);
+    expect(dt._duration_disagrees).toBe(true);
     // The whole point of the deviation: dt_mins is now < 60, so the DB CHECK holds.
     expect(dt.dt_mins).toBeLessThan(60);
   });
@@ -422,14 +430,23 @@ describe("3Q layout shift — anchor-based section location", () => {
     expect(kca!.fuel_liters).toBe(140);
   });
 
-  it("a non-empty downtime row is recovered for 07-08 (dt_mins=28, DB-CHECK-valid < 60)", async () => {
+  it("a non-empty downtime row is recovered for 07-08 (145 min = 2 h 25, DB-CHECK-valid < 60)", async () => {
+    // L-051: this day lists THREE stoppages — 8:00-8:28 (28), 8:50-9:00 (10) and
+    // 12:08 PM-1:55 PM (107) = 145 — while its DURATION cell says only "28 MINUTES",
+    // the first of the three. The section is still located by the same anchor; only the
+    // figure moved, and it moved because the extractor now reads the whole list.
     const mc = extractMc(await loadMc("production_mc_3q.xlsx"), 2026, "2026-06-25");
     const dt = mc.downtime.find((d) => d._source_sheet === "07-08-26") as DowntimeRow | undefined;
     expect(dt).toBeDefined();
-    expect(dt!.dt_mins).toBe(28);
-    expect(dt!.dt_hrs).toBe(0);
+    expect(dt!.dt_hrs * 60 + dt!.dt_mins).toBe(145);
+    expect(dt!.dt_hrs).toBe(2);
+    expect(dt!.dt_mins).toBe(25);
     expect(dt!.dt_mins).toBeLessThan(60);
     expect(dt!.dt_reason).toContain("REPAIR");
+    expect(dt!.dt_ranges).toBe("8:00 AM-8:28 AM; 8:50 AM-9:00 AM; 12:08 PM-1:55 PM");
+    // 07-08 ran OVERTIME with real kilos in the runs block.
+    expect(dt!.shift_hrs).toBe(12);
+    expect(dt!.shift_hrs_source).toBe("overtime_signal");
   });
 
   it("day totals are recovered from the shifted TOTAL row (07-08 = 26738)", async () => {
@@ -444,10 +461,14 @@ describe("3Q layout shift — anchor-based section location", () => {
     const mc = extractMc(await loadMc("production_mc_edge.xlsx"), 2026, "2026-01-01");
     expect(mc.downtime).toHaveLength(1);
     const dt = mc.downtime[0] as DowntimeRow;
-    expect(dt.dt_hrs).toBe(2); // 125 min → PD-5 split
-    expect(dt.dt_mins).toBe(5);
+    expect(dt.dt_hrs).toBe(1); // 90 min of ranges → PD-5 split (L-051 moved the input)
+    expect(dt.dt_mins).toBe(30);
     expect(dt.dt_reason).toBe("REPAIR | belt change; motor");
     expect(dt.remarks).toBe("Time ranges: 8:00-9:00; 10:00-10:30");
+    expect(dt.dt_ranges).toBe("8:00-9:00; 10:00-10:30");
+    // No OVERTIME label on this stripped sheet, and no CHARCOAL FED block at all.
+    expect(dt.shift_hrs).toBe(8);
+    expect(dt.shift_hrs_source).toBe("default_8h");
     expect(mc.electricity).toEqual([]);
     expect(mc.trucks).toEqual([]);
     expect(mc.dayTotals["2026-07-04"]).toBe(37048);

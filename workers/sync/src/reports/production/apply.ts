@@ -103,6 +103,72 @@ export interface ProductionHumanEdit {
   outcome: string;
 }
 
+/**
+ * ONE production day where MC's typed DURATION total disagrees with her own list of stop
+ * times, or where no time range could be read at all (L-051). Panel-visibility only: the
+ * row is WRITTEN either way, from the time ranges, so nothing is held. Shape mirrors
+ * `app/(app)/sync/types.ts::DowntimeNote` exactly.
+ */
+export interface DowntimeNote {
+  kind: string;
+  transaction_date: string;
+  production_batch: string | null;
+  duration_mins: number | null;
+  ranges_mins: number | null;
+  minutes_source: string;
+  dt_ranges: string | null;
+  shift_hrs: number | null;
+  shift_hrs_source: string | null;
+  warnings: string[];
+}
+
+/** Cap on the per-row parse complaints carried into a note (a cell cannot be endless). */
+const DOWNTIME_NOTE_WARNING_CAP = 8;
+
+/**
+ * Build one note per downtime DAY that needs one, from the extractor's own underscore
+ * fields on the classify record.
+ *
+ * Keyed by DATE, not by classification: a changeover day emits TWO downtime rows (the
+ * L-007 output split) carrying the same source cell, and the sheet's two halves
+ * disagreeing is ONE fact about ONE day. Raised for EVERY extracted downtime row,
+ * whatever its class — a NOOP row read from a disagreeing sheet is exactly as worth
+ * saying as a newly inserted one, and staying silent on the second run would make the
+ * warning look like it had been resolved.
+ */
+export function buildDowntimeNotes(sections: ProductionSections): DowntimeNote[] {
+  const byDate = new Map<string, DowntimeNote>();
+  for (const c of sections.downtime ?? []) {
+    const rec = (c.record ?? {}) as Row;
+    const date = typeof rec.transaction_date === "string" ? rec.transaction_date : null;
+    if (!date || byDate.has(date)) continue;
+
+    const source = typeof rec._minutes_source === "string" ? rec._minutes_source : "ranges";
+    const disagrees = rec._duration_disagrees === true;
+    const unreadable = source === "duration";
+    if (!disagrees && !unreadable) continue;
+
+    const numOrNull = (v: unknown): number | null => (typeof v === "number" ? v : null);
+    byDate.set(date, {
+      kind: unreadable ? "downtime_ranges_unreadable" : "downtime_duration_mismatch",
+      transaction_date: date,
+      production_batch: typeof rec.production_batch === "string" ? rec.production_batch : null,
+      duration_mins: numOrNull(rec._duration_mins),
+      ranges_mins: numOrNull(rec._ranges_mins),
+      minutes_source: source,
+      dt_ranges: typeof rec.dt_ranges === "string" ? rec.dt_ranges : null,
+      shift_hrs: numOrNull(rec.shift_hrs),
+      shift_hrs_source:
+        typeof rec.shift_hrs_source === "string" ? rec.shift_hrs_source : null,
+      warnings: Array.isArray(rec.warnings)
+        ? (rec.warnings as unknown[]).filter((w): w is string => typeof w === "string")
+            .slice(0, DOWNTIME_NOTE_WARNING_CAP)
+        : [],
+    });
+  }
+  return [...byDate.values()];
+}
+
 export interface ProductionCompact {
   report_type: string;
   since: string;
@@ -141,6 +207,8 @@ export interface ApplyResult {
   production_batch_starts: ProductionBatchStart[];
   /** Rows the sync refused to overwrite because a human owns them. */
   production_human_edits: ProductionHumanEdit[];
+  /** Downtime days whose typed total and listed stop times disagree (L-051). */
+  downtime_notes: DowntimeNote[];
 }
 
 /** Human label for a production child record: "2026-06-30 · JUNE-26 · Morning · runs". */
@@ -402,7 +470,12 @@ export async function applyProduction(compact: ProductionCompact, deps: ApplyDep
 
   // ── 3. downtime (no remarks col) + waste ──
   const childSpecs: Array<[keyof ProductionSections, string[], string]> = [
-    ["downtime", ["shift_hrs", "dt_hrs", "dt_mins", "dt_reason"], "production_downtime"],
+    // L-051: dt_ranges + shift_hrs_source joined the column list on 2026-09-14.
+    [
+      "downtime",
+      ["shift_hrs", "dt_hrs", "dt_mins", "dt_reason", "dt_ranges", "shift_hrs_source"],
+      "production_downtime",
+    ],
     ["waste", [...WASTE_STREAMS, "remarks"], "production_waste"],
   ];
   for (const [secName, cols, table] of childSpecs) {
@@ -669,5 +742,6 @@ export async function applyProduction(compact: ProductionCompact, deps: ApplyDep
     errors,
     production_batch_starts: compact.batch_starts ?? [],
     production_human_edits: humanEdits,
+    downtime_notes: buildDowntimeNotes(sections),
   };
 }

@@ -1415,3 +1415,116 @@ Files: `workers/sync/src/reports/deliveries/{reprice,index,enrich,apply}.ts`,
 `app/(app)/sync/types.ts`, `scripts/verify-findings.ts`.
 Tests: `workers/sync/test/reports/deliveries-reprice.test.ts` (12).
 Specs: `deliveries.md` §9.14, `PORTING_DECISIONS.md`.
+
+---
+
+## L-051 — A DURATION A HUMAN TYPES IS A SUMMARY OF A LIST THEY ALSO TYPED. READ THE LIST. (2026-09-14)
+
+**An entire month of production showed almost zero downtime.** Renzo: *"production isn't
+properly grabbing downtime data from the scan. An entire recent month shows almost zero
+downtime and 12-hour shifts, which is inaccurate."* Measured against the live database:
+**August 2026 published 0.00 downtime hours across 23 of 23 rows, September 0.00 across 10 of
+10** — every one of them "reason present, no parseable minutes" — and every row the sync has
+ever written carried `shift_hrs = 12`.
+
+Nothing was missing from the workbook. MC's downtime block records each stoppage **TWICE**:
+column C is the LIST of time ranges, in the order the plant stopped and restarted, and column
+E is a hand-written DURATION total. The extractor read column E and only column E. On
+**2026-08-01 MC stopped filling column E** and never resumed, so from that day the sync read a
+blank cell as zero minutes while the sheet beside it said, for 2026-09-03,
+`8:00-8:07` and `9:50-11:41` — **118 minutes**.
+
+**And July, which looked fine, was wrong too.** Where the DURATION cell WAS filled it usually
+summarised only the FIRST range: 2026-07-04 lists `8:00 AM-8:07 AM` and `12:20 PM-1:30 PM` (7
++ 70 = **77 min**) against a DURATION of `7 MINUTES`; 2026-07-08 lists three stoppages
+totalling **145 min** against `28 MINUTES`; 2026-07-25 lists three against one. Only 2026-07-23
+wrote both. **A third defect hid inside the same cell**: the old parse stripped every
+non-digit, so `"1 HOUR & 40 MINUTES"` became the number **140** — neither the hours, nor the
+minutes, nor their sum (100).
+
+### The rules
+
+**1. THE LIST IS THE READING; THE TYPED TOTAL IS A CROSS-CHECK.** Minutes come from the time
+ranges. When the DURATION cell also parses and differs by more than a minute, **the ranges
+win** and the run raises a `downtime_duration_mismatch` finding (`attention`) naming BOTH
+figures — the row is written either way, so nothing is held; what is uncertain is whether the
+SHEET needs fixing. A BLANK duration cell is not a disagreement: it states nothing. When no
+range can be read at all the DURATION is still used (the old behaviour) and the run says so
+(`downtime_ranges_unreadable`). Generalising: **when a source states the same fact as a list
+and as a total, the list is the primary and the total is the check** — a human recomputes a
+total by hand and stops doing it; they do not stop writing down what happened.
+
+**2. THE PLANT DAY STARTS AT 08:00, SO A MERIDIEM-LESS TIME IS DECIDABLE.** Since August MC
+writes bare times (`12:58-1:05`, `3:00-3:09`, `4:00-5:00`). Every downtime block in both
+surviving workbooks opens with an `8:00` range, so an hour of **1–7 is the afternoon** and
+**8–12 is the morning** (12 = noon; `NN` is MC's own noon marker). That is the operator's
+convention read off the data, not a guess.
+
+**3. AN UNMEASURABLE SPAN COUNTS ZERO AND IS NAMED — NEVER INVENTED.** A start with no end
+(`3:22 PM`, the truncated `3:55 PM-`) is an event mark, not a stoppage; it contributes 0 and
+raises a warning. A span that ends before it starts is refused the same way. **The one
+exception is decided by a POSITIVE signal**: a cell with NO dashed span anywhere but several
+bare times is the brown-out shape (2026-08-05: `8:00 / 8:22 / 3:00 / 3:09` against `BROWN OUT
+DLPC / START GENSET / POWER IS BACK / START OPERATION` = 31 min), so consecutive marks pair
+into spans — and ONLY then, so a lone mark sitting beside a real range can never be glued to
+the next line.
+
+**4. `shift_hrs` IS DERIVED, AND THE BASIS TRAVELS WITH THE NUMBER.** It was the literal `12`.
+No cell in the workbook states the shift length (both surviving workbooks were scanned for
+one), so it now comes from whether the day ran overtime — **12 h** on an OVERTIME signal,
+**8 h** otherwise — from either of two independent signals, each testing the NUMBER and not
+the label: a runs row labelled `OVERTIME` in column H that produced kilos, or the CHARCOAL FED
+`OVERTIME` row carrying sacks. A printed `OVERTIME` row reading 0 is not a signal.
+`production_downtime.shift_hrs_source` records which rule fired, because a derived number
+nobody can audit is a constant with extra steps.
+
+**5. THE SOURCE TEXT IS KEPT.** `production_downtime.dt_ranges` stores MC's list verbatim.
+Until now the extractor built it, called it `remarks`, and the apply DROPPED it — the one
+piece of evidence that would have made this bug visible from the database was computed and
+thrown away every single run. It is never an input to any calculation.
+
+**6. A HUMAN'S CURATED NUMBER IS NOT REPLACED BY A PARSER'S.** The backfill stops at
+**2026-05-25**, the first sync-written row. The 158 rows before it came from Renzo's
+`MASTER ICTC INPUT FILE V1.xlsx` and carry `shift_hrs = 9` — and on 2026-04-21/22 his file
+records **4 minutes** where the ranges read **309**, because that sheet's own reason says *"NO
+STOPPING OF OPERATION"*. Re-reading those rows would have overwritten a person's judgement
+with an arithmetic that cannot read English.
+
+### Measured effect of the backfill (62 rows, all applied, zero refused)
+
+| month | rows | downtime hrs before → after | shift 12h → 8h |
+|---|---|---|---|
+| 2026-05 | 3 | 1.08 → 2.83 | 3 |
+| 2026-07 | 26 | 9.47 → 22.32 | 12 |
+| 2026-08 | 23 | **0.00 → 17.43** | 23 |
+| 2026-09 | 10 | **0.00 → 8.60** | 10 |
+| **total** | **62** | **10.55 → 51.18** | **48** |
+
+**JUNE 2026 (23 rows) is out of reach and is reported as such, not skipped in silence** — no
+MC workbook covering June survives in `sync-inbox` (the 2Q file ends 2026-05-27 and the 3Q
+file begins 2026-07-01), so its DURATION-derived 19.63 h stands until someone re-sends it.
+
+**Two things a reader should know rather than discover.** (a) **2026-08-11 now reads 3 h 37 m
+from a single `8:00-11:37` range whose reason ends "NO STOP OPERATION"** — the plant kept
+running through that repair. It is the only such row in the backfilled population; the range
+is preserved in `dt_ranges` and the annotation in `dt_reason`, and it was NOT special-cased,
+because inferring downtime from free-text English is exactly the kind of guess this ledger
+exists to forbid. (b) **Three different shift lengths are now in the system** — 9 in Renzo's
+master rows, 8 derived here and in the app's ledger, 12 on an overtime day. **Renzo should
+confirm which is right**; if it is 9, `DEFAULT_SHIFT_HRS` and `ledger-derive.ts` move
+together, and they must never disagree again.
+
+Extractor and apply layer only; classify gained two diffed fields. Migration
+`20260914013652_downtime_ranges_and_shift_hrs_source` adds `dt_ranges` +
+`shift_hrs_source` and puts both in `fn_apply_production_upstream`'s allowlist (a column the
+classifier can diff must be a column the RPC can write, or one unknown key refuses the WHOLE
+op). The Python oracle reads only the DURATION and is unported, so this is a registered
+expected deviation, not a porter bug: **parity stayed 12/12** with the PD-5 note extended and
+a new `L-051` entry scoped to `/downtime/**`.
+
+Files: `workers/sync/src/reports/production/{downtimeRanges,shiftHours,extractMc,classify,apply,index}.ts`,
+`workers/sync/scripts/backfill-downtime-ranges.ts`, `lib/sync/{findings,cases-fold}.ts`,
+`app/(app)/sync/types.ts`, `supabase/migrations/20260914013652_*.sql`, `types/supabase.ts`.
+Tests: `production-downtime-ranges.test.ts` (29), `production-downtime-extract.test.ts` (5),
+`scripts/verify-findings.ts` (+5, 82 → 87).
+Specs: `production.md` §2 Section B, `PORTING_DECISIONS.md`.

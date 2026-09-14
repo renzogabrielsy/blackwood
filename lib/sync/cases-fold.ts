@@ -21,6 +21,7 @@ import type {
   ProductionBatchStart,
   ProductionHumanEdit,
   DeliveryHumanEdit,
+  DowntimeNote,
   RcMovementDrift,
   RcOutBackfill,
   ReportArtifact,
@@ -303,6 +304,29 @@ export function collectRcMovementDrifts(result: SyncRunResult): CollectedRcMovem
   }
 
   return drifts.map((drift) => ({ drift, heldOnDate: heldByDate.get(drift.date) ?? [] }))
+}
+
+/**
+ * Flatten every downtime day whose two halves disagree — MC's hand-written DURATION cell
+ * against her own list of time ranges (`result.reports.production.apply.downtime_notes`,
+ * L-051). Only the `production` report fills it, but the fold is generic + guarded so a
+ * hand-built or pre-feature result simply yields [].
+ *
+ * Like `collectSourceTabNotes` these are NOT folded into durable cases: the row was
+ * written with the ranges' figure either way, so there is nothing held and nothing to
+ * close by hand — the note stops firing the moment the sheet's two halves agree.
+ */
+export function collectDowntimeNotes(result: SyncRunResult): DowntimeNote[] {
+  const reports = result.reports
+  if (!reports) return []
+
+  const out: DowntimeNote[] = []
+  for (const key of Object.keys(reports) as SyncReportType[]) {
+    const report = reports[key]
+    if (!report) continue
+    for (const note of report.apply?.downtime_notes ?? []) out.push(note)
+  }
+  return out
 }
 
 export function collectSourceTabNotes(result: SyncRunResult): SourceTabNote[] {
