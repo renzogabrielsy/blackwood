@@ -1263,6 +1263,7 @@ export type Database = {
         Row: {
           created_at: string
           dt_hrs: number
+          dt_incident_ranges: string | null
           dt_mins: number
           dt_ranges: string | null
           dt_reason: string | null
@@ -1276,6 +1277,7 @@ export type Database = {
         Insert: {
           created_at?: string
           dt_hrs?: number
+          dt_incident_ranges?: string | null
           dt_mins?: number
           dt_ranges?: string | null
           dt_reason?: string | null
@@ -1289,6 +1291,7 @@ export type Database = {
         Update: {
           created_at?: string
           dt_hrs?: number
+          dt_incident_ranges?: string | null
           dt_mins?: number
           dt_ranges?: string | null
           dt_reason?: string | null

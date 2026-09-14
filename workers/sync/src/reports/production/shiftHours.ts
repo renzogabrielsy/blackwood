@@ -15,11 +15,16 @@
  * (`production_downtime.shift_hrs_source`) so a reader can see which rule fired instead
  * of having to trust a bare number.
  *
- * THE RULE
+ * THE RULE (**settled by Renzo, 2026-09-14 — L-051b**)
  *   - The day carried an OVERTIME signal → **12 h**.
- *   - Otherwise                          → **8 h**, the app's own convention
- *                                          (`app/(app)/production/daily/ledger-derive.ts`
- *                                          computes PROD HRS as `8 − DT TTL`).
+ *   - Otherwise                          → **9 h**. A normal shift is NINE hours: 08:00 to
+ *                                          17:00 with an hour off, which is also what every
+ *                                          one of the 158 rows Renzo backfilled from
+ *                                          `MASTER ICTC INPUT FILE V1.xlsx` already said.
+ *                                          The app agrees in ONE place —
+ *                                          `app/(app)/production/daily/ledger-derive.ts`
+ *                                          exports `DEFAULT_SHIFT_HRS` and all four of its
+ *                                          PROD HRS call sites read it.
  *
  * TWO INDEPENDENT SIGNALS, either of which is enough, because MC fills them in different
  * places and has stopped filling each of them at different times:
@@ -36,16 +41,23 @@
  * does not infer a longer shift from a late downtime range. A stoppage that ends at
  * 5:00 PM is evidence about the stoppage, not about whether anyone was paid overtime.
  *
- * ⚠️ OPEN FOR RENZO. Three different numbers are in play across the system: the sync
- * wrote 12, the app derives 8, and the 158 rows backfilled from `MASTER ICTC INPUT FILE
- * V1.xlsx` (2025-11-27 … 2026-05-23) all carry **9**. The 8 here matches the app, which
- * is the number a person actually sees; if the plant's real day shift is 9 h, change
- * `DEFAULT_SHIFT_HRS` and the app's ledger together — they must never disagree again.
+ * RESOLVED 2026-09-14 (was: three numbers were in play — the sync wrote 12, the app assumed
+ * 8, Renzo's master rows said 9). **Nine is right.** `default_8h` is therefore a RETIRED
+ * emitted value: the DB CHECK still accepts it so history stays readable, but nothing
+ * writes it any more and the 48 rows that carried it were re-derived to `default_9h`.
  */
 import type { LoadedSheet, CellValue } from "../../lib/xlsx.js";
 
-/** Shift length, in hours, for an ordinary day with no overtime signal. */
-export const DEFAULT_SHIFT_HRS = 8;
+/**
+ * Shift length, in hours, for an ordinary day with no overtime signal.
+ *
+ * **MUST equal `DEFAULT_SHIFT_HRS` in `app/(app)/production/daily/ledger-derive.ts`.** They
+ * are the same fact stated on two sides of the wire: this one is what gets STORED, that one
+ * is what the operator SEES as `PROD HRS = shift − DT TTL`. They disagreed for months (12
+ * stored against 8 displayed) and nobody could see it, which is the whole reason
+ * `shift_hrs_source` exists.
+ */
+export const DEFAULT_SHIFT_HRS = 9;
 /** Shift length, in hours, for a day that carried an overtime signal. */
 export const OVERTIME_SHIFT_HRS = 12;
 
@@ -54,13 +66,16 @@ export const OVERTIME_SHIFT_HRS = 12;
  * `production_downtime.shift_hrs_source` (CHECKed to exactly these three).
  *
  *   `overtime_signal` — the day ran overtime, so 12 h.
- *   `duration_only`   — no overtime, 8 h, AND this row's minutes came from the hand-written
+ *   `duration_only`   — no overtime, 9 h, AND this row's minutes came from the hand-written
  *                       DURATION cell because no time range could be read. Recorded
  *                       distinctly because it tells a reader the figure is the operator's
  *                       own summary rather than the list of stoppages.
- *   `default_8h`      — no overtime, 8 h, minutes read from the time ranges.
+ *   `default_9h`      — no overtime, 9 h, minutes read from the time ranges.
+ *   `default_8h`      — **RETIRED 2026-09-14.** Nothing emits it; the DB CHECK still accepts
+ *                       it so a historical row stays readable, but all 48 rows that carried
+ *                       it were re-derived to `default_9h` in the same change.
  */
-export type ShiftHrsSource = "overtime_signal" | "duration_only" | "default_8h";
+export type ShiftHrsSource = "overtime_signal" | "duration_only" | "default_9h";
 
 export interface OvertimeScan {
   /** True when either signal fired. */
@@ -156,5 +171,5 @@ export function resolveShiftHours(
   if (minutesSource === "duration") {
     return { shiftHrs: DEFAULT_SHIFT_HRS, source: "duration_only" };
   }
-  return { shiftHrs: DEFAULT_SHIFT_HRS, source: "default_8h" };
+  return { shiftHrs: DEFAULT_SHIFT_HRS, source: "default_9h" };
 }

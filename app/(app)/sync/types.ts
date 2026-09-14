@@ -714,8 +714,9 @@ export interface BatchAliasNote {
 }
 
 /**
- * ONE production day where the two halves of MC's downtime block do not tell the same
- * story (L-051, 2026-09-14).
+ * ONE production day whose downtime block needs a word said about it (L-051, 2026-09-14) —
+ * the two halves disagreeing, no readable range list, or a stoppage excluded as an
+ * incident (L-051b).
  *
  * MC records each stoppage TWICE: as a list of time ranges (column C) and as a
  * hand-written DURATION total (column E). The sync used to read only the DURATION — so
@@ -727,9 +728,15 @@ export interface BatchAliasNote {
  * with the ranges' figure either way; this only makes the disagreement visible so a
  * person can decide whether the sheet needs fixing.
  *
+ * **`downtime_incident_no_stop` (L-051b)** is the third flavour and the quietest (`info`):
+ * a range whose reason says the plant did NOT stop is trouble production ran through, so
+ * it contributes zero minutes — and a stoppage that stops counting must never become
+ * invisible, so the day and the excluded ranges are named every run.
+ *
  * Never a durable case: it stops firing the moment the two halves agree (or the DURATION
- * cell is left blank, which is not a disagreement — a blank states nothing). Carries no ₱
- * — production has none.
+ * cell is left blank, which is not a disagreement — a blank states nothing). An incident
+ * note keeps firing for as long as the sheet keeps saying it, which is correct: it
+ * describes the day, not a problem awaiting a fix. Carries no ₱ — production has none.
  */
 export interface DowntimeNote {
   /** `downtime_duration_mismatch` today. A field, not a literal, so a second flavour of
@@ -747,6 +754,8 @@ export interface DowntimeNote {
   minutes_source: string
   /** The range list verbatim, so the note can be checked without the workbook. */
   dt_ranges: string | null
+  /** The subset of `dt_ranges` excluded as a "no stop operation" incident (L-051b). */
+  dt_incident_ranges: string | null
   /** Shift length written, and why (`overtime_signal` | `duration_only` | `default_8h`). */
   shift_hrs: number | null
   shift_hrs_source: string | null

@@ -321,7 +321,7 @@ export async function runReport(
   const dbRuns = (await childDb("production_runs", ["customer", "grade", "ttl_kg", "sacks_bags", "remarks"])) as RunDbRow[];
   // L-051: dt_ranges + shift_hrs_source must be READ as well as written — a column the
   // classifier diffs but never reads back would report every row as changed, forever.
-  const dbDowntime = (await childDb("production_downtime", ["shift_hrs", "dt_hrs", "dt_mins", "dt_reason", "dt_ranges", "shift_hrs_source"])) as DowntimeDbRow[];
+  const dbDowntime = (await childDb("production_downtime", ["shift_hrs", "dt_hrs", "dt_mins", "dt_reason", "dt_ranges", "dt_incident_ranges", "shift_hrs_source"])) as DowntimeDbRow[];
   const dbWaste = (await childDb("production_waste", ["rs1a_kg", "rs1b_kg", "bf_kg", "rs23_kg", "rs5_kg", "trml1_kg", "trml2_kg", "grit_kg", "remarks"])) as WasteDbRow[];
   // electricity + trucks: OWN reading_date filter from lo (no upper bound).
   const dbElec = (await db.readRows("electricity_readings", {

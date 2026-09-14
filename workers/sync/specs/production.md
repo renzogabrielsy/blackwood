@@ -48,7 +48,7 @@ natural-key tables (`electricity_readings`, `truck_readings`) with no shift rela
 2. **Upsert each shift FIRST**, before any child write: `db.insert_if_absent("production_shifts", [payload], natural_key=(transaction_date, production_batch, shift))`. If the insert returns nothing (row already existed — a race with a concurrent process, or the classify-time shift-map was stale), falls back to `db.select_one` to find the existing row's id. Builds `shift_map: {triplet: shift_id}` for use by children.
 3. **L-026 combine**: before inserting `production_runs`, groups all `NEW` run classifications by `(resolved_shift_id, customer.upper(), grade.upper())` — for any group with MORE than one row, SUMS `ttl_kg` and `sacks_bags`, and joins `remarks` with `"; "` (`filter(None, [...])` drops falsy remarks before joining) — see rule checklist for the exact combine algorithm.
 4. Insert combined `production_runs` rows via `insert_if_absent(natural_key=(shift_id, customer, grade))`.
-5. Insert `production_downtime` (cols: `shift_hrs, dt_hrs, dt_mins, dt_reason, dt_ranges, shift_hrs_source` — the last two added by L-051, migration `20260914013652`; still **NO remarks column** on this table, despite the extractor producing a `remarks` field for time-ranges; that field is simply DROPPED at apply time, never written) and `production_waste` (cols: 8 waste streams + `remarks`) via `insert_if_absent(natural_key=("shift_id",))`.
+5. Insert `production_downtime` (cols: `shift_hrs, dt_hrs, dt_mins, dt_reason, dt_ranges, dt_incident_ranges, shift_hrs_source` — the last three added by L-051 / L-051b, migrations `20260914013652` + `20260914021704`; still **NO remarks column** on this table, despite the extractor producing a `remarks` field for time-ranges; that field is simply DROPPED at apply time, never written) and `production_waste` (cols: 8 waste streams + `remarks`) via `insert_if_absent(natural_key=("shift_id",))`.
 6. Insert `electricity_readings` and `truck_readings` (natural-key tables, no shift FK) — **never writes the DB-generated columns** `diff_kwh`/`consumption_kwh`/`ttl_km` (these are Postgres `GENERATED ALWAYS AS` columns; writing them would be rejected by Postgres anyway, but the code explicitly excludes them from the payload column list rather than relying on that rejection).
 7. VALUE_CHANGED rows (ALL 5 sections) → `db.update(table_for[section], {"id": eq}, patch)`, where `patch` strips any of `{diff_kwh, consumption_kwh, ttl_km}` defensively even on an UPDATE diff (belt-and-suspenders — a VALUE_CHANGED diff should never legitimately contain a generated column, since the classifiers never compare them, but the strip is unconditional).
 8. MALFORMED (any section) → always `held`.
@@ -169,6 +169,7 @@ the hand-written DURATION, column F = the reasons. All three are multi-line.
 > | **Open range** | A start with no end (`3:22 PM`, the truncated `3:55 PM-`) contributes **0** and warns, naming it. MC writes these as event marks, not stoppages. |
 > | **Backwards span** | End before start after the plant-day rule → **0** + a warning. Never negative. |
 > | **Bare-time pairing** | ONLY when the cell has **no dashed span at all**: consecutive bare times pair into spans (2026-08-05's brown-out `8:00 / 8:22 / 3:00 / 3:09` = 31 min). A leftover odd time falls back to the open-range rule. |
+> | **INCIDENT (L-051b)** | A range whose REASON LINE says the plant did not stop contributes **0** and moves to `dt_incident_ranges`. See the box below. |
 > | **Not a time** | Hour > 23 or minute > 59 is skipped, which is what keeps an inverter setting (`29:29`, `30:30`) out of the arithmetic. |
 > | **Cross-check** | DURATION is parsed **with its unit words** (`1 HOUR & 40 MINUTES` = 100; lines SUM, so `12 MINUTES\n40 MINUTES` = 52; a bare number falls back to the legacy digit-strip). If it parses and differs from the ranges by **> 1 min**, the RANGES WIN and a `downtime_duration_mismatch` finding (`attention`) names both. A BLANK duration cell is **not** a disagreement. |
 > | **Fallback** | No range parsed but DURATION did → use DURATION (the pre-L-051 behaviour) and raise `downtime_ranges_unreadable`. |
@@ -181,21 +182,60 @@ the hand-written DURATION, column F = the reasons. All three are multi-line.
 > testing the NUMBER rather than the label's presence: a runs row labelled `OVERTIME` in
 > column H **with kilos**, or the CHARCOAL FED block's `OVERTIME` row **with sacks**.
 > `ENDING`/`STARTING` are batch markers (L-007) and are never read as shift labels.
-> `shift_hrs_source` records which rule fired: `overtime_signal` | `duration_only` (8 h, and
-> the minutes came from the typed total) | `default_8h`.
+> `shift_hrs_source` records which rule fired: `overtime_signal` | `duration_only` (9 h, and
+> the minutes came from the typed total) | `default_9h` (and the RETIRED `default_8h`).
 >
-> ⚠️ **OPEN FOR RENZO — three shift lengths are in play.** The sync wrote 12, the app derives
-> 8, and the 158 rows backfilled from `MASTER ICTC INPUT FILE V1.xlsx` (2025-11-27 …
-> 2026-05-23) carry **9**. If 9 is right, change `DEFAULT_SHIFT_HRS` and `ledger-derive.ts`
-> together.
+> **SETTLED 2026-09-14 (L-051b): a normal shift is NINE hours.** 08:00-17:00 with an hour
+> off, which is also what all 158 rows of Renzo's own `MASTER ICTC INPUT FILE V1.xlsx`
+> already said. `default_8h` is RETIRED (the DB CHECK still accepts it; nothing emits it,
+> and the 48 rows that carried it were re-derived). The app side is now ONE constant —
+> `DEFAULT_SHIFT_HRS` in `app/(app)/production/daily/ledger-derive.ts` — read by all four
+> PROD HRS sites that used to write `8` out by hand, and a test pins the two packages'
+> literals to each other **by reading the app file's source text**, never by importing it
+> (the worker may not depend on `app/**`).
+
+> ### ⚠️ L-051b (2026-09-14) — "NO STOP OPERATION" IS A CONVENTION, NOT FREE TEXT
+>
+> Renzo: a range whose reason says the plant did not stop means **there was trouble but
+> production continued** — an INCIDENT, not downtime. Read the way `FEEDING # N` is read
+> (L-042): one narrow family, matched exactly, everything else untouched.
+>
+> - **The family** is `NO STOP[PING] [OF] [THE] OPERATION`, case-insensitive
+>   (`NO_STOP_OPERATION_RE` / `saysNoStopOperation` in `downtimeRanges.ts` — ONE definition).
+> - **The near-miss audit is what proves it is narrow enough.** Measured over both surviving
+>   workbooks, four reason lines mention STOP and are correctly NOT matched:
+>   `STOPPED TROMMEL 2A` (×4 days), `STOP OPERATION ROLLER MILL #1`,
+>   `STOP OPERATION CHANGED RUBBER TUBE`, `STOPPED AND CHANGED 3 SET FUSE OF GENSET`. Every
+>   one describes the plant DID stop. **The negation carries the whole meaning** — a
+>   substring match on "STOP OPERATION" would invert three real stoppages into non-events.
+> - **Matched PER RANGE, BY INDEX** — reason line *i* marks range *i* — never swept over the
+>   day. 2026-04-21 settles it: `8:00 AM-8:04 AM` (a real screen clean) then
+>   `11:00 AM-4:05 PM` (`…NO STOPPING OF OPERATION…`), hit on line 1, so the day reads
+>   **4 minutes**, which is exactly what the operator's own DURATION cell says. A whole-day
+>   sweep would read 0 and lose a genuine stoppage.
+> - A **one-range** cell is unambiguous, so a phrase anywhere in its reasons marks that
+>   range (2026-08-11: one range, one reason).
+> - A hit landing on **no** range (more reason lines than ranges) excludes **nothing** and is
+>   reported. Excluding a range the note may not even be about is the guess this avoids.
+> - The range text is **kept**: `dt_ranges` still holds the FULL verbatim list and
+>   `dt_incident_ranges` holds the excluded subset, so **the ranges that counted are
+>   `dt_ranges` minus `dt_incident_ranges`**. The reason is kept. An `info`
+>   `downtime_incident_no_stop` finding names the day and the ranges every run, so a
+>   stoppage that stops counting can never become invisible.
+> - **An all-incident day is a MEASURED zero** (`source: "ranges"`, `totalMins: 0`) and must
+>   NOT fall through to the DURATION cell.
+>
+> Measured live: exactly **3 days** in both workbooks match — 2026-08-11 (the only one in the
+> sync-written era; it went 3 h 37 m → **0 h**, range preserved) and 2026-04-21 / 04-22 /
+> 04-27's second line, all in the untouched master-file era.
 
 **Emission gate**: only emitted if `total_mins > 0` OR (`reasons` non-empty OR `category` non-empty) — i.e. a day with genuinely zero downtime and no category/reason text produces NO downtime row at all (returns `None`, not an empty-but-present row). Unchanged by L-051, so a reason-only day (2026-07-17: category `REPAIR`, everything else blank) is still a row with zero minutes.
 
 `dt_reason = " | ".join([category (if any), "; ".join(reasons) (if any)])` — category first, then all reason lines joined with `"; "`.
 
-**`dt_ranges` (L-051) is the time-range list verbatim**, lines joined with `"; "`, and it IS a real column now (migration `20260914013652`). The legacy `remarks` field (`"Time ranges: …"`) is still built and still DROPPED at apply — `production_downtime` has no `remarks` column and the classifier deliberately does not diff it. Note what the old shape cost: the extractor computed the evidence that would have exposed this bug and threw it away on every run.
+**`dt_ranges` (L-051) is the time-range list verbatim**, lines joined with `"; "`, and it IS a real column now (migration `20260914013652`); **`dt_incident_ranges` (L-051b, migration `20260914021704`) is the subset of it excluded as an incident**, so the ranges that counted are the difference. The legacy `remarks` field (`"Time ranges: …"`) is still built and still DROPPED at apply — `production_downtime` has no `remarks` column and the classifier deliberately does not diff it. Note what the old shape cost: the extractor computed the evidence that would have exposed this bug and threw it away on every run.
 
-Output shape: `{transaction_date, production_batch, shift:"M" (HARDCODED), shift_hrs (DERIVED — 8 or 12), dt_hrs, dt_mins (PD-5-split), dt_reason, dt_ranges, shift_hrs_source, remarks, _minutes_source, _duration_mins?, _ranges_mins?, _duration_disagrees?, ...}`. The five leading-underscore fields are run-visibility only and are never written to a column; the apply turns a disagreement into a `downtime_notes` entry.
+Output shape: `{transaction_date, production_batch, shift:"M" (HARDCODED), shift_hrs (DERIVED — 9 or 12), dt_hrs, dt_mins (PD-5-split), dt_reason, dt_ranges, dt_incident_ranges, shift_hrs_source, remarks, _minutes_source, _duration_mins?, _ranges_mins?, _duration_disagrees?, _unmatched_incident_notes?, ...}`. The six leading-underscore fields are run-visibility only and are never written to a column; the apply turns a disagreement into a `downtime_notes` entry.
 
 **L-014 / PD-5 (`dt_mins >= 60` split) is UNCHANGED and still applied at extract shaping** (`hrs += mins // 60; mins %= 60`), satisfying `CHECK (dt_mins >= 0 AND dt_mins < 60)`. The Python never implements it. L-051 moved the split's INPUT, not the split: on the ge60 edge fixture the DURATION says 125 and the ranges say 90, so the TS port now emits `dt_hrs=1 / dt_mins=30` instead of `2 / 5`.
 
@@ -461,7 +501,7 @@ map[key] = shift.id   (only if id is not None)
 ### `classify_production_downtime.py` — natural key `(shift_id,)` — UNIQUE(shift_id), exactly 1 row per shift
 
 - **MALFORMED gates**: (1) missing/blank shift. (2) `shift_hrs <= 0` (note: this is checked on `ex.get("shift_hrs")`, which the extractor ALWAYS sets to the hardcoded default `12` — so this gate is effectively unreachable given the current extractor's output, but remains a defensive check against malformed external input).
-- **Compared fields** (the ORACLE): `shift_hrs`, `dt_hrs`, `dt_mins` (all numeric, tolerance 0.01), `dt_reason`, `remarks` (string equal). **TS DEVIATION**: the port drops `remarks` (see the trap immediately below — it was a permanent phantom disagreement) and, since L-051, ADDS `dt_ranges` + `shift_hrs_source`; both are real columns and both are in `fn_apply_production_upstream`'s allowlist, so a row filed before 2026-09-14 is corrected by the ordinary VALUE_CHANGED path. **`remarks` IS compared here even though the TABLE has no remarks column** — this classifier operates purely on the extractor's JSON shape and doesn't know about the DB schema's column list; a DB row fetched via `_child_db` in `sync_production.py` simply never HAS a `remarks` key (it wasn't in the `extra_cols` list passed for downtime), so `db_row.get("remarks")` always returns `None` — meaning this comparison effectively becomes "email remarks vs always-None", which would make ANY non-null extracted remarks show up as a perpetual VALUE_CHANGED diff on a field that can never actually be written or resolved. **This is a live bug/trap**: verify against a real run whether downtime's `remarks` field genuinely never causes a spurious VALUE_CHANGED in practice (perhaps because the extracted `remarks` — "Time ranges: ..." — is usually present, making EVERY downtime row perpetually flagged VALUE_CHANGED on this one field, silently no-op'd at apply time since the column doesn't exist to patch). Flag for a human decision: should downtime's classifier stop comparing `remarks` entirely, matching the table's actual schema?
+- **Compared fields** (the ORACLE): `shift_hrs`, `dt_hrs`, `dt_mins` (all numeric, tolerance 0.01), `dt_reason`, `remarks` (string equal). **TS DEVIATION**: the port drops `remarks` (see the trap immediately below — it was a permanent phantom disagreement) and, since L-051/L-051b, ADDS `dt_ranges` + `dt_incident_ranges` + `shift_hrs_source`; both are real columns and both are in `fn_apply_production_upstream`'s allowlist, so a row filed before 2026-09-14 is corrected by the ordinary VALUE_CHANGED path. **`remarks` IS compared here even though the TABLE has no remarks column** — this classifier operates purely on the extractor's JSON shape and doesn't know about the DB schema's column list; a DB row fetched via `_child_db` in `sync_production.py` simply never HAS a `remarks` key (it wasn't in the `extra_cols` list passed for downtime), so `db_row.get("remarks")` always returns `None` — meaning this comparison effectively becomes "email remarks vs always-None", which would make ANY non-null extracted remarks show up as a perpetual VALUE_CHANGED diff on a field that can never actually be written or resolved. **This is a live bug/trap**: verify against a real run whether downtime's `remarks` field genuinely never causes a spurious VALUE_CHANGED in practice (perhaps because the extracted `remarks` — "Time ranges: ..." — is usually present, making EVERY downtime row perpetually flagged VALUE_CHANGED on this one field, silently no-op'd at apply time since the column doesn't exist to patch). Flag for a human decision: should downtime's classifier stop comparing `remarks` entirely, matching the table's actual schema?
 
 ### `classify_production_waste.py` — natural key `(shift_id,)`
 
@@ -545,7 +585,7 @@ Note this combine happens ONLY across rows within the SAME classify batch's `NEW
 
 - `production_shifts`: `transaction_date, production_batch, shift`.
 - `production_runs`: `shift_id, customer, grade, ttl_kg, sacks_bags, remarks`.
-- `production_downtime`: `shift_id, shift_hrs, dt_hrs, dt_mins, dt_reason, dt_ranges, shift_hrs_source` (NO remarks). The last two are L-051 (2026-09-14) and are BOTH in `fn_apply_production_upstream`'s allowlist — a column the classifier diffs must be a column the RPC can write, or one unknown key refuses the WHOLE op.
+- `production_downtime`: `shift_id, shift_hrs, dt_hrs, dt_mins, dt_reason, dt_ranges, dt_incident_ranges, shift_hrs_source` (NO remarks). The last three are L-051 / L-051b (2026-09-14) and are BOTH in `fn_apply_production_upstream`'s allowlist — a column the classifier diffs must be a column the RPC can write, or one unknown key refuses the WHOLE op.
 - `production_waste`: `shift_id, rs1a_kg, rs1b_kg, bf_kg, rs23_kg, rs5_kg, trml1_kg, trml2_kg, grit_kg, remarks`.
 - `electricity_readings`: `reading_date, meter, start_kwh, end_kwh, meter_multiplier, remarks`.
 - `truck_readings`: `reading_date, plate_no, start_km, end_km, fuel_liters, remarks`.

@@ -137,6 +137,20 @@ const JUL_17: DaySpec = {
   fedOvertime: 0,
 };
 
+/** 2026-08-11 — one range, and the reason says the plant never stopped (L-051b). */
+const AUG_11: DaySpec = {
+  name: "08-11-26",
+  runs: [["CEBU 3X50", 1015, 26390, null]],
+  category: "REPAIR",
+  ranges: "8:00-11:37",
+  duration: "",
+  reason:
+    "CHANGED MOTOR ROLLER MILL #1 AND CHANGED HANGER BEARING 1 PC FOR BE #6 CONNECTED TO " +
+    "RS 5. NO STOP OPERATION",
+  fedFirst: 900,
+  fedOvertime: 0,
+};
+
 describe("extractMc downtime — L-051, the real sheet shapes", () => {
   it("2026-09-03 reads 118 minutes from the ranges (DURATION blank)", async () => {
     const [dt] = await extractDays([SEP_3]);
@@ -148,8 +162,8 @@ describe("extractMc downtime — L-051, the real sheet shapes", () => {
     expect(dt._minutes_source).toBe("ranges");
     expect(dt._duration_disagrees).toBeUndefined();
     // No overtime kilos and 0 overtime sacks → the ordinary 8-hour day.
-    expect(dt.shift_hrs).toBe(8);
-    expect(dt.shift_hrs_source).toBe("default_8h");
+    expect(dt.shift_hrs).toBe(9);
+    expect(dt.shift_hrs_source).toBe("default_9h");
   });
 
   it("2026-07-04 reads 77 minutes and flags the DURATION cell's 7", async () => {
@@ -171,7 +185,7 @@ describe("extractMc downtime — L-051, the real sheet shapes", () => {
     expect(dt.dt_hrs).toBe(0);
     expect(dt.dt_mins).toBe(31);
     expect(dt.dt_ranges).toBe("8:00; 8:22; 3:00; 3:09");
-    expect(dt.shift_hrs).toBe(8);
+    expect(dt.shift_hrs).toBe(9);
   });
 
   it("2026-07-17 still emits a reason-only row with no minutes and no ranges", async () => {
@@ -185,9 +199,25 @@ describe("extractMc downtime — L-051, the real sheet shapes", () => {
     expect(dt._duration_disagrees).toBeUndefined();
   });
 
+  it("2026-08-11 records ZERO downtime and keeps the range as an incident (L-051b)", async () => {
+    const [dt] = await extractDays([AUG_11]);
+    expect(dt.dt_hrs).toBe(0);
+    expect(dt.dt_mins).toBe(0);
+    // The time is NOT lost — it moves to the incident column and stays in dt_ranges.
+    expect(dt.dt_ranges).toBe("8:00-11:37");
+    expect(dt.dt_incident_ranges).toBe("8:00-11:37");
+    expect(dt.dt_reason).toContain("NO STOP OPERATION");
+    // A measured zero, not a failed read: the ranges WERE the source.
+    expect(dt._minutes_source).toBe("ranges");
+    expect(dt.shift_hrs).toBe(9);
+  });
+
   it("a whole workbook of days keeps each day's own figures", async () => {
-    const rows = await extractDays([JUL_4, AUG_5, SEP_3, JUL_17]);
-    expect(rows.map((r) => r.dt_hrs * 60 + r.dt_mins)).toEqual([77, 31, 118, 0]);
-    expect(rows.map((r) => r.shift_hrs)).toEqual([12, 8, 8, 8]);
+    const rows = await extractDays([JUL_4, AUG_5, SEP_3, JUL_17, AUG_11]);
+    expect(rows.map((r) => r.dt_hrs * 60 + r.dt_mins)).toEqual([77, 31, 118, 0, 0]);
+    expect(rows.map((r) => r.shift_hrs)).toEqual([12, 9, 9, 9, 9]);
+    expect(rows.map((r) => r.dt_incident_ranges)).toEqual([
+      null, null, null, null, "8:00-11:37",
+    ]);
   });
 });

@@ -102,7 +102,9 @@ export interface DowntimeDbRow {
   dt_reason?: string | null;
   /** L-051 — the operator's own time-range list, persisted since 2026-09-14. */
   dt_ranges?: string | null;
-  /** L-051 — why `shift_hrs` is what it is (`overtime_signal|duration_only|default_8h`). */
+  /** L-051b — the subset of `dt_ranges` excluded as a "no stop operation" incident. */
+  dt_incident_ranges?: string | null;
+  /** L-051/b — why `shift_hrs` is what it is (`overtime_signal|duration_only|default_9h`). */
   shift_hrs_source?: string | null;
   // No `remarks` — `production_downtime` has no such column. See downtimeFieldDiff.
 }
@@ -324,7 +326,7 @@ function downtimeFieldDiff(email: DowntimeRow, db: DowntimeDbRow): Record<string
   // actually be written. They are diffed so a row filed before the fix (dt_ranges NULL,
   // shift_hrs_source NULL) is corrected by the normal VALUE_CHANGED path rather than
   // needing a second repair mechanism.
-  for (const f of ["dt_ranges", "shift_hrs_source"] as const) {
+  for (const f of ["dt_ranges", "dt_incident_ranges", "shift_hrs_source"] as const) {
     if (normStr(email[f]) !== normStr(db[f])) {
       diff[f] = { db: db[f] ?? null, email: email[f] ?? null };
     }

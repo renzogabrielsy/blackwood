@@ -117,6 +117,7 @@ export interface DowntimeNote {
   ranges_mins: number | null;
   minutes_source: string;
   dt_ranges: string | null;
+  dt_incident_ranges: string | null;
   shift_hrs: number | null;
   shift_hrs_source: string | null;
   warnings: string[];
@@ -146,17 +147,27 @@ export function buildDowntimeNotes(sections: ProductionSections): DowntimeNote[]
     const source = typeof rec._minutes_source === "string" ? rec._minutes_source : "ranges";
     const disagrees = rec._duration_disagrees === true;
     const unreadable = source === "duration";
-    if (!disagrees && !unreadable) continue;
+    // L-051b: a day that excluded a stoppage as an incident ALWAYS says so, whether or not
+    // anything else about it is odd. A stoppage that stops counting must never be silent.
+    const incident = typeof rec.dt_incident_ranges === "string" && rec.dt_incident_ranges !== "";
+    if (!disagrees && !unreadable && !incident) continue;
 
     const numOrNull = (v: unknown): number | null => (typeof v === "number" ? v : null);
     byDate.set(date, {
-      kind: unreadable ? "downtime_ranges_unreadable" : "downtime_duration_mismatch",
+      // An incident is the QUIETEST of the three, so it only names the day when nothing
+      // louder is also true — the reader gets one note per day, not a pile.
+      kind: unreadable
+        ? "downtime_ranges_unreadable"
+        : disagrees
+          ? "downtime_duration_mismatch"
+          : "downtime_incident_no_stop",
       transaction_date: date,
       production_batch: typeof rec.production_batch === "string" ? rec.production_batch : null,
       duration_mins: numOrNull(rec._duration_mins),
       ranges_mins: numOrNull(rec._ranges_mins),
       minutes_source: source,
       dt_ranges: typeof rec.dt_ranges === "string" ? rec.dt_ranges : null,
+      dt_incident_ranges: incident ? String(rec.dt_incident_ranges) : null,
       shift_hrs: numOrNull(rec.shift_hrs),
       shift_hrs_source:
         typeof rec.shift_hrs_source === "string" ? rec.shift_hrs_source : null,
@@ -470,10 +481,14 @@ export async function applyProduction(compact: ProductionCompact, deps: ApplyDep
 
   // ── 3. downtime (no remarks col) + waste ──
   const childSpecs: Array<[keyof ProductionSections, string[], string]> = [
-    // L-051: dt_ranges + shift_hrs_source joined the column list on 2026-09-14.
+    // L-051 / L-051b: dt_ranges, dt_incident_ranges and shift_hrs_source joined the
+    // column list on 2026-09-14.
     [
       "downtime",
-      ["shift_hrs", "dt_hrs", "dt_mins", "dt_reason", "dt_ranges", "shift_hrs_source"],
+      [
+        "shift_hrs", "dt_hrs", "dt_mins", "dt_reason",
+        "dt_ranges", "dt_incident_ranges", "shift_hrs_source",
+      ],
       "production_downtime",
     ],
     ["waste", [...WASTE_STREAMS, "remarks"], "production_waste"],

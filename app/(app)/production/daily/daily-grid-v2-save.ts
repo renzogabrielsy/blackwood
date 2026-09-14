@@ -111,6 +111,7 @@ import { normalizeTypedDate, stripNumericFormatting, trimCellValue } from '@/lib
 
 import type { LedgerRowPayload } from './actions';
 import type { GridRow as LedgerRow } from './daily-ledger-grid';
+import { DEFAULT_SHIFT_HRS } from './ledger-derive';
 
 // ═══ Row identity ═══════════════════════════════════════════════════════════════
 
@@ -223,8 +224,12 @@ const SHIFT_SET: ReadonlySet<string> = new Set<string>(SHIFT_CODES);
 const GRADE_SET: ReadonlySet<string> = new Set<string>(SAVEABLE_GRADES);
 const DB_ONLY_GRADE_SET: ReadonlySet<string> = new Set<string>(DB_ONLY_GRADES);
 
-/** The default shift length the sheet's own PROD HRS arithmetic assumes. */
-export const ASSUMED_SHIFT_HRS = 8;
+/**
+ * The default shift length the sheet's own PROD HRS arithmetic assumes. Re-exported from
+ * `ledger-derive.ts` rather than restated (L-051b) — it was an independent `8` here, and a
+ * second copy of a constant is a second chance to disagree.
+ */
+export const ASSUMED_SHIFT_HRS = DEFAULT_SHIFT_HRS;
 
 /** The customer a blank CUSTOMER cell becomes — `saveBulkDailyLedger`'s own fallback. */
 export const DEFAULT_CUSTOMER = 'CEBU';

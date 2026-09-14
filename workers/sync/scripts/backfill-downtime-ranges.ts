@@ -32,6 +32,11 @@
  * workbook in Storage at all**, so its 23 rows keep their DURATION-derived figures; they
  * are reported as out-of-reach rather than silently skipped.
  *
+ * RE-RUN 2026-09-14 (L-051b): the same script carries Renzo's two rulings — a normal shift
+ * is NINE hours, and a range whose reason says the plant did not stop is an INCIDENT, not
+ * downtime. It re-derives from the same workbooks through the same RPC, so there is no
+ * second repair mechanism and no second definition of either rule.
+ *
  * Usage (from workers/sync):
  *   npx tsx scripts/backfill-downtime-ranges.ts --dry-run
  *   npx tsx scripts/backfill-downtime-ranges.ts
@@ -133,13 +138,21 @@ interface DbDowntime {
   dt_hrs: number | null;
   dt_mins: number | null;
   dt_ranges: string | null;
+  dt_incident_ranges: string | null;
   shift_hrs_source: string | null;
   human_edited_at: string | null;
   transaction_date: string;
   production_batch: string;
 }
 
-const FIELDS = ["dt_hrs", "dt_mins", "dt_ranges", "shift_hrs", "shift_hrs_source"] as const;
+const FIELDS = [
+  "dt_hrs",
+  "dt_mins",
+  "dt_ranges",
+  "dt_incident_ranges",
+  "shift_hrs",
+  "shift_hrs_source",
+] as const;
 
 const same = (a: unknown, b: unknown): boolean => {
   if (a === null || a === undefined) return b === null || b === undefined;
@@ -161,7 +174,8 @@ async function main(): Promise<void> {
   const { data: rows, error } = await db.sb
     .from("production_downtime")
     .select(
-      "id, shift_id, shift_hrs, dt_hrs, dt_mins, dt_ranges, shift_hrs_source, human_edited_at, " +
+      "id, shift_id, shift_hrs, dt_hrs, dt_mins, dt_ranges, dt_incident_ranges, " +
+        "shift_hrs_source, human_edited_at, " +
         "production_shifts!inner(transaction_date, production_batch)",
     );
   if (error) throw new Error(`production_downtime read failed: ${error.message}`);
@@ -176,6 +190,7 @@ async function main(): Promise<void> {
       dt_hrs: r.dt_hrs as number | null,
       dt_mins: r.dt_mins as number | null,
       dt_ranges: r.dt_ranges as string | null,
+      dt_incident_ranges: r.dt_incident_ranges as string | null,
       shift_hrs_source: r.shift_hrs_source as string | null,
       human_edited_at: (r.human_edited_at as string | null) ?? null,
       transaction_date: String(sh.transaction_date),
@@ -270,25 +285,34 @@ async function main(): Promise<void> {
   // ── 4. the table ───────────────────────────────────────────────────────────
   const months = new Map<
     string,
-    { rows: number; before: number; after: number; to8: number; to12: number }
+    { rows: number; before: number; after: number; shiftMoved: number; incidents: number }
   >();
+  const incidentRows: Array<{ date: string; ranges: string }> = [];
   for (const c of changes) {
     const k = month(c.row.transaction_date);
-    const agg = months.get(k) ?? { rows: 0, before: 0, after: 0, to8: 0, to12: 0 };
+    const agg = months.get(k) ?? { rows: 0, before: 0, after: 0, shiftMoved: 0, incidents: 0 };
     agg.rows++;
     agg.before += c.beforeHrs;
     agg.after += c.afterHrs;
-    if (c.patch.shift_hrs === 8 && Number(c.row.shift_hrs) === 12) agg.to8++;
-    if (c.patch.shift_hrs === 12 && Number(c.row.shift_hrs) !== 12) agg.to12++;
+    if ("shift_hrs" in c.patch) agg.shiftMoved++;
+    if (typeof c.patch.dt_incident_ranges === "string" && c.patch.dt_incident_ranges) {
+      agg.incidents++;
+      incidentRows.push({ date: c.row.transaction_date, ranges: c.patch.dt_incident_ranges });
+    }
     months.set(k, agg);
   }
-  console.log("\n  month    rows  downtime hrs before -> after      12h->8h  ->12h");
-  console.log("  ------------------------------------------------------------------");
+  console.log("\n  month    rows  downtime hrs before -> after   shift moved  incidents");
+  console.log("  --------------------------------------------------------------------");
   for (const [k, v] of [...months.entries()].sort()) {
     console.log(
       `  ${k}  ${String(v.rows).padStart(5)}  ${v.before.toFixed(2).padStart(9)} -> ` +
-        `${v.after.toFixed(2).padStart(9)}   ${String(v.to8).padStart(9)}  ${String(v.to12).padStart(5)}`,
+        `${v.after.toFixed(2).padStart(9)}   ${String(v.shiftMoved).padStart(11)}  ` +
+        `${String(v.incidents).padStart(9)}`,
     );
+  }
+  if (incidentRows.length > 0) {
+    console.log("\n  INCIDENTS (reason says the plant did not stop — 0 downtime, range kept):");
+    for (const r of incidentRows) console.log(`      ${r.date}  ${r.ranges}`);
   }
   const tot = [...months.values()].reduce(
     (a, v) => ({ rows: a.rows + v.rows, before: a.before + v.before, after: a.after + v.after }),
@@ -348,7 +372,9 @@ async function main(): Promise<void> {
       comment:
         `provenance=backfill-L051 | downtime re-read from MC's own time ranges ` +
         `(the DURATION cell was blank or covered only the first stoppage) and shift_hrs ` +
-        `derived from the day's overtime signal | ${c.row.transaction_date} ` +
+        `derived from the day's overtime signal (9 h normal, 12 h on overtime) and any ` +
+        `"no stop operation" range recorded as an INCIDENT rather than downtime | ` +
+        `${c.row.transaction_date} ` +
         `${c.row.production_batch} | ${c.beforeHrs.toFixed(2)} h -> ${c.afterHrs.toFixed(2)} h`,
       diff: { before: c.before, after: c.patch },
       snapshot: { id: c.row.id, transaction_date: c.row.transaction_date, ...c.patch },

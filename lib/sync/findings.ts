@@ -1232,6 +1232,39 @@ function fromDowntimeNote(n: DowntimeNote): RunFinding {
   const mins = (v: number | null) => (v == null ? 'nothing' : `${Math.round(v)} min`)
   const where = [n.transaction_date, n.production_batch].filter(Boolean).join(` ${DOT} `)
 
+  if (n.kind === 'downtime_incident_no_stop') {
+    // L-051b. NOT a problem report — a statement of how the day was read. `info`, because
+    // nothing is wrong, nothing is missing and nothing needs doing; it exists so that a
+    // stoppage the sync deliberately did not count can never become invisible.
+    return {
+      key: `downtime_incident_no_stop:${n.transaction_date}`,
+      kind: 'downtime_incident_no_stop',
+      kindLabel: 'Trouble the plant ran through — not counted as downtime',
+      source: 'Production report',
+      title: `${n.transaction_date}: ${n.dt_incident_ranges ?? 'a stoppage'} not counted — the report says the plant did not stop`,
+      location: where,
+      data: {
+        transaction_date: n.transaction_date,
+        production_batch: n.production_batch,
+        dt_incident_ranges: n.dt_incident_ranges,
+        dt_ranges: n.dt_ranges,
+        ranges_mins: n.ranges_mins,
+        minutes_source: n.minutes_source,
+        shift_hrs: n.shift_hrs,
+        shift_hrs_source: n.shift_hrs_source,
+        warnings: n.warnings,
+      },
+      reason:
+        `The report's reason for ${n.dt_incident_ranges ?? 'this period'} says the plant ` +
+        `did NOT stop, so it was recorded as trouble production ran through rather than as ` +
+        `downtime — those minutes are not in the day's total. The times are kept. ` +
+        `Downtime for the day reads ${mins(n.ranges_mins)}. Nothing to do; this is here so ` +
+        `the period is never invisible.`,
+      severity: 'info',
+      section: 'production',
+    }
+  }
+
   if (n.kind === 'downtime_ranges_unreadable') {
     return {
       key: `downtime_ranges_unreadable:${n.transaction_date}`,
@@ -2698,6 +2731,7 @@ const SHORT_KIND: Record<string, string> = {
   production_human_edited: 'your edit kept',
   downtime_duration_mismatch: 'downtime total off',
   downtime_ranges_unreadable: 'downtime times unreadable',
+  downtime_incident_no_stop: 'ran through it',
   delivery_human_edited: 'your edit kept',
   stale_stream: 'report overdue',
   price_tab_unresolved: 'no price tab',
@@ -2743,6 +2777,7 @@ const EXTRA_KIND_LABEL: Record<string, string> = {
   production_human_edited: 'Row you edited — the report disagrees',
   downtime_duration_mismatch: 'Downtime total disagrees with the times written',
   downtime_ranges_unreadable: 'Downtime read from the typed total, not the times',
+  downtime_incident_no_stop: 'Trouble the plant ran through — not counted as downtime',
   delivery_human_edited: 'Delivery you edited — the source disagrees',
   stale_stream: 'Report stream has gone quiet',
   // Delivery price kinds (2026-08-07). Kept in sync with PRICE_KIND_LABEL above — that
