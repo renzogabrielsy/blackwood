@@ -51,6 +51,7 @@ import type {
     ProductionWasteRow,
     LedgerRowPayload,
 } from './actions';
+import { DEFAULT_SHIFT_HRS } from './ledger-derive';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 const GRADE_OPTIONS = ['3X50', '6X50', '8X50', '2X6'] as const;
@@ -671,11 +672,11 @@ export function DailyLedgerGrid({
                 const dtMins = parseFloat(row.dt_mins) || 0;
                 return dtHrs > 0 || dtMins > 0 ? (dtHrs + dtMins / 60).toFixed(2) : '';
             }
-            // Computed: PROD HRS (col 11) — uses hardcoded shift default of 8h when shift_hrs absent
+            // Computed: PROD HRS (col 11) — uses DEFAULT_SHIFT_HRS when shift_hrs absent
             if (colIdx === 11) {
                 const dtHrs = parseFloat(row.dt_hrs) || 0;
                 const dtMins = parseFloat(row.dt_mins) || 0;
-                const effectiveShift = 8;
+                const effectiveShift = DEFAULT_SHIFT_HRS;
                 return (effectiveShift - dtHrs - dtMins / 60).toFixed(2);
             }
             // Computed: PROD LOSS (col 13)
@@ -1476,7 +1477,7 @@ export function DailyLedgerGrid({
             const dtM = parseFloat(r.dt_mins) || 0;
             const dtTtl = dtH + dtM / 60;
             dtTtlVals.push(dtTtl);
-            prodHrsVals.push(8 - dtTtl);
+            prodHrsVals.push(DEFAULT_SHIFT_HRS - dtTtl);
 
             const waste =
                 (parseFloat(r.rs1a) || 0) +
@@ -1704,11 +1705,11 @@ export function DailyLedgerGrid({
                                 // cell selection, paste, and the context menu — stay aligned.
                                 const rowHidden = isRowHidden(row);
 
-                                // Computed downtime values (shift default = 8h)
+                                // Computed downtime values (shift default = DEFAULT_SHIFT_HRS)
                                 const dtHrs = parseFloat(row.dt_hrs) || 0;
                                 const dtMins = parseFloat(row.dt_mins) || 0;
                                 const dtTtl = dtHrs + dtMins / 60;
-                                const prodHrs = 8 - dtTtl;
+                                const prodHrs = DEFAULT_SHIFT_HRS - dtTtl;
 
                                 // Computed waste values
                                 const totalWaste =

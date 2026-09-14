@@ -51,6 +51,34 @@
  * `3:22 PM` — can never be silently glued to the next line. A leftover odd time falls
  * back to the open-range rule.
  *
+ * ── "NO STOP OPERATION" is a CONVENTION, not free text (L-051b, 2026-09-14) ──
+ * Renzo: a range whose reason says the plant did not stop means there was TROUBLE BUT
+ * PRODUCTION CONTINUED — an **incident**, not downtime. It is a real phrase in MC's
+ * vocabulary, so it is read the way `FEEDING # N` is read (L-042): one narrow family,
+ * matched exactly, and everything else stays downtime.
+ *
+ *   - The family is `NO STOP[PING] [OF] [THE] OPERATION`, case-insensitive. Measured over
+ *     both surviving workbooks it matches **3 days** — 2026-08-11, 2026-04-21 and
+ *     2026-04-22 (plus 2026-04-27's second line) — and the near-miss audit is what proves
+ *     it is narrow enough: `STOPPED TROMMEL 2A`, `STOP OPERATION ROLLER MILL #1` and
+ *     `STOP OPERATION CHANGED RUBBER TUBE` all describe the plant DID stop and are all
+ *     correctly excluded. **The negation is the whole meaning**; a substring match on
+ *     "STOP OPERATION" would invert three real stoppages into non-events.
+ *   - **It is matched PER RANGE, BY INDEX**, not swept over the day: reason line *i*
+ *     marks range *i*. 2026-04-21 is what settles this — `8:00 AM-8:04 AM` (cleaned
+ *     screens, real) and `11:00 AM-4:05 PM` (`…NO STOPPING OF OPERATION…`) with the hit on
+ *     line 1, so the day reads **4 minutes**, which is exactly what the operator's own
+ *     DURATION cell says. A whole-day sweep would read 0 and lose a genuine stoppage.
+ *   - A one-range cell is the unambiguous case, so a phrase anywhere in its reasons marks
+ *     that range (2026-08-11: one range, one reason).
+ *   - A hit that lands on NO range (more reason lines than ranges) marks **nothing** and is
+ *     REPORTED. Excluding a range the note may not even be about is the guess this rule
+ *     exists to avoid.
+ *   - An incident keeps its range text (it moves to `dt_incident_ranges`, never out of
+ *     `dt_ranges`) and keeps its reason, and the run raises an `info`
+ *     `downtime_incident_no_stop` finding naming the day and the ranges — so a stoppage
+ *     that stops counting can never become invisible.
+ *
  * Pure and dependency-free: no DB, no Excel, no clock. Every rule here is exercised
  * against the real cell text in test/reports/production-downtime-ranges.test.ts.
  */
@@ -65,13 +93,28 @@ export interface DowntimeSpan {
   endMin: number;
   /** `endMin - startMin`, never negative (a refused span never becomes a span). */
   mins: number;
+  /** Position of this span in the cell — what the reason lines are matched against. */
+  index: number;
+  /**
+   * L-051b: the reason on this line says the plant did NOT stop. The span is real and is
+   * kept, but it contributes **0** to `mins` — trouble that production ran through is an
+   * incident, not downtime.
+   */
+  incident: boolean;
 }
 
 export interface RangeParse {
-  /** Every span that resolved to a positive (or zero-length) duration. */
+  /** Every span that resolved, incidents included. */
   spans: DowntimeSpan[];
-  /** Sum of `spans[].mins`. 0 when nothing resolved. */
+  /** Sum of `spans[].mins` over NON-incident spans only. 0 when nothing resolved. */
   totalMins: number;
+  /** Source text of every span excluded as a "no stop operation" incident (L-051b). */
+  incidentRanges: string[];
+  /**
+   * A "no stop operation" reason line that landed on no range at all. Reported, never
+   * acted on — see the module header.
+   */
+  unmatchedIncidentNotes: string[];
   /** Lines/tokens that could not become a span, each already phrased for an operator. */
   warnings: string[];
   /** Source text of every start with no end. */
@@ -120,6 +163,18 @@ const ITEM_RE = new RegExp(
 
 /** The hour at which the plant day starts — the anchor for a meridiem-less time. */
 export const PLANT_DAY_START_HOUR = 8;
+
+/**
+ * THE "the plant did not stop" phrase family (L-051b). Narrow on purpose: the NEGATION is
+ * the meaning, so `STOPPED TROMMEL 2A` / `STOP OPERATION ROLLER MILL #1` — three real
+ * stoppages in the surviving workbooks — must not match, and do not.
+ */
+export const NO_STOP_OPERATION_RE = /NO\s+STOP(PING)?\s+(OF\s+)?(THE\s+)?OPERATION/i;
+
+/** True when this reason line says production carried on through the trouble. */
+export function saysNoStopOperation(reason: string | null | undefined): boolean {
+  return reason == null ? false : NO_STOP_OPERATION_RE.test(String(reason));
+}
 
 /**
  * Resolve one `H:MM [meridiem]` to minutes from midnight, or null when it is not a
@@ -195,7 +250,7 @@ function lines(text: string): string[] {
  * on the next — `8:00-8:10` followed by `10:20-11:25` is two spans of 10 and 65 minutes,
  * never one of 205.
  */
-export function parseTimeRanges(raw: unknown): RangeParse {
+export function parseTimeRanges(raw: unknown, reasonLines: string[] = []): RangeParse {
   const text = cellText(raw);
   const items: RawItem[] = [];
   let sawDashedSpan = false;
@@ -222,8 +277,19 @@ export function parseTimeRanges(raw: unknown): RangeParse {
   const spans: DowntimeSpan[] = [];
   const warnings: string[] = [];
   const openRanges: string[] = [];
+  const incidentRanges: string[] = [];
 
+  // Which reason lines say the plant kept running (L-051b). A ONE-range cell is the
+  // unambiguous case, so a phrase anywhere in it marks that single range; otherwise the
+  // match is strictly BY INDEX — see the module header for why a whole-day sweep is wrong.
+  const noStopLines = reasonLines
+    .map((l, i) => (saysNoStopOperation(l) ? i : -1))
+    .filter((i) => i >= 0);
+
+  /** Sequence number of the next span, used to pair it with its reason line. */
+  let nextIndex = 0;
   const push = (raw: string, start: number, end: number): void => {
+    const index = nextIndex++;
     if (end < start) {
       warnings.push(
         `downtime range '${raw}' ends before it starts (${hhmm(start)} → ${hhmm(end)}) — ` +
@@ -231,7 +297,7 @@ export function parseTimeRanges(raw: unknown): RangeParse {
       );
       return;
     }
-    spans.push({ raw, startMin: start, endMin: end, mins: end - start });
+    spans.push({ raw, startMin: start, endMin: end, mins: end - start, index, incident: false });
   };
 
   const bare = items.filter((i) => i.lone !== null);
@@ -266,8 +332,43 @@ export function parseTimeRanges(raw: unknown): RangeParse {
     }
   }
 
-  const totalMins = spans.reduce((s, x) => s + x.mins, 0);
-  return { spans, totalMins, warnings, openRanges, pairedBareTimes };
+  // Mark the incidents, now that every span has its index.
+  const singleRange = spans.length === 1;
+  for (const span of spans) {
+    const hit = singleRange ? noStopLines.length > 0 : noStopLines.includes(span.index);
+    if (!hit) continue;
+    span.incident = true;
+    incidentRanges.push(span.raw);
+    warnings.push(
+      `downtime range '${span.raw}' is an INCIDENT, not downtime — the reason says the ` +
+        `plant did not stop; counted as 0 minutes`,
+    );
+  }
+
+  // A phrase that landed on no range at all: reported, never acted on.
+  const unmatchedIncidentNotes: string[] = [];
+  if (!singleRange) {
+    for (const i of noStopLines) {
+      if (spans.some((sp) => sp.index === i)) continue;
+      const line = reasonLines[i] ?? "";
+      unmatchedIncidentNotes.push(line);
+      warnings.push(
+        `a 'no stop operation' note (line ${i + 1}) matches no time range — nothing was ` +
+          `excluded from the downtime total`,
+      );
+    }
+  }
+
+  const totalMins = spans.reduce((s, x) => s + (x.incident ? 0 : x.mins), 0);
+  return {
+    spans,
+    totalMins,
+    warnings,
+    openRanges,
+    pairedBareTimes,
+    incidentRanges,
+    unmatchedIncidentNotes,
+  };
 }
 
 /**
@@ -332,12 +433,18 @@ export function parseDurationText(raw: unknown): DurationParse {
  *      the ge60 edge fixture's DURATION-only shape, working.
  *   3. Neither → 0 minutes. The caller's own emission gate decides whether a row exists
  *      at all (a reason with no minutes is still a row).
+ *
+ * `reasonLines` is the downtime block's reason column, split the same way the ranges are,
+ * so rung 1 can exclude a "no stop operation" INCIDENT (L-051b). A day whose every range
+ * is an incident still reports `source: "ranges"` with `totalMins: 0` — that is a MEASURED
+ * zero, not a failure to read, and it must not fall through to the DURATION cell.
  */
 export function resolveDowntimeMinutes(
   rangesText: unknown,
   durationText: unknown,
+  reasonLines: string[] = [],
 ): DowntimeMinutes {
-  const parse = parseTimeRanges(rangesText);
+  const parse = parseTimeRanges(rangesText, reasonLines);
   const dur = parseDurationText(durationText);
   const warnings = [...parse.warnings];
 

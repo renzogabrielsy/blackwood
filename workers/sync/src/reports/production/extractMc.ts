@@ -368,6 +368,13 @@ export interface DowntimeRow {
    * the workbook. Never an input to any calculation.
    */
   dt_ranges: string | null;
+  /**
+   * The subset of `dt_ranges` excluded as a "no stop operation" INCIDENT (L-051b), same
+   * `"; "` join. `dt_ranges` stays the FULL verbatim list, so **the ranges that actually
+   * counted are `dt_ranges` minus `dt_incident_ranges`** — one definition, and a column
+   * whose meaning did not change under an existing row. NULL when the day had none.
+   */
+  dt_incident_ranges: string | null;
   /** Why `shift_hrs` is what it is — see ./shiftHours.ts. */
   shift_hrs_source: ShiftHrsSource;
   remarks: string | null;
@@ -382,6 +389,8 @@ export interface DowntimeRow {
   _duration_mins?: number | null;
   _ranges_mins?: number | null;
   _duration_disagrees?: boolean;
+  /** A "no stop operation" note that matched no range — reported, never acted on. */
+  _unmatched_incident_notes?: string[];
 }
 
 export interface ElectricityRow {
@@ -552,9 +561,12 @@ function extractDowntime(
   // the input: MC stopped filling it entirely from 2026-08-01 (so August and September
   // both published 0.0 downtime hours beside a full list of stoppages), and even while it
   // WAS filled it usually covered only the first range. See ./downtimeRanges.ts.
+  // The reason lines ride along so a "no stop operation" line can mark its OWN range as an
+  // incident rather than downtime (L-051b) — matched by index, never swept over the day.
   const minutes = resolveDowntimeMinutes(
     ws.cell(detailRow, COL_DT_RANGES),
     ws.cell(detailRow, COL_DT_MINUTES),
+    reasons,
   );
   const rowWarnings: string[] = [...minutes.warnings];
   const totalMins = minutes.totalMins;
@@ -605,6 +617,8 @@ function extractDowntime(
     dt_mins: dtMins,
     dt_reason: dtReason,
     dt_ranges: ranges.length > 0 ? ranges.join("; ") : null,
+    dt_incident_ranges:
+      minutes.parse.incidentRanges.length > 0 ? minutes.parse.incidentRanges.join("; ") : null,
     shift_hrs_source: shiftHrsSource,
     remarks,
     _source_sheet: titleStripped,
@@ -614,6 +628,9 @@ function extractDowntime(
   if (minutes.durationMins !== null) row._duration_mins = minutes.durationMins;
   if (minutes.rangesMins !== null) row._ranges_mins = minutes.rangesMins;
   if (minutes.disagrees) row._duration_disagrees = true;
+  if (minutes.parse.unmatchedIncidentNotes.length > 0) {
+    row._unmatched_incident_notes = minutes.parse.unmatchedIncidentNotes;
+  }
   return row;
 }
 
@@ -639,7 +656,8 @@ function rawShiftLabelOf(ws: LoadedSheet, sourceRow: number): string | null {
  *     length is a fact about the shift, not a quantity either batch owns a share of.
  *   - `dt_reason` is copied verbatim to both. Annotating it would make every future run
  *     see a VALUE_CHANGED against the stored text forever.
- *   - `dt_ranges` and `shift_hrs_source` are copied verbatim too (L-051). Both describe
+ *   - `dt_ranges`, `dt_incident_ranges` and `shift_hrs_source` are copied verbatim too
+ *     (L-051 / L-051b). All three describe
  *     the SHIFT — the operator's own list of stoppages, and why the shift is 8 h or 12 h
  *     — so like `shift_hrs` they are facts neither batch owns a share of. Splitting the
  *     range list would make each half read as a different day's stoppages.

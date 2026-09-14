@@ -1528,3 +1528,98 @@ Files: `workers/sync/src/reports/production/{downtimeRanges,shiftHours,extractMc
 Tests: `production-downtime-ranges.test.ts` (29), `production-downtime-extract.test.ts` (5),
 `scripts/verify-findings.ts` (+5, 82 → 87).
 Specs: `production.md` §2 Section B, `PORTING_DECISIONS.md`.
+
+### L-051b — RENZO'S RULINGS ON THE THREE OPEN QUESTIONS (2026-09-14, same day)
+
+L-051 shipped with three things it deliberately did not decide. Renzo decided them.
+
+**1. A NORMAL SHIFT IS NINE HOURS.** 08:00–17:00 with an hour off. 12 h stays for an
+overtime day. This is not a new number: it is what all **158** rows of Renzo's own
+`MASTER ICTC INPUT FILE V1.xlsx` said all along — the system had simply grown two other
+answers beside it, and neither was ever written down as a decision. `default_8h` is
+**retired** after a single day's life (the DB CHECK still accepts it so history reads
+cleanly; nothing emits it) and the 48 rows that carried it were re-derived to
+`default_9h` / 9 h.
+
+**The part worth keeping: the number was written out FOUR times on the app side and once
+in the worker, and nobody could see them disagree.** `ledger-derive.ts`, the desktop
+grid's inline cell compute, that grid's footer aggregate, `daily-grid-v2-save.ts`'s
+`ASSUMED_SHIFT_HRS` and `actions.ts`'s `?? 8` were five independent literals for one fact —
+while the sync stored `12`. They are now ONE exported `DEFAULT_SHIFT_HRS` in
+`ledger-derive.ts` that every site reads, and a test pins it to the worker's own constant
+**by reading the app file's source text**, never by importing it: the worker may not depend
+on `app/**` (that module type-imports a `.tsx` and dragging JSX into the worker package is
+the client/server boundary trap pointing the other way — `tsc` refused it, which is how the
+attempt was caught). *A constant copied is a constant that will disagree; when the two
+copies must live in different packages, pin them with an assertion, not an import.*
+
+**2. NO PRE-SYNC BACKFILL.** The 158 master-file rows stay exactly as they are. The
+`--from 2026-05-25` floor is now a decision, not a caution.
+
+**3. "NO STOP OPERATION" IS A CONVENTION, NOT FREE TEXT.** A range whose reason says the
+plant did not stop means there was **trouble but production continued** — an INCIDENT, not
+downtime. L-051 had refused to read it, on the grounds that inferring downtime from English
+is a guess. Renzo's correction is the fourth instance of this ledger's oldest lesson: **an
+operator's SHORTHAND is a naming convention to be learned, not noise to be stepped around**
+(L-039 `"Aug. 2026"`, L-040b `FEEDING # 1`, L-042 `FEEDING # N`, L-048 `Sep. 2`). Refusing
+to read a convention is the same error as misreading one — it just fails quietly.
+
+So it is implemented the way `FEEDING # N` was: **narrowly, from measured evidence.**
+
+- The family is `NO STOP[PING] [OF] [THE] OPERATION`, case-insensitive. ONE definition
+  (`saysNoStopOperation`), used in one place.
+- **The near-miss audit is what makes it safe, and it was run before the rule was written.**
+  Four reason lines in the two surviving workbooks mention STOP and must NOT match:
+  `STOPPED TROMMEL 2A` (four days), `STOP OPERATION ROLLER MILL #1`, `STOP OPERATION
+  CHANGED RUBBER TUBE`, `STOPPED AND CHANGED 3 SET FUSE OF GENSET`. Every one says the
+  plant DID stop. **The negation is the entire meaning**, so a substring match on "STOP
+  OPERATION" would have inverted three real stoppages into non-events — a quiet wrong
+  traded for a loud one, the exact L-042 trap.
+- **Matched PER RANGE, BY INDEX — reason line *i* marks range *i* — never swept over the
+  day.** 2026-04-21 is what settles it and it is worth stating: that day lists
+  `8:00 AM-8:04 AM` (a genuine screen clean) and `11:00 AM-4:05 PM` (`…NO STOPPING OF
+  OPERATION…`), with the phrase on line 1. Index pairing reads **4 minutes**; a whole-day
+  sweep reads **0** and loses a real stoppage. Four minutes is exactly what the operator's
+  own DURATION cell records for that day. A one-range cell is unambiguous so a phrase
+  anywhere in it marks that range; a phrase landing on NO range excludes nothing and is
+  reported, because excluding a range the note may not even be about is the guess.
+- **Nothing is deleted.** `dt_ranges` still holds the FULL verbatim list; the new
+  `dt_incident_ranges` holds the excluded subset, so **the ranges that counted are the
+  difference** — one definition, and no existing column changed meaning under a row already
+  written. The reason is untouched. An **`info`** `downtime_incident_no_stop` finding names
+  the day and the ranges every run: a stoppage that stops counting must never become
+  invisible, and `info` because nothing is wrong and nothing needs doing.
+- **An all-incident day is a MEASURED zero** (`source: "ranges"`, `totalMins: 0`) and must
+  not fall through to the DURATION cell.
+
+### Measured effect (48 rows, all applied through the RPC, zero refused, 48 audit rows)
+
+| month | rows | downtime hrs before → after | shift_hrs moved | incidents |
+|---|---|---|---|---|
+| 2026-05 | 3 | 2.83 → 2.83 | 3 | 0 |
+| 2026-07 | 12 | 13.08 → 13.08 | 12 | 0 |
+| 2026-08 | 23 | **17.43 → 13.82** | 23 | **1** |
+| 2026-09 | 10 | 8.60 → 8.60 | 10 | 0 |
+| **total** | **48** | **41.95 → 38.33** | **48** | **1** |
+
+Downtime moves in ONE month only, by exactly the 3 h 37 m of `2026-08-11` — the sole
+incident in the sync-written era, now reading **0 h with `8:00-11:37` preserved in both
+`dt_ranges` and `dt_incident_ranges`**. The other 47 rows are a pure `shift_hrs` correction.
+The 14 OVERTIME rows were already right and were not touched. Afterwards: **zero rows carry
+`default_8h`**, 48 carry `default_9h` at 9 h, 14 carry `overtime_signal` at 12 h.
+
+**Still un-derived and still reported, not silently fixed:** the **25 rows** no surviving
+workbook covers (JUNE 2026 ×23, plus 2026-05-28/29) keep the old hardcoded `shift_hrs = 12`
+with a NULL source. They cannot be re-derived — there is no workbook to read an overtime
+signal from — and writing 9 over them would be a guess about days that may well have run
+overtime. An unknown must never be resolved by assumption.
+
+Migration `20260914021704_downtime_9h_default_and_incident_ranges` (CHECK extended with
+`default_9h`, `dt_incident_ranges` added, both column comments rewritten, the column added to
+`fn_apply_production_upstream`'s allowlist). Parity **12/12** with the PD-5 and L-051 notes
+extended. Files: `workers/sync/src/reports/production/{downtimeRanges,shiftHours,extractMc,classify,apply,index}.ts`,
+`workers/sync/scripts/backfill-downtime-ranges.ts`,
+`app/(app)/production/daily/{ledger-derive,daily-ledger-grid,daily-grid-v2-save,actions}.{ts,tsx}`,
+`lib/sync/findings.ts`, `app/(app)/sync/types.ts`, `types/supabase.ts`.
+Tests: `production-downtime-ranges.test.ts` (38, +9), `production-downtime-extract.test.ts`
+(6, +1), `scripts/verify-findings.ts` (90, +3).

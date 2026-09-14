@@ -175,9 +175,9 @@ describe("production_batch follows the RUNNING STATE, not the calendar", () => {
     ]);
     for (const d of mc.downtime) expect(d.transaction_date).toBe("2026-08-01");
     // The shift is one physical shift — its LENGTH is not split. This synthetic
-    // changeover sheet carries no OVERTIME signal, so L-051 derives the 8-hour default
-    // (it read a hardcoded 12 before 2026-09-14).
-    for (const d of mc.downtime) expect(d.shift_hrs).toBe(8);
+    // changeover sheet carries no OVERTIME signal, so L-051 derives the 9-hour default
+    // (it read a hardcoded 12 before 2026-09-14; the 9 was settled by L-051b the same day).
+    for (const d of mc.downtime) expect(d.shift_hrs).toBe(9);
     // This synthetic sheet states a DURATION and no time ranges, so the basis records
     // `duration_only` — the shift is still the 8-hour default; the tag says the minutes
     // came from the operator's typed summary rather than from a list of stoppages.

@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
 import type { Tables, TablesInsert, TablesUpdate } from '@/types/supabase';
 import { format } from 'date-fns';
+import { DEFAULT_SHIFT_HRS } from './ledger-derive';
 
 // ─── Re-exported DB row types ──────────────────────────────────────────────────
 export type ProductionShiftRow = Tables<'production_shifts'>;
@@ -371,7 +372,7 @@ export async function saveBulkDailyLedger(rows: LedgerRowPayload[]): Promise<
             if (hasDowntimeData) {
                 const downtimeData: TablesInsert<'production_downtime'> = {
                     shift_id: shiftId,
-                    shift_hrs: dt.shift_hrs ?? 8,
+                    shift_hrs: dt.shift_hrs ?? DEFAULT_SHIFT_HRS,
                     dt_hrs: dt.dt_hrs ?? 0,
                     dt_mins: dt.dt_mins ?? 0,
                     dt_reason: dt.dt_reason || null,

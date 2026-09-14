@@ -10,14 +10,18 @@
  * through the real extractor when that file is present locally.
  */
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import {
   parseTimeRanges,
   parseDurationText,
   resolveDowntimeMinutes,
+  saysNoStopOperation,
   cellText,
 } from "../../src/reports/production/downtimeRanges.js";
 import {
+  DEFAULT_SHIFT_HRS,
   isOvertimeLabel,
   resolveShiftHours,
   scanOvertime,
@@ -209,6 +213,26 @@ describe("resolveDowntimeMinutes — ranges win, duration cross-checks", () => {
 });
 
 describe("shift hours — derived from an overtime SIGNAL, never hardcoded", () => {
+  it("a normal shift is NINE hours (Renzo, 2026-09-14) and the app says the same", () => {
+    // L-051b. The number that gets STORED and the number the operator SEES as
+    // `PROD HRS = shift − DT TTL` are ONE fact stated on two sides of the wire, and they
+    // silently disagreed (12 vs 8) for months.
+    expect(DEFAULT_SHIFT_HRS).toBe(9);
+
+    // The app's copy is pinned by READING ITS SOURCE, never by importing it: the worker
+    // may not depend on `app/**` (that module type-imports a .tsx and would drag JSX into
+    // this package — the client/server boundary trap, pointing the other way). A text
+    // assertion pins the literal with no module edge at all.
+    const appSrc = readFileSync(
+      join(__dirname, "../../../../app/(app)/production/daily/ledger-derive.ts"),
+      "utf8",
+    );
+    const m = appSrc.match(/export const DEFAULT_SHIFT_HRS\s*=\s*(\d+(?:\.\d+)?)/);
+    expect(m, "app/(app)/production/daily/ledger-derive.ts must export DEFAULT_SHIFT_HRS").not
+      .toBeNull();
+    expect(Number(m![1])).toBe(DEFAULT_SHIFT_HRS);
+  });
+
   it("recognises the overtime label and nothing else", () => {
     expect(isOvertimeLabel("OVERTIME")).toBe(true);
     expect(isOvertimeLabel(" overtime ")).toBe(true);
@@ -239,16 +263,16 @@ describe("shift hours — derived from an overtime SIGNAL, never hardcoded", () 
     expect(scan.hasOvertime).toBe(true);
   });
 
-  it("8 h when the OVERTIME row is printed but reads 0 (2026-09-03)", () => {
+  it("9 h when the OVERTIME row is printed but reads 0 (2026-09-03)", () => {
     const scan = scanOvertime([{ label: null, kg: 19032 }], 0);
     expect(scan.hasOvertime).toBe(false);
     expect(resolveShiftHours(scan, "ranges")).toEqual({
-      shiftHrs: 8,
-      source: "default_8h",
+      shiftHrs: 9,
+      source: "default_9h",
     });
   });
 
-  it("8 h when an OVERTIME label carries no kilos — a printed row is not a signal", () => {
+  it("9 h when an OVERTIME label carries no kilos — a printed row is not a signal", () => {
     const scan = scanOvertime(
       [
         { label: "DAY SHIFT", kg: 15600 },
@@ -263,11 +287,106 @@ describe("shift hours — derived from an overtime SIGNAL, never hardcoded", () 
   it("records `duration_only` when the minutes came from the typed total", () => {
     const scan = scanOvertime([{ label: null, kg: 100 }], 0);
     expect(resolveShiftHours(scan, "duration")).toEqual({
-      shiftHrs: 8,
+      shiftHrs: 9,
       source: "duration_only",
     });
     // …but an overtime day is still `overtime_signal`: the two facts are independent.
     const ot = scanOvertime([{ label: "OVERTIME", kg: 5 }], 0);
     expect(resolveShiftHours(ot, "duration").source).toBe("overtime_signal");
+  });
+});
+
+describe("L-051b — \"NO STOP OPERATION\" is an INCIDENT, not downtime", () => {
+  const AUG_11_REASON =
+    "CHANGED MOTOR ROLLER MILL #1 AND CHANGED HANGER BEARING 1 PC FOR BE #6 CONNECTED TO " +
+    "RS 5. NO STOP OPERATION";
+
+  it("2026-08-11's exact cell reads ZERO downtime and keeps its range", () => {
+    const p = parseTimeRanges("8:00-11:37", [AUG_11_REASON]);
+    expect(p.spans).toHaveLength(1);
+    expect(p.spans[0].incident).toBe(true);
+    expect(p.spans[0].mins).toBe(217); // the span is real…
+    expect(p.totalMins).toBe(0); // …it just is not downtime
+    expect(p.incidentRanges).toEqual(["8:00-11:37"]);
+    expect(p.warnings.join(" ")).toContain("INCIDENT");
+  });
+
+  it("matches BY INDEX — 2026-04-21 keeps its real 4 minutes", () => {
+    // range 0 = a genuine screen clean; range 1 = the one the plant ran through. A
+    // whole-day sweep would read 0 and lose the 4 minutes the operator himself recorded.
+    const p = parseTimeRanges("8:00 AM-8:04 AM\n\n11:00 AM-4:05 PM", [
+      "CLEANED SCREENS RS 2A, RS 2B.",
+      "SINGLE FEEDER SC #8 ADJUST INVERTER TO 45; TROUBLE TROMMEL 1B CHANGED WHEEL 2 PCS " +
+        "AND PILLOW BLOCK BEARING 2 PCS; NO STOPPING OF OPERATION AND BACK TO NORMAL " +
+        "OPERATION INVERTER 30:30",
+      "GS #8 CHANGED FUNCASE 1 PC AND FLANGE BEARING 1 PC",
+    ]);
+    expect(p.totalMins).toBe(4);
+    expect(p.incidentRanges).toEqual(["11:00 AM-4:05 PM"]);
+    expect(p.spans[0].incident).toBe(false);
+    expect(p.spans[1].incident).toBe(true);
+  });
+
+  it("2026-04-27: only the marked range drops out, the other two stay", () => {
+    const p = parseTimeRanges(
+      "8:00 AM-8:05 AM\n\n8:00 AM-8:32 AM\n\n10:15 AM-10:50 AM\n\n1:01 PM",
+      [
+        "CLEANED SCREENS RS 2A, RS 2B, AND SINGLE FEEDER SC #9 ADJUST INVERTER TO 45",
+        "SC #7 STOCK UP CONNECTED TO TROMMEL 2B; NO STOP OPERATION, BACK TO 30:30 INVERTER",
+        "STOCK UP LINE OF BE #7 CONNECTED TO PRODUCTION TANK 3X50",
+        "ADJUST INVERTER TO 28:28",
+      ],
+    );
+    expect(p.totalMins).toBe(40); // 5 + 35; the 32-minute range is the incident
+    expect(p.incidentRanges).toEqual(["8:00 AM-8:32 AM"]);
+  });
+
+  it("the NEAR MISSES stay downtime — the negation is the whole meaning", () => {
+    // Every one of these is a real stoppage in the surviving workbooks. A substring match
+    // on "STOP OPERATION" would invert all three into non-events.
+    for (const reason of [
+      "SINGLE FEEDER SC #9 ADJUST INVERTER TO 45; STOPPED TROMMEL 2A CHANGED WHEEL 2 PCS",
+      "STOP OPERATION ROLLER MILL #1 PULL OUT 7.5 HP SPARE MOTOR",
+      "STOP OPERATION CHANGED RUBBER TUBE 1 PC; BUCKET ELEVATOR 2 CHAIN JUMP",
+      "STOPPED AND CHANGED 3 SET FUSE OF GENSET; 9:45 AM START",
+    ]) {
+      expect(saysNoStopOperation(reason)).toBe(false);
+      expect(parseTimeRanges("8:00-8:30", [reason]).totalMins).toBe(30);
+    }
+  });
+
+  it("accepts the whole phrase FAMILY, case-insensitively", () => {
+    for (const r of [
+      "NO STOP OPERATION",
+      "no stopping of operation",
+      "NO STOPPING OPERATION",
+      "NO STOP OF THE OPERATION",
+      "…AND NO  STOPPING   OF  OPERATION, BACK TO NORMAL",
+    ]) {
+      expect(saysNoStopOperation(r)).toBe(true);
+    }
+  });
+
+  it("a note that matches NO range excludes nothing, and says so", () => {
+    const p = parseTimeRanges("8:00-8:10\n\n9:00-9:20", [
+      "CLEANED SCREENS",
+      "CHANGED SPRING",
+      "GS #8 REBUILT; NO STOP OPERATION",
+    ]);
+    expect(p.totalMins).toBe(30); // nothing excluded
+    expect(p.incidentRanges).toEqual([]);
+    expect(p.unmatchedIncidentNotes).toHaveLength(1);
+    expect(p.warnings.join(" ")).toContain("matches no time range");
+  });
+
+  it("an all-incident day is a MEASURED zero, never a fall-back to the typed total", () => {
+    const r = resolveDowntimeMinutes("8:00-11:37", "", [AUG_11_REASON]);
+    expect(r.totalMins).toBe(0);
+    expect(r.source).toBe("ranges");
+    expect(r.rangesMins).toBe(0);
+  });
+
+  it("no reason lines at all → nothing is an incident (the default argument)", () => {
+    expect(parseTimeRanges("8:00-11:37").totalMins).toBe(217);
   });
 });

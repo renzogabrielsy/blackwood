@@ -2021,6 +2021,7 @@ const downtimeNote = (over: Partial<DowntimeNote> = {}): DowntimeNote => ({
   ranges_mins: 77,
   minutes_source: 'ranges',
   dt_ranges: '8:00 AM-8:07 AM; 12:20 PM-1:30 PM',
+  dt_incident_ranges: null,
   shift_hrs: 12,
   shift_hrs_source: 'overtime_signal',
   warnings: [],
@@ -2086,6 +2087,44 @@ check('L-051: the note carries no ₱ and nothing cost-shaped', () => {
   const f = downtimeFinding({ warnings: ['downtime time \'3:22 PM\' has no end time'] })
   const blob = JSON.stringify(f)
   assert.doesNotMatch(blob, /₱/)
+  for (const k of Object.keys(f.data)) assert.equal(isCostKey(k), false, k)
+})
+
+check('L-051b: an incident says the day, the range, and that nothing needs doing', () => {
+  // A range whose reason says the plant did NOT stop contributes zero minutes. The one
+  // thing that must never happen is for it to become invisible, so the day is named every
+  // run — at `info`, because nothing is wrong and there is nothing to fix.
+  const f = downtimeFinding({
+    kind: 'downtime_incident_no_stop',
+    transaction_date: '2026-08-11',
+    duration_mins: null,
+    ranges_mins: 0,
+    dt_ranges: '8:00-11:37',
+    dt_incident_ranges: '8:00-11:37',
+    shift_hrs: 9,
+    shift_hrs_source: 'default_9h',
+  })
+  assert.equal(f.kind, 'downtime_incident_no_stop')
+  assert.equal(f.severity, 'info', 'an incident must not out-shout a real disagreement')
+  assert.equal(f.section, 'production')
+  assert.match(f.title, /8:00-11:37/)
+  assert.match(f.reason, /did NOT stop/)
+  assert.match(f.reason, /Nothing to do/)
+  assert.equal(f.data.dt_incident_ranges, '8:00-11:37')
+})
+
+check('L-051b: a LOUDER problem on the same day wins the one note', () => {
+  // One note per day, not a pile: the incident kind is only chosen when nothing else is
+  // also true, so a day that both excluded an incident AND disagrees still reads as the
+  // disagreement.
+  const f = downtimeFinding({ dt_incident_ranges: '8:00-11:37' })
+  assert.equal(f.kind, 'downtime_duration_mismatch')
+  assert.equal(f.severity, 'attention')
+})
+
+check('L-051b: an incident note carries no ₱ and nothing cost-shaped', () => {
+  const f = downtimeFinding({ kind: 'downtime_incident_no_stop', dt_incident_ranges: '8:00-11:37' })
+  assert.doesNotMatch(JSON.stringify(f), /₱/)
   for (const k of Object.keys(f.data)) assert.equal(isCostKey(k), false, k)
 })
 

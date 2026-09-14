@@ -467,8 +467,8 @@ describe("3Q layout shift — anchor-based section location", () => {
     expect(dt.remarks).toBe("Time ranges: 8:00-9:00; 10:00-10:30");
     expect(dt.dt_ranges).toBe("8:00-9:00; 10:00-10:30");
     // No OVERTIME label on this stripped sheet, and no CHARCOAL FED block at all.
-    expect(dt.shift_hrs).toBe(8);
-    expect(dt.shift_hrs_source).toBe("default_8h");
+    expect(dt.shift_hrs).toBe(9);
+    expect(dt.shift_hrs_source).toBe("default_9h");
     expect(mc.electricity).toEqual([]);
     expect(mc.trucks).toEqual([]);
     expect(mc.dayTotals["2026-07-04"]).toBe(37048);
