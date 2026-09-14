@@ -50,6 +50,11 @@ export async function middleware(request: NextRequest) {
   // in production with `TABLE_PLAYGROUND` explicitly set. The page itself carries the
   // identical condition and 404s, so the two locks are independent and either one alone
   // keeps it off the live site.
+  //
+  // Note `/dev/ops-ledger` is deliberately NOT here. Those pages are design drafts meant to
+  // be reviewed on the live site, so they are gated by ROLE rather than by environment
+  // (`app/dev/ops-ledger/_shared/gate.ts`) and sit behind this login wall like every other
+  // page. A fixture needs to run with no credentials; a draft does not.
   if (
     process.env.NODE_ENV !== 'production' ||
     process.env.TABLE_PLAYGROUND
