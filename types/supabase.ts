@@ -416,6 +416,20 @@ export type Database = {
             foreignKeyName: "fk_batch_code"
             columns: ["batch_code"]
             isOneToOne: false
+            referencedRelation: "view_ops_ledger_day_block"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_ops_ledger_day_blocks_used"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
             referencedRelation: "view_rc_movement_batch_price"
             referencedColumns: ["batch_code"]
           },
@@ -1321,6 +1335,13 @@ export type Database = {
             foreignKeyName: "production_downtime_shift_id_fkey"
             columns: ["shift_id"]
             isOneToOne: true
+            referencedRelation: "view_ops_ledger_shift"
+            referencedColumns: ["shift_id"]
+          },
+          {
+            foreignKeyName: "production_downtime_shift_id_fkey"
+            columns: ["shift_id"]
+            isOneToOne: true
             referencedRelation: "view_production_daily"
             referencedColumns: ["shift_id"]
           },
@@ -1377,6 +1398,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "production_shifts"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "production_runs_shift_id_fkey"
+            columns: ["shift_id"]
+            isOneToOne: false
+            referencedRelation: "view_ops_ledger_shift"
+            referencedColumns: ["shift_id"]
           },
           {
             foreignKeyName: "production_runs_shift_id_fkey"
@@ -1535,6 +1563,13 @@ export type Database = {
             isOneToOne: true
             referencedRelation: "production_shifts"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "production_waste_shift_id_fkey"
+            columns: ["shift_id"]
+            isOneToOne: true
+            referencedRelation: "view_ops_ledger_shift"
+            referencedColumns: ["shift_id"]
           },
           {
             foreignKeyName: "production_waste_shift_id_fkey"
@@ -3743,6 +3778,20 @@ export type Database = {
             foreignKeyName: "fk_batch_code"
             columns: ["batch_code"]
             isOneToOne: false
+            referencedRelation: "view_ops_ledger_day_block"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_ops_ledger_day_blocks_used"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
             referencedRelation: "view_rc_movement_batch_price"
             referencedColumns: ["batch_code"]
           },
@@ -4132,6 +4181,20 @@ export type Database = {
             foreignKeyName: "fk_batch_code"
             columns: ["batch_code"]
             isOneToOne: false
+            referencedRelation: "view_ops_ledger_day_block"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_ops_ledger_day_blocks_used"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
             referencedRelation: "view_rc_movement_batch_price"
             referencedColumns: ["batch_code"]
           },
@@ -4183,6 +4246,338 @@ export type Database = {
           sort_order: number | null
           total_in: number | null
           total_out: number | null
+        }
+        Relationships: []
+      }
+      view_ops_ledger_campaign_grades: {
+        Row: {
+          campaign_key: string | null
+          campaign_label: string | null
+          campaign_produced_kg: number | null
+          campaign_year: number | null
+          grade: string | null
+          kg: number | null
+          production_batch: string | null
+          run_count: number | null
+          runs_with_sacks: number | null
+          sacks: number | null
+          share_pct: number | null
+        }
+        Relationships: []
+      }
+      view_ops_ledger_campaign_kpis: {
+        Row: {
+          active_days: number | null
+          actual_fed_php_kg: number | null
+          block_resiko_kg: number | null
+          block_resiko_loss_pct: number | null
+          blocks_closed: number | null
+          blocks_closed_unpriced: number | null
+          blocks_fed: number | null
+          blocks_in_price: number | null
+          blocks_open: number | null
+          blocks_with_sundry: number | null
+          campaign_fed_kg_excluded: number | null
+          campaign_fed_kg_included: number | null
+          campaign_fed_kg_included_pct: number | null
+          campaign_key: string | null
+          campaign_label: string | null
+          campaign_weighted_actual_fed_php_kg: number | null
+          campaign_year: number | null
+          downtime_hours: number | null
+          downtime_shift_count: number | null
+          downtime_shifts_reason_only: number | null
+          downtime_shifts_with_duration: number | null
+          fed_kg: number | null
+          fed_kg_price_traceable: number | null
+          fed_kg_price_untraceable: number | null
+          fed_php_kg: number | null
+          fed_price_coverage_pct: number | null
+          fed_value_php: number | null
+          feed_days: number | null
+          first_date: string | null
+          first_fed_date: string | null
+          is_fully_covered: boolean | null
+          kwh: number | null
+          kwh_days: number | null
+          kwh_per_produced_kg: number | null
+          kwh_per_produced_kg_excl_suspect: number | null
+          kwh_suspect_reading_count: number | null
+          last_date: string | null
+          last_fed_date: string | null
+          ledger_days: number | null
+          out_kg: number | null
+          php_per_produced_kg_delivered: number | null
+          php_per_produced_kg_true: number | null
+          process_loss_kg: number | null
+          process_loss_pct: number | null
+          produced_kg: number | null
+          production_batch: string | null
+          production_reported: boolean | null
+          reported_days: number | null
+          rest_days: number | null
+          run_count: number | null
+          runs_with_sacks: number | null
+          sacks: number | null
+          sacks_coverage_pct: number | null
+          shift_count: number | null
+          span_days: number | null
+          sundry_kg: number | null
+          uplift_php_kg: number | null
+          yield_pct: number | null
+        }
+        Relationships: []
+      }
+      view_ops_ledger_campaign_span: {
+        Row: {
+          campaign_key: string | null
+          campaign_label: string | null
+          campaign_year: number | null
+          feed_days: number | null
+          first_date: string | null
+          first_fed_date: string | null
+          first_shift_date: string | null
+          last_date: string | null
+          last_fed_date: string | null
+          last_shift_date: string | null
+          production_batch: string | null
+          shift_count: number | null
+          span_days: number | null
+        }
+        Relationships: []
+      }
+      view_ops_ledger_day: {
+        Row: {
+          bf_kg: number | null
+          blocks_fed_count: number | null
+          calendar_date: string | null
+          campaign_key: string | null
+          campaign_label: string | null
+          campaign_year: number | null
+          day_drift_kg: number | null
+          downtime_hours: number | null
+          downtime_incident_count: number | null
+          downtime_shift_count: number | null
+          downtime_shifts_reason_only: number | null
+          downtime_shifts_with_duration: number | null
+          fed_kg: number | null
+          fed_php_kg: number | null
+          grit_kg: number | null
+          is_rest_day: boolean | null
+          is_weekend: boolean | null
+          iso_weekday: number | null
+          produced_kg: number | null
+          production_batch: string | null
+          production_reported: boolean | null
+          rs1a_kg: number | null
+          rs1b_kg: number | null
+          rs23_kg: number | null
+          rs5_kg: number | null
+          run_count: number | null
+          runs_with_sacks: number | null
+          sacks: number | null
+          shift_count: number | null
+          shift_hrs_total: number | null
+          sundry_kg: number | null
+          total_waste_kg: number | null
+          trml1_kg: number | null
+          trml2_kg: number | null
+          weekday: string | null
+        }
+        Relationships: []
+      }
+      view_ops_ledger_day_block: {
+        Row: {
+          batch_code: string | null
+          batch_id: string | null
+          block_loc: string | null
+          calendar_date: string | null
+          campaign_key: string | null
+          campaign_year: number | null
+          fed_kg: number | null
+          production_batch: string | null
+          sundry_kg: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "batches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_analytics_aging_watchlist"
+            referencedColumns: ["batch_id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_blocking_block_suppliers"
+            referencedColumns: ["batch_id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_blocking_grid"
+            referencedColumns: ["batch_id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_batch_price"
+            referencedColumns: ["batch_id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_block_actual_price"
+            referencedColumns: ["batch_id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_rc_out_closed_blocks"
+            referencedColumns: ["batch_id"]
+          },
+        ]
+      }
+      view_ops_ledger_day_blocks_used: {
+        Row: {
+          balance_kg: number | null
+          batch_code: string | null
+          batch_id: string | null
+          block_loc: string | null
+          calendar_date: string | null
+          campaign_key: string | null
+          campaign_year: number | null
+          close_date: string | null
+          day_fed_kg: number | null
+          delivered_kg: number | null
+          delivery_count: number | null
+          feed_count: number | null
+          first_fed_date: string | null
+          has_sundry_outflow: boolean | null
+          has_unpriced_delivery: boolean | null
+          is_closed: boolean | null
+          loss_pct: number | null
+          production_batch: string | null
+          resiko_kg: number | null
+          resiko_pct: number | null
+          status: Database["public"]["Enums"]["batch_status"] | null
+          sundry_kg: number | null
+          total_fed_kg: number | null
+          total_out_kg: number | null
+          unpriced_delivery_count: number | null
+          weight_lost_kg: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "batches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_analytics_aging_watchlist"
+            referencedColumns: ["batch_id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_blocking_block_suppliers"
+            referencedColumns: ["batch_id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_blocking_grid"
+            referencedColumns: ["batch_id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_batch_price"
+            referencedColumns: ["batch_id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_block_actual_price"
+            referencedColumns: ["batch_id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_rc_out_closed_blocks"
+            referencedColumns: ["batch_id"]
+          },
+        ]
+      }
+      view_ops_ledger_day_grade: {
+        Row: {
+          calendar_date: string | null
+          campaign_key: string | null
+          campaign_year: number | null
+          grade: string | null
+          kg: number | null
+          production_batch: string | null
+          run_count: number | null
+          sacks: number | null
+        }
+        Relationships: []
+      }
+      view_ops_ledger_shift: {
+        Row: {
+          bf_kg: number | null
+          calendar_date: string | null
+          campaign_key: string | null
+          campaign_year: number | null
+          downtime_hours: number | null
+          downtime_row_present: boolean | null
+          dt_hrs: number | null
+          dt_incident_ranges: string | null
+          dt_mins: number | null
+          dt_ranges: string | null
+          dt_reason: string | null
+          grit_kg: number | null
+          has_incident: boolean | null
+          produced_kg: number | null
+          production_batch: string | null
+          productive_hrs: number | null
+          rs1a_kg: number | null
+          rs1b_kg: number | null
+          rs23_kg: number | null
+          rs5_kg: number | null
+          run_count: number | null
+          runs: Json | null
+          runs_with_sacks: number | null
+          sacks: number | null
+          shift: string | null
+          shift_hrs: number | null
+          shift_hrs_source: string | null
+          shift_id: string | null
+          total_waste_kg: number | null
+          trml1_kg: number | null
+          trml2_kg: number | null
+          waste_remarks: string | null
         }
         Relationships: []
       }
@@ -4422,6 +4817,20 @@ export type Database = {
             columns: ["batch_code"]
             isOneToOne: false
             referencedRelation: "view_digest_rcout_batch_daily"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_ops_ledger_day_block"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_ops_ledger_day_blocks_used"
             referencedColumns: ["batch_code"]
           },
           {
@@ -4976,6 +5385,20 @@ export type Database = {
             foreignKeyName: "fk_batch_code"
             columns: ["batch_code"]
             isOneToOne: false
+            referencedRelation: "view_ops_ledger_day_block"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_ops_ledger_day_blocks_used"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
             referencedRelation: "view_rc_movement_batch_price"
             referencedColumns: ["batch_code"]
           },
@@ -5360,6 +5783,50 @@ export type Database = {
         Returns: Json
       }
       fn_is_close_remark: { Args: { p_remarks: string }; Returns: boolean }
+      fn_ops_ledger_group_kpis: {
+        Args: { p_campaign_keys: string[] }
+        Returns: {
+          active_days: number
+          actual_fed_php_kg: number
+          block_resiko_loss_pct: number
+          blocks_closed_distinct: number
+          blocks_fed_campaign_sum: number
+          blocks_fed_distinct: number
+          blocks_open_distinct: number
+          campaign_count: number
+          campaign_fed_kg_included: number
+          campaign_keys: string[]
+          campaigns_fully_covered: number
+          campaigns_missing: string[]
+          campaigns_production_reported: number
+          covered_fed_kg_share: number
+          downtime_hours: number
+          fed_kg: number
+          fed_kg_production_reported: number
+          fed_php_kg: number
+          fed_price_coverage_pct: number
+          fed_value_php: number
+          first_date: string
+          is_fully_covered: boolean
+          last_date: string
+          ledger_days: number
+          php_per_produced_kg_delivered: number
+          php_per_produced_kg_true: number
+          php_per_produced_kg_true_covered: number
+          process_loss_kg: number
+          process_loss_pct: number
+          produced_kg: number
+          reported_calendar_days: number
+          reported_campaign_days: number
+          rest_days: number
+          run_count: number
+          sacks: number
+          shift_count: number
+          sundry_kg: number
+          uplift_php_kg: number
+          yield_pct: number
+        }[]
+      }
       fn_product_grade_fingerprint: {
         Args: { p_payload: Json }
         Returns: string
