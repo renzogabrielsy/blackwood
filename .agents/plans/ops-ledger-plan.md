@@ -218,6 +218,94 @@ NULL with the covered partial beside it.
 
 ---
 
-## §3 — UI
+## §3 — UI (BUILT)
 
-*(left for the frontend agent)*
+Route **`app/(app)/operations/`**, branch `feat/ops-ledger`. Draft **C — Split lens**, ported
+off the mock and onto the adapter. `app/dev/ops-ledger/` is untouched and nothing here imports
+from it; the drafts' *ideas* were ported, their *files* were not.
+
+### 3.1 The files
+
+| File | Role |
+|---|---|
+| `page.tsx` | Server Component. `?campaigns=` / `?lens=` → `fetchOpsLedgerCampaignOptions()` + `fetchOpsLedger(keys)` → `OperationsView`. |
+| `operations-view.tsx` | Client. URL writes, lens control, EOQ collapse, `campaignsMissing` notice, block drawer. |
+| `ops-ledger-split.tsx` | The two panes, the divider, the frozen header/footer, the lens columns, the day expand. |
+| `ops-kpi-strip.tsx` | The EOQ table — a row per campaign + the GROUP row, nine columns. |
+| `ops-day-detail.tsx` | `OpsShiftCards` + `OpsBlocksUsedTable`. |
+| `ops-group-picker.tsx` | Selection chips + popover (filter, derived quarter presets, full list). |
+| `ops-lens.ts` | Lens registry, `parseLens`, `quarterPresets()`. |
+| `ops-format.ts` | The renderers. |
+
+Also changed: `components/navbar.tsx` (a `getBreadcrumb()` entry + `ICTC_MODULES`),
+`components/NAVBAR.md`, `app/(app)/operations/CONTEXT.md`.
+
+### 3.2 The decisions the brief left open
+
+1. **The EOQ strip is a TABLE, not the drafts' tile row.** Tiles answer *"how did this period
+   do"*; Renzo's EOQ tab answers *"how did these three months COMPARE"*, and three stacked tile
+   strips is a comparison the reader has to do in their head. One row per campaign, the GROUP
+   row last, nine columns, each cell carrying a coverage caption underneath.
+2. **The divider is dragged in PIXELS, not as a fraction of the frame.** The spine's natural
+   width is a known constant (692px with ₱, 596 without), so a pixel default makes the pane fit
+   it EXACTLY on the first paint and the spine genuinely never scrolls sideways — which is the
+   whole claim of this layout. A fraction only approximates it, and approximates it differently
+   on every screen. A `ResizeObserver` re-clamps to `[240, frame − 240]`.
+3. **Each pane's table ends in an empty auto-width SPACER column.** `table-fixed` +
+   `width:100%` distributes leftover pane width proportionally across the declared columns,
+   which pulled a three-column grades lens apart into unreadable islands. The spacer absorbs it
+   instead. This is the one case the *"never let a `w-auto` column absorb the slack"* rule does
+   not bite — the spacer carries no content, and `minWidth = Σ fixed widths` still forces the
+   scrollbar when the pane is too narrow.
+4. **`?lens=` is in the URL; the expanded day and the block drawer are not.** The lens decides
+   what is on screen for everyone who opens the link. The other two are disclosures inside ONE
+   reading of one payload — the same category RC Movement keeps in local state — and putting
+   them in the address would re-run the server on every chevron click to change nothing the
+   server computes. The default lens is spelled as ABSENCE, so a plain address stays clean.
+5. **The last campaign cannot be unticked.** An empty `?campaigns=` would silently re-resolve
+   to "the newest campaign", i.e. to something the reader did not pick. The chip refuses (with
+   a `title` saying why) rather than writing a group that means something else.
+6. **The quarter presets are DERIVED from the option list** and a quarter is offered only when
+   all three of its campaigns exist — a two-month "Q3" is a different period wearing a
+   quarter's name.
+7. **Where the payload has no total, the lens footer says so.** Grades DO have a campaign total
+   (`gradesByCampaign`) and it is printed. The waste streams and the per-block columns have
+   none at either grain, so that footer prints one sentence instead of a fabricated number.
+   Summing the visible cells would be exactly the re-derivation §2.7 rule 1 forbids.
+8. **Campaign boundaries are a BAND row plus a per-campaign FOOTER row** (rendered only when
+   more than one campaign is picked, since with one it would duplicate the sticky group
+   footer). Both are drawn in both panes at the same height so the panes stay row-aligned.
+9. **The DRIFT column's campaign and group footers print `processLossKg`** — at those grains
+   `fed − produced` genuinely IS loss — with a `title` saying so. Only the DAY figure is drift.
+10. **The block drawer is `BlockingDetailPanel`, reused** (fourth consumer, after Blocking, RC
+    Movement and the digest), opened optimistically with the staleness guard and the panel's own
+    copyable error banner. Both the block column headers and the BLOCKS USED batch codes open it.
+11. **Not the Blackwood Table.** The grid is one table with one scrollport; two independently
+    scrolling panes over a shared row spine is a shape it does not have, and this is a read-only
+    ledger with no inline editing, so the grid's whole value proposition is unused. Hand-built,
+    keeping every rule the grid would have enforced.
+
+### 3.3 §2.7 compliance
+
+| Rule | How |
+|---|---|
+| 1 — never re-derive a total | No `reduce` / `+` / division on any render path; column-width bookkeeping only. Absent totals are STATED. |
+| 2 — never hardcode a grade | The grades lens maps `OpsLedgerData.grades`; campaign totals come from `gradesByCampaign`. |
+| 3 — never print resiko for an open block | `resiko_kg` and `balance_kg` are TWO separately-headed columns (`closed only` / `open only`), each with a `title` explaining its blank. |
+| 4 — never render `dayDriftKg` as loss | Column head is `DRIFT`, hover explains continuous flow, the expand repeats it; loss lives in the strip. |
+| 5 — never render ₱ for Production | `canViewPrices` removes the spine's ₱ column and the strip's four ₱ columns from the layout. |
+| 6 — fractions vs percents | `pctFromFraction` for yield / loss / resiko; `pctFromPercent` for coverage. Two functions, so the two conventions cannot be confused at a call site. |
+
+### 3.4 Verification (2026-09-14)
+
+`npx tsc --noEmit` clean · `npx eslint` on the new directory + the navbar: 0 errors, 0 warnings
+· `npm run build` passes with `/operations` emitted.
+
+Rendered in Chromium against a static payload fixture (the live route is behind the login wall
+and this session held no session): 1512×950 light + dark, and 375×812. Verified there —
+**the two panes' row tops are identical for every row** (read back from the DOM, not eyeballed);
+all three lenses; the day expand in both panes with a 320px band on each side; the
+price-denied payload rendering 7 spine columns and a 5-column strip; `document.scrollWidth ===
+window.innerWidth` at 375px; the phone pane toggle and its combined expansion band; zero page
+errors in the console. The fixture harness was deleted afterwards — `git status` shows only the
+eight route files, the navbar and the two docs.

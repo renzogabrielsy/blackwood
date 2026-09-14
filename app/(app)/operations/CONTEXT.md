@@ -16,10 +16,11 @@ and for a chosen GROUP of campaigns (Q3 2026 = JULY + AUGUST + SEPTEMBER).
 **Domain module (charcoal tenant).** Campaign-shaped, charcoal-shaped. Never imported by
 platform components.
 
-**Status: DATA LAYER ONLY (2026-09-14).** Migration `20260914033037_ops_ledger`, branch
-`feat/ops-ledger`. The page and its components are a later pass — see
-`.agents/plans/ops-ledger-plan.md` (§1 brief, §2 data layer, §3 UI). The interactive layout
-drafts live at `/dev/ops-ledger` (Renzo picked draft **C — Split lens**).
+**Status: LIVE (2026-09-14).** Data layer — migration `20260914033037_ops_ledger`; UI — the
+files below, branch `feat/ops-ledger`. Renzo picked draft **C — Split lens** from the three
+layout drafts at `/dev/ops-ledger`, which are MOCK-ONLY and stay exactly where they are: no
+file here imports from `app/dev/**`. See `.agents/plans/ops-ledger-plan.md` (§1 brief,
+§2 data layer, §3 UI).
 
 ---
 
@@ -191,10 +192,142 @@ real read, `legacy_verify_fn_count = 0`. **Slowest single campaign 853 ms (JANUA
 
 ---
 
+## Files
+
+| File | Role |
+|---|---|
+| `page.tsx` | **Server Component.** Resolves `?campaigns=` / `?lens=`, reads the campaign options and the ledger, renders `OperationsView`. Owns nothing else — the ₱ gate lives in the adapter and the title in the navbar. |
+| `operations-view.tsx` | `'use client'` — the CONTROLS. Writes the URL (`router.replace` inside a transition), owns the lens segmented control, the EOQ collapse, the `campaignsMissing` notice and the block detail drawer. |
+| `ops-ledger-split.tsx` | The ledger itself: two scroll-synced panes, a draggable divider, the frozen header/footer, the three lenses' columns and the per-day expansion band. |
+| `ops-kpi-strip.tsx` | The `EOQ` tab — one row per campaign plus the GROUP row, nine columns, with the coverage captions. |
+| `ops-day-detail.tsx` | What a day opens into: `OpsShiftCards` (left pane) and `OpsBlocksUsedTable` (right pane). |
+| `ops-group-picker.tsx` | The GROUP builder — selection chips + a popover holding the full campaign list, a filter box and the derived quarter presets. |
+| `ops-lens.ts` | The lens registry (`grades` · `losses` · `blocks`), `parseLens`, and `quarterPresets()` — quarters DERIVED from the option list, never hardcoded. |
+| `ops-format.ts` | `kg` · `tons` · `php` · `pctFromFraction` · `pctFromPercent` · `hours` · `count` · `shortDate`. Renderers only. |
+
+---
+
+## Key Behaviors (UI)
+
+**THE URL IS THE STATE.** `?campaigns=JULY-2026,AUGUST-2026,SEPTEMBER-2026` (comma-separated
+campaign keys, upper-cased and de-duplicated on read, written back in the campaigns' own DATE
+order) and `?lens=grades|losses|blocks` (the default is spelled as ABSENCE, so a plain address
+stays clean and the param's presence always means something). Both are written with
+`router.replace` inside a `useTransition`, so the server page re-reads and the payload comes
+back already folded — no client fetch and no second copy of the resolution logic. The outgoing
+ledger stays mounted at `opacity-50` while the new one resolves (compositor-only, nothing
+reflows). **Absent `?campaigns=` = the newest campaign**, resolved from the same
+`view_rc_movement_campaign_options` list, same filter and same order as RC Movement's picker.
+
+**THE EXPANDED DAY AND THE BLOCK DRAWER ARE DELIBERATELY NOT IN THE URL.** Both are
+disclosures inside ONE reading of one payload — the category RC Movement also keeps in local
+state — and putting either in the address would re-run the server on every chevron click to
+change nothing the server computes.
+
+**AN UNKNOWN CAMPAIGN KEY IS NOT AN ERROR.** The group RPC returns it in `campaignsMissing`
+rather than dropping it; the view prints a muted notice naming the keys and renders the
+campaigns that did resolve. A mistyped or retired key must never read as a silently smaller
+quarter. When NOTHING resolves the page says so and points at the bare `/operations` URL.
+
+**SPLIT LENS.** The LEFT pane is the day spine — `DATE · DAY · FED ₱/KG · TTL FED · TTL PROD ·
+DRIFT · SHIFTS · DT HRS`, one row per calendar day, **rest days included as blank rows**. It
+never scrolls sideways: a frozen column can still be pushed off screen, a pane cannot. The
+RIGHT pane is the chosen lens, scrolling horizontally on its own behind a divider that is
+**dragged in PIXELS, not as a fraction of the frame** (a deliberate change from the draft — the
+spine's natural width is a known constant, so a pixel default makes it fit EXACTLY on the first
+paint, which is the entire claim of this layout). A `ResizeObserver` re-clamps it so neither
+pane can be squeezed below 240px. The divider is keyboard-operable (←/→).
+
+**THE TWO PANES ARE ONE ROW SPINE.** They render the identical row sequence at identical
+explicit heights (header 36 · campaign band 28 · day 32 · campaign footer 28 · group footer 34
+· **expansion band a CONSTANT 320**) and are vertically scroll-synced with an
+ownership guard so the two `onScroll` handlers cannot write to each other forever. *Verified in
+Chrome: the two panes' `tbody > tr` tops are identical for every row.* The band's height is a
+constant precisely because letting each side size to its own content would de-sync every row
+below the expanded one — the failure mode a split view has and a single sheet does not.
+
+**THE THREE LENSES.** `grades` (one column per grade — read from `OpsLedgerData.grades`,
+**never a hardcoded list**), `losses` (the eight `WASTE_STREAMS` in the sheet's order), `blocks`
+(one column per block fed — **this lens IS the RC Movement matrix**). A block column header
+carries no sort/filter chrome; it IS the affordance and **opens that block's
+`BlockingDetailPanel`**, through the same `fetchBlockDataForBatch` + optimistic-open contract
+RC Movement and the digest's Open Blocks band use. Batch codes in the BLOCKS USED expand open
+the same drawer. "Edit All" from the drawer pushes `/inventory?tab=…` explicitly, because there
+is no inventory tab provider on this route.
+
+**NO ARITHMETIC ANYWHERE IN THE COMPONENTS.** No `reduce`, no `+`, no ratio on any render path
+— the only sums left are column-width bookkeeping, which is layout. Day figures come from
+`OpsLedgerDay`, campaign footers from `OpsCampaignRollup`, the sticky group footer from
+`OpsGroupRollup`, grade campaign totals from `gradesByCampaign`. **Where a total does not exist
+in the payload the footer SAYS SO** — the waste streams and the per-block columns have no
+campaign or group total, so that footer prints one sentence instead of a fabricated number.
+
+**DRIFT IS NEVER CALLED LOSS.** The day column is `DRIFT KG`, its header carries the
+continuous-flow explanation on hover, and the day-expand repeats it beside the waste streams
+(which do NOT sum to it). The CAMPAIGN and GROUP footers in that same column print
+`processLossKg` — at those grains fed − produced genuinely IS loss — and say so in a `title`.
+
+**PRICE GATING IS ABSENCE, NOT A BLANK.** `canViewPrices` drops `FED ₱/KG` from the spine's
+coordinate space (the frozen-width arithmetic reads the flag) and the four ₱ columns from the
+EOQ strip. The server already nulled the fields; this is the render guard. *Verified against a
+price-denied payload: the spine renders 7 columns and the strip 5.*
+
+**TRUE PC COST IS NEVER FILLED IN.** Null unless every block is closed and priced; the cell
+prints `—` with the coverage caption that says why (`17 of 20 closed · 16 priced`), and for the
+GROUP the always-computed `phpPerProducedKgTrueCovered` rides beside it, labelled `covered`.
+The group's BLOCK RESIKO cell prints the weighted RATIO and no kg, captioned `ratio only
+(shared blocks)` — a block can be fed by several campaigns.
+
+**EXCEL STANDARD / NEVER CRUSH.** `table-fixed` with explicit pixel widths everywhere,
+`px-2 py-1`, `text-xs`, 32px rows, `font-mono tabular-nums` right-aligned numerics, ₱ in
+accounting format (symbol pinned left). Every table declares `min-width = Σ of its column
+widths` inside an `overflow-x-auto` (or the pane's own `overflow-auto`) wrapper. Each pane's
+table ends in an **empty auto-width SPACER column** so leftover pane width is absorbed there
+instead of being distributed across the data columns — the one case the "never let a `w-auto`
+column absorb the slack" rule does not bite, because the spacer carries no content and the
+`minWidth` still forces a scrollbar when the pane is too narrow. *Measured at 375px: document
+`scrollWidth === innerWidth`.*
+
+**FROZEN SURFACES ARE OPAQUE.** Header cells and the group-footer cells carry a solid
+`bg-muted` with `.frozen-row` / `.frozen-row-bottom` + `.frozen-edge-top`; the spine pane
+carries `.frozen-edge` on its right edge. The pinning classes go on the CELLS, never on the
+`<tr>` — Tailwind's preflight sets `border-collapse: collapse`, under which sticky on a row is
+the browser-dependent form.
+
+**MOTION.** No row animates and nothing is staggered. The only animation is
+`animate-fade-in` on the expansion band and `animate-fade-up` on the empty state; the campaign
+switch is an opacity transition on a mounted sheet.
+
+**PHONE (< 768px).** The split keeps its idea and drops the simultaneity: a segmented control
+swaps which pane is on screen and the two keep one shared scroll position. The spine's
+expansion band carries BOTH halves of the breakdown there, since the lens pane is not visible.
+`narrow` starts `false` on server and client and is set in an effect, so the first client
+render matches the server's.
+
+**ERRORS.** The block drawer is opened optimistically and a failed fetch keeps it open with the
+panel's own persistent, copyable inline banner plus Retry (the project HARD RULE on error
+surfaces) — never a silently empty drawer. The `campaignsMissing` notice is deliberately NOT an
+error: nothing failed.
+
+---
+
 ## Dependencies
 
-`lib/supabase/server`, `lib/auth` (`canViewPrices`), `lib/supabase/paginate` (`fetchAllRows`),
-`types/supabase`. Reads only `view_ops_ledger_*` and `view_rc_movement_campaign_options`.
+**Data layer:** `lib/supabase/server`, `lib/auth` (`canViewPrices`), `lib/supabase/paginate`
+(`fetchAllRows`), `types/supabase`. Reads only `view_ops_ledger_*` and
+`view_rc_movement_campaign_options`.
+
+**UI:** `lib/operations/{types,queries}`, `lib/utils` (`cn`), `components/ui/{popover,input}`,
+`lucide-react`, and two files from the inventory module —
+`app/(app)/inventory/_shared/blocking-detail-panel` (the shell-agnostic drawer, already shared
+by Blocking, RC Movement, the inventory tab shell and the digest's Open Blocks band) and
+`app/(app)/inventory/blocking/actions#fetchBlockDataForBatch` + its `BlockData` type. Both are
+TENANT code, as this module is. **Nothing is imported from `app/dev/**`**, and the drafts there
+are untouched. The Blackwood Table is deliberately NOT used — see the header comment in
+`ops-ledger-split.tsx`.
+
+**Registered in the navbar:** `getBreadcrumb()` (`Operations` · *Plant operations ledger — day
+rows on the campaign clock, with the EOQ rollup*) and `ICTC_MODULES`, next to Analytics.
 
 ## See also
 
