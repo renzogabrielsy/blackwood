@@ -54,10 +54,52 @@ dependency). Each view's plain-language definition lives in its DB `COMMENT`.
 pinned, EXECUTE revoked from `PUBLIC` + `anon`, granted to `authenticated`. One row: the group
 KPI strip.
 
-**`fn_ops_ledger_verify()` / `fn_ops_ledger_verify_groups()`** — read-only verification probes,
-SECURITY DEFINER, `service_role` EXECUTE only, behind `scripts/verify-ops-ledger.ts`. They exist
-because the views are authenticated-only, so neither key a script can hold may read them; they
-return **no ₱ value** (every money check is a gap that must be 0).
+**THE THREE VERIFICATION PROBES** (migration `20260914065453_ops_ledger_verify_per_campaign`) —
+all SECURITY DEFINER, STABLE, `search_path` pinned, EXECUTE revoked from `PUBLIC` + `anon` +
+`authenticated` and granted to **`service_role` only**. They exist because the views are
+authenticated-only, so neither key a script can hold may read them; each returns jsonb with
+**no ₱ value** (gaps that must be 0, counts, booleans).
+
+| Probe | Scope | What it answers |
+|---|---|---|
+| `fn_ops_ledger_verify_campaign(text)` | **ONE campaign** | the four day folds, day totals vs the KPI row, the grade fold, `ledger_days` vs `span_days`, both reuse comparisons, and the one-campaign GROUP identity |
+| `fn_ops_ledger_verify_group(text[])` | **≤ 12 keys — RAISES above that** | the group vs a direct Σ over those campaigns' own KPI rows; block de-duplication, coverage, day split, changeover surplus |
+| `fn_ops_ledger_verify_posture()` | catalog only | invoker/comment/grant posture, the three probes are `service_role`-only, `legacy_verify_fn_count = 0`, the money-column counts — **plus one 32-row read of `view_ops_ledger_campaign_span`**, whose only job is to hand the script the campaign keys |
+
+> **PER CAMPAIGN ONLY. NEVER A WHOLE-HISTORY PROOF. 5 s GUARD ON EVERY HAND-RUN STATEMENT.**
+> On **2026-09-14** the original probe `fn_ops_ledger_verify()` — one call that `count(*)`'d and
+> cross-checked every `view_ops_ledger_*` view over all of history — hung the Supabase instance
+> (OOM) and **took the live site down until a dashboard restart**. It was dropped
+> (`20260914064415_drop_fn_ops_ledger_verify`) and its sibling `fn_ops_ledger_verify_groups` (32
+> group-RPC calls in one statement) was deleted before it ever applied. The rule is now
+> structural, not a convention: the campaign probe takes ONE key, the group probe RAISES above
+> 12, and the script loops **strictly sequentially** (`for … await`, never `Promise.all`).
+> **Every predicate is on `production_batch` + `campaign_year`, never on the computed
+> `campaign_key`** — the latter cannot be pushed down into the views, and that pushdown is the
+> whole reason a per-campaign read costs tens of milliseconds. When checking anything by hand:
+> `set local statement_timeout = '5s';` first, and **one campaign per statement**.
+
+**Measured per-campaign, JULY 2026, each under a 5 s guard:**
+
+| read | ms | rows |
+|---|---:|---:|
+| `view_ops_ledger_campaign_span` (filtered) | 18 | 1 |
+| `view_ops_ledger_shift` | 43 | 28 |
+| `view_ops_ledger_day_block` | 36 | 94 |
+| `view_ops_ledger_day` | 47 | 33 (5 rest) |
+| `view_ops_ledger_day_grade` | 7 | 48 |
+| `view_ops_ledger_day_blocks_used` | 23 | 94 |
+| `view_ops_ledger_campaign_grades` | 26 | 3 |
+| `view_ops_ledger_campaign_kpis` | 85 | 1 |
+| `fn_ops_ledger_group_kpis(Q3 2026)` | 147 | 1 |
+| `view_ops_ledger_campaign_span` (unfiltered) | 9 | 32 |
+
+**ONE REAL DIVERGENCE THE NEW POSTURE PROBE CAUGHT ON ITS FIRST RUN:**
+`view_ops_ledger_campaign_kpis` — the ₱-bearing view — carried **no `reloptions` at all** on the
+live DB, i.e. it was **not** `security_invoker` and had been running as its OWNER for every
+caller, although §10 of the ledger migration declares it. Repaired by
+`20260914065558_ops_ledger_campaign_kpis_security_invoker` (`ALTER VIEW … SET` does not touch
+grants, so the authenticated-SELECT / anon-REVOKE / no-`service_role` posture is unchanged).
 
 ### The eight things to know before touching this
 
@@ -137,10 +179,14 @@ silently.
 
 ### Proofs
 
-`npx tsx scripts/verify-ops-ledger.ts` — 13 static + 30 live assertions; zero on every
-`*_mismatch` is the passing state. Measured 2026-09-14: all folds 0 mismatches, both reuse
-comparisons 0/32, the one-campaign-group identity 0/32, the Q3 yield / fed-rate / PC-cost gaps
-exactly 0, anon and `service_role` refused by a real read. Full table in
+`npx tsx scripts/verify-ops-ledger.ts` — **68 assertions** (15 static + 53 live); zero on every
+`*_mismatch` is the passing state. Measured 2026-09-14, **all 32 campaigns, one RPC call each,
+strictly sequential**: every fold and both reuse comparisons 0 mismatches on 32/32, the
+one-campaign-group identity 0/32, `day_rows == span_days` on 32/32, **686 ledger days / 148 rest
+days**, the Q3 yield / fed-rate / PC-cost gaps exactly 0, anon and `service_role` refused by a
+real read, `legacy_verify_fn_count = 0`. **Slowest single campaign 853 ms (JANUARY 2026)**,
+16.3 s wall for the whole sequential loop including round-trips — the script FAILS any call over
+**5,000 ms**, so the 2026-09-14 shape cannot come back unnoticed. Full table in
 `.agents/plans/ops-ledger-plan.md` §2.6.
 
 ---

@@ -5827,6 +5827,15 @@ export type Database = {
           yield_pct: number
         }[]
       }
+      fn_ops_ledger_verify_campaign: {
+        Args: { p_campaign_key: string }
+        Returns: Json
+      }
+      fn_ops_ledger_verify_group: {
+        Args: { p_campaign_keys: string[] }
+        Returns: Json
+      }
+      fn_ops_ledger_verify_posture: { Args: never; Returns: Json }
       fn_product_grade_fingerprint: {
         Args: { p_payload: Json }
         Returns: string

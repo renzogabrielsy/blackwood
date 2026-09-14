@@ -4,6 +4,27 @@
  * Run: npx tsx scripts/verify-ops-ledger.ts
  *
  * ============================================================================
+ * WHY THIS SCRIPT IS PER-CAMPAIGN (the 2026-09-14 incident)
+ * ============================================================================
+ * The first version of this script called ONE probe, `fn_ops_ledger_verify()`,
+ * which count(*)'d every `view_ops_ledger_*` view over the WHOLE of history and
+ * cross-checked every fold across all 32 campaigns in a single statement. That
+ * call hung the Supabase instance — most likely OOM — and took the LIVE SITE
+ * down until a dashboard restart. The probe has been dropped; its unapplied
+ * sibling `fn_ops_ledger_verify_groups()` (32 group-RPC calls in one statement)
+ * was deleted from the migration before it ever ran.
+ *
+ * THE RULE THAT REPLACED IT, and it is structural rather than a convention:
+ *   - `fn_ops_ledger_verify_campaign(key)` takes ONE campaign key and filters
+ *     every subquery on `production_batch` + `campaign_year` (never on the
+ *     computed `campaign_key`, which cannot be pushed down into the views).
+ *   - `fn_ops_ledger_verify_group(keys[])` RAISES above 12 keys, so it is
+ *     impossible to point it at all history.
+ *   - this script loops the campaigns STRICTLY SEQUENTIALLY (`for … await`),
+ *     never `Promise.all`, times every call and FAILS any call over 5,000 ms.
+ * Nothing in this file may ever read the whole view stack in one go again.
+ *
+ * ============================================================================
  * WHAT IT PROVES, AND WHY EACH ONE IS HERE
  * ============================================================================
  * The ledger publishes a day spine with three LENSES hanging off it (grades,
@@ -20,13 +41,16 @@
  *   REUSE      every price / yield / coverage column on the campaign KPI row is
  *              `IS DISTINCT FROM`-identical to view_analytics_batch_cost, and
  *              every production column to view_analytics_production_by_batch
- *   GROUP      a ONE-campaign group equals that campaign's row exactly, on all
- *              32 campaigns; and the Q3 2026 group's yield, fed rate and PC cost
- *              equal a direct Σproduced/Σfed, Σvalue/Σfed and Σvalue/Σproduced
+ *   GROUP      a ONE-campaign group equals that campaign's row exactly (checked
+ *              once per campaign, inside that campaign's own probe call); and
+ *              the Q3 2026 group's yield, fed rate and PC cost equal a direct
+ *              Σproduced/Σfed, Σvalue/Σfed and Σvalue/Σproduced
  *   POSTURE    all 8 views security_invoker, authenticated SELECT, anon DENIED,
  *              service_role DENIED — and the denial is proven by a REAL READ,
  *              not by reading the grant table (the L-043 lesson: a permission
- *              claim is proven by assuming the victim's role)
+ *              claim is proven by assuming the victim's role) — plus: the two
+ *              whole-history probes are GONE and stay gone, and all three
+ *              replacement probes are service_role-only
  *   MONEY      the five peso-free views carry no money-named column at all, and
  *              view_ops_ledger_day carries exactly one (`fed_php_kg`)
  *
@@ -37,11 +61,11 @@
  * revoked and `service_role` was never granted, because the sync worker reads
  * none of them and `verify-worker-view-grants` must stay at 4 views / 0 findings.
  * So neither key this script can hold may read them, and there is no other door.
- * `public.fn_ops_ledger_verify()` is that door: SECURITY DEFINER, STABLE,
- * service_role EXECUTE only — the same idiom as `canonical_supplier_batch_probe`
- * and `fn_audit_trigger_function_grants`. It returns NO ₱ VALUE: every
- * money-derived check is published as a GAP that must be exactly 0, and a zero
- * difference says nothing about the numbers underneath it.
+ * The three SECURITY DEFINER, service_role-only probes are that door — the same
+ * idiom as `canonical_supplier_batch_probe` and `fn_audit_trigger_function_grants`.
+ * They return NO ₱ VALUE: every money-derived check is published as a GAP that
+ * must be exactly 0, and a zero difference says nothing about the numbers
+ * underneath it.
  */
 
 import assert from 'node:assert/strict';
@@ -56,9 +80,9 @@ function check(label: string, fn: () => void): void {
 }
 
 // ---------------------------------------------------------------------------
-// 1. STATIC — the migration file is the artifact a human reads. Assert it still
-//    declares the posture it claims, so a later edit cannot quietly drop a
-//    REVOKE or a COMMENT and still look finished.
+// 1. STATIC — the migration files are the artifact a human reads. Assert they
+//    still declare the posture they claim, so a later edit cannot quietly drop
+//    a REVOKE or a COMMENT and still look finished.
 // ---------------------------------------------------------------------------
 
 const VIEWS = [
@@ -72,15 +96,35 @@ const VIEWS = [
   'view_ops_ledger_campaign_kpis',
 ] as const;
 
-function migrationSource(): string {
+const VERIFY_FNS = [
+  { name: 'fn_ops_ledger_verify_campaign', sig: 'text' },
+  { name: 'fn_ops_ledger_verify_group', sig: 'text\\[\\]' },
+  { name: 'fn_ops_ledger_verify_posture', sig: '' },
+] as const;
+
+function migrationSource(suffix: string): string {
   const dir = resolve(process.cwd(), 'supabase/migrations');
-  const file = readdirSync(dir).find((f) => f.endsWith('_ops_ledger.sql'));
-  assert.ok(file, 'the ops_ledger migration file is missing from supabase/migrations');
+  const file = readdirSync(dir).find((f) => f.endsWith(suffix));
+  assert.ok(file, `no migration file ending in ${suffix}`);
   return readFileSync(resolve(dir, file), 'utf8');
 }
 
+/**
+ * Strip `--` comment lines. The ledger migration legitimately NAMES the two
+ * retired probes in the note that records why they were removed, so a bare
+ * `includes()` would fail on the explanation itself. What must be gone is the
+ * executable SQL, so that is what is tested.
+ */
+function executableSql(sql: string): string {
+  return sql
+    .split('\n')
+    .map((l) => (l.trimStart().startsWith('--') ? '' : l))
+    .join('\n');
+}
+
 function staticChecks(): void {
-  const sql = migrationSource();
+  const sql = migrationSource('_ops_ledger.sql');
+  const verifySql = migrationSource('_ops_ledger_verify_per_campaign.sql');
 
   for (const v of VIEWS) {
     check(`${v} — created, commented, invoker, granted, anon revoked`, () => {
@@ -117,11 +161,68 @@ function staticChecks(): void {
     );
   });
 
-  check('fn_ops_ledger_verify — definer probe, service_role only, never authenticated', () => {
-    assert.ok(sql.includes('create or replace function public.fn_ops_ledger_verify()'));
-    assert.ok(sql.includes('security definer'), 'the probe must be SECURITY DEFINER to see the views at all');
-    assert.ok(sql.includes('revoke execute on function public.fn_ops_ledger_verify() from public, anon, authenticated;'));
-    assert.ok(sql.includes('grant execute on function public.fn_ops_ledger_verify() to service_role;'));
+  check('the WHOLE-HISTORY probes are gone from the ledger migration (2026-09-14 incident)', () => {
+    const exec = executableSql(sql);
+    assert.ok(
+      !/fn_ops_ledger_verify\s*\(\s*\)/.test(exec),
+      'fn_ops_ledger_verify() is back in the ledger migration — it OOM-ed the instance and took the site down',
+    );
+    assert.ok(
+      !exec.includes('fn_ops_ledger_verify_groups'),
+      'fn_ops_ledger_verify_groups is back — it called the group RPC 32 times in one statement',
+    );
+    // …and the file still SAYS why, so a reader does not reinvent them.
+    assert.ok(sql.includes('20260914064415_drop_fn_ops_ledger_verify.sql'), 'the removal note is missing');
+    assert.ok(sql.includes('_ops_ledger_verify_per_campaign.sql'), 'the note does not point at the replacement');
+  });
+
+  check('the replacement probes — 3 functions, SECURITY DEFINER, service_role ONLY', () => {
+    for (const { name, sig } of VERIFY_FNS) {
+      assert.ok(
+        new RegExp(`create or replace function public\\.${name}\\(`).test(verifySql),
+        `${name} is not declared`,
+      );
+      assert.ok(
+        new RegExp(`comment on function public\\.${name}\\(${sig}\\) is`).test(verifySql),
+        `${name} has no COMMENT`,
+      );
+      assert.ok(
+        new RegExp(`revoke execute on function public\\.${name}\\(${sig}\\)\\s+from public, anon, authenticated;`).test(verifySql),
+        `${name} is not revoked from public/anon/authenticated`,
+      );
+      assert.ok(
+        new RegExp(`grant execute on function public\\.${name}\\(${sig}\\)\\s+to service_role;`).test(verifySql),
+        `${name} is not granted to service_role`,
+      );
+      assert.ok(
+        !new RegExp(`grant execute on function public\\.${name}\\(${sig}\\)\\s+to authenticated`).test(verifySql),
+        `${name} must never be granted to authenticated — it is SECURITY DEFINER over authenticated-only views`,
+      );
+    }
+    assert.equal(
+      (verifySql.match(/^security definer$/gm) ?? []).length,
+      3,
+      'all three probes must be SECURITY DEFINER',
+    );
+    assert.equal(
+      (verifySql.match(/^set search_path = public$/gm) ?? []).length,
+      3,
+      'all three probes must pin search_path',
+    );
+  });
+
+  check('the group probe is CAPPED, so it cannot be pointed at all history', () => {
+    assert.ok(
+      /array_length\(v_keys, 1\) > 12/.test(verifySql),
+      'fn_ops_ledger_verify_group must refuse more than 12 campaign keys',
+    );
+    // and the per-campaign probe must filter on the two base columns, not on the
+    // computed campaign_key — that pushdown is what keeps each call in the tens
+    // of milliseconds.
+    assert.ok(
+      /where dd\.production_batch = v_batch and dd\.campaign_year = v_year/.test(verifySql),
+      'the per-campaign probe must filter on production_batch + campaign_year',
+    );
   });
 
   check('the ₱ columns are NAMED in the COMMENTs that carry them', () => {
@@ -169,7 +270,7 @@ function staticChecks(): void {
 }
 
 // ---------------------------------------------------------------------------
-// 2. LIVE — the probe, plus a real read as anon and as service_role
+// 2. LIVE — the three probes, plus a real read as anon and as service_role
 // ---------------------------------------------------------------------------
 
 /** Read NEXT_PUBLIC_SUPABASE_URL / keys from env or .env.local. */
@@ -195,14 +296,57 @@ function readEnv(): { url: string; service: string; anon: string } | null {
   return url && service && anon ? { url, service, anon } : null;
 }
 
-type Probe = Record<string, number | boolean | null>;
+type Probe = Record<string, number | boolean | string | string[] | null>;
+
+/** No probe may ever return a ₱ VALUE. Gaps, counts and flags only. */
+const MONEY_NAMED_BUT_NOT_MONEY = new Set([
+  'gap_fed_rate',
+  'gap_pc_rate',
+  'kpi_vs_batch_cost_mismatch',
+  'kpi_without_batch_cost_row',
+  'money_named_in_peso_free_views',
+  'money_named_in_day_view',
+  'true_pc_cost_is_null',
+  'true_pc_cost_covered_present',
+  'campaigns_fully_covered',
+]);
+
+function assertNoMoneyValue(p: Probe, where: string): void {
+  for (const k of Object.keys(p)) {
+    if (!/php|peso|price|cost|value|amount|rate/i.test(k)) continue;
+    assert.ok(MONEY_NAMED_BUT_NOT_MONEY.has(k), `${where}: key ${k} looks like it carries money`);
+  }
+}
+
+/** The per-campaign budget. A call slower than this is a FAILURE, not a slow day. */
+const CAMPAIGN_MS_BUDGET = 5_000;
+
+const CAMPAIGN_MISMATCH_KEYS = [
+  'grade_fold_mismatch',
+  'block_fold_mismatch',
+  'shift_produced_mismatch',
+  'shift_downtime_mismatch',
+  'day_totals_vs_kpi_mismatch',
+  'campaign_grade_fold_mismatch',
+  'ledger_days_vs_span_mismatch',
+  'kpi_vs_batch_cost_mismatch',
+  'kpi_vs_production_by_batch_mismatch',
+  'kpi_without_batch_cost_row',
+  'single_campaign_group_mismatch',
+] as const;
 
 async function liveChecks(env: { url: string; service: string; anon: string }): Promise<void> {
   const { createClient } = await import('@supabase/supabase-js');
   const svc = createClient(env.url, env.service, { auth: { persistSession: false } });
   const anon = createClient(env.url, env.anon, { auth: { persistSession: false } });
 
-  // --- the posture half, proven by assuming the role and actually reading ---
+  const n = (p: Probe, k: string): number => {
+    const v = p[k];
+    assert.ok(v !== null && v !== undefined, `probe key ${k} is missing`);
+    return Number(v);
+  };
+
+  // --- (a) posture, proven by assuming the role and actually reading ---
   const anonRead = await anon.from('view_ops_ledger_day').select('campaign_key').limit(1);
   check('anon CANNOT read view_ops_ledger_day (a real read, not a grant lookup)', () => {
     assert.ok(anonRead.error, 'anon was able to read the ledger — the REVOKE is gone');
@@ -213,143 +357,148 @@ async function liveChecks(env: { url: string; service: string; anon: string }): 
     assert.ok(svcRead.error, 'service_role can read the ledger — an unintended grant appeared');
   });
 
-  // --- the numbers ---
-  const { data, error } = await svc.rpc('fn_ops_ledger_verify');
-  assert.ok(!error, `fn_ops_ledger_verify failed: ${error?.message}`);
-  const p = data as unknown as Probe;
-  assert.ok(p && typeof p === 'object', 'the probe returned nothing — an empty probe is a FAILURE, not a pass');
-  if (process.env.OPS_LEDGER_DUMP) {
-    for (const k of Object.keys(p).sort()) console.log(`    ${k.padEnd(38)} ${p[k]}`);
-  }
+  // --- (b) the catalog posture probe (also hands us the campaign list) ---
+  const postureRes = await svc.rpc('fn_ops_ledger_verify_posture');
+  assert.ok(!postureRes.error, `fn_ops_ledger_verify_posture failed: ${postureRes.error?.message}`);
+  const posture = postureRes.data as unknown as Probe;
+  assert.ok(
+    posture && typeof posture === 'object',
+    'the posture probe returned nothing — an empty probe is a FAILURE, not a pass',
+  );
+  assertNoMoneyValue(posture, 'posture');
 
-  const n = (k: string): number => {
-    const v = p[k];
-    assert.ok(v !== null && v !== undefined, `probe key ${k} is missing`);
-    return Number(v);
-  };
-
-  // The probe reads ₱-bearing views. Nothing it RETURNS may be a ₱ value: the
-  // only money-derived keys are gaps (0 by construction), counts of money-named
-  // COLUMNS, and booleans about nullness. Anything new with a money-ish name has
-  // to be added here deliberately, which is the point.
-  const MONEY_NAMED_BUT_NOT_MONEY = new Set([
-    'q3_gap_fed_rate',
-    'q3_gap_pc_rate',
-    'kpi_vs_batch_cost_mismatch',
-    'kpi_without_batch_cost_row',
-    'money_named_in_peso_free_views',
-    'money_named_in_day_view',
-    'q3_true_pc_cost_is_null',
-    'q3_true_pc_cost_covered_present',
-    'q3_campaigns_fully_covered',
-  ]);
-  check('the probe returns no ₱ VALUE — every money-named key is a gap, a count or a flag', () => {
-    for (const k of Object.keys(p)) {
-      if (!/php|peso|price|cost|value|amount|rate/i.test(k)) continue;
-      assert.ok(MONEY_NAMED_BUT_NOT_MONEY.has(k), `probe key ${k} looks like it carries money`);
-    }
-    // and the gaps really are zero, so they carry no information about the values
-    assert.equal(Number(p.q3_gap_fed_rate), 0);
-    assert.equal(Number(p.q3_gap_pc_rate), 0);
-  });
-
-  // FOLDS
-  for (const k of [
-    'grade_fold_mismatch',
-    'block_fold_mismatch',
-    'shift_produced_mismatch',
-    'shift_downtime_mismatch',
-    'day_totals_vs_kpi_mismatch',
-    'campaign_grade_fold_mismatch',
-    'ledger_days_vs_span_mismatch',
-  ]) {
-    check(`fold: ${k} === 0`, () => assert.equal(n(k), 0));
-  }
-
-  // REUSE
-  for (const k of [
-    'kpi_vs_batch_cost_mismatch',
-    'kpi_vs_production_by_batch_mismatch',
-    'kpi_without_batch_cost_row',
-  ]) {
-    check(`reuse: ${k} === 0`, () => assert.equal(n(k), 0));
-  }
-
-  // GROUP
-  check('group: a ONE-campaign group equals that campaign\'s row, on every campaign', () =>
-    assert.equal(n('single_campaign_group_mismatch'), 0));
-  check('group: an unknown key is REPORTED in campaigns_missing, never dropped', () =>
-    assert.equal(n('unknown_key_reported'), 1));
-  for (const k of ['q3_gap_yield', 'q3_gap_fed_rate', 'q3_gap_pc_rate', 'q3_gap_fed_kg', 'q3_gap_produced_kg']) {
-    check(`group Q3 2026: ${k} === 0`, () => assert.equal(n(k), 0));
-  }
-  check('group Q3 2026: 3 campaigns, 2 of them fully covered', () => {
-    assert.equal(n('q3_campaign_count'), 3);
-    assert.equal(n('q3_campaigns_fully_covered'), 2);
-  });
-  check('group Q3 2026: TRUE PC COST is strict NULL, with the covered partial beside it', () => {
-    assert.equal(p.q3_true_pc_cost_is_null, true);
-    assert.equal(p.q3_true_pc_cost_covered_present, true);
-  });
-  check('group Q3 2026: blocks are de-duplicated (45 distinct vs 50 campaign-sum)', () => {
-    assert.ok(n('q3_blocks_distinct') < n('q3_blocks_campaign_sum'),
-      'the de-duplicated block count must be smaller — 5 Q3 blocks were fed by two campaigns');
-    assert.equal(n('q3_blocks_distinct'), 45);
-    assert.equal(n('q3_blocks_campaign_sum'), 50);
-  });
-  check('group Q3 2026: the changeover surplus is real (campaign-days > calendar-days)', () =>
-    assert.equal(n('q3_changeover_surplus'), 2));
-  check('group Q3 2026: 77 ledger days = 63 active + 14 rest', () => {
-    assert.equal(n('q3_ledger_days'), 77);
-    assert.equal(n('q3_active_days'), 63);
-    assert.equal(n('q3_rest_days'), 14);
-    assert.equal(n('q3_active_days') + n('q3_rest_days'), n('q3_ledger_days'));
-  });
-
-  // POSTURE (the catalog half — the read half is above)
   check('posture: 8 views, all security_invoker, all commented, all authenticated', () => {
-    assert.equal(n('view_count'), 8);
-    assert.equal(n('not_security_invoker'), 0);
-    assert.equal(n('missing_authenticated_select'), 0);
-    assert.equal(n('views_without_comment'), 0);
-    assert.equal(n('anon_can_select'), 0);
-    assert.equal(n('service_role_can_select'), 0);
+    assert.equal(n(posture, 'view_count'), 8);
+    assert.equal(n(posture, 'not_security_invoker'), 0);
+    assert.equal(n(posture, 'missing_authenticated_select'), 0);
+    assert.equal(n(posture, 'views_without_comment'), 0);
+    assert.equal(n(posture, 'anon_can_select'), 0);
+    assert.equal(n(posture, 'service_role_can_select'), 0);
   });
   check('posture: the group RPC is authenticated-only', () => {
-    assert.equal(p.fn_authenticated_execute, true);
-    assert.equal(p.fn_anon_execute, false);
-    assert.equal(p.fn_service_role_execute, false);
+    assert.equal(posture.fn_authenticated_execute, true);
+    assert.equal(posture.fn_anon_execute, false);
+    assert.equal(posture.fn_service_role_execute, false);
+    assert.equal(posture.fn_group_authenticated_execute, true);
+    assert.equal(posture.fn_group_anon_execute, false);
+    assert.equal(posture.fn_group_service_role_execute, false);
   });
-
-  // MONEY
+  check('posture: all THREE verify probes are service_role-only (never authenticated, never anon)', () => {
+    assert.equal(n(posture, 'verify_fn_count'), 3);
+    assert.equal(posture.verify_fns_service_role_only, true);
+  });
+  check('posture: the WHOLE-HISTORY probes no longer exist in the database', () => {
+    // fn_ops_ledger_verify() OOM-ed the instance on 2026-09-14 and took the live
+    // site down. Zero here is what keeps it from coming back by accident.
+    assert.equal(n(posture, 'legacy_verify_fn_count'), 0);
+  });
   check('money: the five peso-free views carry NO money-named column', () =>
-    assert.equal(n('money_named_in_peso_free_views'), 0));
+    assert.equal(n(posture, 'money_named_in_peso_free_views'), 0));
   check('money: view_ops_ledger_day carries EXACTLY ONE (fed_php_kg)', () =>
-    assert.equal(n('money_named_in_day_view'), 1));
+    assert.equal(n(posture, 'money_named_in_day_view'), 1));
 
-  // SHAPE / ROW BUDGETS — recorded so a future change that blows past
-  // PostgREST's 1000-row cap fails here instead of in production.
-  check('row budget: no lens exceeds 1000 rows for a single campaign', () => {
-    assert.ok(n('max_day_rows_per_campaign') <= 1000);
-    assert.ok(n('max_day_block_rows_per_campaign') <= 1000);
-    assert.ok(n('max_day_grade_rows_per_campaign') <= 1000);
-  });
-  check('shape: the day spine has 32 campaigns and a non-empty set of rest days', () => {
-    assert.equal(n('day_campaigns'), 32);
-    assert.equal(n('kpi_rows'), 32);
-    assert.equal(n('span_rows'), 32);
-    assert.ok(n('rest_days') > 0, 'a ledger with no rest-day rows has dropped the blank Sundays');
-    assert.equal(n('ledger_days_total'), n('day_rows'));
-  });
+  const campaignKeys = posture.campaign_keys as string[];
+  assert.ok(Array.isArray(campaignKeys) && campaignKeys.length > 0, 'the posture probe returned no campaign keys');
+  check('shape: the ledger spans 32 campaigns', () => assert.equal(campaignKeys.length, 32));
 
-  console.log('\n  measured ------------------------------------------------------');
-  for (const k of [
-    'day_rows', 'rest_days', 'max_span_days', 'shift_rows', 'day_grade_rows',
-    'day_block_rows', 'blocks_used_rows', 'campaign_grade_rows',
-    'max_day_rows_per_campaign', 'max_day_block_rows_per_campaign', 'max_day_grade_rows_per_campaign',
-  ]) {
-    console.log(`    ${k.padEnd(34)} ${p[k]}`);
+  // --- (c) ONE CAMPAIGN PER CALL, STRICTLY SEQUENTIALLY. Never Promise.all: the
+  //     point of the per-campaign split is that only one of these reads is in
+  //     flight at any moment.
+  console.log('\n  per-campaign (one RPC call each, sequential) ------------------');
+  console.log(`    ${'campaign'.padEnd(18)}${'days'.padStart(6)}${'rest'.padStart(6)}${'ms'.padStart(8)}`);
+  let slowest = 0;
+  let slowestKey = '';
+  let totalMs = 0;
+  let totalDays = 0;
+  let totalRest = 0;
+
+  for (const key of campaignKeys) {
+    const t0 = Date.now();
+    const res = await svc.rpc('fn_ops_ledger_verify_campaign', { p_campaign_key: key });
+    const ms = Date.now() - t0;
+    assert.ok(!res.error, `fn_ops_ledger_verify_campaign(${key}) failed: ${res.error?.message}`);
+    const p = res.data as unknown as Probe;
+    assert.ok(p && typeof p === 'object', `the probe returned nothing for ${key} — that is a FAILURE, not a pass`);
+    assertNoMoneyValue(p, key);
+
+    totalMs += ms;
+    totalDays += n(p, 'day_rows');
+    totalRest += n(p, 'rest_days');
+    if (ms > slowest) {
+      slowest = ms;
+      slowestKey = key;
+    }
+
+    check(
+      `${key.padEnd(18)}${String(n(p, 'day_rows')).padStart(6)}${String(n(p, 'rest_days')).padStart(6)}${String(ms).padStart(8)}`,
+      () => {
+        assert.equal(p.campaign_key, key, 'the probe answered about a different campaign');
+        for (const k of CAMPAIGN_MISMATCH_KEYS) assert.equal(n(p, k), 0, `${key}: ${k} is not 0`);
+        assert.equal(n(p, 'day_rows'), n(p, 'span_days'), `${key}: the day spine is not the campaign span`);
+        assert.ok(
+          ms < CAMPAIGN_MS_BUDGET,
+          `${key}: the probe took ${ms} ms, over the ${CAMPAIGN_MS_BUDGET} ms budget — the 2026-09-14 shape is back`,
+        );
+      },
+    );
   }
+
+  console.log(
+    `\n    ${campaignKeys.length} campaigns · ${totalDays} ledger days · ${totalRest} rest days · ` +
+      `${totalMs} ms total · slowest ${slowestKey} ${slowest} ms`,
+  );
+
+  // --- (d) the GROUP proof, Q3 2026 ---
+  console.log('\n  group -------------------------------------------------------');
+  const q3Res = await svc.rpc('fn_ops_ledger_verify_group', {
+    p_campaign_keys: ['JULY-2026', 'AUGUST-2026', 'SEPTEMBER-2026'],
+  });
+  assert.ok(!q3Res.error, `fn_ops_ledger_verify_group(Q3) failed: ${q3Res.error?.message}`);
+  const q3 = q3Res.data as unknown as Probe;
+  assert.ok(q3 && typeof q3 === 'object', 'the group probe returned nothing — a FAILURE, not a pass');
+  assertNoMoneyValue(q3, 'Q3 2026');
+
+  check('group Q3 2026: the probe returns no ₱ VALUE — the gaps really are zero', () => {
+    assert.equal(n(q3, 'gap_fed_rate'), 0);
+    assert.equal(n(q3, 'gap_pc_rate'), 0);
+  });
+  for (const k of ['gap_yield', 'gap_fed_rate', 'gap_pc_rate', 'gap_fed_kg', 'gap_produced_kg']) {
+    check(`group Q3 2026: ${k} === 0`, () => assert.equal(n(q3, k), 0));
+  }
+  check('group Q3 2026: 3 campaigns, 2 of them fully covered, none missing', () => {
+    assert.equal(n(q3, 'campaign_count'), 3);
+    assert.equal(n(q3, 'campaigns_fully_covered'), 2);
+    assert.equal(n(q3, 'campaigns_missing_count'), 0);
+  });
+  check('group Q3 2026: TRUE PC COST is strict NULL, with the covered partial beside it', () => {
+    assert.equal(q3.true_pc_cost_is_null, true);
+    assert.equal(q3.true_pc_cost_covered_present, true);
+  });
+  check('group Q3 2026: blocks are de-duplicated (45 distinct vs 50 campaign-sum)', () => {
+    assert.ok(
+      n(q3, 'blocks_distinct') < n(q3, 'blocks_campaign_sum'),
+      'the de-duplicated block count must be smaller — 5 Q3 blocks were fed by two campaigns',
+    );
+    assert.equal(n(q3, 'blocks_distinct'), 45);
+    assert.equal(n(q3, 'blocks_campaign_sum'), 50);
+  });
+  check('group Q3 2026: the changeover surplus is real (campaign-days > calendar-days)', () =>
+    assert.equal(n(q3, 'changeover_surplus'), 2));
+  check('group Q3 2026: 77 ledger days = 63 active + 14 rest', () => {
+    assert.equal(n(q3, 'ledger_days'), 77);
+    assert.equal(n(q3, 'active_days'), 63);
+    assert.equal(n(q3, 'rest_days'), 14);
+    assert.equal(n(q3, 'active_days') + n(q3, 'rest_days'), n(q3, 'ledger_days'));
+  });
+
+  // --- (e) an unknown key is REPORTED, never silently dropped ---
+  const missRes = await svc.rpc('fn_ops_ledger_verify_group', { p_campaign_keys: ['NOPE-1999'] });
+  assert.ok(!missRes.error, `fn_ops_ledger_verify_group(NOPE-1999) failed: ${missRes.error?.message}`);
+  const miss = missRes.data as unknown as Probe;
+  check('group: an unknown key is REPORTED in campaigns_missing, never dropped', () => {
+    assert.equal(n(miss, 'campaigns_missing_count'), 1);
+    assert.equal(n(miss, 'campaign_count'), 0);
+  });
 }
 
 // ---------------------------------------------------------------------------
