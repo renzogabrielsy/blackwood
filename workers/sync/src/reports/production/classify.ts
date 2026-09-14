@@ -100,6 +100,10 @@ export interface DowntimeDbRow {
   dt_hrs?: number | null;
   dt_mins?: number | null;
   dt_reason?: string | null;
+  /** L-051 — the operator's own time-range list, persisted since 2026-09-14. */
+  dt_ranges?: string | null;
+  /** L-051 — why `shift_hrs` is what it is (`overtime_signal|duration_only|default_8h`). */
+  shift_hrs_source?: string | null;
   // No `remarks` — `production_downtime` has no such column. See downtimeFieldDiff.
 }
 export interface WasteDbRow {
@@ -314,6 +318,16 @@ function downtimeFieldDiff(email: DowntimeRow, db: DowntimeDbRow): Record<string
   // and taking the row's REAL dt_hrs/dt_mins/dt_reason corrections down with it.
   if (normStr(email.dt_reason) !== normStr(db.dt_reason)) {
     diff.dt_reason = { db: db.dt_reason ?? null, email: email.dt_reason ?? null };
+  }
+  // L-051 — both are REAL columns since 2026-09-14 and both are in
+  // `fn_apply_production_upstream`'s allowlist, so unlike `remarks` above these can
+  // actually be written. They are diffed so a row filed before the fix (dt_ranges NULL,
+  // shift_hrs_source NULL) is corrected by the normal VALUE_CHANGED path rather than
+  // needing a second repair mechanism.
+  for (const f of ["dt_ranges", "shift_hrs_source"] as const) {
+    if (normStr(email[f]) !== normStr(db[f])) {
+      diff[f] = { db: db[f] ?? null, email: email[f] ?? null };
+    }
   }
   return diff;
 }

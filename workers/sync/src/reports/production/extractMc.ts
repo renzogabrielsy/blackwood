@@ -37,6 +37,16 @@ import {
   type SheetBatchPlan,
   type SheetMarkerScan,
 } from "./productionBatch.js";
+import {
+  resolveDowntimeMinutes,
+  type DowntimeMinutesSource,
+} from "./downtimeRanges.js";
+import {
+  charcoalFedOvertimeSacks,
+  resolveShiftHours,
+  scanOvertime,
+  type ShiftHrsSource,
+} from "./shiftHours.js";
 
 // ── Domain constants (Python lines 79-165) ─────────────────────────────────
 const VALID_GRADES = new Set(["3X50", "6X50", "8X50", "2X6", "4X8"]); // L-027
@@ -351,9 +361,27 @@ export interface DowntimeRow {
   dt_hrs: number;
   dt_mins: number;
   dt_reason: string | null;
+  /**
+   * The time-range list EXACTLY as MC wrote it, lines joined with "; " (L-051). This is
+   * the source of `dt_hrs`/`dt_mins` and is now PERSISTED (`production_downtime.dt_ranges`)
+   * so the arithmetic can be checked against the operator's own words without reopening
+   * the workbook. Never an input to any calculation.
+   */
+  dt_ranges: string | null;
+  /** Why `shift_hrs` is what it is — see ./shiftHours.ts. */
+  shift_hrs_source: ShiftHrsSource;
   remarks: string | null;
   _source_sheet: string;
   warnings: string[];
+  /**
+   * Where the minutes came from, and what the DURATION cell said if it parsed at all.
+   * Run-visibility ONLY (leading underscore = never written to a column): the apply turns
+   * a disagreement into a `downtime_duration_mismatch` finding.
+   */
+  _minutes_source: DowntimeMinutesSource;
+  _duration_mins?: number | null;
+  _ranges_mins?: number | null;
+  _duration_disagrees?: boolean;
 }
 
 export interface ElectricityRow {
@@ -512,21 +540,24 @@ function extractDowntime(
   titleStripped: string,
   txnIso: string,
   productionBatch: string,
+  runs: RunRow[],
 ): DowntimeRow | null {
   const { categoryRow, detailRow } = resolveDowntimeRows(ws);
   const category = coerceStr(ws.cell(categoryRow, COL_DT_CATEGORY));
   const ranges = splitMultiline(ws.cell(detailRow, COL_DT_RANGES));
-  const minuteLines = splitMultiline(ws.cell(detailRow, COL_DT_MINUTES));
   const reasons = splitMultiline(ws.cell(detailRow, COL_DT_REASON));
 
-  const rowWarnings: string[] = [];
-  let totalMins = 0.0;
-  for (const line of minuteLines) {
-    const stripped = line.replace(/[^0-9.]/g, "");
-    const f = coerceFloat(stripped === "" ? null : stripped);
-    if (f !== null) totalMins += f;
-    else rowWarnings.push(`could not parse downtime minutes from '${line}'`);
-  }
+  // ── L-051 — THE MINUTES COME FROM THE TIME RANGES (column C) ───────────────
+  // The DURATION cell (column E) is a hand-written summary and is now a CROSS-CHECK, not
+  // the input: MC stopped filling it entirely from 2026-08-01 (so August and September
+  // both published 0.0 downtime hours beside a full list of stoppages), and even while it
+  // WAS filled it usually covered only the first range. See ./downtimeRanges.ts.
+  const minutes = resolveDowntimeMinutes(
+    ws.cell(detailRow, COL_DT_RANGES),
+    ws.cell(detailRow, COL_DT_MINUTES),
+  );
+  const rowWarnings: string[] = [...minutes.warnings];
+  const totalMins = minutes.totalMins;
 
   const hasReason = reasons.length > 0 || category !== null;
   if (totalMins <= 0 && !hasReason) return null;
@@ -555,18 +586,40 @@ function extractDowntime(
     dtMins = dtMins % 60;
   }
 
-  return {
+  // ── L-051 — shift_hrs is DERIVED, and its basis is recorded ────────────────
+  // It was the literal `12` on every row the sync ever wrote. No cell in the workbook
+  // states the shift length, so it comes from whether the day ran overtime; see
+  // ./shiftHours.ts for the two signals and the ⚠️ note on 8-vs-9.
+  const overtime = scanOvertime(
+    runs.map((r) => ({ label: rawShiftLabelOf(ws, r._source_row), kg: r.ttl_kg })),
+    charcoalFedOvertimeSacks(ws),
+  );
+  const { shiftHrs, source: shiftHrsSource } = resolveShiftHours(overtime, minutes.source);
+
+  const row: DowntimeRow = {
     transaction_date: txnIso,
     production_batch: productionBatch,
     shift: "M",
-    shift_hrs: 12,
+    shift_hrs: shiftHrs,
     dt_hrs: dtHrs,
     dt_mins: dtMins,
     dt_reason: dtReason,
+    dt_ranges: ranges.length > 0 ? ranges.join("; ") : null,
+    shift_hrs_source: shiftHrsSource,
     remarks,
     _source_sheet: titleStripped,
     warnings: rowWarnings,
+    _minutes_source: minutes.source,
   };
+  if (minutes.durationMins !== null) row._duration_mins = minutes.durationMins;
+  if (minutes.rangesMins !== null) row._ranges_mins = minutes.rangesMins;
+  if (minutes.disagrees) row._duration_disagrees = true;
+  return row;
+}
+
+/** The raw column-H label of one runs row, read back for the overtime scan. */
+function rawShiftLabelOf(ws: LoadedSheet, sourceRow: number): string | null {
+  return coerceStr(ws.cell(sourceRow, COL_RUN_SHIFT));
 }
 
 /**
@@ -586,6 +639,10 @@ function extractDowntime(
  *     length is a fact about the shift, not a quantity either batch owns a share of.
  *   - `dt_reason` is copied verbatim to both. Annotating it would make every future run
  *     see a VALUE_CHANGED against the stored text forever.
+ *   - `dt_ranges` and `shift_hrs_source` are copied verbatim too (L-051). Both describe
+ *     the SHIFT — the operator's own list of stoppages, and why the shift is 8 h or 12 h
+ *     — so like `shift_hrs` they are facts neither batch owns a share of. Splitting the
+ *     range list would make each half read as a different day's stoppages.
  *
  * Conservation is exact: the second part is `total - first`, never a second rounding, so
  * the two rows always sum back to the minutes MC wrote down. Each part is then
@@ -836,7 +893,7 @@ function extractSheet(
   // the same rule as an unmarked run row: the batch that was already running.
   // On a CHANGEOVER day that single answer is wrong for one of the two batches, so
   // the stoppage is apportioned by same-day output instead (2026-08-04, Renzo's call).
-  const downtimeRow = extractDowntime(ws, titleStripped, txnIso, plan.running);
+  const downtimeRow = extractDowntime(ws, titleStripped, txnIso, plan.running, runs);
   const downtime = downtimeRow !== null ? splitChangeoverDowntime(downtimeRow, runs, plan) : [];
   const electricity = extractElectricity(ws, titleStripped, txnIso);
   const trucks = extractTrucks(ws, titleStripped, txnIso);

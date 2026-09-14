@@ -29,6 +29,7 @@ import type {
   ProductionBatchStart,
   ProductionHumanEdit,
   DeliveryHumanEdit,
+  DowntimeNote,
   RcOutBackfill,
   RcOutSource,
   ReportArtifact,
@@ -58,6 +59,7 @@ import {
   collectProductionBatchStarts,
   collectProductionHumanEdits,
   collectDeliveryHumanEdits,
+  collectDowntimeNotes,
   collectReportArtifact,
   collectReportsNotReceived,
   collectScheduleConflicts,
@@ -1211,6 +1213,85 @@ function productionDeltas(e: ProductionHumanEdit): string {
 }
 
 /**
+ * ONE production day where MC's hand-written DURATION cell disagrees with her own list of
+ * time ranges — or where no range could be read at all (L-051, 2026-09-14).
+ *
+ * WHY IT EXISTS. The downtime block states each stoppage twice: as a list of time ranges
+ * and as a typed total. The sync read only the total, so when MC stopped filling it on
+ * 2026-08-01 the database published `0.0 downtime hours` for two whole months beside a
+ * fully-written list of stoppages — and even while the total WAS filled it usually
+ * covered only the FIRST range (2026-07-04: `7 MINUTES` against a real 77). The list is
+ * now what is written and the total is a cross-check; when they differ the LIST WINS and
+ * this finding names both figures rather than silently picking one.
+ *
+ * `attention`, never `high`: the row was written with the ranges' figure, so nothing is
+ * missing and nothing is held — what is uncertain is whether the SHEET needs correcting.
+ * A blank DURATION cell is not a disagreement (it states nothing) and raises nothing.
+ */
+function fromDowntimeNote(n: DowntimeNote): RunFinding {
+  const mins = (v: number | null) => (v == null ? 'nothing' : `${Math.round(v)} min`)
+  const where = [n.transaction_date, n.production_batch].filter(Boolean).join(` ${DOT} `)
+
+  if (n.kind === 'downtime_ranges_unreadable') {
+    return {
+      key: `downtime_ranges_unreadable:${n.transaction_date}`,
+      kind: 'downtime_ranges_unreadable',
+      kindLabel: "Downtime read from the typed total, not the times",
+      source: 'Production report',
+      title: `${n.transaction_date}: no downtime time range could be read — used the typed total`,
+      location: where,
+      data: {
+        transaction_date: n.transaction_date,
+        production_batch: n.production_batch,
+        duration_mins: n.duration_mins,
+        ranges_mins: n.ranges_mins,
+        minutes_source: n.minutes_source,
+        dt_ranges: n.dt_ranges,
+        shift_hrs: n.shift_hrs,
+        shift_hrs_source: n.shift_hrs_source,
+        warnings: n.warnings,
+      },
+      reason:
+        `The time-range column could not be read for this day, so the downtime was taken ` +
+        `from the typed DURATION cell (${mins(n.duration_mins)}). That cell has been ` +
+        `measured to summarise only the first stoppage, so this day's figure may be short. ` +
+        `Writing the start and end time of each stop fixes it.`,
+      severity: 'attention',
+      section: 'production',
+    }
+  }
+
+  return {
+    key: `downtime_duration_mismatch:${n.transaction_date}`,
+    kind: 'downtime_duration_mismatch',
+    kindLabel: 'Downtime total disagrees with the times written',
+    source: 'Production report',
+    title:
+      `${n.transaction_date}: downtime written as ${mins(n.duration_mins)} but the times ` +
+      `add up to ${mins(n.ranges_mins)}`,
+    location: where,
+    data: {
+      transaction_date: n.transaction_date,
+      production_batch: n.production_batch,
+      duration_mins: n.duration_mins,
+      ranges_mins: n.ranges_mins,
+      minutes_source: n.minutes_source,
+      dt_ranges: n.dt_ranges,
+      shift_hrs: n.shift_hrs,
+      shift_hrs_source: n.shift_hrs_source,
+      warnings: n.warnings,
+    },
+    reason:
+      `The report's own stop-and-start times (${n.dt_ranges ?? 'none listed'}) add up to ` +
+      `${mins(n.ranges_mins)}, but the DURATION cell says ${mins(n.duration_mins)}. The ` +
+      `times were used, because that cell normally summarises only the first stop. ` +
+      `Nothing is missing — check the sheet if the typed total was meant to be the real one.`,
+    severity: 'attention',
+    section: 'production',
+  }
+}
+
+/**
  * A production row the sync refused to overwrite because a human edited it in the app
  * (the human-edit latch). The report's value is NOT applied and NOT parked — MC's/Ivy's
  * workbook is cumulative, so this re-fires every run until the operator fixes the sheet
@@ -2203,6 +2284,10 @@ export function flattenRunFindings(result: SyncRunResult): RunFinding[] {
   // 10. Production rows the sync refused to overwrite (the human-edit latch).
   for (const e of collectProductionHumanEdits(result)) out.push(fromProductionHumanEdit(e))
 
+  // 10a. Downtime days whose typed total and listed times disagree (L-051). Never held —
+  //      the row was written from the times either way; this only makes it visible.
+  for (const n of collectDowntimeNotes(result)) out.push(fromDowntimeNote(n))
+
   // 10b. Deliveries the sync refused to overwrite (the 2026-08-08 deliveries latch).
   //      TWO reports can raise these — the emailed report and the Google Sheet.
   for (const e of collectDeliveryHumanEdits(result)) out.push(fromDeliveryHumanEdit(e))
@@ -2611,6 +2696,8 @@ const SHORT_KIND: Record<string, string> = {
   schedule_conflict: 'schedule day held',
   production_batch_started: 'new production batch',
   production_human_edited: 'your edit kept',
+  downtime_duration_mismatch: 'downtime total off',
+  downtime_ranges_unreadable: 'downtime times unreadable',
   delivery_human_edited: 'your edit kept',
   stale_stream: 'report overdue',
   price_tab_unresolved: 'no price tab',
@@ -2654,6 +2741,8 @@ const EXTRA_KIND_LABEL: Record<string, string> = {
   schedule_conflict: 'Schedule day you edited — the plan email disagrees',
   production_batch_started: 'New production batch opened',
   production_human_edited: 'Row you edited — the report disagrees',
+  downtime_duration_mismatch: 'Downtime total disagrees with the times written',
+  downtime_ranges_unreadable: 'Downtime read from the typed total, not the times',
   delivery_human_edited: 'Delivery you edited — the source disagrees',
   stale_stream: 'Report stream has gone quiet',
   // Delivery price kinds (2026-08-07). Kept in sync with PRICE_KIND_LABEL above — that

@@ -37,6 +37,7 @@ import type {
   BatchAliasNote,
   BlockDiff,
   DeliveryHumanEdit,
+  DowntimeNote,
   HeldRow,
   PriceNote,
   ProductNote,
@@ -2001,5 +2002,99 @@ check('L-050: the delivery-class mirror reproduces fn_delivery_class on its docu
   assert.equal(deliveryClass('JAN-26-SUNDRY2', 'Layupan'), 'sundry_reentry')
 })
 
+
+// ---------------------------------------------------------------------------
+// L-051 (2026-09-14) — the downtime block's two halves disagree.
+//
+// THE REGRESSION THESE PIN: MC records each stoppage twice — a LIST of time ranges and a
+// hand-written DURATION total — and the sync read only the total. She stopped filling it
+// on 2026-08-01, so August published 0.00 downtime hours across 23 of 23 rows beside a
+// full list of stoppages. The list is now the reading; these check that a disagreement is
+// SAID OUT LOUD rather than silently resolved, and that saying it never escalates.
+// ---------------------------------------------------------------------------
+
+const downtimeNote = (over: Partial<DowntimeNote> = {}): DowntimeNote => ({
+  kind: 'downtime_duration_mismatch',
+  transaction_date: '2026-07-04',
+  production_batch: 'JULY',
+  duration_mins: 7,
+  ranges_mins: 77,
+  minutes_source: 'ranges',
+  dt_ranges: '8:00 AM-8:07 AM; 12:20 PM-1:30 PM',
+  shift_hrs: 12,
+  shift_hrs_source: 'overtime_signal',
+  warnings: [],
+  ...over,
+})
+
+const downtimeRun = (notes: DowntimeNote[]): SyncRunResult =>
+  ({
+    reports: {
+      production: {
+        apply: {
+          report_type: 'production',
+          ok: true,
+          held: [],
+          labeled: false,
+          watermark_updated: false,
+          errors: [],
+          downtime_notes: notes,
+        },
+      },
+    },
+  }) as unknown as SyncRunResult
+
+const downtimeFinding = (over: Partial<DowntimeNote> = {}) =>
+  flattenRunFindings(downtimeRun([downtimeNote(over)])).find((f) =>
+    f.kind.startsWith('downtime_'),
+  )!
+
+check('L-051: a disagreeing downtime day names BOTH figures and files under production', () => {
+  const f = downtimeFinding()
+  assert.equal(f.kind, 'downtime_duration_mismatch')
+  assert.equal(f.section, 'production')
+  assert.match(f.title, /7 min/)
+  assert.match(f.title, /77 min/)
+  assert.match(f.reason, /8:00 AM-8:07 AM; 12:20 PM-1:30 PM/)
+  assert.equal(f.data.ranges_mins, 77)
+  assert.equal(f.data.duration_mins, 7)
+})
+
+check('L-051: it is `attention`, never `high` — the row WAS written, from the list', () => {
+  // Nothing is missing and nothing is held; what is uncertain is whether the SHEET is
+  // wrong. An alarm that shouts about a resolved reading teaches an operator to skip it.
+  assert.equal(downtimeFinding().severity, 'attention')
+  assert.equal(downtimeFinding({ minutes_source: 'duration' }).severity, 'attention')
+})
+
+check('L-051: an unreadable range list is its OWN kind, and says the figure may be short', () => {
+  const f = downtimeFinding({
+    kind: 'downtime_ranges_unreadable',
+    minutes_source: 'duration',
+    ranges_mins: null,
+    dt_ranges: null,
+    duration_mins: 85,
+  })
+  assert.equal(f.kind, 'downtime_ranges_unreadable')
+  assert.match(f.reason, /85 min/)
+  assert.match(f.reason, /may be short/)
+})
+
+check('L-051: the note carries no ₱ and nothing cost-shaped', () => {
+  // Production is the one module with no money in it, and this channel is not
+  // price-gated — so a peso reaching it could never be nulled at read time.
+  const f = downtimeFinding({ warnings: ['downtime time \'3:22 PM\' has no end time'] })
+  const blob = JSON.stringify(f)
+  assert.doesNotMatch(blob, /₱/)
+  for (const k of Object.keys(f.data)) assert.equal(isCostKey(k), false, k)
+})
+
+check('L-051: identity is the DAY, and the numbers are what expire it', () => {
+  // Same day, same complaint -> one standing acknowledgement; a CHANGED delta re-surfaces.
+  const a = findingIdentity(downtimeFinding())
+  const b = findingIdentity(downtimeFinding({ ranges_mins: 145 }))
+  assert.equal(a.fingerprint, b.fingerprint, 'the same day is the same discrepancy')
+  assert.notEqual(a.contentHash, b.contentHash, 'a different delta is a new situation')
+})
 
 console.log(`\nAll ${passed} findings checks passed.`)

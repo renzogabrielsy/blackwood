@@ -713,6 +713,47 @@ export interface BatchAliasNote {
   source_row: string | number | null
 }
 
+/**
+ * ONE production day where the two halves of MC's downtime block do not tell the same
+ * story (L-051, 2026-09-14).
+ *
+ * MC records each stoppage TWICE: as a list of time ranges (column C) and as a
+ * hand-written DURATION total (column E). The sync used to read only the DURATION — so
+ * when she stopped filling it on 2026-08-01, August and September both published ZERO
+ * downtime hours beside a full list of stoppages, and even while it was filled it
+ * normally summarised only the FIRST range. The list is now the reading and the duration
+ * is the cross-check; when they differ THE LIST WINS and this note says so, naming both
+ * figures. Nothing is corrected in the workbook and nothing is held — the row is written
+ * with the ranges' figure either way; this only makes the disagreement visible so a
+ * person can decide whether the sheet needs fixing.
+ *
+ * Never a durable case: it stops firing the moment the two halves agree (or the DURATION
+ * cell is left blank, which is not a disagreement — a blank states nothing). Carries no ₱
+ * — production has none.
+ */
+export interface DowntimeNote {
+  /** `downtime_duration_mismatch` today. A field, not a literal, so a second flavour of
+   *  "the downtime block does not add up" can join without a second channel. */
+  kind: string
+  /** The production day, `YYYY-MM-DD`. */
+  transaction_date: string
+  /** The batch the shift was filed under. */
+  production_batch: string | null
+  /** Minutes the DURATION cell states, when it parsed. */
+  duration_mins: number | null
+  /** Minutes the time-range list adds up to — the figure that was written. */
+  ranges_mins: number | null
+  /** Which one the row was written from: `ranges` | `duration` | `none`. */
+  minutes_source: string
+  /** The range list verbatim, so the note can be checked without the workbook. */
+  dt_ranges: string | null
+  /** Shift length written, and why (`overtime_signal` | `duration_only` | `default_8h`). */
+  shift_hrs: number | null
+  shift_hrs_source: string | null
+  /** Per-row parse complaints (open ranges, backwards spans), capped by the worker. */
+  warnings: string[]
+}
+
 export interface SourceTabNote {
   /** `source_tabs_unreadable` today. A field, not a literal, so a second flavour of
    *  "the file is here and unreadable" can join without a second channel. */
@@ -836,6 +877,11 @@ export interface ApplyResult {
    *  contract as `auto_created_batches` — read it as `apply?.product_notes ?? []` (see
    *  `collectProductNotes`). Only the `products` report ever fills it. */
   product_notes?: ProductNote[]
+  /** Downtime days where MC's hand-written DURATION cell and her own list of time ranges
+   *  disagree, or where no range could be read at all (L-051). Same optionality contract
+   *  as `auto_created_batches` — read it as `apply?.downtime_notes ?? []` (see
+   *  `collectDowntimeNotes`). Only the `production` report ever fills it. */
+  downtime_notes?: DowntimeNote[]
   /** Set ONLY when this report's source file never arrived (L-044). Absent on every
    *  ordinary run, so the KEY'S PRESENCE is the fact — never an array with a length to
    *  check. Read it via `collectReportsNotReceived`. */

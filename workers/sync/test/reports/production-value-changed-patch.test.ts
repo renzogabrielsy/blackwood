@@ -93,9 +93,12 @@ function downtimeEmailRow(over: Partial<DowntimeRow> = {}): DowntimeRow {
     dt_hrs: 1,
     dt_mins: 30,
     dt_reason: "MECHANICAL | belt slip",
+    dt_ranges: "08:00-09:30",
+    shift_hrs_source: "overtime_signal",
     remarks: "Time ranges: 08:00-09:30",
     _source_sheet: "06-30-26",
     warnings: [],
+    _minutes_source: "ranges",
     ...over,
   };
 }
@@ -241,7 +244,9 @@ describe("downtime `remarks` is a phantom — it must never be diffed", () => {
     // drops it, so the DB side is permanently absent. Comparing them made every
     // downtime row carrying time ranges a permanent, self-renewing disagreement.
     const dbRows: DowntimeDbRow[] = [
-      { id: "D-1", shift_id: "SID-1", shift_hrs: 12, dt_hrs: 1, dt_mins: 30, dt_reason: "MECHANICAL | belt slip" },
+      // dt_ranges + shift_hrs_source are REAL columns since L-051, so the DB side of an
+      // already-correct row carries them; only `remarks` stays permanently absent.
+      { id: "D-1", shift_id: "SID-1", shift_hrs: 12, dt_hrs: 1, dt_mins: 30, dt_reason: "MECHANICAL | belt slip", dt_ranges: "08:00-09:30", shift_hrs_source: "overtime_signal" },
     ];
 
     const res = classifyDowntime([downtimeEmailRow()], dbRows, SHIFTS);
@@ -253,7 +258,7 @@ describe("downtime `remarks` is a phantom — it must never be diffed", () => {
 
   it("a REAL downtime disagreement is still caught, and carries no remarks key", () => {
     const dbRows: DowntimeDbRow[] = [
-      { id: "D-2", shift_id: "SID-1", shift_hrs: 12, dt_hrs: 1, dt_mins: 15, dt_reason: "MECHANICAL | belt slip" },
+      { id: "D-2", shift_id: "SID-1", shift_hrs: 12, dt_hrs: 1, dt_mins: 15, dt_reason: "MECHANICAL | belt slip", dt_ranges: "08:00-09:30", shift_hrs_source: "overtime_signal" },
     ];
 
     const res = classifyDowntime([downtimeEmailRow()], dbRows, SHIFTS);
@@ -277,7 +282,8 @@ describe("downtime `remarks` is a phantom — it must never be diffed", () => {
  */
 const RPC_ALLOWLIST: Record<string, string[]> = {
   production_runs: ["customer", "grade", "ttl_kg", "sacks_bags", "remarks"],
-  production_downtime: ["shift_hrs", "dt_hrs", "dt_mins", "dt_reason"],
+  // L-051 added dt_ranges + shift_hrs_source (migration 20260914013652).
+  production_downtime: ["shift_hrs", "dt_hrs", "dt_mins", "dt_reason", "dt_ranges", "shift_hrs_source"],
   production_waste: ["rs1a_kg", "rs1b_kg", "bf_kg", "rs23_kg", "rs5_kg", "trml1_kg", "trml2_kg", "grit_kg", "remarks"],
   electricity_readings: ["start_kwh", "end_kwh", "meter_multiplier", "remarks"],
   truck_readings: ["start_km", "end_km", "fuel_liters", "remarks"],
@@ -286,7 +292,7 @@ const RPC_ALLOWLIST: Record<string, string[]> = {
 describe("every patch key is a column the RPC will accept", () => {
   it("a downtime correction sends only allowlisted keys", async () => {
     const dbRows: DowntimeDbRow[] = [
-      { id: "D-3", shift_id: "SID-1", shift_hrs: 11, dt_hrs: 0, dt_mins: 5, dt_reason: "ELECTRICAL" },
+      { id: "D-3", shift_id: "SID-1", shift_hrs: 11, dt_hrs: 0, dt_mins: 5, dt_reason: "ELECTRICAL", dt_ranges: null, shift_hrs_source: null },
     ];
     const classified = classifyDowntime([downtimeEmailRow()], dbRows, SHIFTS);
 

@@ -1264,33 +1264,39 @@ export type Database = {
           created_at: string
           dt_hrs: number
           dt_mins: number
+          dt_ranges: string | null
           dt_reason: string | null
           human_edited_at: string | null
           human_edited_by: string | null
           id: string
           shift_hrs: number
+          shift_hrs_source: string | null
           shift_id: string
         }
         Insert: {
           created_at?: string
           dt_hrs?: number
           dt_mins?: number
+          dt_ranges?: string | null
           dt_reason?: string | null
           human_edited_at?: string | null
           human_edited_by?: string | null
           id?: string
           shift_hrs: number
+          shift_hrs_source?: string | null
           shift_id: string
         }
         Update: {
           created_at?: string
           dt_hrs?: number
           dt_mins?: number
+          dt_ranges?: string | null
           dt_reason?: string | null
           human_edited_at?: string | null
           human_edited_by?: string | null
           id?: string
           shift_hrs?: number
+          shift_hrs_source?: string | null
           shift_id?: string
         }
         Relationships: [
