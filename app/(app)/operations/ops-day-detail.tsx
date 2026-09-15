@@ -86,10 +86,12 @@ export function OpsShiftCards({ day, className }: OpsShiftCardsProps) {
           ))}
         </div>
         <p className="mt-1 text-[10px] leading-snug text-muted-foreground">
-          These eight do NOT sum to the day’s {kg(day.dayDriftKg) || '—'} kg of drift — most of
-          the difference leaves as moisture and volatiles, which nobody weighs. And a day’s fed
-          and produced do not describe the same charcoal: the feed tank is continuous flow, so
-          the day figure is DRIFT. Real loss is a campaign figure — read it in the strip above.
+          These eight do NOT sum to the process loss — most of what the retort loses leaves as
+          moisture and volatiles, which nobody weighs. The WASTE % on the spine is this total
+          over the day’s PRODUCED kilos, because what gets swept up came OUT of the retort and
+          was then rejected. And a day’s fed and produced do not describe the same charcoal: the
+          feed tank is continuous flow, so the day’s YIELD % and LOSS % are INDICATIVE ONLY —
+          the real figures are the campaign’s, in the strip above.
         </p>
       </div>
     </div>

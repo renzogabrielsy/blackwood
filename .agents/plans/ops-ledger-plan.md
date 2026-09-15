@@ -231,7 +231,7 @@ from it; the drafts' *ideas* were ported, their *files* were not.
 | `page.tsx` | Server Component. `?campaigns=` / `?lens=` → `fetchOpsLedgerCampaignOptions()` + `fetchOpsLedger(keys)` → `OperationsView`. |
 | `operations-view.tsx` | Client. URL writes, lens control, EOQ collapse, `campaignsMissing` notice, block drawer. |
 | `ops-ledger-table.tsx` | **ONE table, ONE scrollbar**: the frozen left spine, the two sticky header rows, the sticky group footer, the lens columns, the day expand. (Replaced `ops-ledger-split.tsx` on 2026-09-15.) |
-| `ops-kpi-strip.tsx` | The EOQ table — a row per campaign + the GROUP row, nine columns, every cell a button. |
+| `ops-kpi-strip.tsx` | The EOQ table — a row per campaign + the GROUP row, **eleven columns**, every cell a button, every unit pinned left via `components/shared/unit-value`. |
 | `ops-kpi-modal.tsx` | The per-KPI "show me the math" dialog (`KpiDetail`). |
 | `ops-color.ts` | The semantic palette (`TONE`, `CAMPAIGN_ACCENTS`). |
 | `ops-day-detail.tsx` | `OpsShiftCards` + `OpsBlocksUsedTable`. |
@@ -388,3 +388,72 @@ deleted afterwards, `git status` clean of it). Measured there:
   Yield · Loss · Waste Loss`, **no ₱ glyph in either table**.
 - light AND dark, 1512×950; and 375×812 where `document.scrollWidth === innerWidth === 375`,
   one vertical scroller, spine cells `position: static` (the spine un-freezes below 768px).
+
+---
+
+### 3.7 REFINEMENT PASS 2 (2026-09-15) — Renzo's four notes after *"looking good!"*
+
+He read the refined `/operations` on production. Four changes; the first two are one idea (give
+the ledger back its vertical space) and the last two are one idea (say what the day actually is).
+
+1. **THE EOQ STRIP SPLIT `ACTUAL FED PRICE` INTO THREE COLUMNS.** *"The KPI is wide enough to
+   separate resiko cost and resiko loss as their own separate columns. This would make the KPI
+   thinner and give more vertical space for the breakdown table."* One 138px cell was stacking
+   three figures, and because a table row is as tall as its tallest cell that ONE cell set the
+   height of **every** row in the strip at three lines. Split, the order is `RC Fed · Produced ·
+   Yield · Loss · Waste Loss · Fed Price · Actual Fed Price · Resiko Cost · Resiko Loss ·
+   PC Cost · True PC Cost` — eleven columns, and `upliftPhpKg` / `blockResikoLossPct` each get
+   their own header and their own modal (the actual-price modal kept the price and the coverage;
+   the resiko-cost modal owns `Actual − Delivered` and the 0-or-negative caveat; the resiko-loss
+   modal owns the yard's shrinkage and, for the group, why no resiko KG exists). *Measured: rows
+   34px where they were ~60, the whole strip 159px for three campaigns + GROUP.*
+   **RESIKO LOSS IS NOT A ₱ COLUMN** — a weight ratio the adapter never nulls — so it is not
+   `price`-flagged and Production keeps it, in the amber LOSS hue rather than the violet MONEY
+   one. The gate now drops FIVE columns, not four.
+2. **THE UNIT MOVED TO THE LEFT OF EVERY STRIP CELL**, and `UnitValue` moved with it:
+   `app/(app)/analytics/unit-value.tsx` → **`components/shared/unit-value.tsx`** (platform layer
+   — it already carried zero tenant knowledge; the glyph is a prop), with a one-line re-export
+   left at the old path so none of its six analytics call sites moved. Glyphs `t` · `%` · `kg` ·
+   `₱/kg`; the column headers dropped their unit sub-labels, because a unit stated on every row
+   at a fixed x does not also need a header line. **An absent figure drops the glyph with the
+   number** — `% —` claims a percentage that does not exist.
+3. **THE LEDGER'S `DRIFT` COLUMN IS GONE AND FOUR RATIOS TOOK ITS PLACE:** `WASTE`
+   (`totalWasteKg`) · `WASTE %` (`wastePct`) · `YIELD %` (`yieldPct`) · `LOSS %` (`lossPct`),
+   under two group bands — rose `WASTE`, amber `OUTPUT RATIOS`. `dayDriftKg` is **no longer
+   rendered anywhere** (the day-expand's note quoted it too, and was rewritten). DRIFT was a
+   kilogram figure whose entire header tooltip existed to say *"this is not what it looks
+   like"*; the caveat now sits on the two columns it applies to — *"Day-level, indicative — the
+   feed tank is continuous flow; the campaign figure is the real one"* — and WASTE / WASTE %
+   carry none, because a day's swept-up waste and a day's production DO describe the same shift.
+   Footers print the published `wasteKg` / `wasteLossPct` / `yieldPct` / `processLossPct`, never
+   a fold of the cells. The spine went 692 → **916px with ₱ / 820 without**, so its un-freeze
+   breakpoint went 767 → **1023px** — the rule was always "un-freeze while the spine is within
+   ~10% of the frame", and at 800px a 916px spine would have left nothing for the lens.
+4. **"of fed kg" → "of produced kg"** everywhere the waste denominator was described: the strip's
+   header comment, the losses-lens hint, the day-expand's waste note. (The data layer had already
+   moved in `20260915032016`; this is the copy catching up.) The stale live figures in
+   `CONTEXT.md` (0.121155 / 0.114719, measured against fed kg) are now labelled as the retired
+   definition beside the current 0.152369 / 0.146174.
+
+**Verification (2026-09-15, round 2).** `npx tsc --noEmit` clean · `npx eslint "app/(app)/operations"
+components/shared/unit-value.tsx "app/(app)/analytics/unit-value.tsx"` 0 errors 0 warnings ·
+`npm run build` passes with `/operations` emitted. Driven in Chromium against a temporary
+three-campaign fixture (both changeover dates, each in two campaigns) mounted at
+`app/dev/table-playground/ops/`, deleted afterwards:
+
+- strip headers read exactly `CAMPAIGN · RC FED · PRODUCED · YIELD · LOSS · WASTE LOSS ·
+  FED PRICE · ACTUAL FED PRICE · RESIKO COST · RESIKO LOSS · PC COST · TRUE PC COST`, cell text
+  `"t\n781.2"`, `"%\n79.52"`, `"kg\n94,652\n%\n15.24"`, `"₱/kg\n45.33"` — unit left, digits
+  right; rows **34px**, strip **159px**.
+- the three new modals open from their own cells and carry their own definitions; the GROUP
+  RESIKO LOSS modal states the no-group-kg rule.
+- spine reads `DATE · DAY · FED PRICE · TTL FED · TTL PROD · WASTE · WASTE % · YIELD % · LOSS % ·
+  SHIFTS · DT HRS` under `DAY · PRICE · FED · PRODUCED · WASTE · OUTPUT RATIOS · SHIFT`; **no
+  DRIFT**; group footer `218,401 · 14.62% · 78.48% · 21.52%`; both ratio headers carry the
+  indicative `title`.
+- **exactly ONE element with `scrollHeight > clientHeight`**, two `<table>`s, zero React key
+  warnings and zero application console errors across a lens round trip (all four lenses).
+- price-denied payload: strip `Campaign · RC Fed · Produced · Yield · Loss · Waste Loss ·
+  Resiko Loss`, spine drops FED PRICE and the whole PRICE band, **no ₱ glyph in the document**.
+- light AND dark at 1512×950; at 375×812 `document.scrollWidth === innerWidth === 375`, one
+  vertical scroller, spine cells `position: static`.

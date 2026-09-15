@@ -43,13 +43,13 @@ dependency). Each view's plain-language definition lives in its DB `COMMENT`.
 | View | Grain | Key columns | Rows |
 |---|---|---|---|
 | `view_ops_ledger_campaign_span` | campaign | `campaign_key`, `campaign_label`, `first_date`, `last_date`, `span_days`, `first_fed_date`, `feed_days`, `shift_count` | 32 |
-| **`view_ops_ledger_day`** | campaign × calendar day | `calendar_date`, `weekday`, `is_weekend`, `is_rest_day`, `fed_kg`, `sundry_kg`, **`fed_php_kg` (₱)**, `produced_kg`, `day_drift_kg`, `blocks_fed_count`, `shift_count`, `shift_hrs_total`, `downtime_hours`, `downtime_incident_count`, `downtime_shift_count`/`_with_duration`/`_reason_only`, `run_count`, `sacks`, the eight waste columns, `total_waste_kg`, `production_reported` | **686** (≈31/campaign, max 33) |
+| **`view_ops_ledger_day`** | campaign × calendar day | `calendar_date`, `weekday`, `is_weekend`, `is_rest_day`, `fed_kg`, `sundry_kg`, **`fed_php_kg` (₱)**, `produced_kg`, `day_drift_kg`, `blocks_fed_count`, `shift_count`, `shift_hrs_total`, `downtime_hours`, `downtime_incident_count`, `downtime_shift_count`/`_with_duration`/`_reason_only`, `run_count`, `sacks`, the eight waste columns, `total_waste_kg`, `production_reported`, **`waste_pct` / `yield_pct` / `loss_pct` (2026-09-15, FRACTIONS)** | **688** (≈31/campaign, max 33) |
 | `view_ops_ledger_day_grade` | campaign × day × grade | `grade`, `kg`, `sacks`, `run_count` | 317 (max 48/campaign) |
 | `view_ops_ledger_day_block` | campaign × day × block | `batch_id`, `batch_code`, `block_loc`, `fed_kg`, `sundry_kg` | 2,148 (max **114**/campaign) |
 | `view_ops_ledger_day_blocks_used` | campaign × day × block | `first_fed_date` (date open), `close_date`, `is_closed`, `status`, `day_fed_kg`, `total_fed_kg`, `total_out_kg`, `delivered_kg`, `weight_lost_kg`, `loss_pct`, **`resiko_kg`/`resiko_pct`** (closed only), **`balance_kg`** (open only), `has_sundry_outflow`, `has_unpriced_delivery` | 2,148 |
 | `view_ops_ledger_shift` | shift | `shift` (`M`/`E`), `shift_hrs`, `shift_hrs_source`, `dt_hrs`, `dt_mins`, `downtime_hours`, `productive_hrs`, `dt_reason`, `dt_ranges`, `dt_incident_ranges`, `has_incident`, `produced_kg`, `run_count`, `sacks`, the eight waste columns, `waste_remarks`, **`runs` (jsonb array)** | 260 |
 | `view_ops_ledger_campaign_grades` | campaign × grade | `grade`, `kg`, `share_pct` (0–100), `campaign_produced_kg` | 21 |
-| **`view_ops_ledger_campaign_kpis`** | campaign | the EOQ row — see below; **+ the eight waste streams, `waste_kg`, `waste_shift_count`, `waste_loss_pct` (2026-09-15)** | 32 |
+| **`view_ops_ledger_campaign_kpis`** | campaign | the EOQ row — see below; **+ the eight waste streams, `waste_kg`, `waste_shift_count`, `waste_loss_pct` (2026-09-15; its denominator became PRODUCED kg the same day)** | 32 |
 
 **`fn_ops_ledger_group_kpis(p_campaign_keys text[])`** — SECURITY INVOKER, `search_path`
 pinned, EXECUTE revoked from `PUBLIC` + `anon`, granted to `authenticated`. One row: the group
@@ -65,7 +65,7 @@ authenticated-only, so neither key a script can hold may read them; each returns
 
 | Probe | Scope | What it answers |
 |---|---|---|
-| `fn_ops_ledger_verify_campaign(text)` | **ONE campaign** | the four day folds, **the WASTE fold (`waste_fold_mismatch`, 0/1) and the PER-STREAM fold (`waste_stream_fold_mismatch`, a count 0..8 — a total can agree while two streams are swapped)**, day totals vs the KPI row, the grade fold, `ledger_days` vs `span_days`, both reuse comparisons, and the one-campaign GROUP identity (waste columns included) |
+| `fn_ops_ledger_verify_campaign(text)` | **ONE campaign** | the four day folds, **the WASTE fold (`waste_fold_mismatch`, 0/1) and the PER-STREAM fold (`waste_stream_fold_mismatch`, a count 0..8 — a total can agree while two streams are swapped)**, day totals vs the KPI row, the grade fold, `ledger_days` vs `span_days`, **the DAY-RATIO self-consistency check (`day_ratio_mismatch`) and the campaign denominator (`kpi_waste_pct_mismatch`, 0/1)**, both reuse comparisons, and the one-campaign GROUP identity (waste columns included) |
 | `fn_ops_ledger_verify_group(text[])` | **≤ 12 keys — RAISES above that** | the group vs a direct Σ over those campaigns' own KPI rows (**`gap_waste_kg` included — exact by construction, since a shift has one campaign**); block de-duplication, coverage, `campaigns_waste_reported` / `waste_shift_count`, day split, changeover surplus |
 | `fn_ops_ledger_verify_posture()` | catalog only | invoker/comment/grant posture, the three probes are `service_role`-only, `legacy_verify_fn_count = 0`, the money-column counts — **plus one 32-row read of `view_ops_ledger_campaign_span`**, whose only job is to hand the script the campaign keys |
 
@@ -96,6 +96,16 @@ authenticated-only, so neither key a script can hold may read them; each returns
 | `view_ops_ledger_campaign_kpis` | 85 → **33** | 1 |
 | `fn_ops_ledger_group_kpis(Q3 2026)` | 147 → **135** | 1 |
 | `view_ops_ledger_campaign_span` (unfiltered) | 9 | 32 |
+
+**What the 2026-09-15 DAY RATIOS cost: nothing measurable.** `waste_pct` / `yield_pct` /
+`loss_pct` divide columns the row already carries, so they add no join and no scan. JULY 2026 on
+the day view: **1,074 → 1,071 shared buffers** (95.5 ms → 12.8 ms, the drop being cache, not the
+change). The campaign view, whose `waste_loss_pct` swapped denominator from `fed_kg` to
+`produced_kg` — a column it was already selecting — went **2,662 → 2,656 buffers** (155.1 → 127.7
+ms), and the Q3 group RPC **3,046 → 3,019 buffers** (125.7 → 134.8 ms). The per-campaign probe
+costs **280 ms / 10,982 buffers** (AUGUST 2026) to **581 ms / 12,599** (SEPTEMBER 2025)
+server-side; the wall-clock the script prints is round-trip-dominated and moves with instance
+load, which is why the budget is a generous 5 s.
 
 **What the 2026-09-15 waste columns cost, measured under the same 5 s guard.** The campaign
 fold alone (`sum()` over `view_ops_ledger_shift` filtered to JULY 2026) is **3.570 ms / 30
@@ -180,12 +190,23 @@ reader can compare this screen with `/analytics` digit for digit.
 `view_ops_ledger_campaign_kpis` and `fn_ops_ledger_group_kpis` carry the eight RECORDED streams
 (`trml1_kg`, `trml2_kg`, `rs1a_kg`, `rs1b_kg`, `rs23_kg`, `rs5_kg`, `bf_kg`, `grit_kg`), their
 total **`waste_kg`**, **`waste_shift_count`** (the shifts that filed a waste row — the coverage
-behind the total) and **`waste_loss_pct` = `waste_kg ÷ fed_kg`, a FRACTION** (point 8's
+behind the total) and **`waste_loss_pct` = `waste_kg ÷ produced_kg`, a FRACTION** (point 8's
 convention; ×100 at render). The group adds **`campaigns_waste_reported`** and
-**`fed_kg_waste_reported`**. On the port: `OpsCampaignRollup.waste` / `.wasteKg` /
+**`produced_kg_waste_reported`**. On the port: `OpsCampaignRollup.waste` / `.wasteKg` /
 `.wasteShiftCount` / `.wasteLossPct`, and the same on `OpsGroupRollup` plus
-`.campaignsWasteReported` / `.fedKgWasteReported`. **No ₱ column, none derivable — the whole
+`.campaignsWasteReported` / `.producedKgWasteReported`. **No ₱ column, none derivable — the whole
 band is safe for Production and is not gated.**
+
+- **THE DENOMINATOR IS PRODUCTION OUTPUT, NOT FED KG (Renzo, 2026-09-15 — migration
+  `20260915032016_ops_ledger_day_ratios_waste_over_produced`).** What the plant sweeps up off the
+  screens and trommels came OUT of the retort and was then rejected, so it is a property of the
+  OUTPUT; dividing it by what went IN mixes it with the moisture and volatiles `process_loss_pct`
+  already accounts for. **JULY 2026 moved from 0.121156 to 0.152369** (94,651.5 kg over 621,201 kg
+  produced) and Q3 2026 from 0.114719 to **0.146174**. Only the EXPRESSION changed: same column
+  name, same position, same type, so it stayed a `CREATE OR REPLACE`. It is NULL — never 0 — when
+  produced is NULL or 0, and **measured, 0 of the 10 waste-reporting campaigns lose their ratio**.
+  `kpi_waste_pct_mismatch` (campaign) and `gap_waste_pct` (group) are what would catch it
+  reverting.
 
 - **THEY DO NOT SUM TO `processLossKg`.** Most of what the retort loses leaves as moisture and
   volatiles that nobody weighs; this is what was swept up and put on a scale. It is a recovery /
@@ -198,17 +219,35 @@ band is safe for Production and is not gated.**
   by several campaigns, but a SHIFT belongs to exactly one, so waste partitions cleanly and the
   kilograms simply add.
 - **THE GROUP RATIO'S DENOMINATOR IS NARROWED ON PURPOSE.** `waste_loss_pct` divides by
-  `fed_kg_waste_reported` — the fed kilos of the campaigns that actually filed waste — not by the
-  group's whole fed total. Production reporting begins 2025-11-27, so **22 of the 32 campaigns fed
-  the plant and filed no shift at all**; including their kilos would understate any group
-  straddling that boundary, the same trap `yield_pct` avoids with `fed_kg_production_reported`.
-  Measured: on **Q3 2026 all three campaigns filed waste**, so the two possible denominators are
-  identical there (1,903,790.00 kg either way) — the narrowing costs Q3 nothing and protects
-  every group that reaches back past November 2025.
-- **Live figures at 2026-09-15.** JULY 2026 — TRML1 2,391.0 · TRML2 11.5 · RS1A 38,135.0 ·
-  RS1B 36,475.0 · RS2/3 7,869.0 · RS5 4,191.0 · BF 4,557.0 · GRITS 1,022.0 = **94,651.5 kg over
-  23 of 28 shifts**, against 781,234.00 fed kg = **0.121155**. Q3 2026 — **218,401.0 kg over 58
-  shifts**, 1,903,790.00 fed kg = **0.114719**, 3 of 3 campaigns reporting.
+  **`produced_kg_waste_reported`** — the PRODUCED kilos of the campaigns that actually filed waste
+  — not by the group's whole produced total. Production reporting begins 2025-11-27, so **22 of
+  the 32 campaigns fed the plant and filed no shift at all**; including their kilos would
+  understate any group straddling that boundary, the same trap `yield_pct` avoids with
+  `fed_kg_production_reported`. Measured on **Q3 2026: 218,401.0 ÷ 1,494,121.0 = 0.146174**, and
+  all three campaigns filed waste, so the narrowing costs Q3 nothing and protects every group that
+  reaches back past November 2025.
+
+- **THE DAY ROWS CARRY THEIR OWN RATIOS (2026-09-15).** `view_ops_ledger_day` publishes
+  **`waste_pct` = `total_waste_kg ÷ produced_kg`** — the SAME denominator as the campaign cell, so
+  a day figure and the EOQ figure are one definition at two grains — plus **`yield_pct` =
+  `produced_kg ÷ fed_kg`** and **`loss_pct` = `1 − yield_pct`**. All three are FRACTIONS and all
+  three are NULL, never 0, when an input is missing or a denominator is 0 (a rest day reads blank
+  on all three). **A DAY YIELD IS INDICATIVE ONLY and must be labelled that way wherever it is
+  shown:** the feed tank is continuous flow, so a day's fed kilos and its produced kilos are not
+  the same charcoal — 2026-07-02 divides to **0.9955** and a JULY day produced 22,862 kg on no
+  feed at all. It is the same statement `day_drift_kg` makes in kilograms (point 2), said as a
+  ratio; the REAL yield is the campaign figure. `day_ratio_mismatch` proves each published ratio
+  equals the division of that row's OWN inputs and pins `loss_pct` to `1 − yield_pct`, so a row
+  can never print a yield and a loss that do not add to 1. Sample: **2026-07-02 — waste_pct
+  0.151514 · yield_pct 0.995483 · loss_pct 0.004517**. **Since 2026-09-15 these three (plus
+  `total_waste_kg`) ARE the ledger's spine columns** — they replaced `day_drift_kg`, which is no
+  longer rendered anywhere in the UI; see "THE DRIFT COLUMN IS GONE" under Key Behaviors.
+- **Live figures at 2026-09-15**, on the PRODUCED denominator that shipped the same day (the
+  earlier fed-kg figures 0.121155 / 0.114719 are the retired definition and are recorded above
+  only as the before-half of the change). JULY 2026 — TRML1 2,391.0 · TRML2 11.5 · RS1A 38,135.0
+  · RS1B 36,475.0 · RS2/3 7,869.0 · RS5 4,191.0 · BF 4,557.0 · GRITS 1,022.0 = **94,651.5 kg over
+  23 of 28 shifts**, against 621,201.0 kg PRODUCED = **0.152369**. Q3 2026 — **218,401.0 kg over
+  58 shifts**, 1,494,121.0 kg produced = **0.146174**, 3 of 3 campaigns reporting.
 
 ### PRICE GATING (server-side, structural)
 
@@ -238,15 +277,19 @@ silently.
 
 ### Proofs
 
-`npx tsx scripts/verify-ops-ledger.ts` — **72 assertions** (17 static + 55 live); zero on every
+`npx tsx scripts/verify-ops-ledger.ts` — **75 assertions** (19 static + 56 live); zero on every
 `*_mismatch` is the passing state. Measured 2026-09-15, **all 32 campaigns, one RPC call each,
 strictly sequential**: every fold (the two WASTE folds included) and both reuse comparisons 0
 mismatches on 32/32, the one-campaign-group identity 0/32, `day_rows == span_days` on 32/32,
-**688 ledger days / 149 rest days**, the Q3 yield / fed-rate / PC-cost / **waste** gaps exactly 0,
-anon and `service_role` refused by a real read, `legacy_verify_fn_count = 0`. **Slowest single
-campaign 904 ms (JANUARY 2024)**, 14.3 s wall for the whole sequential loop including
-round-trips — the script FAILS any call over **5,000 ms**, so the 2026-09-14 shape cannot come
-back unnoticed. Full table in `.agents/plans/ops-ledger-plan.md` §2.6.
+**688 ledger days / 149 rest days**, the Q3 yield / fed-rate / PC-cost / **waste kg** / **waste
+pct** gaps exactly 0, anon and `service_role` refused by a real read, `legacy_verify_fn_count = 0`.
+Since 2026-09-15 it also asserts **`day_ratio_mismatch = 0` and `kpi_waste_pct_mismatch = 0` on
+all 32 campaigns** and `gap_waste_pct === 0` on Q3, plus two static checks that the day-ratio
+migration re-ALTERs `security_invoker` on BOTH views it replaced and re-grants the group function
+it DROPped. **Slowest single campaign 4,671 ms (NOVEMBER 2025) on a loaded instance, 69 s wall for
+the whole sequential loop** — that wall-clock is round-trip-dominated (the same probes cost
+280–581 ms server-side) and the script FAILS any call over **5,000 ms**, so the 2026-09-14 shape
+cannot come back unnoticed. Full table in `.agents/plans/ops-ledger-plan.md` §2.6.
 
 > **TWO ASSERTIONS WERE RE-STATED AS INVARIANTS ON 2026-09-15, and the reason generalises.**
 > The Q3 group's day split and block counts were frozen at their 2026-09-14 values (77/63/14 days,
@@ -269,13 +312,13 @@ back unnoticed. Full table in `.agents/plans/ops-ledger-plan.md` §2.6.
 | `page.tsx` | **Server Component.** Resolves `?campaigns=` / `?lens=`, reads the campaign options and the ledger, renders `OperationsView`. Owns nothing else — the ₱ gate lives in the adapter and the title in the navbar. |
 | `operations-view.tsx` | `'use client'` — the CONTROLS. Writes the URL (`router.replace` inside a transition), owns the lens segmented control, the EOQ collapse, the `campaignsMissing` notice and the block detail drawer. |
 | `ops-ledger-table.tsx` | The ledger itself — **ONE table in ONE scroll container**: the frozen left spine, the frozen header band + label row, the sticky group footer, the four lenses' columns and the per-day expansion row. (Replaced `ops-ledger-split.tsx`, deleted 2026-09-15.) |
-| `ops-kpi-strip.tsx` | The `EOQ` tab — one row per campaign plus the GROUP row, nine columns, **every cell a button that opens the math**. |
+| `ops-kpi-strip.tsx` | The `EOQ` tab — one row per campaign plus the GROUP row, **eleven columns**, **every cell a button that opens the math**, every unit pinned LEFT via the platform `UnitValue`. |
 | `ops-kpi-modal.tsx` | That math: `KpiDetail` (definition in words + symbols, the inputs with their payload values, the result, the caveats) rendered in a `Dialog`. |
 | `ops-day-detail.tsx` | What a day opens into: `OpsShiftCards` + `OpsBlocksUsedTable`, now both in the one expansion row. |
 | `ops-group-picker.tsx` | The GROUP builder — selection chips + a popover holding the full campaign list, a filter box and the derived quarter presets. |
 | `ops-lens.ts` | The lens registry (`production` · `grades` · `losses` · `blocks`), `DEFAULT_LENS`, `parseLens`, and `quarterPresets()` — quarters DERIVED from the option list, never hardcoded. |
 | `ops-color.ts` | The semantic palette — `TONE` (one entry per meaning) and `CAMPAIGN_ACCENTS`. Opaque `head` for frozen surfaces, translucent `cell` for scrolling ones. |
-| `ops-format.ts` | `kg` · `tons` · `php` · `pctFromFraction` · `pctFromPercent` · `hours` · `count` · `shortDate`. Renderers only. |
+| `ops-format.ts` | `kg` · `tons` · `php` · `pctFromFraction` · **`pctNumFromFraction`** (the bare percent NUMBER, for a cell that states its unit on the left) · `pctFromPercent` · `hours` · `count` · `shortDate`. Renderers only. |
 
 ---
 
@@ -309,10 +352,13 @@ coexist."* The two scroll-synced panes are gone and with them **five mechanisms 
 existed to hold them together**: the scroll-sync handler, its ownership guard, the pixel
 divider + its `ResizeObserver` clamp, the phone pane toggle, and the **fixed 320px expansion
 band** (which existed solely so the two sides stayed row-aligned). The day spine is now a block
-of **FROZEN COLUMNS** — `#expand · DATE · DAY · FED ₱/KG · TTL FED · TTL PROD · DRIFT · SHIFTS ·
-DT HRS`, 692px with ₱ / 596 without — each `position: sticky` at its own cumulative `left`
-offset, `.frozen-edge` on the last; the lens columns scroll past them inside the same `<table>`.
-*Measured: exactly ONE element in the page has `scrollHeight > clientHeight`.*
+of **FROZEN COLUMNS** — `#expand · DATE · DAY · FED ₱/KG · TTL FED · TTL PROD · WASTE · WASTE % ·
+YIELD % · LOSS % · SHIFTS · DT HRS`, **916px with ₱ / 820 without** — each `position: sticky` at
+its own cumulative `left` offset, `.frozen-edge` on the last; the lens columns scroll past them
+inside the same `<table>`. *Measured: exactly ONE element in the page has
+`scrollHeight > clientHeight`.* The un-freeze breakpoint moved with the width, from 767px to
+**1023px**: the rule was always "un-freeze while the spine is within ~10% of the frame", and at
+800px a 916px spine would eat the whole viewport.
 
 **A ROW'S IDENTITY IS `campaignKey:date`, NEVER THE DATE ALONE.** A **changeover date belongs to
 two campaigns** — 2026-08-01 is JULY's last day and AUGUST's first, 2026-08-29 is AUGUST's last
@@ -351,16 +397,41 @@ published" into "published as null" is how a footer starts lying. Grades have a 
 total only, so with several campaigns the group footer says *which grain* is missing rather than
 claiming neither exists; the per-block columns have neither and say so.
 
-**THE EOQ ROLLUP — NINE COLUMNS AND A MODAL PER CELL.** `RC Fed · Produced · Yield · Loss (%) ·
-Waste Loss (kg + %) · Fed Price · Actual Fed Price (with the resiko cost `upliftPhpKg` and the
-resiko loss `blockResikoLossPct` under it) · PC Cost · True PC Cost`. Renzo: *"too wordy"* — so
-the nine sub-captions (*"24 feed days"*, *"100.0% priced"*, *"whole-block 48.26"*, *"delivered
-basis"*, *"carries the shrinkage"*) are **gone from the cells and moved into the math**: every
-cell is a `<button aria-haspopup="dialog">` that opens `OpsKpiModal` with the definition in
-words AND symbols, each input beside its published value, the result, and the coverage. `a ÷ b =
-c` in a modal is **three separate published fields printed side by side, never a division** —
-there is no arithmetic on any value path in the strip or its builders. A ₱/kg result that is
-null prints a bare em-dash, never `₱—/kg`.
+**THE EOQ ROLLUP — ELEVEN COLUMNS AND A MODAL PER CELL.** `RC Fed · Produced · Yield · Loss ·
+Waste Loss (kg + %) · Fed Price · Actual Fed Price · Resiko Cost · Resiko Loss · PC Cost ·
+True PC Cost`. Renzo: *"too wordy"* — so the nine sub-captions (*"24 feed days"*, *"100.0%
+priced"*, *"whole-block 48.26"*, *"delivered basis"*, *"carries the shrinkage"*) are **gone from
+the cells and moved into the math**: every cell is a `<button aria-haspopup="dialog">` that
+opens `OpsKpiModal` with the definition in words AND symbols, each input beside its published
+value, the result, and the coverage. `a ÷ b = c` in a modal is **three separate published fields
+printed side by side, never a division** — there is no arithmetic on any value path in the strip
+or its builders. A ₱/kg result that is null prints a bare em-dash, never `₱—/kg`.
+
+**THE RESIKO PAIR IS TWO COLUMNS OF ITS OWN (2026-09-15, round 2).** Renzo: *"the KPI is wide
+enough to separate resiko cost and resiko loss as their own separate columns. This would make
+the KPI thinner and give more vertical space for the breakdown table."* ACTUAL FED PRICE used to
+stack three figures in one 138px cell, which set the height of EVERY row in the strip at three
+lines; split out, **`upliftPhpKg` (RESIKO COST) and `blockResikoLossPct` (RESIKO LOSS) each get
+a full cell, a header and their own modal**, and the strip costs the ledger one line instead of
+three. *Measured: rows 34px (was ~60), whole strip 159px for three campaigns + the GROUP row.*
+
+**RESIKO LOSS IS THE ONE OF THE THREE THAT SURVIVES THE PRICE GATE.** `blockResikoLossPct` is a
+WEIGHT ratio — no ₱ in it, none derivable, and the adapter does not null it — so it is not
+`price`-flagged and **Production keeps it** even though it may not see what the shrinkage cost.
+It is drawn in the amber LOSS hue rather than the violet MONEY one, which says the same thing in
+colour. *Verified against a price-denied payload: the strip renders `Campaign · RC Fed ·
+Produced · Yield · Loss · Waste Loss · Resiko Loss` — five ₱ columns dropped, this one kept, no
+₱ glyph anywhere in either table.*
+
+**THE UNIT IS PINNED LEFT IN EVERY STRIP CELL.** Each cell renders through the platform
+`UnitValue` (`components/shared/unit-value.tsx` — moved out of `/analytics` in this change, with
+a one-line re-export left behind so none of its six analytics call sites moved): the glyph
+`t` · `%` · `kg` · `₱/kg` in muted 11px on the left, the `tabular-nums` figure hard against the
+right. That is CLAUDE.md's Currency (Accounting format) rule generalised — Renzo's 2026-09-02
+analytics decision, applied here — and it is why the column headers **no longer carry a unit
+sub-label**: the cell says it on every row at a fixed x. **An ABSENT figure drops the glyph with
+the number**; a lone `%` or `₱/kg` beside an em-dash claims a unit for a figure that does not
+exist.
 
 **COLOUR IS SEMANTIC, AND IT LIVES ON THREE SURFACES.** `ops-color.ts` owns one hue per meaning
 — **sky** FED/input · **emerald** PRODUCED/yield · **amber** DRIFT/loss · **rose** WASTE ·
@@ -380,23 +451,39 @@ Campaign bands get a rotating accent drawn from hues the semantic palette does N
 in the payload the footer SAYS SO** — the waste streams and the per-block columns have no
 campaign or group total, so that footer prints one sentence instead of a fabricated number.
 
-**DRIFT IS NEVER CALLED LOSS.** The day column is `DRIFT KG`, its header carries the
-continuous-flow explanation on hover, and the day-expand repeats it beside the waste streams
-(which do NOT sum to it). The CAMPAIGN and GROUP footers in that same column print
-`processLossKg` — at those grains fed − produced genuinely IS loss — and say so in a `title`.
+**THE DRIFT COLUMN IS GONE; FOUR RATIOS TOOK ITS PLACE (2026-09-15, round 2).**
+`dayDriftKg` is **no longer rendered anywhere on this screen**. It was a kilogram figure whose
+whole header tooltip existed to say *"this is not what it looks like"*, and the four numbers a
+reader actually wants beside a day now say it better: **WASTE** (`totalWasteKg`, the eight
+streams, rose band) · **WASTE %** (`wastePct`, rose) · **YIELD %** (`yieldPct`, amber) ·
+**LOSS %** (`lossPct`, amber), under two group bands `WASTE` and `OUTPUT RATIOS`. All four are
+published per day by `view_ops_ledger_day` and none is computed here.
+
+**THE DAY YIELD AND LOSS ARE LABELLED INDICATIVE, WHICH IS THE CAVEAT DRIFT USED TO CARRY.**
+Both column headers carry the `title` *"Day-level, indicative — the feed tank is continuous
+flow; the campaign figure is the real one."* WASTE and WASTE % carry no such caveat — a day's
+swept-up waste and a day's production DO describe the same shift. The CAMPAIGN and GROUP footers
+under the four print the published rollup figures (`wasteKg` · `wasteLossPct` · `yieldPct` ·
+`processLossPct`), never a sum of the cells above them, and each says which grain it is in its
+own `title` (`RATIO_FOOTER_TITLE`, keyed by column so it cannot land on the wrong one). The
+day-expand's waste note was rewritten the same way: it no longer quotes a drift figure, it
+points at WASTE % and says the day's yield and loss are indicative.
 
 **PRICE GATING IS ABSENCE, NOT A BLANK.** `canViewPrices` drops `FED ₱/KG` from the spine's
-coordinate space (the `left`-offset arithmetic reads the flag) and the four ₱ columns from the
-EOQ strip — which also removes their four modals. The server already nulled the fields; this is
-the render guard. *Verified against a price-denied payload: the spine drops FED PRICE, the strip
-renders `Campaign · RC Fed · Produced · Yield · Loss · Waste Loss`, and neither table contains a
-₱ glyph anywhere.*
+coordinate space (the `left`-offset arithmetic reads the flag) and the **five** ₱ columns from
+the EOQ strip — `Fed Price · Actual Fed Price · Resiko Cost · PC Cost · True PC Cost`, and their
+five modals with them. **RESIKO LOSS is deliberately not one of them** (see above). The server
+already nulled the fields; this is the render guard. *Verified against a price-denied payload:
+the spine drops FED PRICE and its whole PRICE band, the strip renders `Campaign · RC Fed ·
+Produced · Yield · Loss · Waste Loss · Resiko Loss`, and neither table contains a ₱ glyph
+anywhere.*
 
 **TRUE PC COST IS NEVER FILLED IN.** Null unless every block is closed and priced; the cell
-prints `—` with the coverage caption that says why (`17 of 20 closed · 16 priced`), and for the
-GROUP the always-computed `phpPerProducedKgTrueCovered` rides beside it, labelled `covered`.
-The group's BLOCK RESIKO cell prints the weighted RATIO and no kg, captioned `ratio only
-(shared blocks)` — a block can be fed by several campaigns.
+prints a bare `—` and **its modal says why** (`17 of 20 closed · 16 priced`), and for the GROUP
+prints the always-computed `phpPerProducedKgTrueCovered` as the honest partial, labelled. The
+GROUP's RESIKO LOSS modal likewise states that no group resiko KG is published and why — a block
+can be fed by several campaigns (78 of 523), so summing per-campaign resiko weights would charge
+one pile's shrinkage once per campaign that touched it.
 
 **EXCEL STANDARD / NEVER CRUSH.** `table-fixed` with explicit pixel widths everywhere,
 `px-2 py-1`, `text-xs`, 32px rows, `font-mono tabular-nums` right-aligned numerics, ₱ in
@@ -423,8 +510,9 @@ own entrance; the campaign switch is an opacity transition on a mounted sheet. T
 a `Dialog`, which already ships the project's canonical glass
 (`bg-background/95 backdrop-blur-xl supports-[backdrop-filter]:bg-background/80`).
 
-**PHONE (< 768px): THE SPINE UN-FREEZES.** 692px of frozen columns on a 375px screen would
-leave no room at all for the lens, so below 768px the spine simply scrolls with everything else
+**PHONE / SMALL LAPTOP (< 1024px): THE SPINE UN-FREEZES.** 916px of frozen columns on a 375px
+(or an 800px) screen would leave no room at all for the lens, so below 1024px the spine simply
+scrolls with everything else
 — one table, one horizontal scroll, **nothing hidden and no second layout to maintain**. The
 header stays pinned at every width. `narrow` starts `false` on server AND client and is set in
 an effect, so the first client render matches the server's. *Measured at 375px: document
@@ -443,7 +531,9 @@ error: nothing failed.
 (`fetchAllRows`), `types/supabase`. Reads only `view_ops_ledger_*` and
 `view_rc_movement_campaign_options`.
 
-**UI:** `lib/operations/{types,queries}`, `lib/utils` (`cn`), `components/ui/{popover,input}`,
+**UI:** `lib/operations/{types,queries}`, `lib/utils` (`cn`),
+**`components/shared/unit-value`** (the platform unit-on-the-left cell, shared with
+`/analytics`), `components/ui/{popover,input}`,
 `lucide-react`, and two files from the inventory module —
 `app/(app)/inventory/_shared/blocking-detail-panel` (the shell-agnostic drawer, already shared
 by Blocking, RC Movement, the inventory tab shell and the digest's Open Blocks band) and

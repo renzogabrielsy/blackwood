@@ -279,6 +279,28 @@ export interface OpsLedgerDay {
   /** The digest's rule: a production day is a day with a `production_runs` child. */
   productionReported: boolean;
 
+  /**
+   * `totalWasteKg ÷ producedKg` — a **FRACTION** (0.1515 = 15.15%), ×100 at
+   * render. WASTE OVER PRODUCTION OUTPUT, never over fed kg: what the plant
+   * sweeps up is a property of what came OUT of the retort (Renzo, 2026-09-15).
+   * The campaign row's {@link OpsCampaignRollup.wasteLossPct} uses the SAME
+   * denominator, so a day cell and the EOQ cell are one definition at two
+   * grains. NULL — never 0 — when either side is missing or produced is 0.
+   */
+  wastePct: number | null;
+  /**
+   * `producedKg ÷ fedKg` — a **FRACTION**, ×100 at render. **INDICATIVE ONLY.**
+   * The feed tank is continuous flow, so a day's fed kilos and its produced
+   * kilos are not the same charcoal (2026-07-02 divides to 0.9955, and a JULY
+   * 2026 day produced 22,862 kg on no feed at all). THE REAL YIELD IS THE
+   * CAMPAIGN FIGURE, {@link OpsCampaignRollup.yieldPct}. This is the same
+   * statement {@link dayDriftKg} makes in kilograms, said as a ratio, and it
+   * must be labelled that way wherever it is shown.
+   */
+  yieldPct: number | null;
+  /** `1 − yieldPct`, a **FRACTION**. NULL whenever `yieldPct` is. Indicative — see above. */
+  lossPct: number | null;
+
   /** grade → kg produced that day. Absent = the grade did not run. */
   producedByGrade: Record<string, number | null>;
   /** The RC Movement lens: one entry per block fed that day. */
@@ -347,9 +369,16 @@ export interface OpsCampaignRollup {
   /** Shifts that filed a waste row — the coverage behind {@link wasteKg}. */
   wasteShiftCount: number;
   /**
-   * `wasteKg ÷ fedKg`, a **FRACTION** (0.121155 = 12.1155%), the same convention
-   * as {@link yieldPct} / {@link processLossPct}. ×100 at render. NULL when
-   * either side is missing or the fed denominator is 0.
+   * `wasteKg ÷ producedKg`, a **FRACTION** of **PRODUCED** kg (JULY 2026:
+   * 0.152369 = 15.2369%), the same convention as {@link yieldPct} /
+   * {@link processLossPct}. ×100 at render.
+   *
+   * THE DENOMINATOR IS PRODUCTION OUTPUT, NOT FED (Renzo, 2026-09-15): what the
+   * plant sweeps up off the screens and trommels is charcoal that came OUT of
+   * the retort and was then rejected, so dividing it by what went IN mixes it
+   * with the moisture and volatiles {@link processLossPct} already accounts for.
+   * NULL — never 0 — when either side is missing or produced is 0; measured, 0
+   * of the 10 waste-reporting campaigns lose their ratio to the change.
    */
   wasteLossPct: number | null;
 
@@ -447,18 +476,20 @@ export interface OpsGroupRollup {
   wasteKg: number | null;
   wasteShiftCount: number;
   /**
-   * A **FRACTION** of fed kg, weighted by {@link fedKgWasteReported} — the fed
-   * kilos of the campaigns that actually filed waste, NOT the group's whole fed
-   * total. Production reporting begins 2025-11-27, so 22 of the 32 campaigns fed
-   * the plant and filed no shift at all; including their kilos would understate
-   * any group straddling that boundary, the same trap {@link yieldPct} avoids
-   * with {@link fedKgProductionReported}.
+   * A **FRACTION** of **PRODUCED** kg (Renzo, 2026-09-15 — waste is a property
+   * of what came OUT of the retort), weighted by
+   * {@link producedKgWasteReported}: the produced kilos of the campaigns that
+   * actually filed waste, NOT the group's whole produced total. Production
+   * reporting begins 2025-11-27, so 22 of the 32 campaigns fed the plant and
+   * filed no shift at all; including their kilos would understate any group
+   * straddling that boundary, the same trap {@link yieldPct} avoids with
+   * {@link fedKgProductionReported}. Q3 2026: 218,401.0 ÷ 1,494,121.0 = 0.146174.
    */
   wasteLossPct: number | null;
   /** How many of {@link campaignCount} filed any waste — print "3 of 3". */
   campaignsWasteReported: number;
-  /** The denominator `wasteLossPct` actually used. */
-  fedKgWasteReported: number | null;
+  /** The denominator `wasteLossPct` actually used — PRODUCED kg, since 2026-09-15. */
+  producedKgWasteReported: number | null;
 
   /** ₱ */
   fedPhpKg: number | null;

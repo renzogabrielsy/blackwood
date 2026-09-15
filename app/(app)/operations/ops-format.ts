@@ -52,6 +52,20 @@ export function pctFromFraction(fraction: number | null | undefined, dp = 1): st
   return `${(fraction * 100).toFixed(dp)}%`;
 }
 
+/**
+ * A FRACTION → the BARE percent number, with no `%` glyph on it.
+ *
+ * The twin of {@link pctFromFraction}, for a cell that states its unit somewhere
+ * else — the EOQ strip pins every unit on the LEFT (`UnitValue`), so a trailing
+ * `%` there would print the unit twice and move the last digit off the column.
+ * NULL renders BLANK rather than an em-dash, because the caller decides what an
+ * absent figure looks like (and drops the glyph with it).
+ */
+export function pctNumFromFraction(fraction: number | null | undefined, dp = 1): string {
+  if (fraction === null || fraction === undefined) return '';
+  return (fraction * 100).toFixed(dp);
+}
+
 /** An ALREADY-PERCENT (0–100): `sharePct`, `fedPriceCoveragePct`, `sacksCoveragePct`. */
 export function pctFromPercent(pct: number | null | undefined, dp = 1): string {
   if (pct === null || pct === undefined) return '—';

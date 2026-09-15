@@ -4377,6 +4377,7 @@ export type Database = {
           is_rest_day: boolean | null
           is_weekend: boolean | null
           iso_weekday: number | null
+          loss_pct: number | null
           produced_kg: number | null
           production_batch: string | null
           production_reported: boolean | null
@@ -4393,7 +4394,9 @@ export type Database = {
           total_waste_kg: number | null
           trml1_kg: number | null
           trml2_kg: number | null
+          waste_pct: number | null
           weekday: string | null
+          yield_pct: number | null
         }
         Relationships: []
       }
@@ -5816,7 +5819,6 @@ export type Database = {
           downtime_hours: number
           fed_kg: number
           fed_kg_production_reported: number
-          fed_kg_waste_reported: number
           fed_php_kg: number
           fed_price_coverage_pct: number
           fed_value_php: number
@@ -5831,6 +5833,7 @@ export type Database = {
           process_loss_kg: number
           process_loss_pct: number
           produced_kg: number
+          produced_kg_waste_reported: number
           reported_calendar_days: number
           reported_campaign_days: number
           rest_days: number
