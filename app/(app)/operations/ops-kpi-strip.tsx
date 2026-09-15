@@ -5,10 +5,17 @@ import * as React from 'react';
 import { cn } from '@/lib/utils';
 import {
   WASTE_STREAMS,
+  type OpsCampaign,
   type OpsCampaignRollup,
   type OpsGroupRollup,
 } from '@/lib/operations/types';
 import { UnitValue } from '@/components/shared/unit-value';
+import {
+  OpsBlocksTable,
+  campaignBlockRows,
+  groupBlockRows,
+  type OpsBlocksRow,
+} from './ops-blocks-table';
 import { TONE, type OpsTone } from './ops-color';
 import {
   count,
@@ -83,6 +90,20 @@ import { OpsKpiModal, type KpiDetail, type KpiInput } from './ops-kpi-modal';
 //     cell prints `—`; the modal says which blocks (or campaigns) are short, and for
 //     the group prints `phpPerProducedKgTrueCovered` as the honest partial, labelled.
 //
+// ── ROUND 3 (2026-09-15): THE CAMPAIGN CELL LOST ITS DATE LINE, AND FOUR MODALS
+//    BECAME A TABLE ─────────────────────────────────────────────────────────────
+// *"The date range under the campaign name is kind of needless."* It is — the ledger
+// under the strip states every date of every campaign, so the cell is the NAME. The
+// GROUP row keeps one line (`3 campaigns`), because how many campaigns is what that
+// row IS and nothing else on screen says it.
+//
+// And FED PRICE / ACTUAL FED PRICE / RESIKO COST / RESIKO LOSS now render the BLOCKS
+// USED table instead of an inputs list: *"those two KPI pop ups should portray the
+// data in table form so the user can distinguish and get a quick look and a breakdown
+// of why the price is the way it is and what the actual price is and why."* The rows
+// come from `OpsCampaign.blocks` / `OpsGroupRollup.blocks` — which is why the strip
+// takes `campaigns` as well as `rollups`, and reads it for NOTHING else.
+//
 // ── TWO FIGURES THE GROUP DELIBERATELY DOES NOT HAVE ────────────────────────────
 // A block can be fed by more than one campaign (measured: 78 of 523), so summing
 // per-campaign resiko kg would charge one block's whole-life shrinkage once per
@@ -105,6 +126,21 @@ interface Cell extends Figure {
   absent?: boolean;
 }
 
+/**
+ * WHAT A DETAIL BUILDER NEEDS BESIDE ITS ROLLUP.
+ *
+ * The BLOCKS USED rows hang off `OpsCampaign` / `OpsGroupRollup`, not off the money
+ * rollup — they are a fact about the campaign that TWO different modals read — so the
+ * strip is handed them rather than re-deriving which blocks a campaign fed.
+ */
+export interface OpsKpiDetailCtx {
+  /** campaignKey → that campaign's blocks, in the payload's own order. */
+  blocks: Map<string, OpsBlocksRow[]>;
+  /** The group's DISTINCT blocks (one row per block, however many campaigns fed it). */
+  groupBlocks: OpsBlocksRow[];
+  canViewPrices: boolean;
+}
+
 interface KpiColumn {
   key: string;
   label: string;
@@ -114,8 +150,8 @@ interface KpiColumn {
   price?: boolean;
   campaign(r: OpsCampaignRollup): Cell;
   group(g: OpsGroupRollup): Cell;
-  campaignDetail(r: OpsCampaignRollup): KpiDetail;
-  groupDetail(g: OpsGroupRollup): KpiDetail;
+  campaignDetail(r: OpsCampaignRollup, ctx: OpsKpiDetailCtx): KpiDetail;
+  groupDetail(g: OpsGroupRollup, ctx: OpsKpiDetailCtx): KpiDetail;
 }
 
 /**
@@ -163,6 +199,58 @@ const campaignSpan = (r: OpsCampaignRollup) =>
 const groupSpan = (g: OpsGroupRollup) =>
   `${g.campaignCount} campaigns · ${g.firstDate ?? '—'} → ${g.lastDate ?? '—'} · ${g.ledgerDays} days`;
 
+/**
+ * A published COUNT where ZERO IS A CLAIM — `count()` blanks a 0, which is right in a
+ * ledger cell and wrong in "3 open": there being none open is the answer.
+ */
+const n0 = (v: number | null | undefined) => (v === null || v === undefined ? '—' : String(v));
+
+// ── THE BLOCKS USED COUNTS AND FOOTER TOTALS ──────────────────────────────────
+// Every figure below is a PUBLISHED field of the rollup. Nothing counts the rows of
+// the table it sits under — a length and a published count are two definitions, and
+// the published one is the one the database proves.
+
+const campaignBlockCounts = (r: OpsCampaignRollup) =>
+  `${n0(r.blocksFed)} blocks · ${n0(r.blocksClosed)} closed · ${n0(r.blocksOpen)} open · ` +
+  `${n0(r.blocksInPrice)} fully priced · ${n0(r.blocksClosedUnpriced)} closed but unpriced`;
+
+const campaignPriceSetCounts = (r: OpsCampaignRollup) =>
+  `${campaignBlockCounts(r)} · ${kg(r.campaignFedKgIncluded)} kg fed inside the price set ` +
+  `(${pctFromFraction(r.campaignFedKgIncludedPct, 1)})`;
+
+const groupBlockCounts = (g: OpsGroupRollup) =>
+  `${g.blocksFedDistinct} distinct blocks · ${g.blocksClosedDistinct} closed · ` +
+  `${g.blocksOpenDistinct} open · ${count(g.blocksFedCampaignSum)} counting each campaign separately`;
+
+const groupPriceSetCounts = (g: OpsGroupRollup) =>
+  `${groupBlockCounts(g)} · ${kg(g.campaignFedKgIncluded)} kg fed inside the price set ` +
+  `(${pctFromFraction(g.coveredFedKgShare, 1)})`;
+
+const fedTotals = (r: OpsCampaignRollup | OpsGroupRollup) => [
+  { label: '₱ paid', value: php(r.fedValuePhp) },
+  { label: 'RC fed', value: `${kg(r.fedKg)} kg` },
+  { label: 'Priced coverage', value: pctFromPercent(r.fedPriceCoveragePct, 1) },
+  { label: 'Fed price', value: phpResult(r.fedPhpKg) },
+];
+
+const actualTotals = (r: OpsCampaignRollup) => [
+  { label: 'Fed price', value: phpResult(r.fedPhpKg) },
+  { label: 'Actual fed price', value: phpResult(r.actualFedPhpKg) },
+  { label: 'Campaign-attributed', value: phpResult(r.campaignWeightedActualFedPhpKg) },
+  { label: 'Resiko cost', value: phpResult(r.upliftPhpKg) },
+  { label: 'Resiko loss', value: pctFromFraction(r.blockResikoLossPct, 2) },
+  { label: 'Resiko weight', value: `${kg(r.blockResikoKg)} kg` },
+];
+
+// THE GROUP HAS NO RESIKO KILOGRAMS AND NO WHOLE-BLOCK ACTUAL PRICE, and the absence
+// is the point: a block can be fed by several campaigns, so both would double-count.
+const groupActualTotals = (g: OpsGroupRollup) => [
+  { label: 'Fed price', value: phpResult(g.fedPhpKg) },
+  { label: 'Actual fed price', value: phpResult(g.actualFedPhpKg) },
+  { label: 'Resiko cost', value: phpResult(g.upliftPhpKg) },
+  { label: 'Resiko loss', value: pctFromFraction(g.blockResikoLossPct, 2) },
+];
+
 /** The eight streams as modal inputs. Reading, not summing. */
 function wasteInputs(waste: OpsCampaignRollup['waste']): KpiInput[] {
   return WASTE_STREAMS.map((w) => ({ label: w.label, value: kg(waste[w.key]) }));
@@ -181,8 +269,6 @@ const COLUMNS: KpiColumn[] = [
       title: `${r.label} · RC FED`,
       subtitle: campaignSpan(r),
       tone: 'fed',
-      words:
-        'The kilograms of raw charcoal the plant was actually fed over the campaign. FED means destination = MAIN only: a pull out to sun-dry left the block but never reached the plant, so it is reported beside this figure and never inside it.',
       symbols: 'RC Fed = Σ rc_out.weight_kg where destination = MAIN',
       inputs: [
         { label: 'Fed', value: `${kg(r.fedKg)} kg` },
@@ -197,8 +283,6 @@ const COLUMNS: KpiColumn[] = [
       title: 'GROUP · RC FED',
       subtitle: groupSpan(g),
       tone: 'fed',
-      words:
-        'Kilograms SUM across the campaigns in the group — a shift and a feeding each belong to exactly one campaign, so there is nothing to double-count. Only the BLOCK counts are de-duplicated, because one block can be fed by more than one campaign.',
       symbols: 'RC Fed = Σ of the member campaigns’ fed kg',
       inputs: [
         { label: 'Fed', value: `${kg(g.fedKg)} kg` },
@@ -227,8 +311,6 @@ const COLUMNS: KpiColumn[] = [
       title: `${r.label} · PRODUCED`,
       subtitle: campaignSpan(r),
       tone: 'produced',
-      words:
-        'Finished charcoal filed against this production batch. A production day is a day with a production_runs child — the digest’s own rule, carried across so the two screens count the same days.',
       symbols: 'Produced = Σ production_runs.ttl_kg for the campaign',
       inputs: [
         { label: 'Produced', value: `${kg(r.producedKg)} kg` },
@@ -252,8 +334,6 @@ const COLUMNS: KpiColumn[] = [
       title: 'GROUP · PRODUCED',
       subtitle: groupSpan(g),
       tone: 'produced',
-      words:
-        'The member campaigns’ produced kilograms, summed. A changeover date counts in BOTH campaigns as a campaign-day, which is why the campaign-day count can exceed the calendar-day count.',
       symbols: 'Produced = Σ of the member campaigns’ produced kg',
       inputs: [
         { label: 'Produced', value: `${kg(g.producedKg)} kg` },
@@ -285,24 +365,17 @@ const COLUMNS: KpiColumn[] = [
       title: `${r.label} · YIELD`,
       subtitle: campaignSpan(r),
       tone: 'yield',
-      words:
-        'How much finished charcoal came out of the retort for every kilogram fed into it, over the whole campaign. At CAMPAIGN grain the two figures describe the same charcoal; at DAY grain they do not — the feed tank is continuous flow — which is why the ledger’s own YIELD % column is labelled indicative and this one is not.',
       symbols: 'Yield = Produced ÷ RC Fed',
       inputs: [
         { label: 'Produced', value: `${kg(r.producedKg)} kg` },
         { label: 'RC Fed', value: `${kg(r.fedKg)} kg` },
       ],
       result: { label: 'Yield', value: pctFromFraction(r.yieldPct, 2) },
-      notes: [
-        'The database publishes this as a FRACTION and the screen multiplies by 100 to print it — the same convention /analytics uses, kept so the two screens compare digit for digit.',
-      ],
     }),
     groupDetail: (g) => ({
       title: 'GROUP · YIELD',
       subtitle: groupSpan(g),
       tone: 'yield',
-      words:
-        'Weighted in SQL, never the mean of the member yields. The denominator is the fed kilograms of the campaigns that actually REPORTED production — production reporting began 2025-11-27, so a group straddling that boundary would be understated if the unreported campaigns’ kilos were counted against nothing.',
       symbols: 'Yield = Produced ÷ fed kg of the campaigns that reported',
       inputs: [
         { label: 'Produced', value: `${kg(g.producedKg)} kg` },
@@ -333,8 +406,6 @@ const COLUMNS: KpiColumn[] = [
       title: `${r.label} · PROCESS LOSS`,
       subtitle: campaignSpan(r),
       tone: 'drift',
-      words:
-        'The retort’s own loss — everything fed that did not come out as product. Most of it leaves as moisture and volatiles that nobody weighs, which is why the WASTE LOSS beside it (the eight streams that WERE weighed) is much smaller and never adds up to this.',
       symbols: 'Loss = 1 − Yield ·  Loss kg = RC Fed − Produced',
       inputs: [
         { label: 'RC Fed', value: `${kg(r.fedKg)} kg` },
@@ -344,15 +415,13 @@ const COLUMNS: KpiColumn[] = [
       ],
       result: { label: 'Process loss', value: pctFromFraction(r.processLossPct, 2) },
       notes: [
-        'This is the RETORT’s loss. The yard’s own shrinkage — evaporation in the pile between arrival and feeding — is a separate figure and rides under ACTUAL FED PRICE as the resiko loss.',
+        'This is the RETORT’s loss. The yard’s own shrinkage — evaporation in the pile between arrival and feeding — is the separate RESIKO LOSS column.',
       ],
     }),
     groupDetail: (g) => ({
       title: 'GROUP · PROCESS LOSS',
       subtitle: groupSpan(g),
       tone: 'drift',
-      words:
-        'The member campaigns’ loss kilograms summed, and the ratio weighted in SQL over the campaigns that reported production.',
       symbols: 'Loss = 1 − Yield',
       inputs: [
         { label: 'RC Fed', value: `${kg(g.fedKg)} kg` },
@@ -376,8 +445,6 @@ const COLUMNS: KpiColumn[] = [
       title: `${r.label} · WASTE LOSS`,
       subtitle: campaignSpan(r),
       tone: 'waste',
-      words:
-        'The eight waste streams the plant actually sweeps up and puts on a scale, totalled for the campaign, and what fraction of the charcoal PRODUCED they amount to.',
       symbols: 'Waste Loss = (TRML 1 + TRML 2 + RS1A + RS1B + RS2/3 + RS5 + BF + GRITS) ÷ Produced',
       inputs: [
         ...wasteInputs(r.waste),
@@ -392,7 +459,6 @@ const COLUMNS: KpiColumn[] = [
       result: { label: 'Waste loss', value: pctFromFraction(r.wasteLossPct, 2) },
       notes: [
         'THESE EIGHT DO NOT SUM TO THE PROCESS LOSS above. Most of what the retort loses leaves as moisture and volatiles that nobody weighs; this is what was swept up and weighed.',
-        'The denominator is PRODUCTION OUTPUT, not charcoal fed: what gets swept up came OUT of the retort and was then rejected, so dividing it by what went in would mix it with the moisture the Process Loss figure already covers.',
         'NULL IS NEVER 0 — a campaign none of whose shifts filed a waste row reads blank on every stream, which is not the same as a campaign that produced no waste.',
       ],
     }),
@@ -400,8 +466,6 @@ const COLUMNS: KpiColumn[] = [
       title: 'GROUP · WASTE LOSS',
       subtitle: groupSpan(g),
       tone: 'waste',
-      words:
-        'A plain SUM of the member campaigns’ waste. Unlike a block, a SHIFT belongs to exactly one campaign, so waste partitions cleanly and the kilograms simply add — which is why a group waste KG exists where a group resiko KG deliberately does not.',
       symbols: 'Waste Loss = Σ member waste ÷ produced kg of the campaigns that filed waste',
       inputs: [
         ...wasteInputs(g.waste),
@@ -421,13 +485,15 @@ const COLUMNS: KpiColumn[] = [
       result: { label: 'Waste loss', value: pctFromFraction(g.wasteLossPct, 2) },
       notes: [
         'THESE EIGHT DO NOT SUM TO THE PROCESS LOSS above — most of it leaves as moisture and volatiles nobody weighs.',
-        'The denominator is PRODUCTION OUTPUT, not charcoal fed: what gets swept up came OUT of the retort and was then rejected.',
-        'It is the produced kilos of the campaigns that filed waste, not the group’s whole produced total: production reporting begins 2025-11-27, and counting a pre-reporting campaign’s kilos against no waste would understate the ratio.',
+        'The denominator is the produced kilos of the campaigns that FILED WASTE, not the group’s whole produced total: production reporting begins 2025-11-27, and counting a pre-reporting campaign’s kilos against no waste would understate the ratio.',
       ],
     }),
   },
 
   // ── FED PRICE ─────────────────────────────────────────────────────────────────
+  // THE MODAL IS THE BLOCKS USED TABLE (2026-09-15, round 3). Renzo asked for the
+  // rows behind the price rather than a paragraph about it: which block, when it
+  // opened, when it closed, how much of it THIS campaign ate, and what it cost.
   {
     key: 'fedprice',
     label: 'Fed Price',
@@ -436,44 +502,51 @@ const COLUMNS: KpiColumn[] = [
     price: true,
     campaign: (r) => phpFig(r.fedPhpKg),
     group: (g) => phpFig(g.fedPhpKg),
-    campaignDetail: (r) => ({
+    campaignDetail: (r, ctx) => ({
       title: `${r.label} · FED PRICE`,
       subtitle: campaignSpan(r),
       tone: 'money',
-      words:
-        'What the charcoal cost ON ARRIVAL, per kilogram actually fed — the DELIVERED basis. It does not carry the shrinkage the pile suffered while it sat in the yard; the figure that does is ACTUAL FED PRICE beside it.',
-      symbols: 'Fed Price = ₱ paid for the charcoal fed ÷ RC Fed',
-      inputs: [
-        { label: '₱ paid for the charcoal fed', value: php(r.fedValuePhp) },
-        { label: 'RC Fed', value: `${kg(r.fedKg)} kg` },
-        {
-          label: 'Fed kilos with a traceable price',
-          value: pctFromPercent(r.fedPriceCoveragePct, 1),
-          note: 'a batch with no delivery rows puts kilos in the denominator and nothing in the numerator',
-        },
-      ],
+      symbols: 'Fed Price = ₱ paid ÷ RC Fed',
+      inputs: [],
+      wide: true,
+      table: (
+        <OpsBlocksTable
+          variant="fed"
+          rows={ctx.blocks.get(r.campaignKey) ?? []}
+          canViewPrices={ctx.canViewPrices}
+          counts={campaignBlockCounts(r)}
+          totals={fedTotals(r)}
+        />
+      ),
       result: { label: 'Fed Price', value: phpResult(r.fedPhpKg) },
     }),
-    groupDetail: (g) => ({
+    groupDetail: (g, ctx) => ({
       title: 'GROUP · FED PRICE',
       subtitle: groupSpan(g),
       tone: 'money',
-      words:
-        'Weighted by fed kilograms in SQL, never the mean of the member prices — a heavy month and a light month do not count equally.',
       symbols: 'Fed Price = Σ ₱ paid ÷ Σ fed kg',
-      inputs: [
-        { label: '₱ paid for the charcoal fed', value: php(g.fedValuePhp) },
-        { label: 'RC Fed', value: `${kg(g.fedKg)} kg` },
-        { label: 'Fed kilos with a traceable price', value: pctFromPercent(g.fedPriceCoveragePct, 1) },
-      ],
+      inputs: [],
+      wide: true,
+      table: (
+        <OpsBlocksTable
+          variant="fed"
+          rows={ctx.groupBlocks}
+          canViewPrices={ctx.canViewPrices}
+          counts={groupBlockCounts(g)}
+          totals={fedTotals(g)}
+        />
+      ),
       result: { label: 'Fed Price', value: phpResult(g.fedPhpKg) },
+      notes: [
+        'FED WT is the kilograms the GROUP drew from each block — one row per DISTINCT block, so a block two campaigns fed appears once and its kilos are not counted twice.',
+      ],
     }),
   },
 
   // ── ACTUAL FED PRICE ──────────────────────────────────────────────────────────
-  // The price itself. Its two components — the RESIKO COST it is made of and the
-  // RESIKO LOSS that caused it — are the two columns after it, each with its own
-  // modal, so this cell is one line like every other.
+  // The same twelve-column table the RESIKO pair reads, because the three figures are
+  // three columns of ONE breakdown: what a block cost on arrival, what it cost by the
+  // time it reached the retort, and the weight that went missing in between.
   {
     key: 'actual',
     label: 'Actual Fed Price',
@@ -482,61 +555,54 @@ const COLUMNS: KpiColumn[] = [
     price: true,
     campaign: (r) => phpFig(r.actualFedPhpKg),
     group: (g) => phpFig(g.actualFedPhpKg),
-    campaignDetail: (r) => ({
+    campaignDetail: (r, ctx) => ({
       title: `${r.label} · ACTUAL FED PRICE`,
       subtitle: campaignSpan(r),
       tone: 'money',
-      words:
-        'What every kilogram that actually reached the plant really cost. A block receives charcoal at a delivered price and then dries out and loses weight — but the money already spent does not shrink, so the surviving kilos each carry more of it. How much more is the RESIKO COST column; how much weight went is the RESIKO LOSS column.',
       symbols: 'Actual Fed Price = whole-block ₱ ÷ whole-block fed kg',
-      inputs: [
-        { label: 'Delivered (Fed Price)', value: phpLine('', r.fedPhpKg) },
-        { label: 'Actual, whole block', value: phpLine('', r.actualFedPhpKg) },
-        {
-          label: 'Actual, attributed to this campaign',
-          value: phpLine('', r.campaignWeightedActualFedPhpKg),
-          note: 'weighted by this campaign’s own fed kilos — shape-comparable with Fed Price',
-        },
-        { label: 'Blocks closed', value: `${count(r.blocksClosed)} of ${count(r.blocksFed)}` },
-        { label: 'Blocks fully priced', value: count(r.blocksInPrice) },
-        { label: 'Blocks still open', value: count(r.blocksOpen) },
-        {
-          label: 'Campaign fed kg inside the price set',
-          value: `${kg(r.campaignFedKgIncluded)} kg`,
-          note: pctFromFraction(r.campaignFedKgIncludedPct, 1),
-        },
-      ],
+      inputs: [],
+      wide: true,
+      table: (
+        <OpsBlocksTable
+          variant="actual"
+          rows={ctx.blocks.get(r.campaignKey) ?? []}
+          canViewPrices={ctx.canViewPrices}
+          counts={campaignPriceSetCounts(r)}
+          totals={actualTotals(r)}
+        />
+      ),
       result: { label: 'Actual Fed Price', value: phpResult(r.actualFedPhpKg) },
       notes: [
-        'It exists only for blocks that are CLOSED and fully priced — until a block is closed its fed total is not final, and an unpriced delivery would put kilos in the denominator with no money against them and push the figure the wrong way.',
-        'A block with any sun-drying outflow is excluded rather than guessed at: its money physically left with the charcoal and comes back inside a different batch.',
+        'A greyed row is outside the price set and says why on hover — a block must be CLOSED and fully priced before its fed total and its money are both final, and a block with any sun-drying outflow is excluded rather than guessed at.',
       ],
     }),
-    groupDetail: (g) => ({
+    groupDetail: (g, ctx) => ({
       title: 'GROUP · ACTUAL FED PRICE',
       subtitle: groupSpan(g),
       tone: 'money',
-      words:
-        'The CAMPAIGN-ATTRIBUTED form, weighted in SQL. There is no whole-block group figure: a block can be fed by more than one campaign, so summing per-campaign block figures would charge one pile’s whole-life shrinkage twice.',
       symbols: 'Actual Fed Price = Σ (campaign-attributed ₱) ÷ Σ fed kg',
-      inputs: [
-        { label: 'Delivered (Fed Price)', value: phpLine('', g.fedPhpKg) },
-        { label: 'Actual, campaign-attributed', value: phpLine('', g.actualFedPhpKg) },
-        {
-          label: 'Campaigns fully covered',
-          value: `${g.campaignsFullyCovered} of ${g.campaignCount}`,
-        },
-        { label: 'Distinct blocks closed', value: String(g.blocksClosedDistinct) },
-        { label: 'Distinct blocks open', value: String(g.blocksOpenDistinct) },
-        { label: 'Share of fed kg that is covered', value: pctFromFraction(g.coveredFedKgShare, 1) },
-      ],
+      inputs: [],
+      wide: true,
+      table: (
+        <OpsBlocksTable
+          variant="actual"
+          rows={ctx.groupBlocks}
+          canViewPrices={ctx.canViewPrices}
+          counts={groupPriceSetCounts(g)}
+          totals={groupActualTotals(g)}
+        />
+      ),
       result: { label: 'Actual Fed Price', value: phpResult(g.actualFedPhpKg) },
+      notes: [
+        'The group publishes the CAMPAIGN-ATTRIBUTED price and no whole-block one: a block can be fed by more than one campaign, so summing per-campaign block figures would charge one pile’s whole-life shrinkage twice.',
+      ],
     }),
   },
 
   // ── RESIKO COST ───────────────────────────────────────────────────────────────
   // `upliftPhpKg` — actual minus delivered, per kilogram fed. A ₱ column, so it goes
-  // when the viewer may not see prices.
+  // when the viewer may not see prices. It reads the SAME table as ACTUAL FED PRICE:
+  // the difference is which footer figure the reader came for.
   {
     key: 'resikocost',
     label: 'Resiko Cost',
@@ -545,44 +611,44 @@ const COLUMNS: KpiColumn[] = [
     price: true,
     campaign: (r) => phpFig(r.upliftPhpKg),
     group: (g) => phpFig(g.upliftPhpKg),
-    campaignDetail: (r) => ({
+    campaignDetail: (r, ctx) => ({
       title: `${r.label} · RESIKO COST`,
       subtitle: campaignSpan(r),
       tone: 'money',
-      words:
-        'What the yard’s shrinkage ADDED to every kilogram the plant was fed. The pile lost weight between arrival and feeding, the money already spent did not, so the kilos that survived carry the rest of it. This is the gap between the price on the delivery note and what the charcoal actually cost by the time it reached the retort.',
       symbols: 'Resiko Cost = Actual Fed Price − Fed Price',
-      inputs: [
-        { label: 'Actual Fed Price', value: phpLine('', r.actualFedPhpKg) },
-        { label: 'Fed Price (delivered)', value: phpLine('', r.fedPhpKg) },
-        { label: 'Resiko cost (uplift)', value: phpLine('', r.upliftPhpKg) },
-        { label: 'Resiko loss', value: pctFromFraction(r.blockResikoLossPct, 2) },
-        { label: 'Resiko weight', value: `${kg(r.blockResikoKg)} kg` },
-        { label: 'Blocks in the price set', value: `${count(r.blocksInPrice)} of ${count(r.blocksFed)}` },
-      ],
+      inputs: [],
+      wide: true,
+      table: (
+        <OpsBlocksTable
+          variant="actual"
+          rows={ctx.blocks.get(r.campaignKey) ?? []}
+          canViewPrices={ctx.canViewPrices}
+          counts={campaignPriceSetCounts(r)}
+          totals={actualTotals(r)}
+        />
+      ),
       result: { label: 'Resiko Cost', value: phpResult(r.upliftPhpKg) },
       notes: [
-        'It is legitimately 0 or NEGATIVE on some blocks — roughly 27% of closed blocks — and is not clamped: a block that gained weight back, or whose paperwork was filed late, is a real reading and hiding it would flatter the figure.',
-        'It is blank whenever ACTUAL FED PRICE is, and for the same reasons: a block must be CLOSED and fully priced before its fed total and its money are both final.',
+        'RESIKO PRICE is legitimately 0 or NEGATIVE on some blocks — roughly 27% of closed ones — and is not clamped: a block that gained weight back, or whose paperwork was filed late, is a real reading.',
+        'It is blank wherever ACTUAL PRICE is, and for the same reasons.',
       ],
     }),
-    groupDetail: (g) => ({
+    groupDetail: (g, ctx) => ({
       title: 'GROUP · RESIKO COST',
       subtitle: groupSpan(g),
       tone: 'money',
-      words:
-        'The same difference at group grain, both sides weighted in SQL over the campaign-attributed actual price — never the mean of the member uplifts.',
       symbols: 'Resiko Cost = Actual Fed Price − Fed Price',
-      inputs: [
-        { label: 'Actual Fed Price (campaign-attributed)', value: phpLine('', g.actualFedPhpKg) },
-        { label: 'Fed Price (delivered)', value: phpLine('', g.fedPhpKg) },
-        { label: 'Resiko cost (uplift)', value: phpLine('', g.upliftPhpKg) },
-        {
-          label: 'Campaigns fully covered',
-          value: `${g.campaignsFullyCovered} of ${g.campaignCount}`,
-        },
-        { label: 'Share of fed kg that is covered', value: pctFromFraction(g.coveredFedKgShare, 1) },
-      ],
+      inputs: [],
+      wide: true,
+      table: (
+        <OpsBlocksTable
+          variant="actual"
+          rows={ctx.groupBlocks}
+          canViewPrices={ctx.canViewPrices}
+          counts={groupPriceSetCounts(g)}
+          totals={groupActualTotals(g)}
+        />
+      ),
       result: { label: 'Resiko Cost', value: phpResult(g.upliftPhpKg) },
     }),
   },
@@ -590,6 +656,8 @@ const COLUMNS: KpiColumn[] = [
   // ── RESIKO LOSS ───────────────────────────────────────────────────────────────
   // `blockResikoLossPct` — a WEIGHT ratio. No ₱ in it and none derivable, so it is
   // NOT `price`-flagged and Production keeps it; amber, not violet, says the same.
+  // Its table is the same one, minus the three ₱ columns for a viewer without price
+  // rights — which is exactly what makes it safe to open at every role.
   {
     key: 'resikoloss',
     label: 'Resiko Loss',
@@ -597,55 +665,59 @@ const COLUMNS: KpiColumn[] = [
     tone: 'drift',
     campaign: (r) => pctFig(r.blockResikoLossPct),
     group: (g) => pctFig(g.blockResikoLossPct),
-    campaignDetail: (r) => ({
+    campaignDetail: (r, ctx) => ({
       title: `${r.label} · RESIKO LOSS`,
       subtitle: campaignSpan(r),
       tone: 'drift',
-      words:
-        'THE YARD’S OWN LOSS, in weight. Charcoal sitting in a block evaporates and shrinks, so less leaves the pile than arrived into it; this is that shortfall as a share of what arrived. It is a different loss from the retort’s — read the LOSS column for that one — and the two are never added together.',
-      symbols: 'Resiko Loss = resiko weight ÷ delivered weight, over the blocks in the price set',
-      inputs: [
-        { label: 'Resiko weight', value: `${kg(r.blockResikoKg)} kg` },
-        { label: 'Blocks closed', value: `${count(r.blocksClosed)} of ${count(r.blocksFed)}` },
-        { label: 'Blocks fully priced', value: count(r.blocksInPrice) },
-        { label: 'Blocks with a sun-drying outflow', value: count(r.blocksWithSundry) },
-        {
-          label: 'Campaign fed kg inside the price set',
-          value: `${kg(r.campaignFedKgIncluded)} kg`,
-          note: pctFromFraction(r.campaignFedKgIncludedPct, 1),
-        },
-        { label: 'Resiko cost it caused', value: phpLine('', r.upliftPhpKg) },
-      ],
+      symbols: 'Resiko Loss = resiko weight ÷ arrival weight, over the blocks in the price set',
+      inputs: [],
+      wide: true,
+      table: (
+        <OpsBlocksTable
+          variant="actual"
+          rows={ctx.blocks.get(r.campaignKey) ?? []}
+          canViewPrices={ctx.canViewPrices}
+          counts={campaignPriceSetCounts(r)}
+          totals={
+            ctx.canViewPrices
+              ? actualTotals(r)
+              : [
+                  { label: 'Resiko loss', value: pctFromFraction(r.blockResikoLossPct, 2) },
+                  { label: 'Resiko weight', value: `${kg(r.blockResikoKg)} kg` },
+                ]
+          }
+        />
+      ),
       result: { label: 'Resiko Loss', value: pctFromFraction(r.blockResikoLossPct, 2) },
       notes: [
-        'It is measured over CLOSED blocks only: while a block is still open the charcoal left in the pile is stock, not loss, and counting it as shrinkage would invent evaporation that has not happened.',
-        'THIS COLUMN CARRIES NO ₱ and none is derivable from it, so it stays on screen for every role — including Production, which may not see what the shrinkage cost.',
+        'RESIKO is measured over CLOSED blocks only: while a block is open the charcoal left in the pile is stock, so the cell shows that BALANCE instead, muted.',
+        'This figure carries NO PESO VALUE and none is derivable from it, so it stays on screen for every role — including Production, which may not see what the shrinkage cost. (The glyph is deliberately not written here: the price-denied check asserts the document contains none.)',
       ],
     }),
-    groupDetail: (g) => ({
+    groupDetail: (g, ctx) => ({
       title: 'GROUP · RESIKO LOSS',
       subtitle: groupSpan(g),
       tone: 'drift',
-      words:
-        'The fed-kg-weighted ratio across the member campaigns. THE GROUP PUBLISHES NO RESIKO KILOGRAMS — a block can be fed by more than one campaign (measured: 78 of 523), so adding up per-campaign resiko weights would charge one pile’s whole-life shrinkage once per campaign that touched it. The ratio is weighted instead, which does not double-count.',
       symbols: 'Resiko Loss = weighted over the covered fed kg of the member campaigns',
-      inputs: [
-        {
-          label: 'Resiko loss',
-          value: pctFromFraction(g.blockResikoLossPct, 2),
-          note: 'a weighted RATIO only — there is no group resiko kg',
-        },
-        { label: 'Distinct blocks closed', value: String(g.blocksClosedDistinct) },
-        { label: 'Distinct blocks open', value: String(g.blocksOpenDistinct) },
-        {
-          label: 'Naive Σ of per-campaign block counts',
-          value: count(g.blocksFedCampaignSum),
-          note: 'larger than the distinct count — which is exactly why no kg is published',
-        },
-        { label: 'Share of fed kg that is covered', value: pctFromFraction(g.coveredFedKgShare, 1) },
-        { label: 'Resiko cost it caused', value: phpLine('', g.upliftPhpKg) },
-      ],
+      inputs: [],
+      wide: true,
+      table: (
+        <OpsBlocksTable
+          variant="actual"
+          rows={ctx.groupBlocks}
+          canViewPrices={ctx.canViewPrices}
+          counts={groupPriceSetCounts(g)}
+          totals={
+            ctx.canViewPrices
+              ? groupActualTotals(g)
+              : [{ label: 'Resiko loss', value: pctFromFraction(g.blockResikoLossPct, 2) }]
+          }
+        />
+      ),
       result: { label: 'Resiko Loss', value: pctFromFraction(g.blockResikoLossPct, 2) },
+      notes: [
+        'THE GROUP PUBLISHES NO RESIKO KILOGRAMS — a block can be fed by more than one campaign (78 of 523), so adding per-campaign resiko weights would charge one pile’s whole-life shrinkage once per campaign that touched it. The ratio is weighted instead, which does not double-count.',
+      ],
     }),
   },
 
@@ -662,8 +734,6 @@ const COLUMNS: KpiColumn[] = [
       title: `${r.label} · PC COST`,
       subtitle: campaignSpan(r),
       tone: 'money',
-      words:
-        'The raw-charcoal cost of one kilogram of FINISHED product, on the DELIVERED basis. Because only part of what is fed survives the retort, each surviving kilo carries the cost of the kilos that did not: a lower yield makes this figure rise even when the purchase price has not moved.',
       symbols: 'PC Cost = Fed Price ÷ Yield',
       inputs: [
         { label: 'Fed Price (delivered)', value: phpLine('', r.fedPhpKg) },
@@ -680,7 +750,6 @@ const COLUMNS: KpiColumn[] = [
       title: 'GROUP · PC COST',
       subtitle: groupSpan(g),
       tone: 'money',
-      words: 'The same definition, with both sides weighted in SQL across the member campaigns.',
       symbols: 'PC Cost = Fed Price ÷ Yield',
       inputs: [
         { label: 'Fed Price (delivered)', value: phpLine('', g.fedPhpKg) },
@@ -705,8 +774,6 @@ const COLUMNS: KpiColumn[] = [
       title: `${r.label} · TRUE PC COST`,
       subtitle: campaignSpan(r),
       tone: 'money',
-      words:
-        'PC COST carrying the yard’s shrinkage as well as the retort’s — the raw-charcoal cost of a kilogram of finished product measured from the money that was actually spent, not from the price on the delivery note.',
       symbols: 'True PC Cost = Actual Fed Price ÷ Yield',
       inputs: [
         { label: 'Actual Fed Price', value: phpLine('', r.campaignWeightedActualFedPhpKg) },
@@ -729,8 +796,6 @@ const COLUMNS: KpiColumn[] = [
       title: 'GROUP · TRUE PC COST',
       subtitle: groupSpan(g),
       tone: 'money',
-      words:
-        'The same definition at group grain, weighted in SQL. Strict NULL unless EVERY member campaign is fully covered — but the covered partial is always computed and printed beside it, labelled, so the blank is never the end of the answer.',
       symbols: 'True PC Cost = Actual Fed Price ÷ Yield',
       inputs: [
         { label: 'Actual Fed Price', value: phpLine('', g.actualFedPhpKg) },
@@ -761,7 +826,7 @@ const COLUMNS: KpiColumn[] = [
   },
 ];
 
-const W_LABEL = 170;
+const W_LABEL = 150;
 
 /**
  * Excel Standard `h-8`, as a table row MINIMUM.
@@ -775,16 +840,38 @@ const W_LABEL = 170;
 const ROW_H = 32;
 
 export interface OpsKpiStripProps {
+  /**
+   * The campaigns in view — read ONLY for their `blocks`, the BLOCKS USED table the
+   * FED PRICE / ACTUAL FED PRICE / RESIKO modals render. Every number in the strip
+   * still comes from `rollups` / `group`.
+   */
+  campaigns: readonly OpsCampaign[];
   rollups: readonly OpsCampaignRollup[];
   group: OpsGroupRollup | null;
   canViewPrices: boolean;
   className?: string;
 }
 
-export function OpsKpiStrip({ rollups, group, canViewPrices, className }: OpsKpiStripProps) {
+export function OpsKpiStrip({
+  campaigns,
+  rollups,
+  group,
+  canViewPrices,
+  className,
+}: OpsKpiStripProps) {
   const cols = React.useMemo(
     () => COLUMNS.filter((c) => canViewPrices || !c.price),
     [canViewPrices],
+  );
+  // A RESHAPE, not a computation: the payload's own rows, keyed by campaign, with the
+  // one field that differs between the campaign and group shapes normalised.
+  const ctx = React.useMemo<OpsKpiDetailCtx>(
+    () => ({
+      blocks: new Map(campaigns.map((c) => [c.key, campaignBlockRows(c.blocks)])),
+      groupBlocks: group ? groupBlockRows(group.blocks) : [],
+      canViewPrices,
+    }),
+    [campaigns, group, canViewPrices],
   );
   const [detail, setDetail] = React.useState<KpiDetail | null>(null);
   const showGroup = group !== null && rollups.length > 1;
@@ -831,9 +918,8 @@ export function OpsKpiStrip({ rollups, group, canViewPrices, className }: OpsKpi
               <Row
                 key={r.campaignKey}
                 title={r.label}
-                subtitle={`${r.firstDate} → ${r.lastDate}`}
                 cells={cols.map((c) => c.campaign(r))}
-                details={cols.map((c) => c.campaignDetail(r))}
+                details={cols.map((c) => c.campaignDetail(r, ctx))}
                 cols={cols}
                 onOpen={setDetail}
               />
@@ -842,9 +928,9 @@ export function OpsKpiStrip({ rollups, group, canViewPrices, className }: OpsKpi
               <Row
                 lead
                 title="GROUP"
-                subtitle={`${group.campaignCount} campaigns · ${group.firstDate} → ${group.lastDate}`}
+                subtitle={`${group.campaignCount} campaigns`}
                 cells={cols.map((c) => c.group(group))}
-                details={cols.map((c) => c.groupDetail(group))}
+                details={cols.map((c) => c.groupDetail(group, ctx))}
                 cols={cols}
                 onOpen={setDetail}
               />
@@ -900,7 +986,12 @@ function Row({
   onOpen,
 }: {
   title: string;
-  subtitle: string;
+  /**
+   * OPTIONAL, AND ABSENT ON A CAMPAIGN ROW (Renzo, 2026-09-15 round 3: the date range
+   * under the name is *"kind of needless"* — the ledger below states every date). The
+   * GROUP row keeps one line, because *how many campaigns* is what the row IS.
+   */
+  subtitle?: string;
   cells: Cell[];
   details: KpiDetail[];
   cols: KpiColumn[];
@@ -919,9 +1010,11 @@ function Row({
         <span className={cn('block truncate text-[11px]', lead ? 'font-semibold' : 'font-medium')}>
           {title}
         </span>
-        <span className="block truncate font-mono text-[10px] leading-tight tabular-nums text-muted-foreground">
-          {subtitle}
-        </span>
+        {subtitle ? (
+          <span className="block truncate font-mono text-[10px] leading-tight tabular-nums text-muted-foreground">
+            {subtitle}
+          </span>
+        ) : null}
       </td>
       {cells.map((cell, i) => (
         <td key={cols[i].key} className="border-r border-border/60 p-0 align-middle">

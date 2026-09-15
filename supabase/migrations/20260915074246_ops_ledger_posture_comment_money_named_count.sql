@@ -1,0 +1,25 @@
+-- =============================================================================
+-- OPS LEDGER — a COMMENT correction, and nothing else
+-- 2026-09-15
+-- =============================================================================
+-- `20260915073755_ops_ledger_campaign_blocks_and_shift_grades` added
+-- `campaign_block_money_named_columns` to fn_ops_ledger_verify_posture() and its
+-- COMMENT said "four of the five are real pesos". MEASURED, the money-ish regex
+-- `php|peso|cost|price|value|amount` matches EIGHT columns on
+-- view_ops_ledger_campaign_block, not five: the four real ₱ columns plus FOUR
+-- coverage flags that carry the word "price" or "unpriced" —
+-- `in_price_set`, `is_fully_priced`, `has_unpriced_delivery` and
+-- `unpriced_delivery_count`.
+--
+-- The probe itself is UNCHANGED and was never wrong: it publishes the exact SET
+-- of names, which is precisely why the miscount was caught the first time the
+-- assertion ran instead of being carried as a number nobody re-derives. Only the
+-- prose is corrected — a COMMENT that states a wrong count is the same class of
+-- thing as a stale figure quoted in a doc, and this one would have been read as
+-- "there are five" by the next person to add a column.
+--
+-- No view, no function body, no grant and no privilege moves. `COMMENT ON` does
+-- not touch reloptions or ACLs, so nothing here can reset security_invoker.
+-- =============================================================================
+comment on function public.fn_ops_ledger_verify_posture() is
+'READ-ONLY posture probe for the ops-ledger data layer: CATALOG ONLY (pg_class / pg_description / has_table_privilege / has_function_privilege / information_schema.columns) plus ONE read of view_ops_ledger_campaign_span (32 rows, 9 ms) whose sole purpose is to hand the verification script the campaign_keys it must then check ONE AT A TIME. It asserts the NINE views (view_ops_ledger_campaign_block joined them on 2026-09-15) are security_invoker, commented, authenticated-SELECT, anon-denied and service_role-denied; that fn_ops_ledger_group_kpis is authenticated-only; that all THREE verify functions are service_role-only (verify_fns_service_role_only); that the whole-history probes fn_ops_ledger_verify / fn_ops_ledger_verify_groups no longer exist (legacy_verify_fn_count = 0, after the 2026-09-14 OOM incident); and that the five peso-free views carry no money-named column while view_ops_ledger_day carries exactly one. Since 2026-09-15 it also publishes campaign_block_money_named_columns, the EXACT SET of money-ish column names on view_ops_ledger_campaign_block - that view carries ₱ on purpose, so a count of zero is not the assertion. MEASURED, the regex matches EIGHT columns there: the FOUR real ₱ ones named in the view''s own COMMENT (actual_fed_php_kg, delivered_php_kg, priced_delivered_php_kg, uplift_php_kg) and FOUR coverage FLAGS that merely carry the word price or unpriced (in_price_set, is_fully_priced, has_unpriced_delivery, unpriced_delivery_count). Publishing the NAMES rather than a count is what makes a NINTH column appearing a failure rather than an off-by-one nobody reads - and it is what caught this very comment claiming five on its first run. SECURITY DEFINER, STABLE, service_role EXECUTE only. NO ₱ VALUE.';

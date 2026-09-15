@@ -238,6 +238,7 @@ export function OperationsView({ data, options, selected, lens }: OperationsView
         </button>
         {rollupOpen ? (
           <OpsKpiStrip
+            campaigns={data.campaigns}
             rollups={data.rollups}
             group={data.group}
             canViewPrices={data.canViewPrices}

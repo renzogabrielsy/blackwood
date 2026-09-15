@@ -108,6 +108,15 @@ const VIEWS = [
   'view_ops_ledger_campaign_kpis',
 ] as const;
 
+/**
+ * Every ledger view, INCLUDING the ones created after the original migration.
+ * `VIEWS` above is asserted against `_ops_ledger.sql` and must stay exactly the
+ * eight that file creates; the security_invoker scan below must cover all of
+ * them, because `CREATE OR REPLACE VIEW` resets `reloptions` on any view, not
+ * only on the original eight.
+ */
+const ALL_VIEWS = [...VIEWS, 'view_ops_ledger_campaign_block'] as const;
+
 const VERIFY_FNS = [
   { name: 'fn_ops_ledger_verify_campaign', sig: 'text' },
   { name: 'fn_ops_ledger_verify_group', sig: 'text\\[\\]' },
@@ -314,6 +323,97 @@ function staticChecks(): void {
     }
   });
 
+  check('the CAMPAIGN-BLOCK migration: new view full posture, new fn granted, shift view re-ALTERed', () => {
+    const sql = migrationSource('_ops_ledger_campaign_blocks_and_shift_grades.sql');
+    const V = 'view_ops_ledger_campaign_block';
+
+    // THE NEW VIEW gets the whole posture from birth — invoker, commented,
+    // authenticated-only, anon revoked, and NEVER service_role (the worker reads
+    // none of these, so verify-worker-view-grants must stay at 4 views).
+    assert.ok(sql.includes(`create or replace view public.${V} as`), `${V} is not created`);
+    assert.ok(sql.includes(`comment on view public.${V} is`), `${V} has no COMMENT`);
+    assert.ok(
+      new RegExp(`alter view public\\.${V}\\s+set \\(security_invoker = true\\)`).test(sql),
+      `${V} is not security_invoker`,
+    );
+    assert.ok(
+      new RegExp(`grant select on public\\.${V}\\s+to authenticated;`).test(sql),
+      `${V} is not granted to authenticated`,
+    );
+    assert.ok(
+      new RegExp(`revoke all on public\\.${V}\\s+from public, anon;`).test(sql),
+      `${V} does not revoke anon`,
+    );
+    assert.ok(
+      !new RegExp(`grant select on public\\.${V}[^;]*service_role`).test(sql),
+      `${V} must NOT be granted to service_role`,
+    );
+    // ...and its COMMENT must NAME the four ₱ columns and the gate, so a future
+    // server action cannot claim it did not know what to null.
+    const at = sql.indexOf(`comment on view public.${V} is`);
+    const body = sql.slice(at, sql.indexOf("';", at));
+    assert.ok(body.includes('₱'), `${V}'s comment must name its ₱ columns`);
+    assert.ok(body.includes('canViewPrices'), `${V}'s comment must name the gate`);
+    for (const col of [
+      'delivered_php_kg',
+      'priced_delivered_php_kg',
+      'actual_fed_php_kg',
+      'uplift_php_kg',
+    ]) {
+      assert.ok(body.includes(col), `${V}'s comment does not name the ₱ column ${col}`);
+    }
+
+    // THE NEW FUNCTION — invoker, search_path pinned, authenticated only.
+    assert.ok(
+      sql.includes('create or replace function public.fn_ops_ledger_group_blocks(p_campaign_keys text[])'),
+      'fn_ops_ledger_group_blocks is not declared',
+    );
+    assert.ok(sql.includes('comment on function public.fn_ops_ledger_group_blocks(text[]) is'));
+    assert.ok(
+      sql.includes('revoke execute on function public.fn_ops_ledger_group_blocks(text[]) from public, anon;'),
+    );
+    assert.ok(
+      sql.includes('grant  execute on function public.fn_ops_ledger_group_blocks(text[]) to authenticated;'),
+    );
+    assert.ok(
+      !/grant\s+execute on function public\.fn_ops_ledger_group_blocks\(text\[\]\) to service_role/.test(sql),
+      'the group blocks RPC must not be granted to service_role',
+    );
+
+    // THE REPLACED SHIFT VIEW — CREATE OR REPLACE VIEW resets reloptions, so
+    // security_invoker must be re-asserted IN THIS FILE.
+    assert.ok(
+      sql.includes('create or replace view public.view_ops_ledger_shift as'),
+      'the shift view is not replaced here',
+    );
+    assert.ok(
+      /alter view public\.view_ops_ledger_shift\s+set \(security_invoker = true\)/.test(sql),
+      'the shift view is replaced but security_invoker is not re-asserted IN THE SAME FILE',
+    );
+    assert.ok(
+      /grant select on public\.view_ops_ledger_shift\s+to authenticated;/.test(sql),
+      'the replaced shift view is not granted to authenticated',
+    );
+    // ...and the two columns it was replaced FOR.
+    assert.ok(sql.includes('as waste_pct'), 'the shift view does not append waste_pct');
+    assert.ok(sql.includes('as grade_kg'), 'the shift view does not append grade_kg');
+  });
+
+  check('the PORT carries the block table and the per-shift grade split', () => {
+    const types = readFileSync(resolve(process.cwd(), 'lib/operations/types.ts'), 'utf8');
+    assert.ok(/export interface OpsCampaignBlock \{/.test(types), 'OpsCampaignBlock is missing');
+    assert.ok(/export interface OpsGroupBlock \{/.test(types), 'OpsGroupBlock is missing');
+    assert.ok(/^  blocks: OpsCampaignBlock\[\];$/m.test(types), 'OpsCampaign.blocks is missing');
+    assert.ok(/^  blocks: OpsGroupBlock\[\];$/m.test(types), 'OpsGroupRollup.blocks is missing');
+    for (const f of ['wastePct', 'gradeKg']) {
+      assert.ok(types.includes(`  ${f}:`), `OpsShift.${f} is missing from the port`);
+    }
+    // campaignFedKg is the WHOLE POINT of the new grain — a block's all-time
+    // total would credit a campaign with kilos another campaign ate.
+    assert.ok(types.includes('campaignFedKg'), 'OpsCampaignBlock.campaignFedKg is missing');
+    assert.ok(types.includes('groupFedKg'), 'OpsGroupBlock.groupFedKg is missing');
+  });
+
   check('the PORT names the day ratios as FRACTIONS and says a day yield is indicative', () => {
     const types = readFileSync(resolve(process.cwd(), 'lib/operations/types.ts'), 'utf8');
     for (const f of ['wastePct', 'yieldPct', 'lossPct']) {
@@ -352,7 +452,7 @@ function staticChecks(): void {
     const restored: { version: string; view: string }[] = [];
     for (const f of files) {
       const body = readFileSync(resolve(dir, f), 'utf8');
-      for (const v of VIEWS) {
+      for (const v of ALL_VIEWS) {
         if (new RegExp(`create or replace view public\\.${v} as`).test(body)) {
           replaced.push({ version: f, view: v });
         }
@@ -404,6 +504,23 @@ function staticChecks(): void {
         new RegExp(`${field}:\\s*showPrices`).test(adapter),
         `${field} is not gated on showPrices in lib/operations/queries.ts`,
       );
+    }
+    // THE FOUR ₱ FIELDS ON THE TWO BLOCK SHAPES (2026-09-15). Asserted by their
+    // SOURCE EXPRESSION rather than by field name, because `actualFedPhpKg` and
+    // `upliftPhpKg` also exist on the rollup — a name-only check would pass on
+    // the rollup's line while the block mapper leaked.
+    for (const row of ['b', 'gb']) {
+      for (const col of [
+        'delivered_php_kg',
+        'priced_delivered_php_kg',
+        'actual_fed_php_kg',
+        'uplift_php_kg',
+      ]) {
+        assert.ok(
+          adapter.includes(`showPrices ? num(${row}.${col}) : null`),
+          `${row}.${col} is not stripped server-side in lib/operations/queries.ts`,
+        );
+      }
     }
   });
 
@@ -493,6 +610,15 @@ const CAMPAIGN_MISMATCH_KEYS = [
   // is what catches waste_loss_pct silently reverting to a fed denominator.
   'day_ratio_mismatch',
   'kpi_waste_pct_mismatch',
+  // THE CAMPAIGN x BLOCK TABLE (2026-09-15). campaign_block_fold_mismatch: the
+  // Σ of campaign_fed_kg over view_ops_ledger_campaign_block must be the
+  // campaign KPI row's own fed_kg — it aggregates the same cells the day spine
+  // folds, so anything but 0 means one of the two was re-derived.
+  // campaign_block_count_mismatch: its row count must be blocks_fed, so the
+  // modal can never list a different set of blocks than the coverage badge
+  // above it counts.
+  'campaign_block_fold_mismatch',
+  'campaign_block_count_mismatch',
   'kpi_vs_batch_cost_mismatch',
   'kpi_vs_production_by_batch_mismatch',
   'kpi_without_batch_cost_row',
@@ -531,8 +657,9 @@ async function liveChecks(env: { url: string; service: string; anon: string }): 
   );
   assertNoMoneyValue(posture, 'posture');
 
-  check('posture: 8 views, all security_invoker, all commented, all authenticated', () => {
-    assert.equal(n(posture, 'view_count'), 8);
+  check('posture: 9 views, all security_invoker, all commented, all authenticated', () => {
+    // 8 from the original migration + view_ops_ledger_campaign_block (2026-09-15).
+    assert.equal(n(posture, 'view_count'), 9);
     assert.equal(n(posture, 'not_security_invoker'), 0);
     assert.equal(n(posture, 'missing_authenticated_select'), 0);
     assert.equal(n(posture, 'views_without_comment'), 0);
@@ -560,6 +687,28 @@ async function liveChecks(env: { url: string; service: string; anon: string }): 
     assert.equal(n(posture, 'money_named_in_peso_free_views'), 0));
   check('money: view_ops_ledger_day carries EXACTLY ONE (fed_php_kg)', () =>
     assert.equal(n(posture, 'money_named_in_day_view'), 1));
+  check('money: view_ops_ledger_campaign_block — the FOUR ₱ columns and FOUR coverage flags', () => {
+    // This view carries money ON PURPOSE, so a count of zero is not the
+    // assertion — the exact SET of names is, which is what makes a NINTH column
+    // appearing a failure rather than an off-by-one nobody reads. MEASURED, the
+    // money-ish regex matches EIGHT: the four real ₱ columns (which the adapter
+    // nulls together before the payload leaves the server) and four boolean or
+    // count COVERAGE FLAGS that merely carry the word "price"/"unpriced". The
+    // exact-set form is what caught the migration's own COMMENT claiming five
+    // on this assertion's very first run (fixed in 20260915074246).
+    assert.deepEqual(posture.campaign_block_money_named_columns, [
+      // the four that really are money
+      'actual_fed_php_kg',
+      'delivered_php_kg',
+      'priced_delivered_php_kg',
+      'uplift_php_kg',
+      // ...and the four that only look like it
+      'has_unpriced_delivery',
+      'in_price_set',
+      'is_fully_priced',
+      'unpriced_delivery_count',
+    ].sort());
+  });
 
   const campaignKeys = posture.campaign_keys as string[];
   assert.ok(Array.isArray(campaignKeys) && campaignKeys.length > 0, 'the posture probe returned no campaign keys');
@@ -637,6 +786,13 @@ async function liveChecks(env: { url: string; service: string; anon: string }): 
     // Σ waste ÷ Σ PRODUCED over the campaigns that filed waste. Exact by
     // construction — a shift belongs to one campaign — so 0 is the only answer.
     'gap_waste_pct',
+    // 2026-09-15: fn_ops_ledger_group_blocks re-aggregated against the group
+    // row. gap_group_blocks_fed_kg is Σ group_fed_kg − fed_kg;
+    // gap_group_blocks_distinct is its row count − blocks_fed_distinct, which is
+    // the de-duplication working: a block fed by two of the group's campaigns is
+    // ONE row.
+    'gap_group_blocks_fed_kg',
+    'gap_group_blocks_distinct',
   ]) {
     check(`group Q3 2026: ${k} === 0`, () => assert.equal(n(q3, k), 0));
   }
