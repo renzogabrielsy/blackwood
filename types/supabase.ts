@@ -4269,6 +4269,7 @@ export type Database = {
         Row: {
           active_days: number | null
           actual_fed_php_kg: number | null
+          bf_kg: number | null
           block_resiko_kg: number | null
           block_resiko_loss_pct: number | null
           blocks_closed: number | null
@@ -4297,6 +4298,7 @@ export type Database = {
           feed_days: number | null
           first_date: string | null
           first_fed_date: string | null
+          grit_kg: number | null
           is_fully_covered: boolean | null
           kwh: number | null
           kwh_days: number | null
@@ -4316,6 +4318,10 @@ export type Database = {
           production_reported: boolean | null
           reported_days: number | null
           rest_days: number | null
+          rs1a_kg: number | null
+          rs1b_kg: number | null
+          rs23_kg: number | null
+          rs5_kg: number | null
           run_count: number | null
           runs_with_sacks: number | null
           sacks: number | null
@@ -4323,7 +4329,12 @@ export type Database = {
           shift_count: number | null
           span_days: number | null
           sundry_kg: number | null
+          trml1_kg: number | null
+          trml2_kg: number | null
           uplift_php_kg: number | null
+          waste_kg: number | null
+          waste_loss_pct: number | null
+          waste_shift_count: number | null
           yield_pct: number | null
         }
         Relationships: []
@@ -5788,6 +5799,7 @@ export type Database = {
         Returns: {
           active_days: number
           actual_fed_php_kg: number
+          bf_kg: number
           block_resiko_loss_pct: number
           blocks_closed_distinct: number
           blocks_fed_campaign_sum: number
@@ -5799,14 +5811,17 @@ export type Database = {
           campaigns_fully_covered: number
           campaigns_missing: string[]
           campaigns_production_reported: number
+          campaigns_waste_reported: number
           covered_fed_kg_share: number
           downtime_hours: number
           fed_kg: number
           fed_kg_production_reported: number
+          fed_kg_waste_reported: number
           fed_php_kg: number
           fed_price_coverage_pct: number
           fed_value_php: number
           first_date: string
+          grit_kg: number
           is_fully_covered: boolean
           last_date: string
           ledger_days: number
@@ -5819,11 +5834,20 @@ export type Database = {
           reported_calendar_days: number
           reported_campaign_days: number
           rest_days: number
+          rs1a_kg: number
+          rs1b_kg: number
+          rs23_kg: number
+          rs5_kg: number
           run_count: number
           sacks: number
           shift_count: number
           sundry_kg: number
+          trml1_kg: number
+          trml2_kg: number
           uplift_php_kg: number
+          waste_kg: number
+          waste_loss_pct: number
+          waste_shift_count: number
           yield_pct: number
         }[]
       }

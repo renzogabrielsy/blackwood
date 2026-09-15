@@ -1,0 +1,27 @@
+-- =============================================================================
+-- RESTORE security_invoker ON view_ops_ledger_campaign_kpis — SECOND TIME
+-- =============================================================================
+-- `CREATE OR REPLACE VIEW` KEEPS THE GRANTS BUT RESETS `reloptions`. The
+-- ops-ledger migration (20260914033037) declared security_invoker in a separate
+-- section-10 `ALTER VIEW`, and on 2026-09-14 the posture probe caught that this
+-- view - the ONE ₱-bearing view of the stack - carried no reloptions at all and
+-- had been running as its OWNER for every caller; 20260914065558 repaired it.
+--
+-- 20260915021820_ops_ledger_campaign_waste.sql then CREATE OR REPLACEd the same
+-- view to APPEND the nine waste columns, and knocked the flag off AGAIN. Caught
+-- the same way, by asking the catalog straight after applying:
+--   pg_options_to_table(reloptions) -> security_invoker = 'false'
+-- while the grants were intact (authenticated SELECT true, anon false,
+-- service_role false), which is exactly why a grant check alone cannot find it.
+--
+-- THE RULE, and it is now written down where the next person will hit it: ANY
+-- migration that CREATE OR REPLACEs a view_ops_ledger_* view must RE-ASSERT
+-- `alter view ... set (security_invoker = true)` in the same file. Enforced
+-- statically by scripts/verify-ops-ledger.ts and live by
+-- fn_ops_ledger_verify_posture()'s `not_security_invoker = 0`.
+--
+-- ALTER VIEW ... SET does not touch grants, so the authenticated-SELECT /
+-- anon-REVOKE / no-service_role posture is unchanged by this migration.
+-- =============================================================================
+
+alter view public.view_ops_ledger_campaign_kpis set (security_invoker = true);

@@ -230,11 +230,13 @@ from it; the drafts' *ideas* were ported, their *files* were not.
 |---|---|
 | `page.tsx` | Server Component. `?campaigns=` / `?lens=` → `fetchOpsLedgerCampaignOptions()` + `fetchOpsLedger(keys)` → `OperationsView`. |
 | `operations-view.tsx` | Client. URL writes, lens control, EOQ collapse, `campaignsMissing` notice, block drawer. |
-| `ops-ledger-split.tsx` | The two panes, the divider, the frozen header/footer, the lens columns, the day expand. |
-| `ops-kpi-strip.tsx` | The EOQ table — a row per campaign + the GROUP row, nine columns. |
+| `ops-ledger-table.tsx` | **ONE table, ONE scrollbar**: the frozen left spine, the two sticky header rows, the sticky group footer, the lens columns, the day expand. (Replaced `ops-ledger-split.tsx` on 2026-09-15.) |
+| `ops-kpi-strip.tsx` | The EOQ table — a row per campaign + the GROUP row, nine columns, every cell a button. |
+| `ops-kpi-modal.tsx` | The per-KPI "show me the math" dialog (`KpiDetail`). |
+| `ops-color.ts` | The semantic palette (`TONE`, `CAMPAIGN_ACCENTS`). |
 | `ops-day-detail.tsx` | `OpsShiftCards` + `OpsBlocksUsedTable`. |
 | `ops-group-picker.tsx` | Selection chips + popover (filter, derived quarter presets, full list). |
-| `ops-lens.ts` | Lens registry, `parseLens`, `quarterPresets()`. |
+| `ops-lens.ts` | Lens registry (`production` · `grades` · `losses` · `blocks`), `DEFAULT_LENS`, `parseLens`, `quarterPresets()`. |
 | `ops-format.ts` | The renderers. |
 
 Also changed: `components/navbar.tsx` (a `getBreadcrumb()` entry + `ICTC_MODULES`),
@@ -309,3 +311,80 @@ price-denied payload rendering 7 spine columns and a 5-column strip; `document.s
 window.innerWidth` at 375px; the phone pane toggle and its combined expansion band; zero page
 errors in the console. The fixture harness was deleted afterwards — `git status` shows only the
 eight route files, the navbar and the two docs.
+
+---
+
+### 3.5 REFINEMENT PASS (2026-09-15) — Renzo's seven notes on the shipped page
+
+He read `/operations` on production with JULY + AUGUST + SEPTEMBER 2026 under the Losses lens.
+Seven changes, and each one removed machinery rather than adding it.
+
+1. **ONE TABLE, ONE SCROLLBAR.** *"There are two vertical scroll bars. There's no point in
+   having two if they are synced… no point in making them two different tables when in reality
+   they are just beside each other. Better if they coexist."* The split paid for a problem it
+   created, and **five mechanisms existed only to hold the two halves together**: the
+   scroll-sync handler, its ownership guard, the pixel divider + `ResizeObserver` clamp, the
+   phone pane toggle, and the fixed 320px expansion band. All five deleted. The spine became
+   FROZEN COLUMNS at cumulative `left` offsets inside the one `<table>`; the expansion band
+   sizes to its content, still `sticky left-0` and bounded to `min(1000px, 100vw − 2rem)` so it
+   does not spread across the blocks lens's horizontal scroll.
+2. **Visible cell borders**, spreadsheet style, both themes — with `border-separate` +
+   `border-spacing: 0`, which is MANDATORY here: under `border-collapse` sticky cell backgrounds
+   render transparent and the scrolling cells bleed through the frozen spine. Gridlines are
+   therefore reconstructed per cell, exactly as the RC Movement matrix does it.
+3. **The stray 2026-08-29 row above the JULY band — fixed.** Root cause: both panes keyed day
+   rows `key={d.date}` and the expand state was a bare date. A **changeover date belongs to two
+   campaigns** (08-01 = JULY's last + AUGUST's first; 08-29 = AUGUST's last + SEPTEMBER's
+   first), so React saw duplicate keys and reconciled one into the wrong band. Rows and the
+   expanded identity are now `campaignKey:date`, and `buildRows` groups days by campaign in the
+   campaigns' own chronological order instead of trusting row order.
+4. **The EOQ rollup is exactly nine columns**: `RC Fed · Produced · Yield · Loss (%) · Waste
+   Loss (kg + %) · Fed Price · Actual Fed Price · PC Cost · True PC Cost`. *"Too wordy"* — the
+   nine sub-captions are gone.
+5. **…because every cell is now a BUTTON that opens the math.** `OpsKpiModal` prints the
+   definition in words and in symbols, every input beside its published value, the result, and
+   the coverage — including WHY a `True PC Cost` is null and what the covered partial is. The
+   captions were not deleted, they were moved somewhere that can afford to be complete. **`a ÷ b
+   = c` is three published fields printed side by side, never a division**: §2.7 rule 1 holds in
+   the modal builders as strictly as it does in the table.
+6. **A semantic colour system** (`ops-color.ts`): sky FED · emerald PRODUCED/YIELD · amber
+   DRIFT/LOSS · rose WASTE · violet MONEY · zinc spine chrome, on three surfaces only — the
+   column-group header bands, the KPI/headline values, and a light tint on the scrolling lens
+   columns. Frozen surfaces take the OPAQUE half of each tone; only non-frozen cells take the
+   translucent one. The eight waste VALUE columns stay neutral so the losses lens is not a wall
+   of red. Campaign bands take a rotating accent from hues the semantic palette does not use.
+7. **A fourth lens, `production` (grades + the eight waste streams under two group headers), and
+   it is the DEFAULT.** Built from the SAME column builders the grades and losses lenses use, so
+   the three can never disagree about a figure. `?lens=grades` / `?lens=losses` / `?lens=blocks`
+   are unchanged; only the default moved, and the default is still spelled as ABSENCE.
+
+Also: the Losses and Production footers now print REAL per-campaign and per-group stream totals
+from `rollups[].waste` / `group.waste` (shipped with the data layer the same morning). Whether a
+total EXISTS is a flag separate from its value, because `null` is a legitimate total and
+collapsing "not published" into "published as null" is how a footer starts lying. The blocks
+lens still has no total at either grain and still says so.
+
+### 3.6 Verification (2026-09-15)
+
+`npx tsc --noEmit` clean · `npx eslint "app/(app)/operations"` 0 errors 0 warnings ·
+`npm run build` passes with `/operations` emitted.
+
+Driven in Chromium against a temporary three-campaign fixture carrying BOTH changeover dates in
+two campaigns each (mounted under `/dev/table-playground/`, which is public outside production;
+deleted afterwards, `git status` clean of it). Measured there:
+
+- **exactly ONE element with `scrollHeight > clientHeight`** (`.min-h-0.flex-1.overflow-auto`);
+  two `<table>`s in the page — the EOQ strip and the ledger.
+- **row order correct and no stray row**: JULY 07-28…08-01 → JULY footer → AUGUST 08-01…08-29 →
+  AUGUST footer → SEPTEMBER 08-29…09-01 → SEPTEMBER footer. Each changeover date appears ONCE
+  PER CAMPAIGN inside its own band. **Zero React key warnings and zero console errors**, across
+  a lens switch round trip.
+- all four lenses: group headers read `DAY · PRICE · FED · PRODUCED · DRIFT · SHIFT` + `GRADES`
+  / `WASTE STREAMS` / `GRADES + WASTE STREAMS` / `BLOCKS FED`; the losses group footer printed
+  the eight real stream totals; the blocks footer printed its one-line note.
+- the KPI modal opens from a cell and renders the eight streams, the total, the denominator, the
+  coverage and the two caveats; the `True PC Cost` modal explains its own blank.
+- price-denied payload: spine drops FED PRICE, strip renders `Campaign · RC Fed · Produced ·
+  Yield · Loss · Waste Loss`, **no ₱ glyph in either table**.
+- light AND dark, 1512×950; and 375×812 where `document.scrollWidth === innerWidth === 375`,
+  one vertical scroller, spine cells `position: static` (the spine un-freezes below 768px).

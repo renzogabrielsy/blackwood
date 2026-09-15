@@ -12,10 +12,11 @@ import {
   BlockingDetailPanel,
   type BlockingDetailNavTarget,
 } from '../inventory/_shared/blocking-detail-panel';
-import { OPS_LENSES, lensSpec, type OpsLensId } from './ops-lens';
+import { TONE } from './ops-color';
+import { DEFAULT_LENS, OPS_LENSES, lensSpec, type OpsLensId } from './ops-lens';
 import { OpsGroupPicker } from './ops-group-picker';
 import { OpsKpiStrip } from './ops-kpi-strip';
-import { OpsLedgerSplit } from './ops-ledger-split';
+import { OpsLedgerTable } from './ops-ledger-table';
 
 // ═════════════════════════════════════════════════════════════════════════════════
 // `/operations` — the client half. It owns the CONTROLS and the block drawer; the
@@ -29,6 +30,11 @@ import { OpsLedgerSplit } from './ops-ledger-split';
 // receives it. That is CLAUDE.md's "URL search params drive filters and navigation
 // state", and it is why the campaign switch dims the sheet rather than spinning: the
 // outgoing ledger stays mounted and laid out while the new one resolves.
+//
+// THE LEDGER IS **ONE TABLE WITH ONE SCROLLBAR** (2026-09-15). The two scroll-synced
+// panes, the draggable divider and the phone pane toggle are gone; the day spine is
+// now a block of FROZEN COLUMNS inside the same `<table>` as the lens. See the header
+// comment in `ops-ledger-table.tsx`.
 //
 // THE EXPANDED DAY IS DELIBERATELY **NOT** IN THE URL. It is a disclosure inside one
 // reading of one payload — the same category as the block drawer, which RC Movement
@@ -57,7 +63,7 @@ export function OperationsView({ data, options, selected, lens }: OperationsView
       if (patch.lens) {
         // The default lens is spelled as ABSENCE, so the plain address stays clean
         // and the param's presence always means something.
-        if (patch.lens === 'grades') params.delete('lens');
+        if (patch.lens === DEFAULT_LENS) params.delete('lens');
         else params.set('lens', patch.lens);
       }
       const qs = params.toString();
@@ -171,13 +177,22 @@ export function OperationsView({ data, options, selected, lens }: OperationsView
                   onClick={() => writeParams({ lens: l.id })}
                   title={l.hint}
                   className={cn(
-                    'h-7 whitespace-nowrap rounded px-2.5 text-xs font-medium transition-colors duration-150',
+                    'flex h-7 items-center gap-1.5 whitespace-nowrap rounded px-2.5 text-xs font-medium transition-colors duration-150',
                     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                    // The tab carries the same hue its columns are drawn in, so the
+                    // control and the sheet below it say the same thing.
                     l.id === lens
-                      ? 'bg-background text-foreground shadow-sm'
+                      ? cn(TONE[l.tone].head, 'shadow-sm')
                       : 'text-muted-foreground hover:text-foreground',
                   )}
                 >
+                  <span
+                    className={cn(
+                      'size-1.5 shrink-0 rounded-full transition-opacity duration-150',
+                      TONE[l.tone].dot,
+                      l.id === lens ? 'opacity-100' : 'opacity-40',
+                    )}
+                  />
                   {l.label}
                 </button>
               ))}
@@ -238,7 +253,7 @@ export function OperationsView({ data, options, selected, lens }: OperationsView
           isPending && 'pointer-events-none opacity-50',
         )}
       >
-        <OpsLedgerSplit data={data} lens={lens} onOpenBlock={handleOpenBlock} />
+        <OpsLedgerTable data={data} lens={lens} onOpenBlock={handleOpenBlock} />
       </div>
 
       <BlockingDetailPanel

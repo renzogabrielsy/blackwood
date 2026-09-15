@@ -382,6 +382,13 @@ export async function fetchOpsLedger(campaignKeys: string[]): Promise<OpsLedgerD
     blockResikoKg: num(r.block_resiko_kg),
     blockResikoLossPct: num(r.block_resiko_loss_pct),
 
+    // WASTE — the eight streams and their total, folded in SQL. No ₱ here, so
+    // nothing is gated: the whole waste band is safe for every role.
+    waste: waste(r, WASTE_COLUMNS),
+    wasteKg: num(r.waste_kg),
+    wasteShiftCount: int(r.waste_shift_count),
+    wasteLossPct: num(r.waste_loss_pct),
+
     // ₱ — every one of the seven stripped together.
     fedPhpKg: showPrices ? num(r.fed_php_kg) : null,
     fedValuePhp: showPrices ? num(r.fed_value_php) : null,
@@ -466,6 +473,14 @@ export async function fetchOpsLedger(campaignKeys: string[]): Promise<OpsLedgerD
         processLossKg: num(groupRow.process_loss_kg),
         processLossPct: num(groupRow.process_loss_pct),
         blockResikoLossPct: num(groupRow.block_resiko_loss_pct),
+
+        // WASTE — summed in SQL from the campaign rows' own columns.
+        waste: waste(groupRow, WASTE_COLUMNS),
+        wasteKg: num(groupRow.waste_kg),
+        wasteShiftCount: int(groupRow.waste_shift_count),
+        wasteLossPct: num(groupRow.waste_loss_pct),
+        campaignsWasteReported: int(groupRow.campaigns_waste_reported),
+        fedKgWasteReported: num(groupRow.fed_kg_waste_reported),
 
         // ₱ — stripped exactly as on the campaign rows.
         fedPhpKg: showPrices ? num(groupRow.fed_php_kg) : null,
