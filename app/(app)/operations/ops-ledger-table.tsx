@@ -13,7 +13,7 @@ import {
   type OpsLedgerDay,
 } from '@/lib/operations/types';
 import { campaignAccent, TONE, type OpsTone } from './ops-color';
-import { count, hours, kg, php } from './ops-format';
+import { count, hours, kg, pctFromFraction, php } from './ops-format';
 import type { OpsLensId } from './ops-lens';
 import { OpsBlocksUsedTable, OpsShiftCards } from './ops-day-detail';
 
@@ -31,9 +31,27 @@ import { OpsBlocksUsedTable, OpsShiftCards } from './ops-day-detail';
 // row — so all five went, and the band now sizes to its content.
 //
 // The spine is now FROZEN COLUMNS instead of a pane: `#expand · DATE · DAY ·
-// FED ₱/KG · TTL FED · TTL PROD · DRIFT · SHIFTS · DT HRS`, each `position: sticky`
-// at its own cumulative `left` offset, `.frozen-edge` on the last one. The lens
-// columns scroll past them in the same `<table>`.
+// FED ₱/KG · TTL FED · TTL PROD · WASTE · WASTE % · YIELD % · LOSS % · SHIFTS ·
+// DT HRS`, each `position: sticky` at its own cumulative `left` offset,
+// `.frozen-edge` on the last one. The lens columns scroll past them in the same
+// `<table>`.
+//
+// ── DRIFT KG IS GONE; FOUR RATIOS TOOK ITS PLACE (2026-09-15, round 2) ──────────
+// `dayDriftKg` is no longer rendered anywhere on this screen. It was a kilogram
+// figure whose whole header tooltip existed to say *"this is not what it looks
+// like"*, and the same statement is now made by the numbers a reader actually wants
+// beside a day: **WASTE** (`totalWasteKg`, the eight streams), **WASTE %**
+// (`wastePct`), **YIELD %** (`yieldPct`) and **LOSS %** (`lossPct`) — all four
+// published per day by `view_ops_ledger_day`, none of them computed here.
+//
+// **THE DAY YIELD AND LOSS ARE INDICATIVE AND SAY SO.** The feed tank is continuous
+// flow, so a day's fed kilos and its produced kilos are not the same charcoal
+// (2026-07-02 divides to 99.55%, and a JULY day produced 22,862 kg on no feed at
+// all). That is the identical caveat DRIFT carried, moved onto the two columns it
+// actually applies to, and the CAMPAIGN and GROUP footers under them print the real
+// campaign figures (`yieldPct` / `processLossPct`) where the ratio genuinely holds.
+// WASTE and WASTE % carry no such caveat — a day's swept-up waste and a day's
+// production DO describe the same shift.
 //
 // ── SIX RULES THIS COMPONENT IS BUILT AROUND ────────────────────────────────────
 //
@@ -49,10 +67,11 @@ import { OpsBlocksUsedTable, OpsShiftCards } from './ops-day-detail';
 //     `date` handed React duplicate keys and it reconciled one of them into the wrong
 //     band (a stray 2026-08-29 row rendered above JULY). The expanded-row identity is
 //     the same composite string for the same reason.
-//  4. **`dayDriftKg` IS NEVER CALLED LOSS.** The feed tank is continuous flow, so a
-//     day's fed and produced do not describe the same charcoal. The column is DRIFT;
-//     the CAMPAIGN and GROUP footers in that column print `processLossKg`, where the
-//     subtraction genuinely is loss, and say so on hover.
+//  4. **A DAY RATIO IS NEVER PRESENTED AS THE CAMPAIGN'S.** The feed tank is
+//     continuous flow, so a day's fed and produced do not describe the same
+//     charcoal. YIELD % and LOSS % therefore carry the indicative caveat in their
+//     header `title`, and the CAMPAIGN / GROUP footers under them print the
+//     campaign's own `yieldPct` / `processLossPct`, where the ratio genuinely holds.
 //  5. **A ₱ COLUMN IS ABSENT, NOT BLANK, for a role that may not see prices.** The
 //     server already nulled the field; dropping the column from the coordinate space
 //     is what the RC Movement matrix does and what the `left`-offset arithmetic here
@@ -79,7 +98,10 @@ const W_DAY = 46;
 const W_FEDPHP = 96;
 const W_FEDKG = 94;
 const W_PRODKG = 98;
-const W_DRIFT = 92;
+const W_WASTEKG = 88;
+const W_WASTEPCT = 76;
+const W_YIELDPCT = 76;
+const W_LOSSPCT = 76;
 const W_SHIFTS = 62;
 const W_DTHRS = 80;
 
@@ -87,8 +109,25 @@ const W_GRADE = 92;
 const W_WASTE = 86;
 const W_BLOCK = 128;
 
-/** Below this the frozen spine (692px with ₱) would be wider than the screen. */
-const NARROW_MQ = '(max-width: 767px)';
+/**
+ * Below this the frozen spine would leave no room for the lens.
+ *
+ * The spine is **916px with ₱ / 820 without** since the four ratio columns replaced
+ * DRIFT, so the 767px breakpoint the 692px spine used no longer holds: at 800px the
+ * spine alone would eat the whole viewport. The rule is the same one it always was —
+ * un-freeze while the spine is within ~10% of the frame — applied to the new width.
+ */
+const NARROW_MQ = '(max-width: 1023px)';
+
+/**
+ * THE ONE CAVEAT, on the two columns it applies to.
+ *
+ * Renzo's rule, carried from the data layer: a DAY yield is indicative only. It is
+ * the same statement the retired DRIFT column made in kilograms, said as a ratio —
+ * and the footers underneath print the campaign figure, where it genuinely holds.
+ */
+const DAY_RATIO_TITLE =
+  'Day-level, indicative — the feed tank is continuous flow; the campaign figure is the real one.';
 
 const mono = (text: string, extra?: string) =>
   text ? <span className={cn('font-mono tabular-nums', extra)}>{text}</span> : null;
@@ -206,18 +245,55 @@ const SPINE: SpineCol[] = [
     total: (g, s) => mono(kg(g ? g.producedKg : (s?.producedKg ?? null))),
   },
   {
-    key: 'drift',
-    label: 'Drift',
+    key: 'wastekg',
+    label: 'Waste',
     sub: 'kg',
     right: true,
     title:
-      'Fed − produced, at DAY grain. This is DRIFT, not loss: the feed tank is continuous flow, so a day’s fed and produced do not describe the same charcoal. Real loss is a campaign figure — see the rollup above.',
-    width: W_DRIFT,
+      'The eight recorded waste streams, totalled for the day. They do NOT sum to the process loss — most of what the retort loses leaves as moisture and volatiles, which nobody weighs. The footers print the campaign and group totals.',
+    width: W_WASTEKG,
+    tone: 'waste',
+    group: 'WASTE',
+    day: (d) => mono(kg(d.totalWasteKg), cn('font-medium', TONE.waste.text)),
+    campaign: (c) => mono(kg(c.wasteKg)),
+    total: (g, s) => mono(kg(g ? g.wasteKg : (s?.wasteKg ?? null))),
+  },
+  {
+    key: 'wastepct',
+    label: 'Waste %',
+    right: true,
+    title:
+      'Recorded waste over the charcoal PRODUCED that day — what the plant swept up came OUT of the retort and was then rejected, so it is a property of the output, not of what went in. Same denominator as the campaign figure in the rollup above, so the two grains are one definition.',
+    width: W_WASTEPCT,
+    tone: 'waste',
+    group: 'WASTE',
+    day: (d) => mono(pctFromFraction(d.wastePct, 2), 'text-muted-foreground'),
+    campaign: (c) => mono(pctFromFraction(c.wasteLossPct, 2)),
+    total: (g, s) => mono(pctFromFraction(g ? g.wasteLossPct : (s?.wasteLossPct ?? null), 2)),
+  },
+  {
+    key: 'yieldpct',
+    label: 'Yield %',
+    right: true,
+    title: DAY_RATIO_TITLE,
+    width: W_YIELDPCT,
     tone: 'drift',
-    group: 'DRIFT',
-    day: (d) => mono(kg(d.dayDriftKg), 'text-muted-foreground'),
-    campaign: (c) => mono(kg(c.processLossKg)),
-    total: (g, s) => mono(kg(g ? g.processLossKg : (s?.processLossKg ?? null))),
+    group: 'OUTPUT RATIOS',
+    day: (d) => mono(pctFromFraction(d.yieldPct, 2), 'text-muted-foreground'),
+    campaign: (c) => mono(pctFromFraction(c.yieldPct, 2)),
+    total: (g, s) => mono(pctFromFraction(g ? g.yieldPct : (s?.yieldPct ?? null), 2)),
+  },
+  {
+    key: 'losspct',
+    label: 'Loss %',
+    right: true,
+    title: DAY_RATIO_TITLE,
+    width: W_LOSSPCT,
+    tone: 'drift',
+    group: 'OUTPUT RATIOS',
+    day: (d) => mono(pctFromFraction(d.lossPct, 2), 'text-muted-foreground'),
+    campaign: (c) => mono(pctFromFraction(c.processLossPct, 2)),
+    total: (g, s) => mono(pctFromFraction(g ? g.processLossPct : (s?.processLossPct ?? null), 2)),
   },
   {
     key: 'shifts',
@@ -739,7 +815,7 @@ export function OpsLedgerTable({ data, lens, onOpenBlock, className }: OpsLedger
                     {spineCols.map((col, i) => (
                       <td
                         key={col.key}
-                        title={col.key === 'drift' ? CAMPAIGN_LOSS_TITLE : undefined}
+                        title={RATIO_FOOTER_TITLE[col.key]}
                         style={frozen ? { left: spineLefts[i] } : undefined}
                         className={cn(
                           'border-b border-border bg-muted px-2 py-1 font-mono text-[11px] font-semibold tabular-nums',
@@ -880,7 +956,7 @@ export function OpsLedgerTable({ data, lens, onOpenBlock, className }: OpsLedger
               {spineCols.map((col, i) => (
                 <td
                   key={col.key}
-                  title={col.key === 'drift' ? GROUP_LOSS_TITLE : undefined}
+                  title={RATIO_FOOTER_TITLE[col.key]}
                   style={frozen ? { left: spineLefts[i] } : undefined}
                   className={cn(
                     'bg-muted px-2 py-1 font-mono text-[11px] font-semibold tabular-nums',
@@ -932,8 +1008,16 @@ export function OpsLedgerTable({ data, lens, onOpenBlock, className }: OpsLedger
   );
 }
 
-const CAMPAIGN_LOSS_TITLE =
-  'At CAMPAIGN grain fed − produced IS loss — the retort’s process loss. Only the DAY figure is drift.';
-
-const GROUP_LOSS_TITLE =
-  'At GROUP grain fed − produced IS loss — the retort’s process loss, weighted in SQL. Only the DAY figure is drift.';
+/**
+ * What a FOOTER cell under a ratio column is, said where the day cells say the
+ * opposite. Keyed by column so it can never end up on the wrong one.
+ */
+const RATIO_FOOTER_TITLE: Record<string, string | undefined> = {
+  yieldpct:
+    'The CAMPAIGN / GROUP yield, weighted in SQL — the real figure the indicative day cells above approximate.',
+  losspct:
+    'The CAMPAIGN / GROUP process loss. At these grains fed − produced genuinely IS loss; only the day cells above are indicative.',
+  wastepct:
+    'The CAMPAIGN / GROUP waste over produced kg — the same definition as the day cells, at a grain where the coverage is published beside it in the rollup.',
+  wastekg: 'The campaign / group total of the eight recorded streams, published — never a sum of the cells above.',
+};

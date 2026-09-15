@@ -41,6 +41,15 @@
  *              Σ(day waste) per campaign == the KPI row's waste_kg, AND the same
  *              per STREAM (a total can agree while two streams are swapped), AND
  *              the group's waste_kg == Σ its members' — gap_waste_kg === 0
+ *   RATIOS     every DAY row's waste_pct / yield_pct / loss_pct equals the
+ *              division of that row's OWN published inputs, and loss_pct equals
+ *              1 − the published yield_pct (day_ratio_mismatch); the campaign
+ *              cell's waste_loss_pct equals waste_kg / produced_kg
+ *              (kpi_waste_pct_mismatch); and the GROUP's waste_loss_pct equals
+ *              Σ waste ÷ Σ produced over the members that filed waste
+ *              (gap_waste_pct === 0). WASTE IS DIVIDED BY PRODUCTION OUTPUT,
+ *              NOT BY FED KG (Renzo, 2026-09-15) — these three keys are what
+ *              would catch the denominator silently reverting.
  *   REUSE      every price / yield / coverage column on the campaign KPI row is
  *              `IS DISTINCT FROM`-identical to view_analytics_batch_cost, and
  *              every production column to view_analytics_production_by_batch
@@ -259,6 +268,74 @@ function staticChecks(): void {
     assert.ok(wasteSql.includes('waste_shift_count'), 'waste_shift_count is missing');
   });
 
+  check('the DAY-RATIO migration re-ALTERs both views it replaced and re-grants the group fn', () => {
+    // Same two traps as the waste migration, in one file: CREATE OR REPLACE VIEW
+    // resets `reloptions` (so security_invoker must be restated for BOTH replaced
+    // views), and DROP + CREATE of a RETURNS TABLE function loses its grants.
+    const sql = migrationSource('_ops_ledger_day_ratios_waste_over_produced.sql');
+    for (const v of ['view_ops_ledger_day', 'view_ops_ledger_campaign_kpis']) {
+      assert.ok(
+        new RegExp(`create or replace view public\\.${v} as`).test(sql),
+        `${v} is not replaced by the day-ratio migration`,
+      );
+      assert.ok(
+        new RegExp(`alter view public\\.${v}\\s+set \\(security_invoker = true\\)`).test(sql),
+        `${v} is replaced but security_invoker is not re-asserted IN THE SAME FILE`,
+      );
+      assert.ok(
+        new RegExp(`grant select on public\\.${v}\\s+to authenticated;`).test(sql),
+        `${v} is not granted to authenticated`,
+      );
+    }
+    assert.ok(
+      sql.includes('drop function if exists public.fn_ops_ledger_group_kpis(text[]);'),
+      'the day-ratio migration must DROP the group function before re-creating it',
+    );
+    assert.ok(
+      sql.includes('revoke execute on function public.fn_ops_ledger_group_kpis(text[]) from public, anon;') &&
+        sql.includes('grant  execute on function public.fn_ops_ledger_group_kpis(text[]) to authenticated;'),
+      'the re-created group function is not re-granted in the same file',
+    );
+    // ...and the denominator itself: the column that publishes it moved with it.
+    // Tested on the EXECUTABLE SQL, because the file legitimately NAMES the old
+    // column in the note recording why it was renamed (the same reason the
+    // retired-probe check above strips comments).
+    assert.ok(
+      !/fed_kg_waste_reported/.test(executableSql(sql)),
+      'fed_kg_waste_reported survived — the published denominator must be produced kg',
+    );
+    assert.ok(sql.includes('produced_kg_waste_reported'), 'the renamed denominator column is missing');
+    assert.ok(
+      sql.includes('else w.waste_kg / pbb.produced_kg end as waste_loss_pct'),
+      'the campaign waste_loss_pct is not divided by produced_kg',
+    );
+    for (const col of ['as waste_pct', 'as yield_pct', 'as loss_pct']) {
+      assert.ok(sql.includes(col), `the day view does not append ${col}`);
+    }
+  });
+
+  check('the PORT names the day ratios as FRACTIONS and says a day yield is indicative', () => {
+    const types = readFileSync(resolve(process.cwd(), 'lib/operations/types.ts'), 'utf8');
+    for (const f of ['wastePct', 'yieldPct', 'lossPct']) {
+      assert.ok(
+        new RegExp(`^  ${f}: number \\| null;`, 'm').test(types),
+        `OpsLedgerDay.${f} is missing from the port`,
+      );
+    }
+    assert.ok(
+      /INDICATIVE ONLY/.test(types),
+      'the port must say a DAY yield is indicative — the feed tank is continuous flow',
+    );
+    assert.ok(
+      types.includes('producedKgWasteReported'),
+      'the group rollup must publish the PRODUCED-kg denominator',
+    );
+    assert.ok(
+      !types.includes('fedKgWasteReported'),
+      'fedKgWasteReported survived in the port — the denominator is produced kg',
+    );
+  });
+
   check('EVERY migration that CREATE OR REPLACEs a ledger view re-asserts security_invoker', () => {
     // THE TRAP, hit twice on this exact view: `CREATE OR REPLACE VIEW` keeps the
     // GRANTS but RESETS `reloptions`, so a view declared security_invoker in an
@@ -408,6 +485,14 @@ const CAMPAIGN_MISMATCH_KEYS = [
   // are swapped.
   'waste_fold_mismatch',
   'waste_stream_fold_mismatch',
+  // DAY RATIOS + the new campaign denominator (2026-09-15). day_ratio_mismatch
+  // is a SELF-CONSISTENCY count over the published day rows: each ratio must
+  // equal the division of that row's own inputs, so it catches a ratio present
+  // where an input is missing AND a NULL published over two real numbers, and it
+  // pins loss_pct to 1 - the published yield_pct. kpi_waste_pct_mismatch (0/1)
+  // is what catches waste_loss_pct silently reverting to a fed denominator.
+  'day_ratio_mismatch',
+  'kpi_waste_pct_mismatch',
   'kpi_vs_batch_cost_mismatch',
   'kpi_vs_production_by_batch_mismatch',
   'kpi_without_batch_cost_row',
@@ -541,7 +626,18 @@ async function liveChecks(env: { url: string; service: string; anon: string }): 
     assert.equal(n(q3, 'gap_fed_rate'), 0);
     assert.equal(n(q3, 'gap_pc_rate'), 0);
   });
-  for (const k of ['gap_yield', 'gap_fed_rate', 'gap_pc_rate', 'gap_fed_kg', 'gap_produced_kg', 'gap_waste_kg']) {
+  for (const k of [
+    'gap_yield',
+    'gap_fed_rate',
+    'gap_pc_rate',
+    'gap_fed_kg',
+    'gap_produced_kg',
+    'gap_waste_kg',
+    // 2026-09-15: the group's waste_loss_pct recomputed from the member rows as
+    // Σ waste ÷ Σ PRODUCED over the campaigns that filed waste. Exact by
+    // construction — a shift belongs to one campaign — so 0 is the only answer.
+    'gap_waste_pct',
+  ]) {
     check(`group Q3 2026: ${k} === 0`, () => assert.equal(n(q3, k), 0));
   }
   check('group Q3 2026: WASTE is reported by every campaign, so the ratio is honest', () => {

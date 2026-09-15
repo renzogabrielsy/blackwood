@@ -8,17 +8,27 @@ import {
   type OpsCampaignRollup,
   type OpsGroupRollup,
 } from '@/lib/operations/types';
+import { UnitValue } from '@/components/shared/unit-value';
 import { TONE, type OpsTone } from './ops-color';
-import { count, hours, kg, php, pctFromFraction, pctFromPercent, tons } from './ops-format';
+import {
+  count,
+  hours,
+  kg,
+  php,
+  pctFromFraction,
+  pctFromPercent,
+  pctNumFromFraction,
+  tons,
+} from './ops-format';
 import { OpsKpiModal, type KpiDetail, type KpiInput } from './ops-kpi-modal';
 
 // ═════════════════════════════════════════════════════════════════════════════════
 // THE EOQ ROLLUP — Renzo's `EOQ3 2026` tab, as a table. ONE ROW PER CAMPAIGN, plus
 // the GROUP row when more than one is picked.
 //
-// ── NINE COLUMNS, IN HIS ORDER, AND NOTHING ELSE (2026-09-15) ───────────────────
-//   RC Fed · Produced · Yield · Loss (%) · Waste Loss · Fed Price ·
-//   Actual Fed Price · PC Cost · True PC Cost
+// ── ELEVEN COLUMNS, IN HIS ORDER, AND NOTHING ELSE (2026-09-15, round 2) ────────
+//   RC Fed · Produced · Yield · Loss · Waste Loss · Fed Price · Actual Fed Price ·
+//   Resiko Cost · Resiko Loss · PC Cost · True PC Cost
 //
 // **THE SUB-CAPTIONS ARE GONE.** Every cell used to carry a small line under it —
 // *"24 feed days"*, *"100.0% priced"*, *"whole-block 48.26"*, *"delivered basis"*,
@@ -28,9 +38,33 @@ import { OpsKpiModal, type KpiDetail, type KpiInput } from './ops-kpi-modal';
 // result, and the coverage. What used to be nine cramped captions is one modal per
 // figure, which can afford to be complete.
 //
-// Two cells still carry a second line, because the second line IS the figure:
-// WASTE LOSS is kg AND a percent of fed, and ACTUAL FED PRICE carries the RESIKO
-// COST (`upliftPhpKg`) and the RESIKO LOSS (`blockResikoLossPct`) it is made of.
+// ── THE RESIKO PAIR BECAME ITS OWN TWO COLUMNS (2026-09-15, round 2) ────────────
+// Renzo: *"the KPI is wide enough to separate resiko cost and resiko loss as their
+// own separate columns. This would make the KPI thinner and give more vertical space
+// for the breakdown table."* ACTUAL FED PRICE used to stack three figures in one
+// 138px cell — the price, the `upliftPhpKg` under it, the `blockResikoLossPct` under
+// that — which set the height of EVERY row in the strip at three lines. Split out,
+// each of the three gets a full-width cell, its own header and **its own modal**,
+// and the strip costs the ledger one line instead of three.
+//
+// **RESIKO LOSS IS THE ONE OF THE THREE THAT SURVIVES THE PRICE GATE.**
+// `blockResikoLossPct` is a weight ratio — no ₱ in it and none derivable — so it is
+// NOT flagged `price` and Production still sees the yard's shrinkage even though it
+// may not see what that shrinkage cost. It is drawn in the amber LOSS hue rather
+// than the violet MONEY one, which says the same thing in colour.
+//
+// ONE cell still carries a second line, because the second line IS the figure:
+// WASTE LOSS is kg AND a percent of PRODUCED kg (Renzo, 2026-09-15 — what the plant
+// sweeps up came OUT of the retort, so it is a property of the output).
+//
+// ── THE UNIT IS PINNED LEFT, THE DIGITS KEEP THE RIGHT EDGE ─────────────────────
+// Every cell renders through the platform `UnitValue` (`components/shared/`, moved
+// out of `/analytics` in this same change) — `t` · `%` · `kg` · `₱/kg` in muted 11px
+// on the left, the `tabular-nums` figure hard against the right. That is CLAUDE.md's
+// Currency (Accounting format) rule generalised, and it is why the column headers
+// no longer carry a unit sub-label: the cell already says it, on every row, at a
+// fixed x. **An ABSENT figure drops the glyph with the number** — a lone `%` beside
+// an em-dash claims a unit for a figure that does not exist.
 //
 // ── THREE THINGS THIS COMPONENT MUST NOT DO, AND DOES NOT ───────────────────────
 //
@@ -40,9 +74,10 @@ import { OpsKpiModal, type KpiDetail, type KpiInput } from './ops-kpi-modal';
 //     fields printed side by side, never a division. The GROUP row is `data.group` —
 //     never a fold of the campaign rows — because every ₱/kg and every ratio in it
 //     is WEIGHTED in SQL and the mean of three yields belongs to no quarter.
-//  2. **It never prints a ₱ it was not given.** `canViewPrices` drops the four ₱
+//  2. **It never prints a ₱ it was not given.** `canViewPrices` drops the FIVE ₱
 //     columns from the coordinate space (the RC Movement precedent); the server has
-//     already nulled the fields, so this is the render guard, not the gate.
+//     already nulled the fields, so this is the render guard, not the gate. RESIKO
+//     LOSS is deliberately not one of them.
 //  3. **It never fills in TRUE PC COST.** Strict NULL unless every block a campaign
 //     fed is CLOSED and fully priced — and for a group unless EVERY campaign is. The
 //     cell prints `—`; the modal says which blocks (or campaigns) are short, and for
@@ -56,10 +91,16 @@ import { OpsKpiModal, type KpiDetail, type KpiInput } from './ops-kpi-modal';
 // in the modal rather than reading as missing data.
 // ═════════════════════════════════════════════════════════════════════════════════
 
-/** A rendered cell: the headline, and the extra line(s) that ARE part of the figure. */
-interface Cell {
+/** One value: its unit, its digits, and the extra line(s) that ARE part of the figure. */
+interface Figure {
+  /** The unit pinned LEFT. EMPTY when the value is absent — see {@link DASH}. */
+  glyph: string;
+  /** The formatted number, or an em-dash. */
   value: string;
-  extra?: string[];
+}
+
+interface Cell extends Figure {
+  extra?: Figure[];
   /** Muted — the value is legitimately absent, never "no data". */
   absent?: boolean;
 }
@@ -67,7 +108,6 @@ interface Cell {
 interface KpiColumn {
   key: string;
   label: string;
-  unit?: string;
   width: number;
   tone: OpsTone;
   /** Dropped from the layout entirely when the viewer may not see prices. */
@@ -78,7 +118,34 @@ interface KpiColumn {
   groupDetail(g: OpsGroupRollup): KpiDetail;
 }
 
-const DASH: Cell = { value: '—', absent: true };
+/**
+ * An absent figure: an em-dash and **NO GLYPH**.
+ *
+ * Dropping the unit with the number is the whole point — `₱/kg —` or `% —` reads as
+ * a peso figure or a percentage that happens to be blank, when the truth is that
+ * there is no such figure to state (a campaign with no closed block has no actual
+ * fed price, not an unknown one). Same reasoning as {@link phpResult}.
+ */
+const DASH: Cell = { glyph: '', value: '—', absent: true };
+
+/** Kg → tonnes, 1 dp. NULL is {@link DASH}; a recorded 0 prints. */
+const tFig = (n: number | null): Cell => (n === null ? DASH : { glyph: 't', value: tons(n) });
+/** Integer kilograms. */
+const kgFig = (n: number | null): Cell => (n === null ? DASH : { glyph: 'kg', value: kg(n) });
+/** A published FRACTION → a bare 2-dp percent under a `%` glyph. */
+const pctFig = (f: number | null): Cell =>
+  f === null ? DASH : { glyph: '%', value: pctNumFromFraction(f, 2) };
+/** ₱/kg in accounting form — the glyph IS the left-pinned symbol. */
+const phpFig = (n: number | null): Cell => (n === null ? DASH : { glyph: '₱/kg', value: php(n) });
+
+/**
+ * WASTE LOSS — the one cell that is legitimately two lines, because the kilograms
+ * and the share of PRODUCED kg are both the figure.
+ */
+const wasteFig = (wasteKg: number | null, pct: number | null): Cell => ({
+  ...kgFig(wasteKg),
+  extra: [pctFig(pct)],
+});
 
 /**
  * A ₱/kg RESULT line. Null prints a bare em-dash, never `₱—/kg` — a currency symbol
@@ -106,11 +173,10 @@ const COLUMNS: KpiColumn[] = [
   {
     key: 'fed',
     label: 'RC Fed',
-    unit: 't',
-    width: 100,
+    width: 96,
     tone: 'fed',
-    campaign: (r) => ({ value: tons(r.fedKg) }),
-    group: (g) => ({ value: tons(g.fedKg) }),
+    campaign: (r) => tFig(r.fedKg),
+    group: (g) => tFig(g.fedKg),
     campaignDetail: (r) => ({
       title: `${r.label} · RC FED`,
       subtitle: campaignSpan(r),
@@ -153,11 +219,10 @@ const COLUMNS: KpiColumn[] = [
   {
     key: 'produced',
     label: 'Produced',
-    unit: 't',
-    width: 100,
+    width: 96,
     tone: 'produced',
-    campaign: (r) => (r.productionReported ? { value: tons(r.producedKg) } : DASH),
-    group: (g) => ({ value: tons(g.producedKg) }),
+    campaign: (r) => (r.productionReported ? tFig(r.producedKg) : DASH),
+    group: (g) => tFig(g.producedKg),
     campaignDetail: (r) => ({
       title: `${r.label} · PRODUCED`,
       subtitle: campaignSpan(r),
@@ -214,14 +279,14 @@ const COLUMNS: KpiColumn[] = [
     label: 'Yield',
     width: 86,
     tone: 'yield',
-    campaign: (r) => ({ value: pctFromFraction(r.yieldPct, 2) }),
-    group: (g) => ({ value: pctFromFraction(g.yieldPct, 2) }),
+    campaign: (r) => pctFig(r.yieldPct),
+    group: (g) => pctFig(g.yieldPct),
     campaignDetail: (r) => ({
       title: `${r.label} · YIELD`,
       subtitle: campaignSpan(r),
       tone: 'yield',
       words:
-        'How much finished charcoal came out of the retort for every kilogram fed into it, over the whole campaign. At CAMPAIGN grain the two figures describe the same charcoal; at DAY grain they do not, which is why the ledger’s day column is called DRIFT.',
+        'How much finished charcoal came out of the retort for every kilogram fed into it, over the whole campaign. At CAMPAIGN grain the two figures describe the same charcoal; at DAY grain they do not — the feed tank is continuous flow — which is why the ledger’s own YIELD % column is labelled indicative and this one is not.',
       symbols: 'Yield = Produced ÷ RC Fed',
       inputs: [
         { label: 'Produced', value: `${kg(r.producedKg)} kg` },
@@ -260,11 +325,10 @@ const COLUMNS: KpiColumn[] = [
   {
     key: 'loss',
     label: 'Loss',
-    unit: '%',
     width: 86,
     tone: 'drift',
-    campaign: (r) => ({ value: pctFromFraction(r.processLossPct, 2) }),
-    group: (g) => ({ value: pctFromFraction(g.processLossPct, 2) }),
+    campaign: (r) => pctFig(r.processLossPct),
+    group: (g) => pctFig(g.processLossPct),
     campaignDetail: (r) => ({
       title: `${r.label} · PROCESS LOSS`,
       subtitle: campaignSpan(r),
@@ -304,30 +368,21 @@ const COLUMNS: KpiColumn[] = [
   {
     key: 'waste',
     label: 'Waste Loss',
-    unit: 'kg + %',
-    width: 118,
+    width: 112,
     tone: 'waste',
-    campaign: (r) => ({
-      value: kg(r.wasteKg) || '—',
-      absent: r.wasteKg === null,
-      extra: [pctFromFraction(r.wasteLossPct, 2)],
-    }),
-    group: (g) => ({
-      value: kg(g.wasteKg) || '—',
-      absent: g.wasteKg === null,
-      extra: [pctFromFraction(g.wasteLossPct, 2)],
-    }),
+    campaign: (r) => wasteFig(r.wasteKg, r.wasteLossPct),
+    group: (g) => wasteFig(g.wasteKg, g.wasteLossPct),
     campaignDetail: (r) => ({
       title: `${r.label} · WASTE LOSS`,
       subtitle: campaignSpan(r),
       tone: 'waste',
       words:
-        'The eight waste streams the plant actually sweeps up and puts on a scale, totalled for the campaign, and what fraction of the charcoal fed they amount to.',
-      symbols: 'Waste Loss = (TRML 1 + TRML 2 + RS1A + RS1B + RS2/3 + RS5 + BF + GRITS) ÷ RC Fed',
+        'The eight waste streams the plant actually sweeps up and puts on a scale, totalled for the campaign, and what fraction of the charcoal PRODUCED they amount to.',
+      symbols: 'Waste Loss = (TRML 1 + TRML 2 + RS1A + RS1B + RS2/3 + RS5 + BF + GRITS) ÷ Produced',
       inputs: [
         ...wasteInputs(r.waste),
         { label: 'Waste total', value: `${kg(r.wasteKg)} kg` },
-        { label: 'RC Fed', value: `${kg(r.fedKg)} kg` },
+        { label: 'Produced', value: `${kg(r.producedKg)} kg`, note: 'the denominator' },
         {
           label: 'Shifts that filed a waste row',
           value: `${r.wasteShiftCount} of ${count(r.shiftCount)}`,
@@ -337,6 +392,7 @@ const COLUMNS: KpiColumn[] = [
       result: { label: 'Waste loss', value: pctFromFraction(r.wasteLossPct, 2) },
       notes: [
         'THESE EIGHT DO NOT SUM TO THE PROCESS LOSS above. Most of what the retort loses leaves as moisture and volatiles that nobody weighs; this is what was swept up and weighed.',
+        'The denominator is PRODUCTION OUTPUT, not charcoal fed: what gets swept up came OUT of the retort and was then rejected, so dividing it by what went in would mix it with the moisture the Process Loss figure already covers.',
         'NULL IS NEVER 0 — a campaign none of whose shifts filed a waste row reads blank on every stream, which is not the same as a campaign that produced no waste.',
       ],
     }),
@@ -346,16 +402,16 @@ const COLUMNS: KpiColumn[] = [
       tone: 'waste',
       words:
         'A plain SUM of the member campaigns’ waste. Unlike a block, a SHIFT belongs to exactly one campaign, so waste partitions cleanly and the kilograms simply add — which is why a group waste KG exists where a group resiko KG deliberately does not.',
-      symbols: 'Waste Loss = Σ member waste ÷ fed kg of the campaigns that filed waste',
+      symbols: 'Waste Loss = Σ member waste ÷ produced kg of the campaigns that filed waste',
       inputs: [
         ...wasteInputs(g.waste),
         { label: 'Waste total', value: `${kg(g.wasteKg)} kg` },
         {
-          label: 'Fed kg used as the denominator',
-          value: `${kg(g.fedKgWasteReported)} kg`,
-          note: 'the fed kilos of the campaigns that actually filed waste',
+          label: 'Produced kg used as the denominator',
+          value: `${kg(g.producedKgWasteReported)} kg`,
+          note: 'the produced kilos of the campaigns that actually filed waste',
         },
-        { label: 'Fed (whole group)', value: `${kg(g.fedKg)} kg` },
+        { label: 'Produced (whole group)', value: `${kg(g.producedKg)} kg` },
         {
           label: 'Campaigns that filed any waste',
           value: `${g.campaignsWasteReported} of ${g.campaignCount}`,
@@ -365,7 +421,8 @@ const COLUMNS: KpiColumn[] = [
       result: { label: 'Waste loss', value: pctFromFraction(g.wasteLossPct, 2) },
       notes: [
         'THESE EIGHT DO NOT SUM TO THE PROCESS LOSS above — most of it leaves as moisture and volatiles nobody weighs.',
-        'The denominator is the fed kilos of the campaigns that filed waste, not the group’s whole fed total: production reporting begins 2025-11-27, and counting a pre-reporting campaign’s kilos against no waste would understate the ratio.',
+        'The denominator is PRODUCTION OUTPUT, not charcoal fed: what gets swept up came OUT of the retort and was then rejected.',
+        'It is the produced kilos of the campaigns that filed waste, not the group’s whole produced total: production reporting begins 2025-11-27, and counting a pre-reporting campaign’s kilos against no waste would understate the ratio.',
       ],
     }),
   },
@@ -374,12 +431,11 @@ const COLUMNS: KpiColumn[] = [
   {
     key: 'fedprice',
     label: 'Fed Price',
-    unit: '₱/kg',
-    width: 104,
+    width: 108,
     tone: 'money',
     price: true,
-    campaign: (r) => ({ value: php(r.fedPhpKg) }),
-    group: (g) => ({ value: php(g.fedPhpKg) }),
+    campaign: (r) => phpFig(r.fedPhpKg),
+    group: (g) => phpFig(g.fedPhpKg),
     campaignDetail: (r) => ({
       title: `${r.label} · FED PRICE`,
       subtitle: campaignSpan(r),
@@ -415,36 +471,24 @@ const COLUMNS: KpiColumn[] = [
   },
 
   // ── ACTUAL FED PRICE ──────────────────────────────────────────────────────────
+  // The price itself. Its two components — the RESIKO COST it is made of and the
+  // RESIKO LOSS that caused it — are the two columns after it, each with its own
+  // modal, so this cell is one line like every other.
   {
     key: 'actual',
     label: 'Actual Fed Price',
-    unit: '₱/kg',
-    width: 138,
+    width: 118,
     tone: 'money',
     price: true,
-    campaign: (r) => ({
-      value: php(r.actualFedPhpKg) || '—',
-      absent: r.actualFedPhpKg === null,
-      extra: [
-        phpLine('resiko cost', r.upliftPhpKg),
-        `resiko loss ${pctFromFraction(r.blockResikoLossPct, 2)}`,
-      ],
-    }),
-    group: (g) => ({
-      value: php(g.actualFedPhpKg) || '—',
-      absent: g.actualFedPhpKg === null,
-      extra: [
-        phpLine('resiko cost', g.upliftPhpKg),
-        `resiko loss ${pctFromFraction(g.blockResikoLossPct, 2)}`,
-      ],
-    }),
+    campaign: (r) => phpFig(r.actualFedPhpKg),
+    group: (g) => phpFig(g.actualFedPhpKg),
     campaignDetail: (r) => ({
       title: `${r.label} · ACTUAL FED PRICE`,
       subtitle: campaignSpan(r),
       tone: 'money',
       words:
-        'What every kilogram that actually reached the plant really cost. A block receives charcoal at a delivered price and then dries out and loses weight — but the money already spent does not shrink, so the surviving kilos each carry more of it. The difference is the RESIKO COST, and the weight that evaporated is the RESIKO LOSS.',
-      symbols: 'Actual = whole-block ₱ ÷ whole-block fed kg ·  Resiko cost = Actual − Delivered',
+        'What every kilogram that actually reached the plant really cost. A block receives charcoal at a delivered price and then dries out and loses weight — but the money already spent does not shrink, so the surviving kilos each carry more of it. How much more is the RESIKO COST column; how much weight went is the RESIKO LOSS column.',
+      symbols: 'Actual Fed Price = whole-block ₱ ÷ whole-block fed kg',
       inputs: [
         { label: 'Delivered (Fed Price)', value: phpLine('', r.fedPhpKg) },
         { label: 'Actual, whole block', value: phpLine('', r.actualFedPhpKg) },
@@ -453,9 +497,6 @@ const COLUMNS: KpiColumn[] = [
           value: phpLine('', r.campaignWeightedActualFedPhpKg),
           note: 'weighted by this campaign’s own fed kilos — shape-comparable with Fed Price',
         },
-        { label: 'Resiko cost (uplift)', value: phpLine('', r.upliftPhpKg) },
-        { label: 'Resiko loss', value: pctFromFraction(r.blockResikoLossPct, 2) },
-        { label: 'Resiko weight', value: `${kg(r.blockResikoKg)} kg` },
         { label: 'Blocks closed', value: `${count(r.blocksClosed)} of ${count(r.blocksFed)}` },
         { label: 'Blocks fully priced', value: count(r.blocksInPrice) },
         { label: 'Blocks still open', value: count(r.blocksOpen) },
@@ -476,17 +517,11 @@ const COLUMNS: KpiColumn[] = [
       subtitle: groupSpan(g),
       tone: 'money',
       words:
-        'The CAMPAIGN-ATTRIBUTED form, weighted in SQL. There is no whole-block group figure and no group resiko KG: a block can be fed by more than one campaign, so summing per-campaign block figures would charge one pile’s whole-life shrinkage twice.',
-      symbols: 'Actual = Σ (campaign-attributed ₱) ÷ Σ fed kg ·  Resiko cost = Actual − Delivered',
+        'The CAMPAIGN-ATTRIBUTED form, weighted in SQL. There is no whole-block group figure: a block can be fed by more than one campaign, so summing per-campaign block figures would charge one pile’s whole-life shrinkage twice.',
+      symbols: 'Actual Fed Price = Σ (campaign-attributed ₱) ÷ Σ fed kg',
       inputs: [
         { label: 'Delivered (Fed Price)', value: phpLine('', g.fedPhpKg) },
         { label: 'Actual, campaign-attributed', value: phpLine('', g.actualFedPhpKg) },
-        { label: 'Resiko cost (uplift)', value: phpLine('', g.upliftPhpKg) },
-        {
-          label: 'Resiko loss',
-          value: pctFromFraction(g.blockResikoLossPct, 2),
-          note: 'a weighted RATIO only — there is no group resiko kg',
-        },
         {
           label: 'Campaigns fully covered',
           value: `${g.campaignsFullyCovered} of ${g.campaignCount}`,
@@ -499,16 +534,130 @@ const COLUMNS: KpiColumn[] = [
     }),
   },
 
+  // ── RESIKO COST ───────────────────────────────────────────────────────────────
+  // `upliftPhpKg` — actual minus delivered, per kilogram fed. A ₱ column, so it goes
+  // when the viewer may not see prices.
+  {
+    key: 'resikocost',
+    label: 'Resiko Cost',
+    width: 112,
+    tone: 'money',
+    price: true,
+    campaign: (r) => phpFig(r.upliftPhpKg),
+    group: (g) => phpFig(g.upliftPhpKg),
+    campaignDetail: (r) => ({
+      title: `${r.label} · RESIKO COST`,
+      subtitle: campaignSpan(r),
+      tone: 'money',
+      words:
+        'What the yard’s shrinkage ADDED to every kilogram the plant was fed. The pile lost weight between arrival and feeding, the money already spent did not, so the kilos that survived carry the rest of it. This is the gap between the price on the delivery note and what the charcoal actually cost by the time it reached the retort.',
+      symbols: 'Resiko Cost = Actual Fed Price − Fed Price',
+      inputs: [
+        { label: 'Actual Fed Price', value: phpLine('', r.actualFedPhpKg) },
+        { label: 'Fed Price (delivered)', value: phpLine('', r.fedPhpKg) },
+        { label: 'Resiko cost (uplift)', value: phpLine('', r.upliftPhpKg) },
+        { label: 'Resiko loss', value: pctFromFraction(r.blockResikoLossPct, 2) },
+        { label: 'Resiko weight', value: `${kg(r.blockResikoKg)} kg` },
+        { label: 'Blocks in the price set', value: `${count(r.blocksInPrice)} of ${count(r.blocksFed)}` },
+      ],
+      result: { label: 'Resiko Cost', value: phpResult(r.upliftPhpKg) },
+      notes: [
+        'It is legitimately 0 or NEGATIVE on some blocks — roughly 27% of closed blocks — and is not clamped: a block that gained weight back, or whose paperwork was filed late, is a real reading and hiding it would flatter the figure.',
+        'It is blank whenever ACTUAL FED PRICE is, and for the same reasons: a block must be CLOSED and fully priced before its fed total and its money are both final.',
+      ],
+    }),
+    groupDetail: (g) => ({
+      title: 'GROUP · RESIKO COST',
+      subtitle: groupSpan(g),
+      tone: 'money',
+      words:
+        'The same difference at group grain, both sides weighted in SQL over the campaign-attributed actual price — never the mean of the member uplifts.',
+      symbols: 'Resiko Cost = Actual Fed Price − Fed Price',
+      inputs: [
+        { label: 'Actual Fed Price (campaign-attributed)', value: phpLine('', g.actualFedPhpKg) },
+        { label: 'Fed Price (delivered)', value: phpLine('', g.fedPhpKg) },
+        { label: 'Resiko cost (uplift)', value: phpLine('', g.upliftPhpKg) },
+        {
+          label: 'Campaigns fully covered',
+          value: `${g.campaignsFullyCovered} of ${g.campaignCount}`,
+        },
+        { label: 'Share of fed kg that is covered', value: pctFromFraction(g.coveredFedKgShare, 1) },
+      ],
+      result: { label: 'Resiko Cost', value: phpResult(g.upliftPhpKg) },
+    }),
+  },
+
+  // ── RESIKO LOSS ───────────────────────────────────────────────────────────────
+  // `blockResikoLossPct` — a WEIGHT ratio. No ₱ in it and none derivable, so it is
+  // NOT `price`-flagged and Production keeps it; amber, not violet, says the same.
+  {
+    key: 'resikoloss',
+    label: 'Resiko Loss',
+    width: 96,
+    tone: 'drift',
+    campaign: (r) => pctFig(r.blockResikoLossPct),
+    group: (g) => pctFig(g.blockResikoLossPct),
+    campaignDetail: (r) => ({
+      title: `${r.label} · RESIKO LOSS`,
+      subtitle: campaignSpan(r),
+      tone: 'drift',
+      words:
+        'THE YARD’S OWN LOSS, in weight. Charcoal sitting in a block evaporates and shrinks, so less leaves the pile than arrived into it; this is that shortfall as a share of what arrived. It is a different loss from the retort’s — read the LOSS column for that one — and the two are never added together.',
+      symbols: 'Resiko Loss = resiko weight ÷ delivered weight, over the blocks in the price set',
+      inputs: [
+        { label: 'Resiko weight', value: `${kg(r.blockResikoKg)} kg` },
+        { label: 'Blocks closed', value: `${count(r.blocksClosed)} of ${count(r.blocksFed)}` },
+        { label: 'Blocks fully priced', value: count(r.blocksInPrice) },
+        { label: 'Blocks with a sun-drying outflow', value: count(r.blocksWithSundry) },
+        {
+          label: 'Campaign fed kg inside the price set',
+          value: `${kg(r.campaignFedKgIncluded)} kg`,
+          note: pctFromFraction(r.campaignFedKgIncludedPct, 1),
+        },
+        { label: 'Resiko cost it caused', value: phpLine('', r.upliftPhpKg) },
+      ],
+      result: { label: 'Resiko Loss', value: pctFromFraction(r.blockResikoLossPct, 2) },
+      notes: [
+        'It is measured over CLOSED blocks only: while a block is still open the charcoal left in the pile is stock, not loss, and counting it as shrinkage would invent evaporation that has not happened.',
+        'THIS COLUMN CARRIES NO ₱ and none is derivable from it, so it stays on screen for every role — including Production, which may not see what the shrinkage cost.',
+      ],
+    }),
+    groupDetail: (g) => ({
+      title: 'GROUP · RESIKO LOSS',
+      subtitle: groupSpan(g),
+      tone: 'drift',
+      words:
+        'The fed-kg-weighted ratio across the member campaigns. THE GROUP PUBLISHES NO RESIKO KILOGRAMS — a block can be fed by more than one campaign (measured: 78 of 523), so adding up per-campaign resiko weights would charge one pile’s whole-life shrinkage once per campaign that touched it. The ratio is weighted instead, which does not double-count.',
+      symbols: 'Resiko Loss = weighted over the covered fed kg of the member campaigns',
+      inputs: [
+        {
+          label: 'Resiko loss',
+          value: pctFromFraction(g.blockResikoLossPct, 2),
+          note: 'a weighted RATIO only — there is no group resiko kg',
+        },
+        { label: 'Distinct blocks closed', value: String(g.blocksClosedDistinct) },
+        { label: 'Distinct blocks open', value: String(g.blocksOpenDistinct) },
+        {
+          label: 'Naive Σ of per-campaign block counts',
+          value: count(g.blocksFedCampaignSum),
+          note: 'larger than the distinct count — which is exactly why no kg is published',
+        },
+        { label: 'Share of fed kg that is covered', value: pctFromFraction(g.coveredFedKgShare, 1) },
+        { label: 'Resiko cost it caused', value: phpLine('', g.upliftPhpKg) },
+      ],
+      result: { label: 'Resiko Loss', value: pctFromFraction(g.blockResikoLossPct, 2) },
+    }),
+  },
+
   // ── PC COST ───────────────────────────────────────────────────────────────────
   {
     key: 'pccost',
     label: 'PC Cost',
-    unit: '₱/kg',
-    width: 104,
+    width: 108,
     tone: 'money',
     price: true,
-    campaign: (r) => ({ value: php(r.phpPerProducedKgDelivered) }),
-    group: (g) => ({ value: php(g.phpPerProducedKgDelivered) }),
+    campaign: (r) => phpFig(r.phpPerProducedKgDelivered),
+    group: (g) => phpFig(g.phpPerProducedKgDelivered),
     campaignDetail: (r) => ({
       title: `${r.label} · PC COST`,
       subtitle: campaignSpan(r),
@@ -547,13 +696,11 @@ const COLUMNS: KpiColumn[] = [
   {
     key: 'truepc',
     label: 'True PC Cost',
-    unit: '₱/kg',
-    width: 118,
+    width: 116,
     tone: 'money',
     price: true,
-    campaign: (r) =>
-      r.phpPerProducedKgTrue === null ? DASH : { value: php(r.phpPerProducedKgTrue) },
-    group: (g) => (g.phpPerProducedKgTrue === null ? DASH : { value: php(g.phpPerProducedKgTrue) }),
+    campaign: (r) => phpFig(r.phpPerProducedKgTrue),
+    group: (g) => phpFig(g.phpPerProducedKgTrue),
     campaignDetail: (r) => ({
       title: `${r.label} · TRUE PC COST`,
       subtitle: campaignSpan(r),
@@ -614,7 +761,18 @@ const COLUMNS: KpiColumn[] = [
   },
 ];
 
-const W_LABEL = 176;
+const W_LABEL = 170;
+
+/**
+ * Excel Standard `h-8`, as a table row MINIMUM.
+ *
+ * It is the point of the split: eleven single-line cells instead of nine cells one
+ * of which was three lines tall. WASTE LOSS is still two lines (the kilograms and
+ * the share of produced ARE both the figure), so that row settles a few pixels
+ * over 32 — a `<tr>` height is a floor in the table model, never a clamp, and
+ * clamping it would clip the second line rather than shrink it.
+ */
+const ROW_H = 32;
 
 export interface OpsKpiStripProps {
   rollups: readonly OpsCampaignRollup[];
@@ -660,12 +818,10 @@ export function OpsKpiStrip({ rollups, group, canViewPrices, className }: OpsKpi
                     TONE[c.tone].edge,
                   )}
                 >
+                  {/* NO UNIT SUB-LABEL — the cell states its unit on every row, at a
+                      fixed x, through `UnitValue`. Saying it twice costs a header
+                      line and buys nothing. */}
                   <span className="block truncate">{c.label}</span>
-                  {c.unit ? (
-                    <span className="block truncate text-[9px] font-normal normal-case opacity-70">
-                      {c.unit}
-                    </span>
-                  ) : null}
                 </th>
               ))}
             </tr>
@@ -753,16 +909,17 @@ function Row({
 }) {
   return (
     <tr
+      style={{ height: ROW_H }}
       className={cn(
         'border-b border-border/60 transition-all duration-150 last:border-b-0 hover:bg-muted/30',
         lead && 'bg-muted/40',
       )}
     >
-      <td className="border-r border-border px-2 py-1.5 align-middle">
-        <span className={cn('block truncate text-xs', lead ? 'font-semibold' : 'font-medium')}>
+      <td className="border-r border-border px-2 py-0.5 align-middle">
+        <span className={cn('block truncate text-[11px]', lead ? 'font-semibold' : 'font-medium')}>
           {title}
         </span>
-        <span className="block truncate font-mono text-[10px] tabular-nums text-muted-foreground">
+        <span className="block truncate font-mono text-[10px] leading-tight tabular-nums text-muted-foreground">
           {subtitle}
         </span>
       </td>
@@ -776,26 +933,35 @@ function Row({
             title={`${title} · ${cols[i].label} — show the math`}
             onClick={() => onOpen(details[i])}
             className={cn(
-              'block w-full px-2 py-1.5 text-right transition-colors duration-150',
+              // `flex min-h` rather than padding: the hit area stays the full row
+              // height while the two-line WASTE LOSS cell keeps the row at `h-8`.
+              'flex min-h-[30px] w-full flex-col justify-center px-2 py-0.5 text-right transition-colors duration-150',
               'hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring',
             )}
           >
-            <span
-              className={cn(
-                'block truncate font-mono text-sm tabular-nums',
+            {/* UNIT LEFT, DIGITS RIGHT — one component, so the eleven columns cannot
+                drift in size, colour or spacing. */}
+            <UnitValue
+              glyph={cell.glyph}
+              className="leading-tight"
+              valueClassName={cn(
+                'font-mono text-xs tabular-nums',
                 cell.absent ? 'text-muted-foreground' : cn('font-medium', TONE[cols[i].tone].text),
                 lead && !cell.absent && 'font-semibold',
               )}
             >
               {cell.value || '—'}
-            </span>
+            </UnitValue>
             {cell.extra?.map((line, j) => (
-              <span
+              <UnitValue
                 key={j}
-                className="block truncate font-mono text-[10px] tabular-nums text-muted-foreground"
+                glyph={line.glyph}
+                className="leading-tight"
+                valueClassName="font-mono text-[10px] tabular-nums text-muted-foreground"
+                glyphClassName="text-[length:var(--bw-fs-10)]"
               >
-                {line}
-              </span>
+                {line.value || '—'}
+              </UnitValue>
             ))}
           </button>
         </td>

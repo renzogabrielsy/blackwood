@@ -55,7 +55,7 @@ export const OPS_LENSES: readonly OpsLensSpec[] = [
     id: 'losses',
     label: 'Losses',
     tone: 'waste',
-    hint: 'The eight recorded waste streams. They do NOT sum to the day’s drift — most of it leaves as moisture and volatiles, which nobody weighs.',
+    hint: 'The eight recorded waste streams. They do NOT sum to the process loss — most of what the retort loses leaves as moisture and volatiles, which nobody weighs. The spine’s WASTE % is this total over the day’s PRODUCED kilos.',
   },
   {
     id: 'blocks',

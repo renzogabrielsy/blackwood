@@ -334,6 +334,11 @@ export async function fetchOpsLedger(campaignKeys: string[]): Promise<OpsLedgerD
         waste: waste(r, WASTE_COLUMNS),
         totalWasteKg: num(r.total_waste_kg),
         productionReported: bool(r.production_reported),
+        // DAY-LEVEL RATIOS — computed in SQL, mapped only. Fractions, ×100 at
+        // render; yieldPct/lossPct are INDICATIVE (continuous-flow feed tank).
+        wastePct: num(r.waste_pct),
+        yieldPct: num(r.yield_pct),
+        lossPct: num(r.loss_pct),
         producedByGrade: gradeByDate.get(date) ?? {},
         blocksFed: blockByDate.get(date) ?? [],
         blocksUsed: usedByDate.get(date) ?? [],
@@ -480,7 +485,7 @@ export async function fetchOpsLedger(campaignKeys: string[]): Promise<OpsLedgerD
         wasteShiftCount: int(groupRow.waste_shift_count),
         wasteLossPct: num(groupRow.waste_loss_pct),
         campaignsWasteReported: int(groupRow.campaigns_waste_reported),
-        fedKgWasteReported: num(groupRow.fed_kg_waste_reported),
+        producedKgWasteReported: num(groupRow.produced_kg_waste_reported),
 
         // ₱ — stripped exactly as on the campaign rows.
         fedPhpKg: showPrices ? num(groupRow.fed_php_kg) : null,
