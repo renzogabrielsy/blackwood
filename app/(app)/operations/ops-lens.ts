@@ -1,56 +1,79 @@
 // ═════════════════════════════════════════════════════════════════════════════════
-// THE LENS REGISTRY — what the RIGHT pane of the split shows.
+// THE LENS REGISTRY — which column block scrolls beside the frozen day spine.
 //
 // THE UNIFICATION THESIS, as data. `/operations` and `/inventory/rc-movement` are
 // not two screens; they are one row spine with two different column groups hung off
 // it. So **BLOCKS FED is an entry in this list, not a route** — picking it turns the
-// right pane into the RC Movement matrix over the identical days, and nothing else
-// on the page moves.
+// scrolling half of the ledger into the RC Movement matrix over the identical days,
+// and nothing else on the page moves.
 //
-// Three lenses rather than the drafts' six toggleable groups: Renzo's `Q3 2026` tab
-// has exactly three column blocks to the right of the day spine (GRADES · LOSSES ·
-// BLOCKS FED), and the drafts' `costs` / `production` groups are columns of the
-// SPINE here, not of the lens — they are the things you always want beside the date,
-// which is the whole reason the spine is a frozen pane.
+// Renzo's `Q3 2026` tab has three column blocks to the right of the day spine
+// (GRADES · LOSSES · BLOCKS FED), and the drafts' `costs` / `production` groups are
+// columns of the SPINE here, not of the lens — they are the things you always want
+// beside the date, which is the whole reason the spine is frozen.
 //
-// The lens is a single choice, in `?lens=`, because two lenses at once is a wide
-// sheet with no frozen date — the shape draft C exists to refuse.
+// **PRODUCTION (2026-09-15) is a FOURTH lens and the DEFAULT: grades and the eight
+// waste streams side by side, under two group headers.** Renzo reads those two
+// blocks together — what came out, and what was swept up on the way — and making him
+// flip a tab to compare them is making him hold one half in his head. It is not a
+// new column set: it is the grades lens and the losses lens rendered adjacently,
+// from the identical fields, so nothing can disagree between the three tabs.
+//
+// The lens is a single choice, in `?lens=`. `?lens=grades` and `?lens=losses` keep
+// working exactly as before — the default simply moved, and the default is spelled
+// as ABSENCE, so a plain `/operations` address stays clean.
 // ═════════════════════════════════════════════════════════════════════════════════
 
-export type OpsLensId = 'grades' | 'losses' | 'blocks';
+import type { OpsTone } from './ops-color';
+
+export type OpsLensId = 'production' | 'grades' | 'losses' | 'blocks';
 
 export interface OpsLensSpec {
   id: OpsLensId;
   /** The segmented-control label. */
   label: string;
-  /** One line, on hover, saying what the lens puts in the right pane. */
+  /** One line, on hover, saying what the lens puts beside the day spine. */
   hint: string;
+  /** The semantic hue the lens's columns are drawn in — see `ops-color.ts`. */
+  tone: OpsTone;
 }
 
 export const OPS_LENSES: readonly OpsLensSpec[] = [
   {
+    id: 'production',
+    label: 'Production',
+    tone: 'produced',
+    hint: 'GRADES and the eight WASTE STREAMS side by side — what came out of the retort, and what was swept up on the way. The two blocks carry their own group headers; the figures are the same fields the Grades and Losses lenses show on their own.',
+  },
+  {
     id: 'grades',
     label: 'Grades',
+    tone: 'produced',
     hint: 'One column per finished grade, kg produced that day. The grade set is DATA — it comes from the campaigns in view, never from a hardcoded list.',
   },
   {
     id: 'losses',
     label: 'Losses',
+    tone: 'waste',
     hint: 'The eight recorded waste streams. They do NOT sum to the day’s drift — most of it leaves as moisture and volatiles, which nobody weighs.',
   },
   {
     id: 'blocks',
     label: 'Blocks fed',
+    tone: 'block',
     hint: 'ONE COLUMN PER BLOCK the campaign drew from, kg fed in the cells. This lens IS the RC Movement matrix — click a block header to open it.',
   },
 ];
 
 const LENS_IDS = new Set<string>(OPS_LENSES.map((l) => l.id));
 
-/** `?lens=` → a lens. Anything unrecognised (or absent) resolves to Grades. */
+/** The lens a bare `/operations` opens on, and the one spelled as ABSENCE in `?lens=`. */
+export const DEFAULT_LENS: OpsLensId = 'production';
+
+/** `?lens=` → a lens. Anything unrecognised (or absent) resolves to {@link DEFAULT_LENS}. */
 export function parseLens(raw: string | string[] | undefined): OpsLensId {
   const v = Array.isArray(raw) ? raw[0] : raw;
-  return v && LENS_IDS.has(v) ? (v as OpsLensId) : 'grades';
+  return v && LENS_IDS.has(v) ? (v as OpsLensId) : DEFAULT_LENS;
 }
 
 export function lensSpec(id: OpsLensId): OpsLensSpec {

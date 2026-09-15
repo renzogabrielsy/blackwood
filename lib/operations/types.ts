@@ -333,6 +333,26 @@ export interface OpsCampaignRollup {
   blockResikoKg: number | null;
   blockResikoLossPct: number | null;
 
+  /**
+   * WASTE LOSS — the eight RECORDED streams, totalled for the campaign.
+   *
+   * THEY DO NOT SUM TO {@link processLossKg}. Most of what the retort loses
+   * leaves as moisture and volatiles that nobody weighs; this is what was swept
+   * up and put on a scale. NULL IS NEVER 0 — a campaign none of whose shifts
+   * filed a waste row reads `null` on every stream and on {@link wasteKg}.
+   */
+  waste: OpsWaste;
+  /** Σ of the eight streams. NULL, never 0, when no shift filed a waste row. */
+  wasteKg: number | null;
+  /** Shifts that filed a waste row — the coverage behind {@link wasteKg}. */
+  wasteShiftCount: number;
+  /**
+   * `wasteKg ÷ fedKg`, a **FRACTION** (0.121155 = 12.1155%), the same convention
+   * as {@link yieldPct} / {@link processLossPct}. ×100 at render. NULL when
+   * either side is missing or the fed denominator is 0.
+   */
+  wasteLossPct: number | null;
+
   /** ₱ FED PRICE (delivered). */
   fedPhpKg: number | null;
   fedValuePhp: number | null;
@@ -416,6 +436,29 @@ export interface OpsGroupRollup {
   processLossPct: number | null;
   /** A FRACTION, weighted by covered fed kg. There is no group resiko KG — see the class note. */
   blockResikoLossPct: number | null;
+
+  /**
+   * WASTE LOSS for the whole group — a plain SUM of the member campaigns' own
+   * waste columns. Unlike a block, a SHIFT belongs to exactly one campaign, so
+   * waste partitions cleanly and the kilograms simply add; that is why a group
+   * waste KG exists where a group resiko KG deliberately does not.
+   */
+  waste: OpsWaste;
+  wasteKg: number | null;
+  wasteShiftCount: number;
+  /**
+   * A **FRACTION** of fed kg, weighted by {@link fedKgWasteReported} — the fed
+   * kilos of the campaigns that actually filed waste, NOT the group's whole fed
+   * total. Production reporting begins 2025-11-27, so 22 of the 32 campaigns fed
+   * the plant and filed no shift at all; including their kilos would understate
+   * any group straddling that boundary, the same trap {@link yieldPct} avoids
+   * with {@link fedKgProductionReported}.
+   */
+  wasteLossPct: number | null;
+  /** How many of {@link campaignCount} filed any waste — print "3 of 3". */
+  campaignsWasteReported: number;
+  /** The denominator `wasteLossPct` actually used. */
+  fedKgWasteReported: number | null;
 
   /** ₱ */
   fedPhpKg: number | null;

@@ -38,6 +38,9 @@
  *              Σ(block fed) per day == day.fed_kg
  *              Σ(shift produced / downtime) per day == the day's figures
  *              Σ(day fed / produced) per campaign == the campaign KPI row
+ *              Σ(day waste) per campaign == the KPI row's waste_kg, AND the same
+ *              per STREAM (a total can agree while two streams are swapped), AND
+ *              the group's waste_kg == Σ its members' — gap_waste_kg === 0
  *   REUSE      every price / yield / coverage column on the campaign KPI row is
  *              `IS DISTINCT FROM`-identical to view_analytics_batch_cost, and
  *              every production column to view_analytics_production_by_batch
@@ -225,6 +228,75 @@ function staticChecks(): void {
     );
   });
 
+  check('the WASTE migration re-grants the group function it DROPped (L-044)', () => {
+    // A function whose RETURNS TABLE changes cannot be CREATE OR REPLACEd, so the
+    // waste migration DROPs and re-CREATEs fn_ops_ledger_group_kpis — which LOSES
+    // its grants. The re-grant must live in the SAME file, and the live half
+    // below proves the three has_function_privilege answers for real.
+    const wasteSql = migrationSource('_ops_ledger_campaign_waste.sql');
+    assert.ok(
+      wasteSql.includes('drop function if exists public.fn_ops_ledger_group_kpis(text[]);'),
+      'the waste migration must DROP the group function before re-creating it',
+    );
+    assert.ok(
+      wasteSql.includes('revoke execute on function public.fn_ops_ledger_group_kpis(text[]) from public, anon;'),
+      'the re-created group function is not revoked from public/anon',
+    );
+    assert.ok(
+      wasteSql.includes('grant  execute on function public.fn_ops_ledger_group_kpis(text[]) to authenticated;'),
+      'the re-created group function is not granted back to authenticated',
+    );
+    assert.ok(
+      !/grant\s+execute on function public\.fn_ops_ledger_group_kpis\(text\[\]\) to service_role/.test(wasteSql),
+      'the group RPC must not be granted to service_role',
+    );
+    // ...and every one of the nine waste kg columns must be on BOTH grains.
+    for (const col of ['trml1_kg', 'trml2_kg', 'rs1a_kg', 'rs1b_kg', 'rs23_kg', 'rs5_kg', 'bf_kg', 'grit_kg', 'waste_kg']) {
+      assert.ok(wasteSql.includes(`w.${col},`), `the campaign view does not append ${col}`);
+      assert.ok(wasteSql.includes(`a.${col},`), `the group function does not sum ${col}`);
+    }
+    assert.ok(wasteSql.includes('waste_loss_pct'), 'waste_loss_pct is missing');
+    assert.ok(wasteSql.includes('waste_shift_count'), 'waste_shift_count is missing');
+  });
+
+  check('EVERY migration that CREATE OR REPLACEs a ledger view re-asserts security_invoker', () => {
+    // THE TRAP, hit twice on this exact view: `CREATE OR REPLACE VIEW` keeps the
+    // GRANTS but RESETS `reloptions`, so a view declared security_invoker in an
+    // earlier migration silently reverts to running as its OWNER. 20260914065558
+    // repaired it the first time; the waste migration knocked it off again and
+    // 20260915021924 repaired it the second. A grant check cannot see this — only
+    // pg_options_to_table can, which is what the live posture probe does.
+    //
+    // The static guard: for each migration that replaces a ledger view, that file
+    // or a LATER one must set security_invoker back on for that view.
+    const dir = resolve(process.cwd(), 'supabase/migrations');
+    const files = readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
+    const replaced: { version: string; view: string }[] = [];
+    const restored: { version: string; view: string }[] = [];
+    for (const f of files) {
+      const body = readFileSync(resolve(dir, f), 'utf8');
+      for (const v of VIEWS) {
+        if (new RegExp(`create or replace view public\\.${v} as`).test(body)) {
+          replaced.push({ version: f, view: v });
+        }
+        if (
+          new RegExp(`alter view public\\.${v}\\s+set \\(security_invoker = true\\)`).test(body) ||
+          new RegExp(`alter view public\\.${v} set \\(security_invoker = true\\)`).test(body)
+        ) {
+          restored.push({ version: f, view: v });
+        }
+      }
+    }
+    assert.ok(replaced.length > 0, 'no migration creates a ledger view — the scan is broken');
+    for (const r of replaced) {
+      assert.ok(
+        restored.some((x) => x.view === r.view && x.version >= r.version),
+        `${r.version} CREATE OR REPLACEs ${r.view} and nothing at or after it re-asserts security_invoker — ` +
+          'CREATE OR REPLACE VIEW RESETS reloptions',
+      );
+    }
+  });
+
   check('the ₱ columns are NAMED in the COMMENTs that carry them', () => {
     // A view that carries money must say so in its own comment, so a future
     // server action cannot claim it did not know what to null.
@@ -329,6 +401,13 @@ const CAMPAIGN_MISMATCH_KEYS = [
   'day_totals_vs_kpi_mismatch',
   'campaign_grade_fold_mismatch',
   'ledger_days_vs_span_mismatch',
+  // WASTE (2026-09-15). The campaign KPI row folds view_ops_ledger_shift and the
+  // day spine folds the same view, so the EOQ "Waste Loss" cell and the LOSSES
+  // lens footer are one arithmetic at two grains. The per-stream key is a COUNT
+  // of streams that differ (0..8), because a total can agree while two streams
+  // are swapped.
+  'waste_fold_mismatch',
+  'waste_stream_fold_mismatch',
   'kpi_vs_batch_cost_mismatch',
   'kpi_vs_production_by_batch_mismatch',
   'kpi_without_batch_cost_row',
@@ -462,9 +541,18 @@ async function liveChecks(env: { url: string; service: string; anon: string }): 
     assert.equal(n(q3, 'gap_fed_rate'), 0);
     assert.equal(n(q3, 'gap_pc_rate'), 0);
   });
-  for (const k of ['gap_yield', 'gap_fed_rate', 'gap_pc_rate', 'gap_fed_kg', 'gap_produced_kg']) {
+  for (const k of ['gap_yield', 'gap_fed_rate', 'gap_pc_rate', 'gap_fed_kg', 'gap_produced_kg', 'gap_waste_kg']) {
     check(`group Q3 2026: ${k} === 0`, () => assert.equal(n(q3, k), 0));
   }
+  check('group Q3 2026: WASTE is reported by every campaign, so the ratio is honest', () => {
+    // waste_loss_pct is weighted by the fed kilos of the campaigns that actually
+    // FILED waste, not by the group's whole fed total. When every campaign filed,
+    // the two denominators coincide — which is the Q3 case, and saying so is what
+    // makes the number readable rather than merely present.
+    assert.equal(n(q3, 'campaigns_waste_reported'), n(q3, 'campaign_count'));
+    assert.equal(q3.waste_loss_pct_present, true);
+    assert.ok(n(q3, 'waste_shift_count') > 0, 'no shift filed a waste row in Q3 — that would be news');
+  });
   check('group Q3 2026: 3 campaigns, 2 of them fully covered, none missing', () => {
     assert.equal(n(q3, 'campaign_count'), 3);
     assert.equal(n(q3, 'campaigns_fully_covered'), 2);
@@ -474,22 +562,38 @@ async function liveChecks(env: { url: string; service: string; anon: string }): 
     assert.equal(q3.true_pc_cost_is_null, true);
     assert.equal(q3.true_pc_cost_covered_present, true);
   });
-  check('group Q3 2026: blocks are de-duplicated (45 distinct vs 50 campaign-sum)', () => {
-    assert.ok(
-      n(q3, 'blocks_distinct') < n(q3, 'blocks_campaign_sum'),
-      'the de-duplicated block count must be smaller — 5 Q3 blocks were fed by two campaigns',
-    );
-    assert.equal(n(q3, 'blocks_distinct'), 45);
-    assert.equal(n(q3, 'blocks_campaign_sum'), 50);
-  });
+  check(
+    `group Q3 2026: blocks are de-duplicated (${n(q3, 'blocks_distinct')} distinct vs ` +
+      `${n(q3, 'blocks_campaign_sum')} campaign-sum)`,
+    () => {
+      // SEPTEMBER 2026 IS STILL RUNNING, so the absolute counts grow every week
+      // (45/50 on 2026-09-14, 46/51 on 2026-09-15). Freezing them makes this
+      // script fail on the calendar rather than on a regression, so what is
+      // asserted is the STRUCTURAL fact instead: exactly 5 of Q3's blocks were
+      // fed by two campaigns, so the naive sum exceeds the distinct count by 5,
+      // and neither count may ever go backwards from the 2026-09-14 baseline.
+      assert.ok(
+        n(q3, 'blocks_distinct') < n(q3, 'blocks_campaign_sum'),
+        'the de-duplicated block count must be smaller — 5 Q3 blocks were fed by two campaigns',
+      );
+      assert.equal(n(q3, 'blocks_campaign_sum') - n(q3, 'blocks_distinct'), 5);
+      assert.ok(n(q3, 'blocks_distinct') >= 45, 'the Q3 block set shrank — blocks are never un-fed');
+    },
+  );
   check('group Q3 2026: the changeover surplus is real (campaign-days > calendar-days)', () =>
     assert.equal(n(q3, 'changeover_surplus'), 2));
-  check('group Q3 2026: 77 ledger days = 63 active + 14 rest', () => {
-    assert.equal(n(q3, 'ledger_days'), 77);
-    assert.equal(n(q3, 'active_days'), 63);
-    assert.equal(n(q3, 'rest_days'), 14);
-    assert.equal(n(q3, 'active_days') + n(q3, 'rest_days'), n(q3, 'ledger_days'));
-  });
+  check(
+    `group Q3 2026: ${n(q3, 'ledger_days')} ledger days = ${n(q3, 'active_days')} active + ` +
+      `${n(q3, 'rest_days')} rest`,
+    () => {
+      // Same reason as the block counts: SEPTEMBER 2026 is open, so its span grows
+      // by a day every day (77/63/14 on 2026-09-14). The INVARIANT is the split
+      // being exhaustive and the span never shrinking.
+      assert.equal(n(q3, 'active_days') + n(q3, 'rest_days'), n(q3, 'ledger_days'));
+      assert.ok(n(q3, 'ledger_days') >= 77, 'the Q3 ledger span shrank — a campaign never loses days');
+      assert.ok(n(q3, 'rest_days') >= 14, 'the Q3 rest-day count shrank');
+    },
+  );
 
   // --- (e) an unknown key is REPORTED, never silently dropped ---
   const missRes = await svc.rpc('fn_ops_ledger_verify_group', { p_campaign_keys: ['NOPE-1999'] });
