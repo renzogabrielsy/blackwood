@@ -31,11 +31,12 @@ import { fetchAllRows } from '@/lib/supabase/paginate';
 import { GRADE_DISPLAY_ORDER, WASTE_STREAMS } from './types';
 import type {
   OpsCampaign,
+  OpsCampaignBlock,
   OpsCampaignGrade,
   OpsCampaignOption,
   OpsCampaignRollup,
   OpsDayBlockFeed,
-  OpsDayBlockUsed,
+  OpsGroupBlock,
   OpsGroupRollup,
   OpsLedgerData,
   OpsLedgerDay,
@@ -154,7 +155,7 @@ export async function fetchOpsLedger(campaignKeys: string[]): Promise<OpsLedgerD
   const showPrices = await canViewPrices();
 
   // --- the campaign rows + the grade dimension + the group row, in parallel ---
-  const [kpiRows, gradeRows, groupRow] = await Promise.all([
+  const [kpiRows, gradeRows, groupRow, groupBlockRows] = await Promise.all([
     fetchAllRows<Row>((from, to) =>
       supabase
         .from('view_ops_ledger_campaign_kpis')
@@ -176,6 +177,15 @@ export async function fetchOpsLedger(campaignKeys: string[]): Promise<OpsLedgerD
       });
       return ((data as Row[] | null) ?? [])[0] ?? null;
     })().catch(() => null),
+    // THE GROUP'S BLOCKS USED TABLE — one row per DISTINCT block, already
+    // de-duplicated and ordered in SQL. Read beside the group KPI row because
+    // both answer the same question about the same chosen set of campaigns.
+    (async (): Promise<Row[]> => {
+      const { data } = await supabase.rpc('fn_ops_ledger_group_blocks', {
+        p_campaign_keys: keys,
+      });
+      return (data as Row[] | null) ?? [];
+    })().catch(() => [] as Row[]),
   ]);
 
   const resolvedKeys = kpiRows.map((r) => String(r.campaign_key));
@@ -184,7 +194,7 @@ export async function fetchOpsLedger(campaignKeys: string[]): Promise<OpsLedgerD
   // --- the day spine and its lenses, one campaign at a time, in parallel ---
   const perCampaign = await Promise.all(
     resolvedKeys.map(async (key) => {
-      const [days, grades, blocks, blocksUsed, shifts] = await Promise.all([
+      const [days, grades, blocks, shifts, campaignBlocks] = await Promise.all([
         fetchAllRows<Row>((from, to) =>
           supabase
             .from('view_ops_ledger_day')
@@ -200,13 +210,22 @@ export async function fetchOpsLedger(campaignKeys: string[]): Promise<OpsLedgerD
           supabase.from('view_ops_ledger_day_block').select('*').eq('campaign_key', key).range(from, to),
         ).catch(() => [] as Row[]),
         fetchAllRows<Row>((from, to) =>
-          supabase.from('view_ops_ledger_day_blocks_used').select('*').eq('campaign_key', key).range(from, to),
-        ).catch(() => [] as Row[]),
-        fetchAllRows<Row>((from, to) =>
           supabase.from('view_ops_ledger_shift').select('*').eq('campaign_key', key).range(from, to),
         ).catch(() => [] as Row[]),
+        // THE CAMPAIGN x BLOCK grain (<= ~30 rows/campaign) — the BLOCKS USED
+        // table behind the FED PRICE / ACTUAL FED PRICE modals. Ordered here so
+        // the modal renders the payload as it arrives.
+        fetchAllRows<Row>((from, to) =>
+          supabase
+            .from('view_ops_ledger_campaign_block')
+            .select('*')
+            .eq('campaign_key', key)
+            .order('first_campaign_feed_date', { ascending: true })
+            .order('batch_code', { ascending: true })
+            .range(from, to),
+        ).catch(() => [] as Row[]),
       ]);
-      return { key, days, grades, blocks, blocksUsed, shifts };
+      return { key, days, grades, blocks, shifts, campaignBlocks };
     }),
   );
 
@@ -236,37 +255,6 @@ export async function fetchOpsLedger(campaignKeys: string[]): Promise<OpsLedgerD
       blockByDate.set(d, list);
     }
 
-    const usedByDate = new Map<string, OpsDayBlockUsed[]>();
-    for (const b of c.blocksUsed) {
-      const d = String(b.calendar_date);
-      const list = usedByDate.get(d) ?? [];
-      list.push({
-        batchId: String(b.batch_id),
-        batchCode: String(b.batch_code ?? ''),
-        blockLoc: str(b.block_loc),
-        firstFedDate: str(b.first_fed_date),
-        closeDate: str(b.close_date),
-        isClosed: bool(b.is_closed),
-        state: String(b.status ?? ''),
-        dayFedKg: num(b.day_fed_kg),
-        totalFedKg: num(b.total_fed_kg),
-        totalOutKg: num(b.total_out_kg),
-        deliveredKg: num(b.delivered_kg),
-        weightLostKg: num(b.weight_lost_kg),
-        lossPct: num(b.loss_pct),
-        resikoKg: num(b.resiko_kg),
-        resikoPct: num(b.resiko_pct),
-        balanceKg: num(b.balance_kg),
-        hasSundryOutflow: bool(b.has_sundry_outflow),
-        sundryKg: num(b.sundry_kg),
-        hasUnpricedDelivery: bool(b.has_unpriced_delivery),
-        unpricedDeliveryCount: num(b.unpriced_delivery_count),
-        feedCount: num(b.feed_count),
-        deliveryCount: num(b.delivery_count),
-      });
-      usedByDate.set(d, list);
-    }
-
     const shiftByDate = new Map<string, OpsShift[]>();
     for (const s of c.shifts) {
       const d = String(s.calendar_date);
@@ -291,7 +279,14 @@ export async function fetchOpsLedger(campaignKeys: string[]): Promise<OpsLedgerD
         runsWithSacks: int(s.runs_with_sacks),
         waste: waste(s, WASTE_COLUMNS),
         totalWasteKg: num(s.total_waste_kg),
+        // Computed in SQL over PRODUCED kg — the same denominator as the day row
+        // and the EOQ cell. Mapped only.
+        wastePct: num(s.waste_pct),
         wasteRemarks: str(s.waste_remarks),
+        // The shift's own grade split, summed in SQL. NULL (no runs) reshapes to
+        // an empty map; a missing KEY inside a populated map means that grade
+        // did not run. No summing here.
+        gradeKg: (s.grade_kg as Record<string, number | null> | null) ?? {},
         runs: ((s.runs as OpsShiftRun[] | null) ?? []).map((r) => ({
           grade: r.grade ?? null,
           customer: r.customer ?? null,
@@ -341,11 +336,95 @@ export async function fetchOpsLedger(campaignKeys: string[]): Promise<OpsLedgerD
         lossPct: num(r.loss_pct),
         producedByGrade: gradeByDate.get(date) ?? {},
         blocksFed: blockByDate.get(date) ?? [],
-        blocksUsed: usedByDate.get(date) ?? [],
         shifts: shiftByDate.get(date) ?? [],
       });
     }
   }
+
+  // --- the BLOCKS USED table, per campaign and for the group ---
+  // ₱ IS STRIPPED HERE, before the payload leaves the server: four fields on
+  // each shape, nulled together, exactly as the day row's fed_php_kg and the
+  // rollup's seven are. Everything else on these rows is peso-free.
+  const blocksByCampaign = new Map<string, OpsCampaignBlock[]>();
+  for (const c of perCampaign) {
+    blocksByCampaign.set(
+      c.key,
+      c.campaignBlocks.map((b) => ({
+        campaignKey: String(b.campaign_key),
+        batchId: String(b.batch_id),
+        batchCode: String(b.batch_code ?? ''),
+        blockLoc: str(b.block_loc),
+        campaignFedKg: num(b.campaign_fed_kg),
+        campaignSundryKg: num(b.campaign_sundry_kg),
+        campaignFeedDays: int(b.campaign_feed_days),
+        firstCampaignFeedDate: str(b.first_campaign_feed_date),
+        lastCampaignFeedDate: str(b.last_campaign_feed_date),
+        firstFedDate: str(b.first_fed_date),
+        closeDate: str(b.close_date),
+        isClosed: bool(b.is_closed),
+        state: String(b.status ?? ''),
+        totalFedKg: num(b.total_fed_kg),
+        totalOutKg: num(b.total_out_kg),
+        deliveredKg: num(b.delivered_kg),
+        weightLostKg: num(b.weight_lost_kg),
+        lossPct: num(b.loss_pct),
+        resikoKg: num(b.resiko_kg),
+        resikoPct: num(b.resiko_pct),
+        balanceKg: num(b.balance_kg),
+        hasSundryOutflow: bool(b.has_sundry_outflow),
+        sundryKg: num(b.sundry_kg),
+        hasUnpricedDelivery: bool(b.has_unpriced_delivery),
+        unpricedDeliveryCount: num(b.unpriced_delivery_count),
+        isFullyPriced: bool(b.is_fully_priced),
+        inPriceSet: bool(b.in_price_set),
+        feedCount: num(b.feed_count),
+        deliveryCount: num(b.delivery_count),
+        // ₱ — the four, stripped together.
+        deliveredPhpKg: showPrices ? num(b.delivered_php_kg) : null,
+        pricedDeliveredPhpKg: showPrices ? num(b.priced_delivered_php_kg) : null,
+        actualFedPhpKg: showPrices ? num(b.actual_fed_php_kg) : null,
+        upliftPhpKg: showPrices ? num(b.uplift_php_kg) : null,
+      })),
+    );
+  }
+
+  const groupBlocks: OpsGroupBlock[] = groupBlockRows.map((gb) => ({
+    batchId: String(gb.batch_id),
+    batchCode: String(gb.batch_code ?? ''),
+    blockLoc: str(gb.block_loc),
+    campaignCount: int(gb.campaign_count),
+    campaignKeys: (gb.campaign_keys as string[] | null) ?? [],
+    groupFedKg: num(gb.group_fed_kg),
+    groupSundryKg: num(gb.group_sundry_kg),
+    groupFeedDays: int(gb.group_feed_days),
+    firstGroupFeedDate: str(gb.first_group_feed_date),
+    lastGroupFeedDate: str(gb.last_group_feed_date),
+    firstFedDate: str(gb.first_fed_date),
+    closeDate: str(gb.close_date),
+    isClosed: bool(gb.is_closed),
+    state: String(gb.status ?? ''),
+    totalFedKg: num(gb.total_fed_kg),
+    totalOutKg: num(gb.total_out_kg),
+    deliveredKg: num(gb.delivered_kg),
+    weightLostKg: num(gb.weight_lost_kg),
+    lossPct: num(gb.loss_pct),
+    resikoKg: num(gb.resiko_kg),
+    resikoPct: num(gb.resiko_pct),
+    balanceKg: num(gb.balance_kg),
+    hasSundryOutflow: bool(gb.has_sundry_outflow),
+    sundryKg: num(gb.sundry_kg),
+    hasUnpricedDelivery: bool(gb.has_unpriced_delivery),
+    unpricedDeliveryCount: num(gb.unpriced_delivery_count),
+    isFullyPriced: bool(gb.is_fully_priced),
+    inPriceSet: bool(gb.in_price_set),
+    feedCount: num(gb.feed_count),
+    deliveryCount: num(gb.delivery_count),
+    // ₱ — the four, stripped together.
+    deliveredPhpKg: showPrices ? num(gb.delivered_php_kg) : null,
+    pricedDeliveredPhpKg: showPrices ? num(gb.priced_delivered_php_kg) : null,
+    actualFedPhpKg: showPrices ? num(gb.actual_fed_php_kg) : null,
+    upliftPhpKg: showPrices ? num(gb.uplift_php_kg) : null,
+  }));
 
   // --- campaigns, rollups, grades ---
   const campaigns: OpsCampaign[] = kpiRows.map((r) => {
@@ -362,6 +441,7 @@ export async function fetchOpsLedger(campaignKeys: string[]): Promise<OpsLedgerD
       firstFedDate: str(r.first_fed_date),
       lastFedDate: str(r.last_fed_date),
       feedDays: int(r.feed_days),
+      blocks: blocksByCampaign.get(String(r.campaign_key)) ?? [],
     };
   });
 
@@ -518,6 +598,8 @@ export async function fetchOpsLedger(campaignKeys: string[]): Promise<OpsLedgerD
         downtimeHours: num(groupRow.downtime_hours),
         sacks: num(groupRow.sacks),
         sundryKg: num(groupRow.sundry_kg),
+
+        blocks: groupBlocks,
       }
     : null;
 

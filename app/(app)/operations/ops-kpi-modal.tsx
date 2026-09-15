@@ -16,9 +16,23 @@ import { TONE, type OpsTone } from './ops-color';
 // "SHOW ME THE MATH" — every EOQ cell opens this.
 //
 // Renzo, 2026-09-15: every figure in the rollup should be clickable and say how it
-// was arrived at. So each cell is a button and this dialog answers four questions in
-// a fixed order: **what is this**, **how is it defined** (in words and in symbols),
-// **what went in** (each input with its own payload value), and **what came out**.
+// was arrived at. So each cell is a button and this dialog answers three questions in
+// a fixed order: **what is this** (title + the one-line formula), **what went in**,
+// and **what came out**.
+//
+// ── THE PROSE BLOCK IS GONE (2026-09-15, round 3) ──────────────────────────────
+// Every modal used to open with a HOW IT IS DEFINED paragraph. Renzo, reading them:
+// *"It should take out the how it is defined entirely."* The formula line survives —
+// it is the definition, in the space of one line — and everything the paragraph was
+// carrying that is actually load-bearing (why a figure is NULL, what the coverage is)
+// is a `note` under the result, where it belongs.
+//
+// ── AND TWO MODALS SHOW A TABLE INSTEAD OF A LIST ──────────────────────────────
+// FED PRICE and ACTUAL FED PRICE (and the two RESIKO columns, which read the same
+// rows) render {@link KpiDetail.table} — the campaign's BLOCKS USED table — in place
+// of the inputs list, because *"the user can distinguish and get a quick look and a
+// breakdown of why the price is the way it is and what the actual price is and why."*
+// A twelve-column table needs the room, so those details set {@link KpiDetail.wide}.
 //
 // ── THE ONE RULE ────────────────────────────────────────────────────────────────
 // **NOTHING IS COMPUTED HERE.** `a ÷ b = c` is a SENTENCE: `a`, `b` AND `c` are each
@@ -47,11 +61,17 @@ export interface KpiDetail {
   /** The date span, or the group's membership. */
   subtitle: string;
   tone: OpsTone;
-  /** The definition, in plain language. */
-  words: string;
-  /** The same definition as symbols — `Produced ÷ RC Fed`. */
+  /** The definition, as symbols — `Produced ÷ RC Fed`. ONE line, never a paragraph. */
   symbols: string;
+  /** The inputs list. Ignored when {@link table} is set. */
   inputs: KpiInput[];
+  /**
+   * A TABLE of the rows the figure was made of, rendered INSTEAD of {@link inputs}.
+   * Built by the caller (`OpsBlocksTable`), so this module stays a shell.
+   */
+  table?: React.ReactNode;
+  /** Widen the dialog to `sm:max-w-4xl` — a twelve-column table needs it. */
+  wide?: boolean;
   result: { label: string; value: string };
   /** Coverage, caveats, and the reason a NULL is a NULL. */
   notes?: string[];
@@ -67,7 +87,7 @@ export function OpsKpiModal({ detail, onClose }: OpsKpiModalProps) {
 
   return (
     <Dialog open={detail !== null} onOpenChange={(open) => (open ? undefined : onClose())}>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent className={detail?.wide ? 'sm:max-w-4xl' : 'sm:max-w-xl'}>
         {detail ? (
           <>
             <DialogHeader>
@@ -81,18 +101,13 @@ export function OpsKpiModal({ detail, onClose }: OpsKpiModalProps) {
             </DialogHeader>
 
             <div className="flex flex-col gap-3">
-              {/* ── The definition ─────────────────────────────────────────── */}
-              <section className={cn('rounded-md border border-border border-t-2 p-2.5', tone.edge)}>
-                <h3 className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  How it is defined
-                </h3>
-                <p className="mt-1 text-xs leading-relaxed">{detail.words}</p>
-                <p className={cn('mt-1.5 font-mono text-[11px] tabular-nums', tone.text)}>
-                  {detail.symbols}
-                </p>
-              </section>
+              {/* ── The definition, in ONE line ────────────────────────────── */}
+              <p className={cn('font-mono text-[11px] tabular-nums', tone.text)}>{detail.symbols}</p>
 
-              {/* ── The inputs ─────────────────────────────────────────────── */}
+              {/* ── What it is made of: a TABLE when there is one, else the list ── */}
+              {detail.table ? (
+                detail.table
+              ) : (
               <section>
                 <h3 className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                   The numbers that went in
@@ -121,6 +136,7 @@ export function OpsKpiModal({ detail, onClose }: OpsKpiModalProps) {
                   </tbody>
                 </table>
               </section>
+              )}
 
               {/* ── The result ─────────────────────────────────────────────── */}
               <section

@@ -98,6 +98,14 @@ export interface OpsCampaign {
   firstFedDate: string | null;
   lastFedDate: string | null;
   feedDays: number;
+  /**
+   * THE BLOCKS THIS CAMPAIGN DREW FROM, ordered by the day it first fed from
+   * each and then by batch code — the table the `FED PRICE` and `ACTUAL FED
+   * PRICE` KPI modals render. It hangs off the campaign rather than off
+   * {@link OpsCampaignRollup} because it is a fact about the campaign that TWO
+   * different modals read, not a field of the money rollup.
+   */
+  blocks: OpsCampaignBlock[];
 }
 
 /** One option in the campaign picker. */
@@ -135,50 +143,6 @@ export interface OpsDayBlockFeed {
   blockLoc: string | null;
   fedKg: number | null;
   sundryKg: number | null;
-}
-
-/**
- * One line of the day's BLOCKS USED panel: a block the plant drew from that day,
- * carrying that block's whole life.
- */
-export interface OpsDayBlockUsed {
-  batchId: string;
-  batchCode: string;
-  blockLoc: string | null;
-  /** DATE OPEN — the block's first feed, ever (not this campaign's). */
-  firstFedDate: string | null;
-  /** DATE CLOSE. `null` while the block is still open. */
-  closeDate: string | null;
-  isClosed: boolean;
-  state: BlockState;
-  /** Kg drawn from THIS block on THIS day. */
-  dayFedKg: number | null;
-  /** All-time kg the plant was fed out of this block (MAIN only). */
-  totalFedKg: number | null;
-  /** All-time kg that left the block, sun-drying pulls included. */
-  totalOutKg: number | null;
-  /** ARRIVAL WEIGHT — everything that ever arrived into the block. */
-  deliveredKg: number | null;
-  /** `delivered − out`. Only *means* "lost" once the block is closed. */
-  weightLostKg: number | null;
-  lossPct: number | null;
-  /**
-   * RESIKO — evaporation and shrinkage, a real loss.
-   *
-   * ⚠ CORRECTS THE DRAFT, which read 0 on an open block. It is **null** here:
-   * charcoal still sitting in the pile is not loss yet, and 0 would claim the
-   * block lost nothing. Read {@link balanceKg} for the open case.
-   */
-  resikoKg: number | null;
-  resikoPct: number | null;
-  /** Charcoal still in the pile. Non-null only while the block is OPEN. */
-  balanceKg: number | null;
-  hasSundryOutflow: boolean;
-  sundryKg: number | null;
-  hasUnpricedDelivery: boolean;
-  unpricedDeliveryCount: number | null;
-  feedCount: number | null;
-  deliveryCount: number | null;
 }
 
 /** One run inside a shift, exactly as the plant filed it. */
@@ -226,7 +190,24 @@ export interface OpsShift {
   runsWithSacks: number;
   waste: OpsWaste;
   totalWasteKg: number | null;
+  /**
+   * `totalWasteKg ÷ producedKg` — a **FRACTION**, ×100 at render. THE SAME
+   * DENOMINATOR as {@link OpsLedgerDay.wastePct} and
+   * {@link OpsCampaignRollup.wasteLossPct}, so a per-shift child row, its day
+   * row and the EOQ cell are one definition at three grains. Computed in SQL.
+   * NULL — never 0 — when the shift filed no waste row, filed no run, or
+   * produced 0.
+   */
+  wastePct: number | null;
   wasteRemarks: string | null;
+  /**
+   * grade → kg this SHIFT produced, summed in SQL over its own runs (several
+   * runs may carry one grade). `{}` when the shift filed no run — the view
+   * publishes NULL there and the adapter reshapes it, because an object with
+   * keys would claim the shift ran and produced nothing of any grade, while a
+   * missing KEY inside a populated map means that grade did not run.
+   */
+  gradeKg: Record<string, number | null>;
   runs: OpsShiftRun[];
 }
 
@@ -305,10 +286,162 @@ export interface OpsLedgerDay {
   producedByGrade: Record<string, number | null>;
   /** The RC Movement lens: one entry per block fed that day. */
   blocksFed: OpsDayBlockFeed[];
-  /** The BLOCKS USED expand. */
-  blocksUsed: OpsDayBlockUsed[];
-  /** The per-SHIFT expand. */
+  /**
+   * THE DAY EXPAND — one CHILD ROW per shift, in the same columns as the parent
+   * (2026-09-15, round 3). A day with none is not expandable.
+   *
+   * ⚠ THE DAY'S BLOCKS-USED LIST IS GONE FROM THIS PORT. `view_ops_ledger_day_blocks_used`
+   * still exists in the database; nothing reads it, because the block table a
+   * reader actually wants is the CAMPAIGN's ({@link OpsCampaign.blocks}) — a
+   * block's whole life restated on every day it was drawn from is the same rows
+   * over and over, and its all-time fed total cannot be attributed to a campaign.
+   */
   shifts: OpsShift[];
+}
+
+/**
+ * ONE BLOCK A CAMPAIGN DREW FROM — a row of the BLOCKS USED table behind the
+ * `FED PRICE` and `ACTUAL FED PRICE` KPI modals, in Renzo's own workbook order:
+ * `BATCH · BLOCK LOC · DATE OPEN · DATE CLOSE · STATE · FED WT KG · BLOCK PRICE`,
+ * and for the actual-price modal also `ARRV WT KG · RESIKO KG · RESIKO LOSS ·
+ * ACTUAL PRICE · RESIKO PRICE`.
+ *
+ * ⚠ {@link campaignFedKg} IS NOT {@link totalFedKg}, AND THAT IS THE WHOLE POINT.
+ * The retired day-grain block list could only offer the block's ALL-TIME fed
+ * total; 78 of 523 blocks were fed by more than one campaign (up to 5 each), so
+ * printing the all-time figure in a campaign's modal credits this campaign with
+ * kilos another one ate. Both ride here, labelled — and
+ * Σ `campaignFedKg` over a campaign IS that campaign's
+ * {@link OpsCampaignRollup.fedKg}, proven in SQL every verify run.
+ *
+ * NULL IS NEVER 0 on any ₱ field: `actualFedPhpKg` is null unless the block is
+ * CLOSED, fully priced and has no sundry outflow; `deliveredPhpKg` is null
+ * unless every delivery into it carries a price, with {@link pricedDeliveredPhpKg}
+ * as the honest partial. And the four ₱ fields are ALREADY null for a caller
+ * without price rights — the adapter strips them server-side.
+ */
+export interface OpsCampaignBlock {
+  campaignKey: string;
+  batchId: string;
+  /** BATCH. */
+  batchCode: string;
+  /** BLOCK LOC. */
+  blockLoc: string | null;
+
+  /** FED WT KG — what THIS campaign drew from this block. */
+  campaignFedKg: number | null;
+  /** Kg pulled out of this block to sun-dry during this campaign. NOT feed. */
+  campaignSundryKg: number | null;
+  /** Distinct days this campaign fed from this block. */
+  campaignFeedDays: number;
+  firstCampaignFeedDate: string | null;
+  lastCampaignFeedDate: string | null;
+
+  /** DATE OPEN — the block's first feed, ever (not this campaign's). */
+  firstFedDate: string | null;
+  /** DATE CLOSE. `null` while the block is still open. */
+  closeDate: string | null;
+  isClosed: boolean;
+  /** STATE. */
+  state: BlockState;
+  /** All-time kg the plant was fed out of this block (MAIN only). */
+  totalFedKg: number | null;
+  /** All-time kg that left the block, sun-drying pulls included. */
+  totalOutKg: number | null;
+  /** ARRV WT KG — everything that ever arrived into the block. */
+  deliveredKg: number | null;
+  /** `delivered − out`. Only *means* "lost" once the block is closed. */
+  weightLostKg: number | null;
+  /** A FRACTION. */
+  lossPct: number | null;
+  /** RESIKO KG — non-null only once the block is CLOSED. */
+  resikoKg: number | null;
+  /** RESIKO LOSS — a FRACTION, non-null only once the block is CLOSED. */
+  resikoPct: number | null;
+  /** Charcoal still in the pile. Non-null only while the block is OPEN. */
+  balanceKg: number | null;
+  hasSundryOutflow: boolean;
+  sundryKg: number | null;
+  hasUnpricedDelivery: boolean;
+  unpricedDeliveryCount: number | null;
+  isFullyPriced: boolean;
+  /**
+   * Whether this block counts toward the campaign's ACTUAL FED PRICE —
+   * `isClosed && isFullyPriced`, the price-set predicate
+   * `view_rc_movement_campaign_actual_price` itself uses, lifted not restated.
+   * The count of these rows equals {@link OpsCampaignRollup.blocksInPrice}.
+   */
+  inPriceSet: boolean;
+  feedCount: number | null;
+  deliveryCount: number | null;
+
+  /** ₱ BLOCK PRICE — the block's DELIVERED rate, not its actual. */
+  deliveredPhpKg: number | null;
+  /** ₱ the honest partial when some delivery into the block is still unpriced. */
+  pricedDeliveredPhpKg: number | null;
+  /** ₱ ACTUAL PRICE — whole-block value ÷ whole-block fed kg. */
+  actualFedPhpKg: number | null;
+  /** ₱ RESIKO PRICE — actual − delivered, i.e. what the shrinkage cost per kilo. */
+  upliftPhpKg: number | null;
+}
+
+/**
+ * The same row for a GROUP of campaigns — **one row per DISTINCT block**. A
+ * block fed by two of the group's campaigns is ONE row carrying
+ * {@link campaignCount} = 2 and both keys, the same de-duplication
+ * {@link OpsGroupRollup.blocksFedDistinct} counts; the table's row count IS that
+ * number, and Σ {@link groupFedKg} IS {@link OpsGroupRollup.fedKg}.
+ *
+ * The block-life half is identical to {@link OpsCampaignBlock} and means exactly
+ * the same thing: those are campaign-independent facts about the pile, correct
+ * at any grain. What a group may NOT do is add a shared block's whole-life
+ * shrinkage once per campaign that touched it — which is why there is still no
+ * group-level resiko KG anywhere (see {@link OpsGroupRollup}).
+ */
+export interface OpsGroupBlock {
+  batchId: string;
+  batchCode: string;
+  blockLoc: string | null;
+
+  /** How many of the group's campaigns fed this block. */
+  campaignCount: number;
+  /** Which ones. */
+  campaignKeys: string[];
+  /** Σ of the campaigns' own fed kg. */
+  groupFedKg: number | null;
+  groupSundryKg: number | null;
+  /** DISTINCT days, not a sum of the per-campaign counts — a changeover date
+   *  belongs to two campaigns and would otherwise be counted twice. */
+  groupFeedDays: number;
+  firstGroupFeedDate: string | null;
+  lastGroupFeedDate: string | null;
+
+  firstFedDate: string | null;
+  closeDate: string | null;
+  isClosed: boolean;
+  state: BlockState;
+  totalFedKg: number | null;
+  totalOutKg: number | null;
+  deliveredKg: number | null;
+  weightLostKg: number | null;
+  lossPct: number | null;
+  resikoKg: number | null;
+  resikoPct: number | null;
+  balanceKg: number | null;
+  hasSundryOutflow: boolean;
+  sundryKg: number | null;
+  hasUnpricedDelivery: boolean;
+  unpricedDeliveryCount: number | null;
+  isFullyPriced: boolean;
+  inPriceSet: boolean;
+  feedCount: number | null;
+  deliveryCount: number | null;
+
+  /** ₱ */
+  deliveredPhpKg: number | null;
+  pricedDeliveredPhpKg: number | null;
+  actualFedPhpKg: number | null;
+  upliftPhpKg: number | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -527,6 +660,13 @@ export interface OpsGroupRollup {
   downtimeHours: number | null;
   sacks: number | null;
   sundryKg: number | null;
+
+  /**
+   * THE GROUP'S BLOCKS USED TABLE — one row per DISTINCT block, so its length is
+   * {@link blocksFedDistinct} and not {@link blocksFedCampaignSum}. See
+   * {@link OpsGroupBlock}.
+   */
+  blocks: OpsGroupBlock[];
 }
 
 /** What the adapter hands the page. One object, like `DigestData`. */

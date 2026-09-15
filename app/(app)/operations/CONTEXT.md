@@ -30,7 +30,7 @@ file here imports from `app/dev/**`. See `.agents/plans/ops-ledger-plan.md` (§1
 
 | File | Role |
 |---|---|
-| `lib/operations/types.ts` | **THE PORT** — `OpsLedgerData`, `OpsLedgerDay`, `OpsShift`, `OpsDayBlockFeed`, `OpsDayBlockUsed`, `OpsCampaignRollup`, `OpsGroupRollup`, `OpsCampaignGrade`, `OpsCampaignOption`, plus `WASTE_STREAMS` and `GRADE_DISPLAY_ORDER`. Supersedes the draft port at `app/dev/ops-ledger/_mock/types.ts`; every divergence is annotated in place. |
+| `lib/operations/types.ts` | **THE PORT** — `OpsLedgerData`, `OpsLedgerDay`, `OpsShift`, `OpsDayBlockFeed`, `OpsDayBlockUsed`, **`OpsCampaignBlock`**, **`OpsGroupBlock`**, `OpsCampaignRollup`, `OpsGroupRollup`, `OpsCampaignGrade`, `OpsCampaignOption`, plus `WASTE_STREAMS` and `GRADE_DISPLAY_ORDER`. `OpsCampaign.blocks` and `OpsGroupRollup.blocks` carry the blocks-used table. Supersedes the draft port at `app/dev/ops-ledger/_mock/types.ts`; every divergence is annotated in place. |
 | `lib/operations/queries.ts` | **THE ADAPTER** (server-only). `fetchOpsLedger(campaignKeys)` → one `OpsLedgerData`; `fetchOpsLedgerCampaignOptions()` → the picker. |
 
 ### The SQL objects (migration `20260914033037_ops_ledger`, + `20260915021820_ops_ledger_campaign_waste`)
@@ -47,7 +47,8 @@ dependency). Each view's plain-language definition lives in its DB `COMMENT`.
 | `view_ops_ledger_day_grade` | campaign × day × grade | `grade`, `kg`, `sacks`, `run_count` | 317 (max 48/campaign) |
 | `view_ops_ledger_day_block` | campaign × day × block | `batch_id`, `batch_code`, `block_loc`, `fed_kg`, `sundry_kg` | 2,148 (max **114**/campaign) |
 | `view_ops_ledger_day_blocks_used` | campaign × day × block | `first_fed_date` (date open), `close_date`, `is_closed`, `status`, `day_fed_kg`, `total_fed_kg`, `total_out_kg`, `delivered_kg`, `weight_lost_kg`, `loss_pct`, **`resiko_kg`/`resiko_pct`** (closed only), **`balance_kg`** (open only), `has_sundry_outflow`, `has_unpriced_delivery` | 2,148 |
-| `view_ops_ledger_shift` | shift | `shift` (`M`/`E`), `shift_hrs`, `shift_hrs_source`, `dt_hrs`, `dt_mins`, `downtime_hours`, `productive_hrs`, `dt_reason`, `dt_ranges`, `dt_incident_ranges`, `has_incident`, `produced_kg`, `run_count`, `sacks`, the eight waste columns, `waste_remarks`, **`runs` (jsonb array)** | 260 |
+| `view_ops_ledger_shift` | shift | `shift` (`M`/`E`), `shift_hrs`, `shift_hrs_source`, `dt_hrs`, `dt_mins`, `downtime_hours`, `productive_hrs`, `dt_reason`, `dt_ranges`, `dt_incident_ranges`, `has_incident`, `produced_kg`, `run_count`, `sacks`, the eight waste columns, `waste_remarks`, **`runs` (jsonb array)**, **`waste_pct` / `grade_kg` (2026-09-15)** | 260 |
+| **`view_ops_ledger_campaign_block`** | campaign × block | `batch_code`, `block_loc`, **`campaign_fed_kg`**, `campaign_sundry_kg`, `campaign_feed_days`, `first_fed_date` (date open), `close_date`, `is_closed`, `status`, `total_fed_kg`, `total_out_kg`, `delivered_kg`, `weight_lost_kg`, `loss_pct`, `resiko_kg`/`resiko_pct`/`balance_kg`, `is_fully_priced`, **`in_price_set`**, and **four ₱** (`delivered_php_kg`, `priced_delivered_php_kg`, `actual_fed_php_kg`, `uplift_php_kg`) | **523** (19/campaign for JULY 2026) |
 | `view_ops_ledger_campaign_grades` | campaign × grade | `grade`, `kg`, `share_pct` (0–100), `campaign_produced_kg` | 21 |
 | **`view_ops_ledger_campaign_kpis`** | campaign | the EOQ row — see below; **+ the eight waste streams, `waste_kg`, `waste_shift_count`, `waste_loss_pct` (2026-09-15; its denominator became PRODUCED kg the same day)** | 32 |
 
@@ -57,6 +58,15 @@ KPI strip. **It was DROPped and re-CREATEd on 2026-09-15** to append the waste c
 `RETURNS TABLE` cannot be `CREATE OR REPLACE`d), which LOSES its grants — re-applied in the same
 migration and proven live every run: `authenticated` true / `anon` false / `service_role` false.
 
+**`fn_ops_ledger_group_blocks(p_campaign_keys text[])`** (2026-09-15) — same posture,
+`authenticated` only. The BLOCKS USED table for a GROUP: **one row per DISTINCT block**, so a
+block fed by two of the group's campaigns is ONE row carrying `campaign_count = 2` and both
+`campaign_keys`. Its row count IS `blocks_fed_distinct` and Σ `group_fed_kg` IS the group's
+`fed_kg` — both proven every run. `group_feed_days` COUNTS DISTINCT DATES rather than summing
+the per-campaign day counts, because a changeover date belongs to two campaigns. It is a
+FUNCTION and not a view for the same reason the group KPI row is: a group is a chosen set of
+keys, not a stored dimension.
+
 **THE THREE VERIFICATION PROBES** (migration `20260914065453_ops_ledger_verify_per_campaign`) —
 all SECURITY DEFINER, STABLE, `search_path` pinned, EXECUTE revoked from `PUBLIC` + `anon` +
 `authenticated` and granted to **`service_role` only**. They exist because the views are
@@ -65,9 +75,9 @@ authenticated-only, so neither key a script can hold may read them; each returns
 
 | Probe | Scope | What it answers |
 |---|---|---|
-| `fn_ops_ledger_verify_campaign(text)` | **ONE campaign** | the four day folds, **the WASTE fold (`waste_fold_mismatch`, 0/1) and the PER-STREAM fold (`waste_stream_fold_mismatch`, a count 0..8 — a total can agree while two streams are swapped)**, day totals vs the KPI row, the grade fold, `ledger_days` vs `span_days`, **the DAY-RATIO self-consistency check (`day_ratio_mismatch`) and the campaign denominator (`kpi_waste_pct_mismatch`, 0/1)**, both reuse comparisons, and the one-campaign GROUP identity (waste columns included) |
-| `fn_ops_ledger_verify_group(text[])` | **≤ 12 keys — RAISES above that** | the group vs a direct Σ over those campaigns' own KPI rows (**`gap_waste_kg` included — exact by construction, since a shift has one campaign**); block de-duplication, coverage, `campaigns_waste_reported` / `waste_shift_count`, day split, changeover surplus |
-| `fn_ops_ledger_verify_posture()` | catalog only | invoker/comment/grant posture, the three probes are `service_role`-only, `legacy_verify_fn_count = 0`, the money-column counts — **plus one 32-row read of `view_ops_ledger_campaign_span`**, whose only job is to hand the script the campaign keys |
+| `fn_ops_ledger_verify_campaign(text)` | **ONE campaign** | **the CAMPAIGN × BLOCK table (`campaign_block_fold_mismatch` — Σ `campaign_fed_kg` vs the KPI row's `fed_kg`; `campaign_block_count_mismatch` — row count vs `blocks_fed`)**, the four day folds, **the WASTE fold (`waste_fold_mismatch`, 0/1) and the PER-STREAM fold (`waste_stream_fold_mismatch`, a count 0..8 — a total can agree while two streams are swapped)**, day totals vs the KPI row, the grade fold, `ledger_days` vs `span_days`, **the DAY-RATIO self-consistency check (`day_ratio_mismatch`) and the campaign denominator (`kpi_waste_pct_mismatch`, 0/1)**, both reuse comparisons, and the one-campaign GROUP identity (waste columns included) |
+| `fn_ops_ledger_verify_group(text[])` | **≤ 12 keys — RAISES above that** | **the GROUP BLOCKS table (`gap_group_blocks_fed_kg`, `gap_group_blocks_distinct`, both exactly 0)**, the group vs a direct Σ over those campaigns' own KPI rows (**`gap_waste_kg` included — exact by construction, since a shift has one campaign**); block de-duplication, coverage, `campaigns_waste_reported` / `waste_shift_count`, day split, changeover surplus |
+| `fn_ops_ledger_verify_posture()` | catalog only | invoker/comment/grant posture (**9 views since 2026-09-15**), **`campaign_block_money_named_columns` — the EXACT SET of money-ish names on the new view, not a count**, the three probes are `service_role`-only, `legacy_verify_fn_count = 0`, the money-column counts — **plus one 32-row read of `view_ops_ledger_campaign_span`**, whose only job is to hand the script the campaign keys |
 
 > **PER CAMPAIGN ONLY. NEVER A WHOLE-HISTORY PROOF. 5 s GUARD ON EVERY HAND-RUN STATEMENT.**
 > On **2026-09-14** the original probe `fn_ops_ledger_verify()` — one call that `count(*)`'d and
@@ -95,6 +105,8 @@ authenticated-only, so neither key a script can hold may read them; each returns
 | `view_ops_ledger_campaign_grades` | 26 | 3 |
 | `view_ops_ledger_campaign_kpis` | 85 → **33** | 1 |
 | `fn_ops_ledger_group_kpis(Q3 2026)` | 147 → **135** | 1 |
+| **`view_ops_ledger_campaign_block`** (filtered) | **28** | **19** |
+| **`fn_ops_ledger_group_blocks(Q3 2026)`** | **42** | **46** |
 | `view_ops_ledger_campaign_span` (unfiltered) | 9 | 32 |
 
 **What the 2026-09-15 DAY RATIOS cost: nothing measurable.** `waste_pct` / `yield_pct` /
@@ -249,12 +261,74 @@ band is safe for Production and is not gated.**
   23 of 28 shifts**, against 621,201.0 kg PRODUCED = **0.152369**. Q3 2026 — **218,401.0 kg over
   58 shifts**, 1,494,121.0 kg produced = **0.146174**, 3 of 3 campaigns reporting.
 
+- **THE BLOCKS-USED TABLE IS ITS OWN GRAIN (2026-09-15, round 3 — migration
+  `20260915073755_ops_ledger_campaign_blocks_and_shift_grades`).** Renzo asked for the FED PRICE
+  and ACTUAL FED PRICE modals to become his workbook's BLOCKS USED table per campaign. The
+  payload already had a blocks-used shape — `view_ops_ledger_day_blocks_used` — and it could not
+  answer the question, because it is keyed on the **DAY**: the only fed weight it carries for a
+  campaign is `total_fed_kg`, the block's **ALL-TIME** MAIN outflow. **78 of 523 blocks were fed
+  by more than one campaign (up to 5 each; 5 of Q3 2026's 46)**, so printing that in a campaign's
+  modal credits this campaign with kilos another one ate. `view_ops_ledger_campaign_block`
+  publishes the `(campaign × block)` grain — **`campaign_fed_kg` is FED WT KG** — and carries
+  `total_fed_kg` beside it, both labelled. That grain is not new arithmetic: it is exactly the
+  `campaign_block` CTE `view_rc_movement_campaign_actual_price` already aggregates internally and
+  then discards, so **Σ `campaign_fed_kg` over a campaign IS its `fed_kg`** (JULY 2026:
+  **781,234.00 kg over 19 blocks**, the KPI row's own two figures) and the row count IS
+  `blocks_fed` — both proven every run, 0 on all 32 campaigns.
+- **`in_price_set` IS LIFTED, NOT INVENTED.** `is_closed AND is_fully_priced` is precisely the
+  predicate `view_rc_movement_campaign_actual_price` filters its price set on, so the rows the
+  modal marks as counting toward ACTUAL FED PRICE are exactly the ones `blocks_in_price` counts,
+  with no second rule existing anywhere. Q3 2026: **43 of 46** blocks in the price set.
+- **THE GROUP TABLE DE-DUPLICATES, AND ITS ROW COUNT IS `blocks_fed_distinct`.**
+  `fn_ops_ledger_group_blocks` publishes ONE row per block with `campaign_count` +
+  `campaign_keys`. What it deliberately does NOT do is weight or sum anything ACROSS a shared
+  block: each row still carries that block's own campaign-independent all-time ₱/kg and
+  shrinkage, which are correct at any grain — adding a shared pile's whole-life resiko once per
+  campaign that touched it is exactly the mistake point 6 refuses. `group_feed_days` counts
+  DISTINCT DATES rather than summing `campaign_feed_days`, because a changeover date belongs to
+  two campaigns.
+- **THE DAY EXPAND'S CHILD ROWS NEEDED TWO COLUMNS, SO THEY WERE ADDED TO THE VIEW.** A per-SHIFT
+  child row printing the parent's own columns needs the shift's own WASTE % and GRADE SPLIT.
+  **`view_ops_ledger_shift.waste_pct`** divides by PRODUCED kg — *the same denominator as
+  `view_ops_ledger_day.waste_pct` and `view_ops_ledger_campaign_kpis.waste_loss_pct`*, so it is
+  ONE definition at THREE grains — and **`grade_kg`** is a jsonb `{grade: kg}` map summed in SQL
+  over the shift's own runs (several runs may carry one grade). Folding either in TSX would put
+  arithmetic back on a render path and would let a child row disagree with the day row above it.
+  **`grade_kg` is NULL, never `{}`, when the shift filed no run** — an empty object would claim
+  the shift ran and produced nothing of any grade, while a missing KEY inside a populated map
+  means that grade did not run; the adapter reshapes the NULL to `{}` for the component, which is
+  the only place that distinction is not needed. *Measured on JULY 2026: 28 shifts, 27 with a
+  grade split, 23 with a waste ratio; `Σ grade_kg` equals `produced_kg` on every non-null row and
+  `waste_pct` equals `total_waste_kg / produced_kg` on all 28.*
+- **THE POSTURE PROBE NOW PUBLISHES A SET, NOT A COUNT — and it caught its own migration's
+  COMMENT on the first run.** `view_ops_ledger_campaign_block` carries ₱ on purpose, so "zero
+  money-named columns" is not an available assertion. `campaign_block_money_named_columns`
+  returns the **exact set** of names the money-ish regex matches, and the measured answer is
+  **EIGHT**: the four real ₱ columns (`actual_fed_php_kg`, `delivered_php_kg`,
+  `priced_delivered_php_kg`, `uplift_php_kg`) plus four coverage FLAGS that merely carry the word
+  *price* / *unpriced* (`in_price_set`, `is_fully_priced`, `has_unpriced_delivery`,
+  `unpriced_delivery_count`). The migration's own COMMENT had said "four of the five"; the
+  set-valued assertion failed on it immediately and it was corrected by
+  `20260915074246_ops_ledger_posture_comment_money_named_count` — a COMMENT-only migration, no
+  view, no body, no grant. **A count nobody re-derives is how a wrong number survives; a set is
+  re-derived every run.**
+
 ### PRICE GATING (server-side, structural)
 
 **The ONE ₱ column on the day spine is `fed_php_kg`.** The KPI view carries seven:
 `fed_php_kg`, `fed_value_php`, `actual_fed_php_kg`, `campaign_weighted_actual_fed_php_kg`,
 `uplift_php_kg`, `php_per_produced_kg_delivered`, `php_per_produced_kg_true`. The group RPC
 carries the same seven plus `php_per_produced_kg_true_covered`.
+
+**The blocks-used table adds FOUR more, on two shapes** (2026-09-15):
+`delivered_php_kg`, `priced_delivered_php_kg`, `actual_fed_php_kg`, `uplift_php_kg` on
+`view_ops_ledger_campaign_block` **and** on `fn_ops_ledger_group_blocks`. Every other column on
+both — including `campaign_fed_kg`, the resiko/balance split and `resiko_pct` — is peso-free and
+not derivable back into a price, so a Production reader still gets the whole block table minus
+its four rate columns. `verify-ops-ledger.ts` asserts the strip **by SOURCE EXPRESSION**
+(`showPrices ? num(b.delivered_php_kg) : null`) rather than by field name, because
+`actualFedPhpKg` and `upliftPhpKg` also exist on the rollup and a name-only check would pass on
+the rollup's line while the block mapper leaked.
 
 `fetchOpsLedger` resolves the canonical `canViewPrices()` from `@/lib/auth` **once** and sets
 every one of those to `null` **before the payload leaves the server**, then passes
@@ -277,7 +351,7 @@ silently.
 
 ### Proofs
 
-`npx tsx scripts/verify-ops-ledger.ts` — **75 assertions** (19 static + 56 live); zero on every
+`npx tsx scripts/verify-ops-ledger.ts` — **80 assertions** (21 static + 59 live); zero on every
 `*_mismatch` is the passing state. Measured 2026-09-15, **all 32 campaigns, one RPC call each,
 strictly sequential**: every fold (the two WASTE folds included) and both reuse comparisons 0
 mismatches on 32/32, the one-campaign-group identity 0/32, `day_rows == span_days` on 32/32,
@@ -313,8 +387,9 @@ cannot come back unnoticed. Full table in `.agents/plans/ops-ledger-plan.md` §2
 | `operations-view.tsx` | `'use client'` — the CONTROLS. Writes the URL (`router.replace` inside a transition), owns the lens segmented control, the EOQ collapse, the `campaignsMissing` notice and the block detail drawer. |
 | `ops-ledger-table.tsx` | The ledger itself — **ONE table in ONE scroll container**: the frozen left spine, the frozen header band + label row, the sticky group footer, the four lenses' columns and the per-day expansion row. (Replaced `ops-ledger-split.tsx`, deleted 2026-09-15.) |
 | `ops-kpi-strip.tsx` | The `EOQ` tab — one row per campaign plus the GROUP row, **eleven columns**, **every cell a button that opens the math**, every unit pinned LEFT via the platform `UnitValue`. |
-| `ops-kpi-modal.tsx` | That math: `KpiDetail` (definition in words + symbols, the inputs with their payload values, the result, the caveats) rendered in a `Dialog`. |
-| `ops-day-detail.tsx` | What a day opens into: `OpsShiftCards` + `OpsBlocksUsedTable`, now both in the one expansion row. |
+| `ops-kpi-modal.tsx` | That math: `KpiDetail` (the one-line formula, then either the inputs list or a `table`, the result, the caveats) rendered in a `Dialog`. |
+| `ops-blocks-table.tsx` | **The BLOCKS USED table** the FED PRICE / ACTUAL FED PRICE / RESIKO COST / RESIKO LOSS modals render — two column sets (`fed` · `actual`) over one normalised row shape, plus `campaignBlockRows()` / `groupBlockRows()`. |
+| ~~`ops-day-detail.tsx`~~ | **DELETED 2026-09-15 (round 3).** A day now expands into ordinary child rows, so the shift cards and the day-grain BLOCKS USED table had no caller left. |
 | `ops-group-picker.tsx` | The GROUP builder — selection chips + a popover holding the full campaign list, a filter box and the derived quarter presets. |
 | `ops-lens.ts` | The lens registry (`production` · `grades` · `losses` · `blocks`), `DEFAULT_LENS`, `parseLens`, and `quarterPresets()` — quarters DERIVED from the option list, never hardcoded. |
 | `ops-color.ts` | The semantic palette — `TONE` (one entry per meaning) and `CAMPAIGN_ACCENTS`. Opaque `head` for frozen surfaces, translucent `cell` for scrolling ones. |
@@ -335,6 +410,35 @@ ledger stays mounted at `opacity-50` while the new one resolves (compositor-only
 reflows). **Absent `?campaigns=` = the newest campaign**, resolved from the same
 `view_rc_movement_campaign_options` list, same filter and same order as RC Movement's picker.
 
+**EXPANDING A DAY INSERTS CHILD ROWS, NOT A PANEL (2026-09-15, round 3).** Renzo: *"An
+identical row in the format of the parent row but ONLY showing the SHIFTS groups. So if
+there's M, E, N in one day, then it should show 3 child rows just summing the totals PER shift
+accordingly. There's no need for those sections above the table with the rc fed breakdown for
+the day. Child rows should be self explanatory. Too wordy anyway. No reason for the fed table in
+the dropdown to also be horizontally scrolled."* So the whole expansion PANEL is gone — the
+shift cards, the RECORDED WASTE block, the day-grain BLOCKS USED table and the `sticky left-0`
+band that carried them — and with them **`ops-day-detail.tsx` and the `blocksUsed` read**
+(`view_ops_ledger_day_blocks_used` still exists in the database; nothing reads it, because the
+block table a reader actually wants is the CAMPAIGN's, and a block's all-time fed total cannot
+be attributed to one campaign). A day now opens into **one ordinary `<tr>` per shift, in the
+same columns**, with the same frozen-column treatment and the same gridlines: no inner table, no
+second set of widths, no second horizontal scroll.
+
+**A SHIFT ROW LEAVES BLANK EVERYTHING A SHIFT DOES NOT OWN.** `rc_out` has no shift dimension —
+feeding is recorded per DATE — so **FED PRICE, TTL FED, YIELD % and LOSS % are blank** on a child
+row rather than repeated from the parent or split by an invented rule. What a shift genuinely
+owns is published per shift and is printed: **TTL PROD** (`producedKg`), **WASTE**
+(`totalWasteKg`), **WASTE %** (`wastePct` — the same PRODUCED-kg denominator at all three
+grains), **DT HRS** (`downtimeHours`, whose `title` carries everything L-051/L-051b stored: the
+reason, MC's own ranges, the ranges the plant ran THROUGH, and which rule set the shift length),
+its **grade split** (`gradeKg`) under the grades lens and its **eight streams** under losses.
+The DATE cell announces the row (`↳ Shift M`); the SHIFTS column stays blank, because a count of
+one is not news. **A day with no shift is NOT EXPANDABLE** — it gets no chevron rather than an
+empty disclosure (measured on the fixture: 8 chevrons for 8 days with shifts, none on the rest
+day or on the day that was fed but filed no shift). Child rows are keyed
+`campaignKey:date:shiftId`, for the same changeover-date reason the parent is keyed
+`campaignKey:date`.
+
 **THE EXPANDED DAY AND THE BLOCK DRAWER ARE DELIBERATELY NOT IN THE URL.** Both are
 disclosures inside ONE reading of one payload — the category RC Movement also keeps in local
 state — and putting either in the address would re-run the server on every chevron click to
@@ -353,12 +457,22 @@ existed to hold them together**: the scroll-sync handler, its ownership guard, t
 divider + its `ResizeObserver` clamp, the phone pane toggle, and the **fixed 320px expansion
 band** (which existed solely so the two sides stayed row-aligned). The day spine is now a block
 of **FROZEN COLUMNS** — `#expand · DATE · DAY · FED ₱/KG · TTL FED · TTL PROD · WASTE · WASTE % ·
-YIELD % · LOSS % · SHIFTS · DT HRS`, **916px with ₱ / 820 without** — each `position: sticky` at
+YIELD % · LOSS % · SHIFTS · DT HRS`, **922px with ₱ / 820 without** — each `position: sticky` at
 its own cumulative `left` offset, `.frozen-edge` on the last; the lens columns scroll past them
 inside the same `<table>`. *Measured: exactly ONE element in the page has
 `scrollHeight > clientHeight`.* The un-freeze breakpoint moved with the width, from 767px to
 **1023px**: the rule was always "un-freeze while the spine is within ~10% of the frame", and at
-800px a 916px spine would eat the whole viewport.
+800px a 900-odd-pixel spine would eat the whole viewport. (FED PRICE went 96 → **102px** in
+round 3 so its label and its inline unit fit on the one header line — measured, it clipped by
+2px at 96.)
+
+**EVERY COLUMN HEADER IS ONE LINE, UNIT INCLUDED (2026-09-15, round 3).** Renzo: *"Can't those
+sub headers in the columns (where the units are) be stored on the same line as the column title?
+… For all views in general in this page."* So `kg` · `₱/kg` · `h` · `%` now sit on the label's
+own baseline in muted small type, and a block column carries its `block_loc` inline with the
+batch code the same way. **The label header row went 40px → 26px**, which is two more ledger
+rows on screen; the modal tables are built the same way from the start. Measured after the
+change: not one header in the spine or either lens clips.
 
 **A ROW'S IDENTITY IS `campaignKey:date`, NEVER THE DATE ALONE.** A **changeover date belongs to
 two campaigns** — 2026-08-01 is JULY's last day and AUGUST's first, 2026-08-29 is AUGUST's last
@@ -395,7 +509,45 @@ EXISTS is a separate flag (`hasCampaignTotal` / `hasGroupTotal`) from its value,
 is a legitimate total (a campaign whose shifts filed no waste row) and collapsing "not
 published" into "published as null" is how a footer starts lying. Grades have a per-CAMPAIGN
 total only, so with several campaigns the group footer says *which grain* is missing rather than
-claiming neither exists; the per-block columns have neither and say so.
+claiming neither exists. **THE BLOCKS LENS GOT ITS FOOTERS IN ROUND 3**: each column prints
+that block's `campaignFedKg` per campaign and its `groupFedKg` in the sticky group footer — both
+published per (campaign|group × block) in SQL, both proven to sum to the rollup's own `fedKg` —
+so the *"no total is published for this lens"* note now survives only for an EMPTY lens's
+placeholder column. It is a LOOKUP, never a fold of the cells above it.
+
+**THE CAMPAIGN CELL IS THE NAME, AND NOTHING ELSE (2026-09-15, round 3).** The
+`2026-06-30 → 2026-08-01` line under each campaign name is gone — Renzo: *"kind of needless"*,
+and it is: the ledger directly underneath states every date of every campaign, and the band row
+repeats the span. The **GROUP row keeps one line (`3 campaigns`)**, because how many campaigns
+are in the group is what that row IS and nothing else on screen says it. The label column went
+170 → 150px.
+
+**FOUR MODALS ARE NOW A TABLE, AND NO MODAL OPENS WITH A PARAGRAPH.** Renzo: *"It should take
+out the how it is defined entirely… those two KPI pop ups should portray the data in table form
+so the user can distinguish and get a quick look and a breakdown of why the price is the way it
+is and what the actual price is and why."* So the `HOW IT IS DEFINED` prose block is deleted
+from **every** modal (title → one-line formula → inputs → result → the caveats that explain a
+NULL), and **FED PRICE · ACTUAL FED PRICE · RESIKO COST · RESIKO LOSS** render
+`ops-blocks-table.tsx` in place of the inputs list, in a `sm:max-w-4xl` dialog:
+
+| Modal | Columns |
+|---|---|
+| Fed Price | `BATCH · BLOCK LOC · DATE OPEN · DATE CLOSE · STATE · FED WT kg · BLOCK PRICE ₱/kg` |
+| Actual Fed Price · Resiko Cost · Resiko Loss | the same, plus `ARRV WT kg · RESIKO kg · RESIKO LOSS % · ACTUAL PRICE ₱/kg · RESIKO PRICE ₱/kg` |
+
+**FED WT is the campaign's own `campaignFedKg`, never the block's all-time total** — 78 of 523
+blocks were fed by more than one campaign, so an all-time figure would credit this campaign with
+kilos another one ate; the GROUP table uses `groupFedKg` over one row per DISTINCT block.
+**RESIKO is null on an open block and the BALANCE is shown instead, muted** (`title` *"still in
+the pile"*), and **RESIKO LOSS prints only once the block is closed** — it reads `resikoPct`,
+the published closed-only twin, gated on `isClosed` as well so the two cells can never disagree.
+**A row outside the price set is tinted and says why on hover** (`still open` · `an unpriced
+delivery` · `a sun-drying outflow`); `inPriceSet` is the view's own predicate, read, never
+re-derived. Above the rows is a counts line built from PUBLISHED counts only
+(`4 blocks · 3 closed · 1 open · 1 fully priced · 1 closed but unpriced · 123,500 kg fed inside
+the price set (15.8%)`) and under them a sticky footer of the rollup's own totals — the table
+never counts its own rows and never sums its own cells. Its header and footer are sticky and
+therefore **solid `bg-muted`, never the dialog's glass**.
 
 **THE EOQ ROLLUP — ELEVEN COLUMNS AND A MODAL PER CELL.** `RC Fed · Produced · Yield · Loss ·
 Waste Loss (kg + %) · Fed Price · Actual Fed Price · Resiko Cost · Resiko Loss · PC Cost ·
@@ -469,7 +621,12 @@ own `title` (`RATIO_FOOTER_TITLE`, keyed by column so it cannot land on the wron
 day-expand's waste note was rewritten the same way: it no longer quotes a drift figure, it
 points at WASTE % and says the day's yield and loss are indicative.
 
-**PRICE GATING IS ABSENCE, NOT A BLANK.** `canViewPrices` drops `FED ₱/KG` from the spine's
+**PRICE GATING IS ABSENCE, NOT A BLANK — IN THE MODAL TABLES TOO.** The blocks table drops
+`BLOCK PRICE` / `ACTUAL PRICE` / `RESIKO PRICE` for a viewer without price rights, which is what
+makes the RESIKO LOSS modal (not a ₱ column, so Production keeps it) safe to open at every role.
+*Verified on a price-denied payload: the RESIKO LOSS modal renders nine columns and the document
+contains no `₱` glyph at all — including in the prose, which deliberately writes "NO PESO VALUE"
+so the assertion stays meaningful.* `canViewPrices` drops `FED ₱/KG` from the spine's
 coordinate space (the `left`-offset arithmetic reads the flag) and the **five** ₱ columns from
 the EOQ strip — `Fed Price · Actual Fed Price · Resiko Cost · PC Cost · True PC Cost`, and their
 five modals with them. **RESIKO LOSS is deliberately not one of them** (see above). The server
@@ -504,9 +661,9 @@ go only on NON-frozen lens cells. The last frozen column carries `.frozen-edge`,
 cell carries `.frozen-edge-corner` — one `box-shadow` property, so the two seams are composed
 rather than stacked. Pinning classes go on the CELLS, never on the `<tr>`.
 
-**MOTION.** No row animates and nothing is staggered. The only animation is
-`animate-fade-in` on the expansion band, `animate-fade-up` on the empty state and the dialog's
-own entrance; the campaign switch is an opacity transition on a mounted sheet. The KPI modal is
+**MOTION.** No row animates and nothing is staggered — the expansion band's `animate-fade-in`
+went with the band, because child rows are rows and rows do not animate. The only animation left
+is `animate-fade-up` on the empty state and the dialog's own entrance; the campaign switch is an opacity transition on a mounted sheet. The KPI modal is
 a `Dialog`, which already ships the project's canonical glass
 (`bg-background/95 backdrop-blur-xl supports-[backdrop-filter]:bg-background/80`).
 

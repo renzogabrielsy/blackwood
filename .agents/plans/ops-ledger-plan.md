@@ -234,7 +234,8 @@ from it; the drafts' *ideas* were ported, their *files* were not.
 | `ops-kpi-strip.tsx` | The EOQ table — a row per campaign + the GROUP row, **eleven columns**, every cell a button, every unit pinned left via `components/shared/unit-value`. |
 | `ops-kpi-modal.tsx` | The per-KPI "show me the math" dialog (`KpiDetail`). |
 | `ops-color.ts` | The semantic palette (`TONE`, `CAMPAIGN_ACCENTS`). |
-| `ops-day-detail.tsx` | `OpsShiftCards` + `OpsBlocksUsedTable`. |
+| ~~`ops-day-detail.tsx`~~ | **Deleted 2026-09-15 (round 3)** — a day expands into child rows now. |
+| `ops-blocks-table.tsx` | The BLOCKS USED table behind the FED PRICE / ACTUAL FED PRICE / RESIKO modals (`fed` · `actual` column sets). |
 | `ops-group-picker.tsx` | Selection chips + popover (filter, derived quarter presets, full list). |
 | `ops-lens.ts` | Lens registry (`production` · `grades` · `losses` · `blocks`), `DEFAULT_LENS`, `parseLens`, `quarterPresets()`. |
 | `ops-format.ts` | The renderers. |
@@ -457,3 +458,101 @@ three-campaign fixture (both changeover dates, each in two campaigns) mounted at
   Resiko Loss`, spine drops FED PRICE and the whole PRICE band, **no ₱ glyph in the document**.
 - light AND dark at 1512×950; at 375×812 `document.scrollWidth === innerWidth === 375`, one
   vertical scroller, spine cells `position: static`.
+
+
+---
+
+### 3.8 REFINEMENT PASS 3 (2026-09-15) — Renzo's five notes after round 2
+
+Read on production with JULY + AUGUST + SEPTEMBER 2026. Every change **removes** something.
+
+1. **EVERY COLUMN HEADER IS ONE LINE, UNIT INCLUDED.** *"Can't those sub headers in the columns
+   (where the units are) be stored on the same line as the column title? … For all views in
+   general in this page."* `kg` · `₱/kg` · `h` · `%` now sit on the label's own baseline in
+   muted small type; a block column carries its `block_loc` inline with the batch code the same
+   way; the modal tables are built that way from the start. **The label header row went 40px →
+   26px.** One column had to grow with it — `FED PRICE ₱/kg` clipped by a measured 2px at 96, so
+   `W_FEDPHP` is **102** and the spine is **922px with ₱ / 820 without**. The un-freeze
+   breakpoint did not move (1023px); the rule is unchanged. *Measured after the change: not one
+   header in the spine or in either lens clips.*
+
+2. **THE EOQ CAMPAIGN CELL LOST ITS DATE RANGE.** *"Kind of needless."* It is — the ledger
+   directly beneath states every date, and the campaign BAND row repeats the span. The GROUP row
+   keeps one line (`3 campaigns`), because how many campaigns are in the group is what that row
+   IS and nothing else on screen says it. Label column 170 → 150px.
+
+3. **EXPANDING A DAY INSERTS CHILD ROWS, NOT A PANEL.** *"An identical row in the format of the
+   parent row but ONLY showing the SHIFTS groups… There's no need for those sections above the
+   table with the rc fed breakdown for the day. Child rows should be self explanatory. Too wordy
+   anyway. No reason for the fed table in the dropdown to also be horizontally scrolled."* The
+   whole expansion PANEL is gone — shift cards, the RECORDED WASTE block, the day-grain BLOCKS
+   USED table, and the `sticky left-0` band that carried them — and with them
+   **`ops-day-detail.tsx`** and the day-grain **`blocksUsed`** read/type (the view stays in the
+   database; nothing reads it, because the block table a reader wants is the CAMPAIGN's and a
+   block's all-time fed total cannot be attributed to one campaign). A day opens into **one
+   ordinary `<tr>` per shift, in the same columns**, same frozen treatment, same gridlines.
+   **A shift row leaves blank everything a shift does not own**: `rc_out` has no shift dimension,
+   so FED PRICE / TTL FED / YIELD % / LOSS % are blank rather than repeated or invented. TTL
+   PROD, WASTE, WASTE %, DT HRS, the grade split and the eight streams are published per shift
+   and are printed; the DT HRS `title` carries everything L-051/L-051b stored (reason, MC's own
+   ranges, the ranges the plant ran THROUGH, the shift-length rule), which is what the deleted
+   panel was for. **A day with no shift is not expandable.** Child rows key
+   `campaignKey:date:shiftId` — the round-1 changeover-date lesson, one grain down.
+
+4. **FOUR MODALS BECAME A TABLE, AND NO MODAL OPENS WITH A PARAGRAPH.** *"It should take out the
+   how it is defined entirely… those two KPI pop ups should portray the data in table form so
+   the user can distinguish and get a quick look and a breakdown of why the price is the way it
+   is and what the actual price is and why."* The `HOW IT IS DEFINED` block is deleted from
+   **every** modal (title → one-line formula → inputs → result → the caveats that explain a
+   NULL), and FED PRICE · ACTUAL FED PRICE · RESIKO COST · RESIKO LOSS render the new
+   `ops-blocks-table.tsx` in a `sm:max-w-4xl` dialog:
+   `BATCH · BLOCK LOC · DATE OPEN · DATE CLOSE · STATE · FED WT kg · BLOCK PRICE ₱/kg`, plus
+   `ARRV WT kg · RESIKO kg · RESIKO LOSS % · ACTUAL PRICE ₱/kg · RESIKO PRICE ₱/kg` on the
+   actual-price set. **FED WT is `campaignFedKg` / `groupFedKg`, never the block's all-time
+   total.** RESIKO is null on an open block and the BALANCE shows instead, muted; RESIKO LOSS
+   reads `resikoPct` (the published closed-only twin) gated on `isClosed` as well, so it can
+   never disagree with the kilos beside it. A row outside the price set is tinted and says why
+   (`still open` · `an unpriced delivery` · `a sun-drying outflow`) — `inPriceSet` is read, never
+   re-derived. A counts line above and the rollup's own totals in a sticky footer below: **the
+   table never counts its own rows and never sums its own cells.** Header and footer are sticky,
+   so both are SOLID `bg-muted`, never the dialog's glass.
+
+5. **THE BLOCKS FED LENS GOT ITS FOOTERS.** Now that `campaignFedKg` / `groupFedKg` are
+   published per (campaign|group × block), each block column prints a real per-campaign total and
+   a real group total instead of the *"no total is published for this lens"* note — a LOOKUP,
+   never a fold of the cells. The note survives only for an empty lens's placeholder column, and
+   the rule it states still binds.
+
+**Verification (2026-09-15, round 3).** `npx tsc --noEmit` clean · `npx eslint
+"app/(app)/operations" lib/operations` 0 errors 0 warnings · `npm run build` passes with
+`/operations` emitted · `npx tsx scripts/verify-ops-ledger.ts` static half green. Driven in
+Chromium against a temporary three-campaign fixture (both changeover dates each in two
+campaigns; days with 0/1/2/3 shifts; four blocks per campaign covering closed-and-priced, open,
+closed-but-unpriced and sundry), mounted at `app/dev/table-playground/ops3/` and **deleted
+afterwards** — `git status` carries no trace of it. Measured there:
+
+- header rows **22px + 26px** (was 22 + 40); every header one line
+  (`FED PRICE₱/kg`, `TTL FEDkg`, `DT HRSh`, `3X50kg`, `JAN-26-BLK2D-2A`), **zero clipping**
+  across the spine and all four lenses; spine **922px**.
+- strip rows **34px**, first cell `JULY 2026` with **no date line**, GROUP cell `GROUP ⏎
+  3 campaigns`.
+- **8 chevrons for the 8 days that have shifts**, none on the rest day and none on the day that
+  was fed but filed no shift. Expanding 2026-07-31 inserts **3 rows** reading
+  `↳ Shift M |  |  |  | 13,000 | 1,580 | 12.15% |  |  |  | 0.50 | 9,100 | …` — FED PRICE / TTL
+  FED / YIELD / LOSS / SHIFTS blank, **0 tables inside the ledger**, `document.scrollWidth ===
+  innerWidth`.
+- FED PRICE modal: 7 columns, 4 rows, footer `₱ PAID 35,413,609.20 · RC FED 781,240 kg · PRICED
+  COVERAGE 100.0% · FED PRICE ₱45.33/kg`. ACTUAL FED PRICE modal: 12 columns, the open block
+  showing its balance `42,180` with a blank RESIKO LOSS, the three excluded rows each carrying
+  their own reason, counts line and six-figure footer.
+- blocks lens: per-campaign footers `123,500 · 127,000 · 130,500` and the group footer
+  `247,000 · 254,000 · 261,000` — published `campaignFedKg` / `groupFedKg`, not sums.
+- **exactly ONE element with `scrollHeight > clientHeight`** after a round trip through all four
+  lenses; two `<table>`s; **zero React key warnings and zero console errors**.
+- price-denied payload: strip `CAMPAIGN · RC FED · PRODUCED · YIELD · LOSS · WASTE LOSS ·
+  RESIKO LOSS`, spine drops FED PRICE, the RESIKO LOSS modal's table drops the three ₱ columns,
+  and **`document.body.innerText` contains no `₱` at all** (the one prose mention was reworded to
+  "NO PESO VALUE" precisely so that assertion means something).
+- frozen spine at 1440px (`position: sticky`, `left: 32px`) **on the child rows too**, with an
+  OPAQUE background in dark mode; light AND dark; at 375px `scrollWidth === innerWidth === 375`,
+  one vertical scroller, spine `position: static`.

@@ -7,15 +7,14 @@ import { cn } from '@/lib/utils';
 import {
   WASTE_STREAMS,
   type OpsCampaignRollup,
-  type OpsDayBlockUsed,
   type OpsGroupRollup,
   type OpsLedgerData,
   type OpsLedgerDay,
+  type OpsShift,
 } from '@/lib/operations/types';
 import { campaignAccent, TONE, type OpsTone } from './ops-color';
 import { count, hours, kg, pctFromFraction, php } from './ops-format';
 import type { OpsLensId } from './ops-lens';
-import { OpsBlocksUsedTable, OpsShiftCards } from './ops-day-detail';
 
 // ═════════════════════════════════════════════════════════════════════════════════
 // THE LEDGER — **ONE TABLE, ONE SCROLLBAR** (2026-09-15).
@@ -53,6 +52,27 @@ import { OpsBlocksUsedTable, OpsShiftCards } from './ops-day-detail';
 // WASTE and WASTE % carry no such caveat — a day's swept-up waste and a day's
 // production DO describe the same shift.
 //
+// ── EXPANDING A DAY INSERTS CHILD ROWS, NOT A PANEL (2026-09-15, round 3) ───────
+// Renzo: *"An identical row in the format of the parent row but ONLY showing the
+// SHIFTS groups. So if there's M, E, N in one day, then it should show 3 child rows
+// just summing the totals PER shift accordingly. There's no need for those sections
+// above the table with the rc fed breakdown for the day. Child rows should be self
+// explanatory. Too wordy anyway. No reason for the fed table in the dropdown to also
+// be horizontally scrolled."*
+//
+// So the whole expansion PANEL is gone — the shift cards, the recorded-waste block,
+// the BLOCKS USED table and the `sticky left-0` band that carried them — and with it
+// `ops-day-detail.tsx` and the day-grain `blocksUsed` read. A day now opens into ONE
+// ORDINARY `<tr>` PER SHIFT, in the SAME columns, with the same frozen-column
+// treatment: no inner table, no second set of widths, no second horizontal scroll.
+//
+// **A SHIFT ROW LEAVES BLANK EVERYTHING A SHIFT DOES NOT OWN.** `rc_out` has no shift
+// dimension — feeding is recorded per DATE — so FED PRICE, TTL FED, YIELD % and LOSS %
+// are blank on a child row rather than repeated from the parent or split by some
+// invented rule. What a shift genuinely owns is published per shift and is printed:
+// TTL PROD, WASTE, WASTE %, DT HRS, its grade split and its eight streams. A day with
+// no shift at all is NOT EXPANDABLE — there is nothing to open.
+//
 // ── SIX RULES THIS COMPONENT IS BUILT AROUND ────────────────────────────────────
 //
 //  1. **NOTHING IS COMPUTED HERE.** No `reduce`, no `+`, no ratio on any render path.
@@ -88,14 +108,14 @@ import { OpsBlocksUsedTable, OpsShiftCards } from './ops-day-detail';
 
 const ROW_H = 32; // Excel Standard `h-8`.
 const GROUP_H = 22; // The column-group band — header row 1.
-const HEAD_H = 40; // The column labels — header row 2, sticky at `top: GROUP_H`.
+const HEAD_H = 26; // The column labels — ONE line (label + inline unit), sticky at `top: GROUP_H`.
 const BAND_H = 30;
 const FOOT_H = 34;
 
 const W_EXPAND = 32;
 const W_DATE = 92;
 const W_DAY = 46;
-const W_FEDPHP = 96;
+const W_FEDPHP = 102; // `FED PRICE ₱/kg` on ONE line — measured, it clipped at 96.
 const W_FEDKG = 94;
 const W_PRODKG = 98;
 const W_WASTEKG = 88;
@@ -107,15 +127,15 @@ const W_DTHRS = 80;
 
 const W_GRADE = 92;
 const W_WASTE = 86;
-const W_BLOCK = 128;
+const W_BLOCK = 150; // label + the block loc INLINE — one header line, so it needs the width.
 
 /**
  * Below this the frozen spine would leave no room for the lens.
  *
- * The spine is **916px with ₱ / 820 without** since the four ratio columns replaced
- * DRIFT, so the 767px breakpoint the 692px spine used no longer holds: at 800px the
- * spine alone would eat the whole viewport. The rule is the same one it always was —
- * un-freeze while the spine is within ~10% of the frame — applied to the new width.
+ * The spine is **922px with ₱ / 820 without** (96 → 102 on FED PRICE, so its label and
+ * its inline unit fit on the one header line). The rule is the one it always was —
+ * un-freeze while the spine is within ~10% of the frame — and at 1023px it still
+ * holds, so the breakpoint did not move.
  */
 const NARROW_MQ = '(max-width: 1023px)';
 
@@ -131,6 +151,27 @@ const DAY_RATIO_TITLE =
 
 const mono = (text: string, extra?: string) =>
   text ? <span className={cn('font-mono tabular-nums', extra)}>{text}</span> : null;
+
+/**
+ * EVERYTHING L-051 / L-051b STORED, on the one cell it explains.
+ *
+ * `dtRanges` is MC's own list of stop-and-start times and is what the minutes are
+ * derived FROM; `dtIncidentRanges` is the subset the plant ran THROUGH, which
+ * contributes ZERO minutes and is named anyway so it can never become invisible;
+ * `shiftHrsSource` says which rule set the shift length. String assembly only.
+ */
+function downtimeTitle(s: OpsShift): string | undefined {
+  const parts: string[] = [];
+  if (s.shiftHrs !== null) {
+    parts.push(`Shift ${hours(s.shiftHrs)} h${s.shiftHrsSource ? ` (${s.shiftHrsSource})` : ''}`);
+  }
+  if (s.dtReason) parts.push(s.dtReason);
+  if (s.dtRanges) parts.push(`ranges ${s.dtRanges}`);
+  if (s.hasIncident && s.dtIncidentRanges) {
+    parts.push(`ran through ${s.dtIncidentRanges} — zero downtime minutes`);
+  }
+  return parts.length > 0 ? parts.join(' · ') : undefined;
+}
 
 // ─── THE SPINE ───────────────────────────────────────────────────────────────────
 
@@ -149,6 +190,11 @@ interface SpineCol {
   /** The chevron column — rendered by the row, not by `day()`. */
   expand?: boolean;
   day(d: OpsLedgerDay): React.ReactNode;
+  /**
+   * THE CHILD ROW. Absent means the column is BLANK on a shift row, and that is a
+   * statement: a shift does not own that figure. Never a fallback to the day's.
+   */
+  shift?(s: OpsShift): React.ReactNode;
   campaign(c: OpsCampaignRollup): React.ReactNode;
   /** The sticky bottom row: the GROUP when several campaigns are picked, else the one. */
   total(g: OpsGroupRollup | null, single: OpsCampaignRollup | null): React.ReactNode;
@@ -173,6 +219,13 @@ const SPINE: SpineCol[] = [
     tone: 'day',
     group: 'DAY',
     day: (d) => <span className="font-mono tabular-nums">{d.date}</span>,
+    // The child row announces itself HERE, where the eye already is, rather than in
+    // the SHIFTS column — which stays blank, because a count of one is not news.
+    shift: (s) => (
+      <span className="block truncate pl-2 font-mono text-[11px] text-muted-foreground">
+        ↳ Shift {s.shift || '—'}
+      </span>
+    ),
     campaign: (c) => (
       <span className="text-[10px] font-semibold uppercase tracking-wide">{c.productionBatch}</span>
     ),
@@ -241,6 +294,7 @@ const SPINE: SpineCol[] = [
     tone: 'produced',
     group: 'PRODUCED',
     day: (d) => mono(kg(d.producedKg), cn('font-medium', TONE.produced.text)),
+    shift: (s) => mono(kg(s.producedKg), TONE.produced.text),
     campaign: (c) => mono(kg(c.producedKg)),
     total: (g, s) => mono(kg(g ? g.producedKg : (s?.producedKg ?? null))),
   },
@@ -255,6 +309,7 @@ const SPINE: SpineCol[] = [
     tone: 'waste',
     group: 'WASTE',
     day: (d) => mono(kg(d.totalWasteKg), cn('font-medium', TONE.waste.text)),
+    shift: (s) => mono(kg(s.totalWasteKg), TONE.waste.text),
     campaign: (c) => mono(kg(c.wasteKg)),
     total: (g, s) => mono(kg(g ? g.wasteKg : (s?.wasteKg ?? null))),
   },
@@ -268,6 +323,9 @@ const SPINE: SpineCol[] = [
     tone: 'waste',
     group: 'WASTE',
     day: (d) => mono(pctFromFraction(d.wastePct, 2), 'text-muted-foreground'),
+    // THE SAME DENOMINATOR at all three grains — shift, day, campaign — so a child
+    // row, its parent and the EOQ cell are one definition, computed in SQL each time.
+    shift: (s) => mono(pctFromFraction(s.wastePct, 2), 'text-muted-foreground'),
     campaign: (c) => mono(pctFromFraction(c.wasteLossPct, 2)),
     total: (g, s) => mono(pctFromFraction(g ? g.wasteLossPct : (s?.wasteLossPct ?? null), 2)),
   },
@@ -321,6 +379,22 @@ const SPINE: SpineCol[] = [
           ? 'text-amber-700 dark:text-amber-400'
           : 'text-muted-foreground',
       ),
+    // L-051 / L-051b ride in the `title`: MC's own list of stop-and-start times, the
+    // ranges the plant ran THROUGH (zero minutes, never invisible) and which rule set
+    // the shift length. The panel that used to print them is gone; the facts are not.
+    shift: (s) => (
+      <span
+        className={cn(
+          'font-mono tabular-nums',
+          s.downtimeHours !== null && s.downtimeHours > 0
+            ? 'text-amber-700 dark:text-amber-400'
+            : 'text-muted-foreground',
+        )}
+        title={downtimeTitle(s)}
+      >
+        {hours(s.downtimeHours)}
+      </span>
+    ),
     campaign: (c) => mono(hours(c.downtimeHours)),
     total: (g, s) => mono(hours(g ? g.downtimeHours : (s?.downtimeHours ?? null))),
   },
@@ -364,6 +438,8 @@ interface LensColumn {
   /** Rendered as a batch-code button in the header — the RC Movement gesture. */
   block?: { batchId: string; batchCode: string; blockLoc: string | null };
   value(day: OpsLedgerDay): React.ReactNode;
+  /** The child row. Absent = blank on a shift row — see the header note. */
+  shiftValue?(shift: OpsShift): React.ReactNode;
   /**
    * Whether the PAYLOAD publishes a per-campaign total for this column.
    *
@@ -393,6 +469,9 @@ function gradeColumns(data: OpsLedgerData): LensColumn[] {
     tone: 'produced' as const,
     group: 'GRADES',
     value: (d) => mono(kg(d.producedByGrade[g] ?? null), TONE.produced.text),
+    // The SHIFT's own grade split, summed in SQL over its runs. A MISSING key means
+    // that grade did not run in that shift — never 0.
+    shiftValue: (s) => mono(kg(s.gradeKg[g] ?? null), 'text-muted-foreground'),
     hasCampaignTotal: true,
     // No GROUP grade total is published — `gradesByCampaign` is per campaign. With
     // exactly one campaign in view the two grains are the same published row, so the
@@ -419,6 +498,7 @@ function wasteColumns(data: OpsLedgerData): LensColumn[] {
     // value columns stay on the neutral token so a losses lens is not a wall of
     // red. Colour says WHAT KIND of number this is, never how big it is.
     value: (d) => mono(kg(d.waste[w.key]), 'text-muted-foreground'),
+    shiftValue: (s) => mono(kg(s.waste[w.key]), 'text-muted-foreground'),
     hasCampaignTotal: true,
     hasGroupTotal: data.group !== null,
     campaignTotal: (ck) => mono(kg(byKey.get(ck)?.waste[w.key] ?? null), 'font-semibold'),
@@ -437,6 +517,20 @@ function blockColumns(data: OpsLedgerData): LensColumn[] {
       }
     }
   }
+
+  // ── THIS LENS NOW HAS FOOTERS (2026-09-15, round 3) ──────────────────────────
+  // `OpsCampaign.blocks[].campaignFedKg` is the kilograms THIS campaign drew from
+  // that block, and `OpsGroupRollup.blocks[].groupFedKg` the group's — both published
+  // per (campaign|group × block) in SQL, both proven to sum to the rollup's own
+  // `fedKg`. So the footer prints a real total where it used to print *"no total is
+  // published for this lens"*. It is a LOOKUP, not a fold of the cells above it.
+  const blocksByCampaign = new Map(data.campaigns.map((c) => [c.key, c.blocks]));
+  const soleKey = data.rollups.length === 1 ? data.rollups[0].campaignKey : null;
+  const campaignFed = (campaignKey: string, batchId: string) =>
+    blocksByCampaign.get(campaignKey)?.find((b) => b.batchId === batchId)?.campaignFedKg ?? null;
+  const groupFed = (batchId: string) =>
+    data.group?.blocks.find((b) => b.batchId === batchId)?.groupFedKg ?? null;
+
   return [...seen.entries()].map(([batchId, meta]) => ({
     key: `blk:${batchId}`,
     label: meta.batchCode,
@@ -449,10 +543,13 @@ function blockColumns(data: OpsLedgerData): LensColumn[] {
       const cell = d.blocksFed.find((x) => x.batchId === batchId);
       return cell ? mono(kg(cell.fedKg), TONE.fed.text) : null;
     },
-    hasCampaignTotal: false,
-    hasGroupTotal: false,
-    campaignTotal: () => null,
-    groupTotal: () => null,
+    // Feeding has no shift dimension — `rc_out` is recorded per DATE — so a block
+    // column is BLANK on a child row rather than split by an invented rule.
+    hasCampaignTotal: true,
+    hasGroupTotal: soleKey !== null || data.group !== null,
+    campaignTotal: (ck) => mono(kg(campaignFed(ck, batchId)), 'font-semibold'),
+    groupTotal: () =>
+      mono(kg(soleKey ? campaignFed(soleKey, batchId) : groupFed(batchId)), 'font-semibold'),
   }));
 }
 
@@ -481,10 +578,12 @@ const PLACEHOLDER_COL: LensColumn = {
 /**
  * WHY A LENS FOOTER CAN BE EMPTY, said once rather than left blank.
  *
- * The per-block columns have no campaign-level or group-level total in the data
- * layer. Summing the visible cells to fill the gap is precisely the re-derivation
- * plan §2.7 rule 1 forbids — a second definition of a figure, computed in a
- * component, that nothing checks.
+ * Since 2026-09-15 (round 3) every lens DOES publish totals — grades from
+ * `gradesByCampaign`, the eight streams from `rollups[].waste` / `group.waste`, and
+ * the blocks lens from `campaign.blocks[].campaignFedKg` / `group.blocks[].groupFedKg`
+ * — so this note survives only for the placeholder column of an EMPTY lens. It is kept
+ * rather than deleted because the rule it states still binds: summing the visible
+ * cells to fill a gap is exactly the re-derivation plan §2.7 rule 1 forbids.
  */
 const NO_TOTAL_NOTE =
   'No campaign or group total is published for this lens — the totals that ARE published are in the rollup above.';
@@ -612,11 +711,6 @@ export function OpsLedgerTable({ data, lens, onOpenBlock, className }: OpsLedger
   }, []);
   const frozen = !narrow;
 
-  const openBlockFromUsed = React.useCallback(
-    (b: OpsDayBlockUsed) => onOpenBlock(b.batchId, b.batchCode, b.blockLoc),
-    [onOpenBlock],
-  );
-
   if (data.days.length === 0) {
     return (
       <div
@@ -708,24 +802,25 @@ export function OpsLedgerTable({ data, lens, onOpenBlock, className }: OpsLedger
                   title={c.title}
                   style={frozen ? { top: GROUP_H, left: spineLefts[i] } : { top: GROUP_H }}
                   className={cn(
-                    'border-b border-border px-2 py-1 align-bottom',
+                    'border-b border-border px-2 py-1 align-middle',
                     frozen ? 'frozen-corner' : 'frozen-row',
                     TONE[c.tone].head,
                     c.right ? 'text-right' : 'text-left',
                     frozen && i === lastSpine ? 'frozen-edge' : 'border-r border-border',
                   )}
                 >
+                  {/* ONE LINE — the unit sits on the label's own baseline (Renzo,
+                      2026-09-15 round 3: *"can't those sub headers in the columns
+                      (where the units are) be stored on the same line as the column
+                      title… for all views in general in this page"*). The header row
+                      went 40px → 26px, which is two more ledger rows on screen. */}
                   {c.label ? (
-                    <>
-                      <span className="block truncate text-[10px] font-semibold uppercase tracking-wide">
-                        {c.label}
-                      </span>
+                    <span className="block truncate text-[10px] font-semibold uppercase tracking-wide">
+                      {c.label}
                       {c.sub ? (
-                        <span className="block truncate text-[9px] font-normal normal-case opacity-70">
-                          {c.sub}
-                        </span>
+                        <span className="ml-1 font-normal normal-case opacity-70">{c.sub}</span>
                       ) : null}
-                    </>
+                    </span>
                   ) : null}
                 </th>
               ))}
@@ -739,33 +834,32 @@ export function OpsLedgerTable({ data, lens, onOpenBlock, className }: OpsLedger
                   }
                   style={{ top: GROUP_H }}
                   className={cn(
-                    'frozen-row border-b border-r border-border px-2 py-1 text-right align-bottom',
+                    'frozen-row border-b border-r border-border px-2 py-1 text-right align-middle',
                     TONE[c.tone].head,
                   )}
                 >
                   {c.block ? (
                     // NO SORT / FILTER CHROME on a block column — the header IS the
                     // affordance, and it opens that block, exactly as an RC Movement
-                    // column header does.
+                    // column header does. The block loc rides INLINE with the code, on
+                    // the one header line every column now gets.
                     <button
                       type="button"
                       onClick={() => onOpenBlock(c.block!.batchId, c.block!.batchCode, c.block!.blockLoc)}
                       className="block w-full text-right underline-offset-2 transition-colors duration-150 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                     >
-                      <span className="block truncate font-mono text-[11px] font-semibold">{c.label}</span>
-                      <span className="block truncate text-[9px] font-normal opacity-70">{c.sub}</span>
+                      <span className="block truncate font-mono text-[11px] font-semibold">
+                        {c.label}
+                        <span className="ml-1 font-normal opacity-70">{c.sub}</span>
+                      </span>
                     </button>
                   ) : (
-                    <>
-                      <span className="block truncate text-[10px] font-semibold uppercase tracking-wide">
-                        {c.label}
-                      </span>
+                    <span className="block truncate text-[10px] font-semibold uppercase tracking-wide">
+                      {c.label}
                       {c.sub ? (
-                        <span className="block truncate text-[9px] font-normal normal-case opacity-70">
-                          {c.sub}
-                        </span>
+                        <span className="ml-1 font-normal normal-case opacity-70">{c.sub}</span>
                       ) : null}
-                    </>
+                    </span>
                   )}
                 </th>
               ))}
@@ -854,7 +948,11 @@ export function OpsLedgerTable({ data, lens, onOpenBlock, className }: OpsLedger
 
               // ── A DAY ────────────────────────────────────────────────────────
               const d = r.day;
-              const open = expanded === r.rowKey;
+              // A DAY WITH NO SHIFT IS NOT EXPANDABLE. The expansion IS the shifts;
+              // a rest day (or a day the plant was fed but filed no shift) would open
+              // into nothing, so it gets no chevron rather than an empty disclosure.
+              const expandable = d.shifts.length > 0;
+              const open = expandable && expanded === r.rowKey;
               const frozenBg = open ? 'bg-accent' : d.isRestDay ? 'bg-muted' : 'bg-background';
               return (
                 <React.Fragment key={r.rowKey}>
@@ -883,19 +981,21 @@ export function OpsLedgerTable({ data, lens, onOpenBlock, className }: OpsLedger
                         )}
                       >
                         {col.expand ? (
-                          <button
-                            type="button"
-                            aria-expanded={open}
-                            aria-label={`${open ? 'Collapse' : 'Expand'} ${d.date} (${d.campaignLabel})`}
-                            onClick={() => toggle(r.rowKey)}
-                            className="flex size-5 items-center justify-center rounded text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                          >
-                            {open ? (
-                              <ChevronDown className="size-3.5" />
-                            ) : (
-                              <ChevronRight className="size-3.5" />
-                            )}
-                          </button>
+                          expandable ? (
+                            <button
+                              type="button"
+                              aria-expanded={open}
+                              aria-label={`${open ? 'Collapse' : 'Expand'} ${d.date} (${d.campaignLabel}) — ${d.shifts.length} shift${d.shifts.length === 1 ? '' : 's'}`}
+                              onClick={() => toggle(r.rowKey)}
+                              className="flex size-5 items-center justify-center rounded text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                            >
+                              {open ? (
+                                <ChevronDown className="size-3.5" />
+                              ) : (
+                                <ChevronRight className="size-3.5" />
+                              )}
+                            </button>
+                          ) : null
                         ) : (
                           col.day(d)
                         )}
@@ -925,27 +1025,53 @@ export function OpsLedgerTable({ data, lens, onOpenBlock, className }: OpsLedger
                     />
                   </tr>
 
-                  {open ? (
-                    <tr>
-                      <td colSpan={totalCols} className="border-b border-border bg-muted/30 p-0">
-                        {/* STICKY LEFT and BOUNDED: under the blocks lens the table
-                            can be thousands of pixels wide, so a full-width band
-                            would spread the panel across several screens of
-                            horizontal scroll. Its HEIGHT is now natural — the fixed
-                            320px the split needed existed only to keep two panes
-                            row-aligned, and there is one pane now. */}
-                        <div
-                          className="animate-fade-in sticky left-0 p-3"
-                          style={{ width: 'min(1000px, calc(100vw - 2rem))' }}
+                  {open
+                    ? d.shifts.map((sh) => (
+                        // ONE ORDINARY ROW PER SHIFT, in the SAME columns as its
+                        // parent — no inner table, no second set of widths, and no
+                        // second horizontal scroll. Keyed `campaignKey:date:shift`
+                        // for the same reason the parent is keyed `campaignKey:date`:
+                        // a changeover date belongs to two campaigns.
+                        <tr
+                          key={`${r.rowKey}:${sh.shiftId}`}
+                          className="group/shift transition-all duration-150"
+                          style={{ height: ROW_H }}
                         >
-                          <OpsShiftCards day={d} />
-                          <div className="mt-3">
-                            <OpsBlocksUsedTable day={d} onOpenBlock={openBlockFromUsed} />
-                          </div>
-                        </div>
-                      </td>
-                    </tr>
-                  ) : null}
+                          {spineCols.map((col, i) => (
+                            <td
+                              key={col.key}
+                              style={frozen ? { left: spineLefts[i] } : undefined}
+                              className={cn(
+                                // OPAQUE, like every frozen cell — the child row's
+                                // "indent" is a solid `bg-muted`, never an alpha.
+                                'border-b border-border/60 bg-muted px-2 py-1',
+                                'group-hover/shift:bg-accent',
+                                frozen && 'frozen-col',
+                                col.right ? 'text-right' : 'text-left',
+                                col.expand && 'text-center',
+                                frozen && i === lastSpine
+                                  ? 'frozen-edge'
+                                  : 'border-r border-border/60',
+                              )}
+                            >
+                              {col.expand ? null : col.shift ? col.shift(sh) : null}
+                            </td>
+                          ))}
+                          {lensCols.map((col) => (
+                            <td
+                              key={col.key}
+                              className={cn(
+                                'border-b border-r border-border/60 bg-muted/50 px-2 py-1 text-right',
+                                'group-hover/shift:bg-accent/50',
+                              )}
+                            >
+                              {col.shiftValue ? col.shiftValue(sh) : null}
+                            </td>
+                          ))}
+                          <td className="border-b border-border/60 bg-muted/50 group-hover/shift:bg-accent/50" />
+                        </tr>
+                      ))
+                    : null}
                 </React.Fragment>
               );
             })}
