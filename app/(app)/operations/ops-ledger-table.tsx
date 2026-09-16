@@ -13,6 +13,7 @@ import {
   type OpsShift,
 } from '@/lib/operations/types';
 import { campaignAccent, TONE, type OpsTone } from './ops-color';
+import { OpsFedDaySheet } from './ops-fed-day-sheet';
 import { count, hours, kg, pctFromFraction, php } from './ops-format';
 import type { OpsLensId } from './ops-lens';
 
@@ -153,6 +154,16 @@ const mono = (text: string, extra?: string) =>
   text ? <span className={cn('font-mono tabular-nums', extra)}>{text}</span> : null;
 
 /**
+ * IS THERE ANYTHING TO OPEN BEHIND THIS DAY'S FED CELL?
+ *
+ * A day that fed nothing has no blend (the view publishes one row per day with
+ * `fed_kg > 0`) and no block rows, so it gets no button rather than a disclosure
+ * that opens into an empty panel — the same rule the expand chevron already
+ * follows for a day with no shift.
+ */
+const fedOpenable = (d: OpsLedgerDay) => d.fedBlend !== null || d.blocksFed.length > 0;
+
+/**
  * EVERYTHING L-051 / L-051b STORED, on the one cell it explains.
  *
  * `dtRanges` is MC's own list of stop-and-start times and is what the minutes are
@@ -189,6 +200,15 @@ interface SpineCol {
   price?: boolean;
   /** The chevron column — rendered by the row, not by `day()`. */
   expand?: boolean;
+  /**
+   * THE FED CELL — a BUTTON on a day that fed, opening the day's sidebar
+   * (2026-09-16). Renzo: *"Per cell in the Fed column, it should be clickable like
+   * the KPI and once clicked show a table of the blocks that were fed on that
+   * day, like a sidebar."* The row renders the button around `day()`, so the cell
+   * keeps exactly the figure and the colour it already had; a rest day (and any
+   * day that fed nothing) gets no button rather than a dead affordance.
+   */
+  fedCell?: boolean;
   day(d: OpsLedgerDay): React.ReactNode;
   /**
    * THE CHILD ROW. Absent means the column is BLANK on a shift row, and that is a
@@ -277,10 +297,12 @@ const SPINE: SpineCol[] = [
     key: 'fedkg',
     label: 'Ttl fed',
     sub: 'kg',
+    title: 'Click a day to open the blocks it drew from and the projected profile of what was fed.',
     right: true,
     width: W_FEDKG,
     tone: 'fed',
     group: 'FED',
+    fedCell: true,
     day: (d) => mono(kg(d.fedKg), cn('font-medium', TONE.fed.text)),
     campaign: (c) => mono(kg(c.fedKg)),
     total: (g, s) => mono(kg(g ? g.fedKg : (s?.fedKg ?? null))),
@@ -689,6 +711,12 @@ export function OpsLedgerTable({ data, lens, onOpenBlock, className }: OpsLedger
 
   const rows = React.useMemo(() => buildRows(data, multi), [data, multi]);
 
+  // THE FED-CELL SIDEBAR (2026-09-16). Local state, not the URL — it is a
+  // disclosure inside ONE reading of one payload, the same category as the expanded
+  // day and the block drawer; putting it in the address would re-run the server on
+  // every click to change nothing the server computes.
+  const [fedDay, setFedDay] = React.useState<OpsLedgerDay | null>(null);
+
   // The expanded day is keyed `campaignKey:date` — see rule 3 in the header.
   const [expanded, setExpanded] = React.useState<string | null>(null);
   const toggle = React.useCallback((rowKey: string) => {
@@ -996,6 +1024,20 @@ export function OpsLedgerTable({ data, lens, onOpenBlock, className }: OpsLedger
                               )}
                             </button>
                           ) : null
+                        ) : col.fedCell && fedOpenable(d) ? (
+                          // THE FED CELL IS A BUTTON — the same affordance idiom as
+                          // an EOQ strip cell: full-width hit area, real button
+                          // semantics, a visible focus ring, and the figure itself
+                          // unchanged inside it.
+                          <button
+                            type="button"
+                            aria-haspopup="dialog"
+                            title={`${d.date} · ${d.campaignLabel} — open the blocks fed and the projected profile`}
+                            onClick={() => setFedDay(d)}
+                            className="-mx-1 block w-[calc(100%+0.5rem)] rounded px-1 text-right transition-colors duration-150 hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+                          >
+                            {col.day(d)}
+                          </button>
                         ) : (
                           col.day(d)
                         )}
@@ -1130,6 +1172,10 @@ export function OpsLedgerTable({ data, lens, onOpenBlock, className }: OpsLedger
           </tfoot>
         </table>
       </div>
+
+      {/* THE FED-CELL SIDEBAR. Outside the scroll container, because it is a
+          viewport-anchored overlay and not part of the ledger's coordinate space. */}
+      <OpsFedDaySheet day={fedDay} onClose={() => setFedDay(null)} onOpenBlock={onOpenBlock} />
     </div>
   );
 }

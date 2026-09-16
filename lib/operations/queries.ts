@@ -36,6 +36,7 @@ import type {
   OpsCampaignOption,
   OpsCampaignRollup,
   OpsDayBlockFeed,
+  OpsFedBlend,
   OpsGroupBlock,
   OpsGroupRollup,
   OpsLedgerData,
@@ -94,36 +95,55 @@ function orderGrades(present: Iterable<string>): string[] {
 // ---------------------------------------------------------------------
 
 /**
- * Campaign options for the picker, from `view_rc_movement_campaign_options` —
- * THE SAME source `/inventory/rc-movement` drives its picker from, filtered the
- * same way (`campaign_year >= 2025`; the 2024 rows are one-feeding legacy
- * artefacts) and ordered the same way (newest first). Reusing it is what makes
- * the two screens offer identical campaigns.
+ * Campaign options for the picker, from **`view_ops_ledger_campaign_span`** —
+ * the ledger's own spine, 32 rows, newest first.
+ *
+ * ⚠ IT IS NO LONGER `view_rc_movement_campaign_options` (2026-09-16), and the
+ * two pickers now legitimately DIFFER. That view is built from `rc_out`, so a
+ * campaign that has PRODUCED but not yet been FED is missing from it — which is
+ * exactly what SEPTEMBER 2026 was on the day it opened (a shift on 2026-08-29,
+ * three days before its first feed). The ledger draws such a campaign, so its
+ * picker must offer it. The span view unions feeding and production, which is
+ * why it is the right list here and why RC Movement's fed-only list is still the
+ * right one there.
+ *
+ * ⚠ THE QUARTER COMES FROM THE VIEW, NEVER FROM THE NAME. `quarter_key` places
+ * a campaign in the quarter containing the MIDPOINT of its span; the preset
+ * builder groups on it and does no date arithmetic of its own.
+ *
+ * No `campaign_year >= 2025` filter: the ledger shows what exists, and the 2024
+ * one-feeding rows are real campaigns the EOQ tab can legitimately be pointed at.
+ * 32 rows is three orders of magnitude under PostgREST's cap.
  */
 export async function fetchOpsLedgerCampaignOptions(): Promise<OpsCampaignOption[]> {
   const supabase = await createClient();
   const { data, error } = await supabase
-    .from('view_rc_movement_campaign_options')
-    .select('production_batch, campaign_year, feed_days, total_fed, min_date, max_date')
-    .gte('campaign_year', 2025)
-    .order('max_date', { ascending: false });
+    .from('view_ops_ledger_campaign_span')
+    // ONE string literal, not a concatenation: supabase-js infers the row type
+    // from the select LITERAL, and a `+` makes it fall back to GenericStringError.
+    .select('campaign_key, campaign_label, production_batch, campaign_year, feed_days, first_fed_date, last_fed_date, first_date, last_date, quarter_key, quarter_label')
+    .order('first_date', { ascending: false })
+    .order('campaign_key', { ascending: false });
 
   if (error || !data) return [];
 
-  return (data as Row[]).map((r) => {
-    const pb = String(r.production_batch ?? '');
-    const yr = int(r.campaign_year);
-    return {
-      key: `${pb}-${yr}`,
-      label: titleCaseCampaign(`${pb} ${yr}`),
-      productionBatch: pb,
-      campaignYear: yr,
-      feedDays: int(r.feed_days),
-      totalFedKg: int(r.total_fed),
-      minDate: str(r.min_date),
-      maxDate: str(r.max_date),
-    };
-  });
+  return (data as Row[]).map((r) => ({
+    key: String(r.campaign_key),
+    label: titleCaseCampaign(String(r.campaign_label ?? '')),
+    productionBatch: String(r.production_batch ?? ''),
+    campaignYear: int(r.campaign_year),
+    feedDays: int(r.feed_days),
+    // The span view carries no fed TOTAL — it is a calendar spine, not a money
+    // or tonnage view, and the picker only ever used this to sort. The ledger's
+    // own KPI row is where a fed total comes from.
+    totalFedKg: 0,
+    minDate: str(r.first_fed_date),
+    maxDate: str(r.last_fed_date),
+    firstDate: String(r.first_date ?? ''),
+    lastDate: String(r.last_date ?? ''),
+    quarterKey: String(r.quarter_key ?? ''),
+    quarterLabel: String(r.quarter_label ?? ''),
+  }));
 }
 
 // ---------------------------------------------------------------------
@@ -194,7 +214,7 @@ export async function fetchOpsLedger(campaignKeys: string[]): Promise<OpsLedgerD
   // --- the day spine and its lenses, one campaign at a time, in parallel ---
   const perCampaign = await Promise.all(
     resolvedKeys.map(async (key) => {
-      const [days, grades, blocks, shifts, campaignBlocks] = await Promise.all([
+      const [days, grades, blocks, shifts, campaignBlocks, fedBlends] = await Promise.all([
         fetchAllRows<Row>((from, to) =>
           supabase
             .from('view_ops_ledger_day')
@@ -224,8 +244,18 @@ export async function fetchOpsLedger(campaignKeys: string[]): Promise<OpsLedgerD
             .order('batch_code', { ascending: true })
             .range(from, to),
         ).catch(() => [] as Row[]),
+        // THE DAY'S PROJECTED FED BLEND (<= ~31 rows/campaign) — the head of the
+        // FED-cell sidebar. Every weighted mean was computed in SQL over the
+        // SAME relation `blocks` above comes from.
+        fetchAllRows<Row>((from, to) =>
+          supabase
+            .from('view_ops_ledger_day_fed_blend')
+            .select('*')
+            .eq('campaign_key', key)
+            .range(from, to),
+        ).catch(() => [] as Row[]),
       ]);
-      return { key, days, grades, blocks, shifts, campaignBlocks };
+      return { key, days, grades, blocks, shifts, campaignBlocks, fedBlends };
     }),
   );
 
@@ -251,8 +281,41 @@ export async function fetchOpsLedger(campaignKeys: string[]): Promise<OpsLedgerD
         blockLoc: str(b.block_loc),
         fedKg: num(b.fed_kg),
         sundryKg: num(b.sundry_kg),
+        // The block's delivery-weighted lab profile, computed in SQL. NULL
+        // (never 0) when no delivery into the block carries that stat.
+        mc: num(b.mc),
+        ash: num(b.ash),
+        bdAstm: num(b.bd_astm),
+        bdJis: num(b.bd_jis),
+        grit: num(b.grit),
+        vm: num(b.vm),
+        fc: num(b.fc),
       });
       blockByDate.set(d, list);
+    }
+
+    // THE DAY'S PROJECTED FED BLEND, indexed by date. Mapped only — every
+    // weighted mean and every coverage figure was computed in SQL.
+    const blendByDate = new Map<string, OpsFedBlend>();
+    for (const f of c.fedBlends) {
+      blendByDate.set(String(f.calendar_date), {
+        fedKg: num(f.fed_kg),
+        blocksFedCount: int(f.blocks_fed_count),
+        wMc: num(f.w_mc),
+        mcKg: num(f.mc_kg),
+        wAsh: num(f.w_ash),
+        ashKg: num(f.ash_kg),
+        wBdAstm: num(f.w_bd_astm),
+        bdAstmKg: num(f.bd_astm_kg),
+        wBdJis: num(f.w_bd_jis),
+        bdJisKg: num(f.bd_jis_kg),
+        wGrit: num(f.w_grit),
+        gritKg: num(f.grit_kg),
+        wVm: num(f.w_vm),
+        vmKg: num(f.vm_kg),
+        wFc: num(f.w_fc),
+        fcKg: num(f.fc_kg),
+      });
     }
 
     const shiftByDate = new Map<string, OpsShift[]>();
@@ -336,6 +399,9 @@ export async function fetchOpsLedger(campaignKeys: string[]): Promise<OpsLedgerD
         lossPct: num(r.loss_pct),
         producedByGrade: gradeByDate.get(date) ?? {},
         blocksFed: blockByDate.get(date) ?? [],
+        // null on a day that fed nothing — exactly the days whose FED cell has
+        // nothing to open.
+        fedBlend: blendByDate.get(date) ?? null,
         shifts: shiftByDate.get(date) ?? [],
       });
     }
@@ -466,6 +532,14 @@ export async function fetchOpsLedger(campaignKeys: string[]): Promise<OpsLedgerD
 
     blockResikoKg: num(r.block_resiko_kg),
     blockResikoLossPct: num(r.block_resiko_loss_pct),
+
+    // THE BLOCKS-USED TABLE'S FOOTER, totalled in SQL over the same rows the
+    // modal renders. No ₱ among them, so nothing is gated here.
+    blocksDeliveredKg: num(r.blocks_delivered_kg),
+    blocksClosedDeliveredKg: num(r.blocks_closed_delivered_kg),
+    blocksTotalFedKg: num(r.blocks_total_fed_kg),
+    blocksResikoKg: num(r.blocks_resiko_kg),
+    blocksClosedResikoLossPct: num(r.blocks_closed_resiko_loss_pct),
 
     // WASTE — the eight streams and their total, folded in SQL. No ₱ here, so
     // nothing is gated: the whole waste band is safe for every role.

@@ -9,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { UnitValue } from '@/components/shared/unit-value';
 import { cn } from '@/lib/utils';
 import { TONE, type OpsTone } from './ops-color';
 import {
@@ -75,6 +76,16 @@ export interface KpiInput {
   note?: string;
 }
 
+/** One tile of the result bar. `glyph` empty renders the number alone. */
+export interface KpiResultTile {
+  label: string;
+  /** The unit, pinned LEFT by `UnitValue` — `%` · `₱/kg` · `t`. */
+  glyph: string;
+  /** The formatted number, WITHOUT its unit. Empty renders an em-dash. */
+  value: string;
+  tone: OpsTone;
+}
+
 export interface KpiDetail {
   /** `JULY 2026 · YIELD`. */
   title: string;
@@ -101,11 +112,29 @@ export interface KpiDetail {
    */
   contentWidth?: number;
   /**
-   * The result bar. OPTIONAL — a modal whose table already states every figure
-   * (PRODUCTION, which is four columns of results) has no single "the answer",
-   * and inventing one would mean picking which of the four is the headline.
+   * THE RESULT BAR — ONE TILE PER FIGURE (2026-09-16).
+   *
+   * Renzo, on the PRODUCTION modal's combined `YIELD · LOSS · WASTE %` line: *"It
+   * seems weird keeping them the same colour."* It was — three figures from three
+   * different families printed as one string in one hue, which says they are one
+   * number. They are three tiles now, each in its own family colour (emerald
+   * YIELD · amber LOSS · rose WASTE), each with its label and its unit pinned
+   * LEFT and its value large. A modal with ONE result keeps one tile, drawn the
+   * same way, so the two shapes are one component and not two.
+   *
+   * OPTIONAL — a modal whose table already states every figure has no single "the
+   * answer", and inventing one would mean picking which of them is the headline.
    */
-  result?: { label: string; value: string };
+  results?: KpiResultTile[];
+  /**
+   * A control that rides in the header, right of the title — today the PRINT
+   * button (FED PRICE) or the per-campaign print MENU (the group's).
+   *
+   * It is a NODE, not a spec, for the same reason {@link table} is: this module
+   * stays a shell, and `ops-print-sheet.tsx` can keep importing
+   * {@link KpiResultTile} from here without a cycle back into it.
+   */
+  actions?: React.ReactNode;
   /** Coverage, caveats, and the reason a NULL is a NULL. */
   notes?: string[];
 }
@@ -129,15 +158,24 @@ export function OpsKpiModal({ detail, onClose }: OpsKpiModalProps) {
       <DialogContent className={OPS_MODAL_CONTENT} style={width}>
         {detail ? (
           <>
-            <DialogHeader className="shrink-0 pr-8">
-              <DialogTitle className="flex items-center gap-2 text-sm">
-                <span className={cn('size-2 shrink-0 rounded-full', tone.dot)} />
-                {detail.title}
-              </DialogTitle>
-              <DialogDescription className="font-mono text-[11px] tabular-nums">
-                {detail.subtitle}
-              </DialogDescription>
-            </DialogHeader>
+            <div className="flex shrink-0 items-start gap-3 pr-8">
+              <DialogHeader className="min-w-0 flex-1">
+                <DialogTitle className="flex items-center gap-2 text-sm">
+                  <span className={cn('size-2 shrink-0 rounded-full', tone.dot)} />
+                  {detail.title}
+                </DialogTitle>
+                <DialogDescription className="font-mono text-[11px] tabular-nums">
+                  {detail.subtitle}
+                </DialogDescription>
+              </DialogHeader>
+              {/* `data-print-hide` so the control can never print itself — it is
+                  inside the dialog, which becomes a print ANCESTOR of the stage. */}
+              {detail.actions ? (
+                <div data-print-hide className="flex shrink-0 items-center gap-2">
+                  {detail.actions}
+                </div>
+              ) : null}
+            </div>
 
             {/* ── The definition, in ONE line. PINNED. ───────────────────────── */}
             <p className={cn('shrink-0 font-mono text-[11px] tabular-nums', tone.text)}>
@@ -184,20 +222,35 @@ export function OpsKpiModal({ detail, onClose }: OpsKpiModalProps) {
               )}
             </div>
 
-            {/* ── The result. PINNED. ───────────────────────────────────────── */}
-            {detail.result ? (
-              <section
-                className={cn(
-                  'flex shrink-0 items-baseline justify-between gap-3 rounded-md px-2.5 py-2',
-                  tone.head,
-                )}
-              >
-                <span className="text-[10px] font-semibold uppercase tracking-wide">
-                  {detail.result.label}
-                </span>
-                <span className="font-mono text-base font-semibold tabular-nums">
-                  {detail.result.value || '—'}
-                </span>
+            {/* ── The result. PINNED. ONE TILE PER FIGURE. ──────────────────── */}
+            {detail.results && detail.results.length > 0 ? (
+              <section className="flex shrink-0 flex-wrap gap-2">
+                {detail.results.map((t) => (
+                  <div
+                    key={t.label}
+                    className={cn(
+                      // OPAQUE `head` steps — the palette's solid values, so a tile
+                      // reads the same on any ground and in either theme.
+                      'min-w-[128px] flex-1 rounded-md px-2.5 py-2',
+                      TONE[t.tone].head,
+                    )}
+                  >
+                    <span className="block truncate text-[10px] font-semibold uppercase tracking-wide">
+                      {t.label}
+                    </span>
+                    {/* UNIT LEFT, DIGITS RIGHT — the platform component, so the
+                        tiles cannot drift from the EOQ strip's own cells. An
+                        ABSENT figure drops the glyph with the number. */}
+                    <UnitValue
+                      glyph={t.value ? t.glyph : ''}
+                      className="leading-tight"
+                      glyphClassName="text-[length:var(--bw-fs-11)] opacity-80"
+                      valueClassName="font-mono text-base font-semibold tabular-nums"
+                    >
+                      {t.value || '—'}
+                    </UnitValue>
+                  </div>
+                ))}
               </section>
             ) : null}
 

@@ -72,6 +72,19 @@ export function pctFromPercent(pct: number | null | undefined, dp = 1): string {
   return `${pct.toFixed(dp)}%`;
 }
 
+/**
+ * A LAB READING at a fixed precision — 2 dp for MC / ASH / GRIT / VM / FC, 3 dp
+ * for BD ASTM / BD JIS (CLAUDE.md → "Lab results").
+ *
+ * NULL renders BLANK, never `0.00`: 53 of the 525 blocks a campaign has ever fed
+ * carry no lab reading at all, and a printed zero would read as "0 % moisture"
+ * rather than "not measured" — the L-008 placeholder mistake in a new costume.
+ */
+export function lab(n: number | null | undefined, dp: number): string {
+  if (n === null || n === undefined) return '';
+  return n.toFixed(dp);
+}
+
 /** Hours, 2 dp. A genuine 0.00 PRINTS — an hour count of zero is a claim, not a blank. */
 export function hours(n: number | null | undefined): string {
   if (n === null || n === undefined) return '';

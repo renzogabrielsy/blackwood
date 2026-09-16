@@ -152,6 +152,9 @@ export function OperationsView({ data, options, selected, lens }: OperationsView
           <OpsGroupPicker
             options={options}
             selected={selected}
+            // The chips' tonnage — a LOOKUP into the payload that was actually
+            // resolved. The option list is the calendar SPAN view and carries none.
+            rollups={data.rollups}
             onChange={(next) => writeParams({ campaigns: next })}
             disabled={isPending}
           />

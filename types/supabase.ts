@@ -4384,10 +4384,15 @@ export type Database = {
           block_resiko_kg: number | null
           block_resiko_loss_pct: number | null
           blocks_closed: number | null
+          blocks_closed_delivered_kg: number | null
+          blocks_closed_resiko_loss_pct: number | null
           blocks_closed_unpriced: number | null
+          blocks_delivered_kg: number | null
           blocks_fed: number | null
           blocks_in_price: number | null
           blocks_open: number | null
+          blocks_resiko_kg: number | null
+          blocks_total_fed_kg: number | null
           blocks_with_sundry: number | null
           campaign_fed_kg_excluded: number | null
           campaign_fed_kg_included: number | null
@@ -4462,7 +4467,12 @@ export type Database = {
           last_date: string | null
           last_fed_date: string | null
           last_shift_date: string | null
+          midpoint_date: string | null
           production_batch: string | null
+          quarter_key: string | null
+          quarter_label: string | null
+          quarter_no: number | null
+          quarter_year: number | null
           shift_count: number | null
           span_days: number | null
         }
@@ -4513,15 +4523,22 @@ export type Database = {
       }
       view_ops_ledger_day_block: {
         Row: {
+          ash: number | null
           batch_code: string | null
           batch_id: string | null
+          bd_astm: number | null
+          bd_jis: number | null
           block_loc: string | null
           calendar_date: string | null
           campaign_key: string | null
           campaign_year: number | null
+          fc: number | null
           fed_kg: number | null
+          grit: number | null
+          mc: number | null
           production_batch: string | null
           sundry_kg: number | null
+          vm: number | null
         }
         Relationships: [
           {
@@ -4655,6 +4672,31 @@ export type Database = {
             referencedColumns: ["batch_id"]
           },
         ]
+      }
+      view_ops_ledger_day_fed_blend: {
+        Row: {
+          ash_kg: number | null
+          bd_astm_kg: number | null
+          bd_jis_kg: number | null
+          blocks_fed_count: number | null
+          calendar_date: string | null
+          campaign_key: string | null
+          campaign_year: number | null
+          fc_kg: number | null
+          fed_kg: number | null
+          grit_kg: number | null
+          mc_kg: number | null
+          production_batch: string | null
+          vm_kg: number | null
+          w_ash: number | null
+          w_bd_astm: number | null
+          w_bd_jis: number | null
+          w_fc: number | null
+          w_grit: number | null
+          w_mc: number | null
+          w_vm: number | null
+        }
+        Relationships: []
       }
       view_ops_ledger_day_grade: {
         Row: {
