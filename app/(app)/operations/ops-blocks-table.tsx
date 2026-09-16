@@ -154,35 +154,45 @@ function whyExcluded(r: OpsBlocksRow): string | undefined {
     : 'Outside the price set, so its ACTUAL and RESIKO prices are blank rather than guessed at.';
 }
 
+// ── WIDTHS ARE SIZED TO THE LONGEST HEADER, UNIT INCLUDED (2026-09-16) ──────────
+// Renzo saw `BLOCK PRICE ₱…` and `RESIKO LO…` on a 1080p monitor. TWO separate
+// faults produced that, and both are fixed here: the DIALOG was clamped narrower
+// than the table (see `ops-modal-size.ts`), and these columns were sized for their
+// label ALONE while round 3 had moved the unit onto the same line. A header is
+// `text-[10px] font-semibold uppercase tracking-wide` plus a 4px gap and the unit,
+// inside `px-2` — so the budget is `measured label + gap + unit + 16`, and the
+// numbers below are the measured ones, not estimates.
 const COLS: BlocksCol[] = [
   {
     key: 'batch',
     label: 'Batch',
-    width: 124,
+    // The content, not the header, sets this one: `SEPTEMBER-26-BLK12` is 18 mono
+    // characters at 12px. A batch code is the row's identity and must never elide.
+    width: 152,
     cell: (r) => <span className="block truncate font-mono">{r.batchCode}</span>,
   },
   {
     key: 'loc',
     label: 'Block loc',
-    width: 78,
+    width: 86,
     cell: (r) => <span className="block truncate font-mono">{r.blockLoc ?? '—'}</span>,
   },
   {
     key: 'open',
     label: 'Date open',
-    width: 88,
+    width: 92,
     cell: (r) => num(r.firstFedDate ?? '', 'text-muted-foreground'),
   },
   {
     key: 'close',
     label: 'Date close',
-    width: 88,
+    width: 94,
     cell: (r) => num(r.closeDate ?? '', 'text-muted-foreground'),
   },
   {
     key: 'state',
     label: 'State',
-    width: 78,
+    width: 94,
     cell: (r) => (
       <span
         className={cn(
@@ -198,7 +208,7 @@ const COLS: BlocksCol[] = [
     key: 'fed',
     label: 'Fed wt',
     unit: 'kg',
-    width: 88,
+    width: 98,
     right: true,
     cell: (r) => num(kg(r.fedKg), 'font-medium'),
   },
@@ -207,7 +217,7 @@ const COLS: BlocksCol[] = [
     key: 'arrv',
     label: 'Arrv wt',
     unit: 'kg',
-    width: 88,
+    width: 100,
     right: true,
     wide: true,
     cell: (r) => num(kg(r.deliveredKg), 'text-muted-foreground'),
@@ -216,7 +226,7 @@ const COLS: BlocksCol[] = [
     key: 'resiko',
     label: 'Resiko',
     unit: 'kg',
-    width: 86,
+    width: 98,
     right: true,
     wide: true,
     // TWO FIGURES, NEVER ONE. Closed → resiko. Open → the balance, MUTED, because
@@ -234,7 +244,7 @@ const COLS: BlocksCol[] = [
     key: 'resikopct',
     label: 'Resiko loss',
     unit: '%',
-    width: 84,
+    width: 106,
     right: true,
     wide: true,
     // `resikoPct` is the published CLOSED-ONLY twin of `lossPct`; gating it on
@@ -247,7 +257,7 @@ const COLS: BlocksCol[] = [
     key: 'blockprice',
     label: 'Block price',
     unit: '₱/kg',
-    width: 84,
+    width: 122,
     right: true,
     price: true,
     cell: (r) => num(php(r.deliveredPhpKg)),
@@ -256,7 +266,7 @@ const COLS: BlocksCol[] = [
     key: 'actualprice',
     label: 'Actual price',
     unit: '₱/kg',
-    width: 84,
+    width: 128,
     right: true,
     price: true,
     wide: true,
@@ -266,13 +276,32 @@ const COLS: BlocksCol[] = [
     key: 'resikoprice',
     label: 'Resiko price',
     unit: '₱/kg',
-    width: 84,
+    width: 128,
     right: true,
     price: true,
     wide: true,
     cell: (r) => num(php(r.upliftPhpKg), 'text-muted-foreground'),
   },
 ];
+
+/** The columns a variant actually renders for this viewer. */
+function visibleCols(variant: 'fed' | 'actual', canViewPrices: boolean): BlocksCol[] {
+  return COLS.filter((c) => (variant === 'actual' || !c.wide) && (canViewPrices || !c.price));
+}
+
+/**
+ * THE TABLE'S NATURAL WIDTH — Σ of the declared widths of the columns this viewer
+ * gets. Column-width bookkeeping, i.e. layout, which is the one arithmetic this
+ * screen allows.
+ *
+ * It is exported so the DIALOG can be sized from it (`ops-modal-size.ts`) rather
+ * than from a literal that has to be remembered when a column changes. That is the
+ * whole fix for `BLOCK PRICE ₱…`: the width the dialog asks for and the width the
+ * table needs are now the same expression.
+ */
+export function blocksTableWidth(variant: 'fed' | 'actual', canViewPrices: boolean): number {
+  return visibleCols(variant, canViewPrices).reduce((s, c) => s + c.width, 0);
+}
 
 export interface OpsBlocksTableProps {
   /** `fed` = the seven-column FED PRICE set; `actual` = the twelve-column one. */
@@ -294,12 +323,9 @@ export function OpsBlocksTable({
   totals,
   className,
 }: OpsBlocksTableProps) {
-  const cols = React.useMemo(
-    () => COLS.filter((c) => (variant === 'actual' || !c.wide) && (canViewPrices || !c.price)),
-    [variant, canViewPrices],
-  );
-  // NEVER CRUSH, ALWAYS SCROLL — Σ of every declared width, inside `overflow-x-auto`.
-  const minWidth = cols.reduce((s, c) => s + c.width, 0);
+  const cols = React.useMemo(() => visibleCols(variant, canViewPrices), [variant, canViewPrices]);
+  // NEVER CRUSH, ALWAYS SCROLL — Σ of every declared width, inside `overflow-auto`.
+  const minWidth = blocksTableWidth(variant, canViewPrices);
 
   if (rows.length === 0) {
     return (
@@ -310,10 +336,15 @@ export function OpsBlocksTable({
   }
 
   return (
-    <div className={cn('flex flex-col gap-1.5', className)}>
-      <p className="font-mono text-[10px] tabular-nums text-muted-foreground">{counts}</p>
+    <div className={cn('flex min-h-0 flex-auto flex-col gap-1.5', className)}>
+      <p className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">{counts}</p>
 
-      <div className="max-h-[min(50vh,380px)] overflow-auto rounded-md border border-border">
+      {/* THE ONLY SCROLLER IN THE DIALOG. It used to be capped at
+          `min(50vh,380px)`, which meant a 20-block campaign scrolled inside a
+          modal that was itself scrolling inside a viewport with room to spare.
+          Now it takes whatever height the dialog's 92vh clamp leaves it — see
+          `OPS_MODAL_BODY` for why `flex-auto` and not `flex-1`. */}
+      <div className="min-h-0 flex-auto overflow-auto rounded-md border border-border">
         <table
           className="table-fixed text-xs"
           style={{

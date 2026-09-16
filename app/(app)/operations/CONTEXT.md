@@ -387,8 +387,11 @@ cannot come back unnoticed. Full table in `.agents/plans/ops-ledger-plan.md` §2
 | `operations-view.tsx` | `'use client'` — the CONTROLS. Writes the URL (`router.replace` inside a transition), owns the lens segmented control, the EOQ collapse, the `campaignsMissing` notice and the block detail drawer. |
 | `ops-ledger-table.tsx` | The ledger itself — **ONE table in ONE scroll container**: the frozen left spine, the frozen header band + label row, the sticky group footer, the four lenses' columns and the per-day expansion row. (Replaced `ops-ledger-split.tsx`, deleted 2026-09-15.) |
 | `ops-kpi-strip.tsx` | The `EOQ` tab — one row per campaign plus the GROUP row, **eleven columns**, **every cell a button that opens the math**, every unit pinned LEFT via the platform `UnitValue`. |
-| `ops-kpi-modal.tsx` | That math: `KpiDetail` (the one-line formula, then either the inputs list or a `table`, the result, the caveats) rendered in a `Dialog`. |
-| `ops-blocks-table.tsx` | **The BLOCKS USED table** the FED PRICE / ACTUAL FED PRICE / RESIKO COST / RESIKO LOSS modals render — two column sets (`fed` · `actual`) over one normalised row shape, plus `campaignBlockRows()` / `groupBlockRows()`. |
+| `ops-kpi-modal.tsx` | That math: `KpiDetail` (the one-line formula, then either the inputs list or a `table`, the result, the caveats) rendered in a `Dialog` **sized to its content and clamped to the viewport**. |
+| `ops-modal-size.ts` | **THE ONE definition of how big a modal is** — `opsModalWidth()`, `OPS_MODAL_CONTENT`, `OPS_MODAL_BODY`, `OPS_MODAL_MAX_WIDTH` (1720). No JSX, so both dialog components read it without a cycle. |
+| `ops-blocks-table.tsx` | **The BLOCKS USED table** the FED PRICE / ACTUAL FED PRICE / RESIKO COST / RESIKO LOSS modals render — two column sets (`fed` · `actual`) over one normalised row shape, plus `campaignBlockRows()` / `groupBlockRows()` and **`blocksTableWidth(variant, canViewPrices)`**, the Σ the dialog is sized from. |
+| `ops-production-table.tsx` | **The PRODUCTION breakdown** — the two tables the PRODUCED · YIELD · LOSS · WASTE LOSS family opens: the four figures per campaign (+ GROUP), and the eight waste streams underneath. `productionRowFromCampaign()` / `productionRowFromGroup()` / `productionTablesWidth()`. |
+| `ops-rc-movement-modal.tsx` | **RC FED's modal** — `/inventory/rc-movement`'s Classic matrix, `next/dynamic({ssr:false})`, fetched on demand per campaign with `fetchRcMovementMatrix`, with campaign tabs for a GROUP cell. |
 | ~~`ops-day-detail.tsx`~~ | **DELETED 2026-09-15 (round 3).** A day now expands into ordinary child rows, so the shift cards and the day-grain BLOCKS USED table had no caller left. |
 | `ops-group-picker.tsx` | The GROUP builder — selection chips + a popover holding the full campaign list, a filter box and the derived quarter presets. |
 | `ops-lens.ts` | The lens registry (`production` · `grades` · `losses` · `blocks`), `DEFAULT_LENS`, `parseLens`, and `quarterPresets()` — quarters DERIVED from the option list, never hardcoded. |
@@ -521,6 +524,111 @@ and it is: the ledger directly underneath states every date of every campaign, a
 repeats the span. The **GROUP row keeps one line (`3 campaigns`)**, because how many campaigns
 are in the group is what that row IS and nothing else on screen says it. The label column went
 170 → 150px.
+
+**A MODAL IS SIZED TO WHAT IT HOLDS AND CLAMPED TO THE VIEWPORT (2026-09-16, round 4).**
+Renzo, on a 1080p 24" monitor: *"The modal is causing shrinkage and overflowing of the table
+UIs. The space can be MUCH better utilized considering how much space we have… It should also
+occupy the space that is available so it can be viewed on any device."* `sm:max-w-4xl` is
+**896px** and the ACTUAL FED PRICE table is **1,298px** of columns, so the table scrolled
+sideways inside a dialog with ~900px of monitor empty on either side, and `BLOCK PRICE ₱…` /
+`RESIKO LO…` ellipsised. `ops-modal-size.ts` now owns
+**`width = min(96vw, Σ column widths + 44, 1720px)`** and `max-h-[92vh]`, and **the Σ is never a
+literal** — it comes from `blocksTableWidth(variant, canViewPrices)` / `productionTablesWidth()`,
+so a column that grows widens the dialog with it. Two things had to move with it:
+
+- **THE COLUMN WIDTHS THEMSELVES.** Round 3 put the unit on the label's line and did not re-size
+  the columns for it, so `BLOCK PRICE ₱/kg` clipped at *any* dialog width. The numeric columns
+  are now sized as `measured label + 4px gap + unit + 16px padding`, measured, not estimated:
+  BLOCK/ACTUAL/RESIKO PRICE 84 → **122/128/128**, RESIKO LOSS 84 → **106**, FED/ARRV WT 88 →
+  **98/100**, RESIKO 86 → **98**, BATCH 124 → **152** (a `SEPTEMBER-26-BLK12` is 18 mono
+  characters and a batch code is the row's identity). *Measured at 1920×1080: all 12 columns fit,
+  `scrollWidth === clientWidth === 1298`, zero clipped headers, zero `…`.*
+- **`transition-none` ON THE DIALOG, WHICH IS NOT COSMETIC.** `DialogContent` carries
+  `duration-200` for its entrance, and `transition-property`'s CSS **initial value is `all`** — so
+  with the width now varying per modal, re-opening on a wider table would have ANIMATED a layout
+  property, which CLAUDE.md forbids outright. It does not touch the entrance: `animate-in` reads
+  `--tw-duration`, which `duration-200` sets separately.
+
+The layout is a flex COLUMN: header, formula line, result bar and caveats are **pinned**, and the
+TABLE is the only flexible child and the only scroller. It is **`flex-auto`, never `flex-1`** —
+`flex-1`'s `flex-basis: 0%` makes the child's hypothetical size ZERO, and in a container that is
+only *clamped* at 92vh (never fixed) the container then measures itself as if the child were empty
+and the child collapses. *Measured: a 4-row modal is 494px tall; an 18-row one at 1366×768 is
+exactly 707px = 92vh with only the table scrolling.* `KpiDetail.result` became OPTIONAL in the
+same change, for the PRODUCTION modal — four columns of results have no single headline, and
+picking one would be a claim about which matters. Every modal now sizes to itself: **782px** (FED
+PRICE, 7 columns) · **1,342px** (ACTUAL FED PRICE, 12) · **1,146px** (PRODUCTION) · **560px** (an
+inputs list — "size to content" cuts both ways).
+
+**PRODUCED · YIELD · LOSS · WASTE LOSS ARE ONE FAMILY (2026-09-16, round 4).** Renzo: *"Hovering
+over one of them highlights all 4 of those KPIs. Since those 4 are interrelated, what pops up
+should be a table where we can see all 4 of that data."* They **stay four columns** — the ask was
+to relate them, not to merge them — and `KpiColumn.family` now carries `FAMILY_PRODUCTION` on all
+four, which does two things:
+
+- **Hovering or FOCUSING any of them lights all four**, in that row, with `bg-accent/70` +
+  `ring-1 ring-inset ring-ring/40` (background and ring only — compositor-cheap). **Per ROW, not
+  per column block**: the relationship between the four numbers is a statement about ONE campaign,
+  and lighting three campaigns' worth would say something the data does not. The GROUP row behaves
+  identically because it is the same `Row`. `onFocus`/`onBlur` as well as the pointer, so a
+  keyboard reader sees what a mouse reader sees. *Measured: hovering YIELD on the JULY row lights
+  exactly cells 2–5 and nothing on any other row.*
+- **Clicking any of them opens ONE modal**, `ops-production-table.tsx`: a table of `RC FED t ·
+  PRODUCED t · YIELD % · LOSS % · PROCESS LOSS kg · WASTE kg · WASTE %` with **one row per
+  campaign in the strip plus the GROUP row**, the three formulas on the one `symbols` line above
+  it, and a second table of the eight streams (`TRML 1 · TRML 2 · RS1A · RS1B · RS2/3 · RS5 · BF ·
+  GRITS`, `TOTAL`, and `WASTE SHIFTS` = `23 of 28`). The coverage caveats ride underneath —
+  `fedKgProductionReported` / `campaignsProductionReported` for YIELD's narrowed denominator,
+  `producedKgWasteReported` / `campaignsWasteReported` for WASTE %'s. **Nothing is computed**: the
+  GROUP row is `data.group`, never a fold of the campaign rows, and a campaign that reported no
+  production reads blank on every production figure rather than 0.
+
+**RC FED OPENS THE RC MOVEMENT MATRIX (2026-09-16, round 4).** Renzo: *"RC Fed should pop up to a
+modal of RC movement… rendering the RC Movement table in a modal based on which campaign RC Fed
+you click just makes so much sense."* It is the unification thesis made clickable — the cell is the
+Σ of exactly the cells that matrix prints. **The matrix is NOT forked, copied or
+re-implemented:** `RcMovementMatrix` (the **Classic** matrix) takes `{ data, onCampaignChange?,
+onNavigateToBatch? }` and calls no `useRouter`, `usePathname` or `useSearchParams` — every route
+concern lives in `rc-movement-route-view.tsx`, its HOST — so `ops-rc-movement-modal.tsx` is simply
+a second host and not one character of the matrix changed. (The **v2** grid is not embeddable: it
+takes the page's `searchParams` and writes `?campaign=` with `router.replace`, which inside this
+modal would rewrite `/operations`'s own address.) Four things make it cheap and correct:
+
+- **`next/dynamic` with `ssr: false`** — the matrix chunk is fetched on the first click. *Measured
+  on the production build: `/operations` client JS 972.2 kB → **979.9 kB** across the same 36
+  chunks, and the three chunks carrying the matrix's identifiers are verifiably NOT among them.*
+- **The data is fetched ON DEMAND from the SAME server action the RC Movement page calls**,
+  `fetchRcMovementMatrix(campaignKey)` — the ops payload gains no field, and the two screens cannot
+  disagree about a campaign's cells because they read one query. Each campaign is cached for the
+  life of the dialog; a failure keeps the dialog open with a Retry beside the project's persistent
+  copyable `errorToast()`.
+- **The GROUP cell gets campaign TABS, not three matrices.** Stacking them would be three tall
+  grids fighting for one viewport, and the RC Movement views publish a matrix per CAMPAIGN — there
+  is no group-grain matrix to render even if the room existed. `RC Fed = Σ MAIN feedings` plus the
+  rollup's own totals (tonnes, kg, feed days, blocks, sundry) print above the grid, assembled from
+  published fields.
+- **₱ is gated where it always was.** `fetchRcMovementMatrix` resolves `canViewPrices()` itself,
+  nulls every ₱ field before returning and does not even QUERY the three actual-price views for a
+  denied caller; the matrix then drops `Fed ₱/kg` from its frozen pane's coordinate space. This
+  host passes the payload straight through. *Verified against a price-denied payload: no `₱` glyph
+  anywhere in the dialog.*
+
+> **THE ONE DIALOG ON THIS SCREEN THAT IS OPAQUE, AND WHY IT HAS TO BE.** `backdrop-filter` — the
+> `backdrop-blur-xl` in CLAUDE.md's canonical dialog glass — makes an element the **containing
+> block for every `position: fixed` descendant**. The matrix renders `BlockingDetailPanel`, a fixed
+> slide-over that is **not portalled**, so with the glass on, clicking a block header pinned the
+> drawer to the dialog box instead of the viewport: *measured at 1920×1080, x=1299 · right=1819 ·
+> y=44 instead of flush right and full height.* A transform does the same, so the primitive's
+> `translate(-50%,-50%)` centring is replaced by `inset: 0` + `margin: auto` over a definite width
+> and height; and `animate-in … zoom-in-95` has only a `from` keyframe, so a running or filled
+> animation can HOLD `scale3d(.95)` and outrank the inline reset — hence `animation: none` and
+> `filter: none` as well. *After all four: the drawer measures x=1400 · right=1920 · y=0 ·
+> 520×1080, exactly the viewport.* Nothing is lost — at 1720×92vh this surface covers the screen,
+> so there was no ground showing through to frost, and `DialogOverlay` still supplies the dimmed,
+> blurred backdrop. **The KPI modals keep the glass**: they contain no fixed descendant. One known
+> nit: **Escape inside the matrix's block drawer closes the drawer AND the dialog**, because
+> Radix's dismiss and the panel's own handler both fire; the drawer's X and backdrop close only
+> the drawer.
 
 **FOUR MODALS ARE NOW A TABLE, AND NO MODAL OPENS WITH A PARAGRAPH.** Renzo: *"It should take
 out the how it is defined entirely… those two KPI pop ups should portray the data in table form
@@ -691,12 +799,17 @@ error: nothing failed.
 **UI:** `lib/operations/{types,queries}`, `lib/utils` (`cn`),
 **`components/shared/unit-value`** (the platform unit-on-the-left cell, shared with
 `/analytics`), `components/ui/{popover,input}`,
-`lucide-react`, and two files from the inventory module —
+`lucide-react`, `lib/toast` (`errorToast`), and **four** files from the inventory module —
 `app/(app)/inventory/_shared/blocking-detail-panel` (the shell-agnostic drawer, already shared
-by Blocking, RC Movement, the inventory tab shell and the digest's Open Blocks band) and
-`app/(app)/inventory/blocking/actions#fetchBlockDataForBatch` + its `BlockData` type. Both are
-TENANT code, as this module is. **Nothing is imported from `app/dev/**`**, and the drafts there
-are untouched. The KPI modal uses `components/ui/dialog`. The Blackwood Table is deliberately
+by Blocking, RC Movement, the inventory tab shell and the digest's Open Blocks band),
+`app/(app)/inventory/blocking/actions#fetchBlockDataForBatch` + its `BlockData` type, and since
+2026-09-16 **`app/(app)/inventory/rc-movement/rc-movement-matrix#RcMovementMatrix`** (loaded with
+`next/dynamic({ ssr: false })`, so it is a lazy chunk and not part of this route's first load)
+together with **`app/(app)/inventory/rc-movement/actions#fetchRcMovementMatrix`** and its
+`RcMovementMatrix` type — the RC FED modal. All TENANT code, as this module is; the direction is
+ops → rc-movement only, and the matrix is used AS IT STANDS (a second host, not a fork). **Nothing
+is imported from `app/dev/**`**, and the drafts there are untouched. Both dialogs use
+`components/ui/dialog`, sized through `ops-modal-size.ts`. The Blackwood Table is deliberately
 NOT used — this is a read-only ledger with no inline editing, so the grid's whole value
 proposition is unused; see the header comment in `ops-ledger-table.tsx`.
 
