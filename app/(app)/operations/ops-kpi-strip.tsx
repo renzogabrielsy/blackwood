@@ -4,7 +4,6 @@ import * as React from 'react';
 
 import { cn } from '@/lib/utils';
 import {
-  WASTE_STREAMS,
   type OpsCampaign,
   type OpsCampaignRollup,
   type OpsGroupRollup,
@@ -12,10 +11,18 @@ import {
 import { UnitValue } from '@/components/shared/unit-value';
 import {
   OpsBlocksTable,
+  blocksTableWidth,
   campaignBlockRows,
   groupBlockRows,
   type OpsBlocksRow,
 } from './ops-blocks-table';
+import {
+  OpsProductionTables,
+  productionRowFromCampaign,
+  productionRowFromGroup,
+  productionTablesWidth,
+} from './ops-production-table';
+import { OpsRcMovementModal, type OpsRcCampaignTab } from './ops-rc-movement-modal';
 import { TONE, type OpsTone } from './ops-color';
 import {
   count,
@@ -27,7 +34,7 @@ import {
   pctNumFromFraction,
   tons,
 } from './ops-format';
-import { OpsKpiModal, type KpiDetail, type KpiInput } from './ops-kpi-modal';
+import { OpsKpiModal, type KpiDetail } from './ops-kpi-modal';
 
 // ═════════════════════════════════════════════════════════════════════════════════
 // THE EOQ ROLLUP — Renzo's `EOQ3 2026` tab, as a table. ONE ROW PER CAMPAIGN, plus
@@ -138,8 +145,36 @@ export interface OpsKpiDetailCtx {
   blocks: Map<string, OpsBlocksRow[]>;
   /** The group's DISTINCT blocks (one row per block, however many campaigns fed it). */
   groupBlocks: OpsBlocksRow[];
+  /**
+   * EVERY campaign row in the strip, and the group row.
+   *
+   * The PRODUCTION modal shows one line per campaign plus the GROUP, and the RC FED
+   * modal's tabs are the group's campaigns — both are questions about the whole
+   * strip, not about the cell that was clicked, so the whole strip is handed over.
+   */
+  rollups: readonly OpsCampaignRollup[];
+  group: OpsGroupRollup | null;
   canViewPrices: boolean;
 }
+
+/**
+ * WHAT A CELL OPENS.
+ *
+ * Ten of the eleven columns open the math sheet. RC FED opens the RC Movement
+ * matrix, which is a different component with a different lifecycle (it fetches),
+ * so the strip's modal state is a discriminated union rather than one nullable
+ * `KpiDetail` — the alternative was a `KpiDetail` carrying a marker that
+ * `OpsKpiModal` would have had to branch on, i.e. two modals wearing one type.
+ */
+type OpsModalState =
+  | { kind: 'detail'; detail: KpiDetail }
+  | {
+      kind: 'rcmovement';
+      title: string;
+      initialKey: string;
+      campaigns: OpsRcCampaignTab[];
+      groupNote?: string;
+    };
 
 interface KpiColumn {
   key: string;
@@ -148,11 +183,28 @@ interface KpiColumn {
   tone: OpsTone;
   /** Dropped from the layout entirely when the viewer may not see prices. */
   price?: boolean;
+  /**
+   * THE INTERRELATED FAMILY this column belongs to.
+   *
+   * Renzo, 2026-09-16: *"Hovering over one of them highlights all 4 of those KPIs.
+   * Since those 4 are interrelated, what pops up should be a table where we can see
+   * all 4 of that data."* PRODUCED · YIELD · LOSS · WASTE LOSS share two inputs and
+   * re-divide them three ways, so they light together and open ONE modal. They stay
+   * FOUR COLUMNS — the ask was to relate them, not to merge them.
+   */
+  family?: string;
   campaign(r: OpsCampaignRollup): Cell;
   group(g: OpsGroupRollup): Cell;
-  campaignDetail(r: OpsCampaignRollup, ctx: OpsKpiDetailCtx): KpiDetail;
-  groupDetail(g: OpsGroupRollup, ctx: OpsKpiDetailCtx): KpiDetail;
+  /** The math sheet. Absent on a column that opens something else (RC FED). */
+  campaignDetail?(r: OpsCampaignRollup, ctx: OpsKpiDetailCtx): KpiDetail;
+  groupDetail?(g: OpsGroupRollup, ctx: OpsKpiDetailCtx): KpiDetail;
+  /** Overrides {@link campaignDetail} — a modal that is not the math sheet. */
+  campaignModal?(r: OpsCampaignRollup, ctx: OpsKpiDetailCtx): OpsModalState;
+  groupModal?(g: OpsGroupRollup, ctx: OpsKpiDetailCtx): OpsModalState;
 }
+
+/** The family id shared by PRODUCED · YIELD · LOSS · WASTE LOSS. */
+const FAMILY_PRODUCTION = 'production';
 
 /**
  * An absent figure: an em-dash and **NO GLYPH**.
@@ -251,10 +303,92 @@ const groupActualTotals = (g: OpsGroupRollup) => [
   { label: 'Resiko loss', value: pctFromFraction(g.blockResikoLossPct, 2) },
 ];
 
-/** The eight streams as modal inputs. Reading, not summing. */
-function wasteInputs(waste: OpsCampaignRollup['waste']): KpiInput[] {
-  return WASTE_STREAMS.map((w) => ({ label: w.label, value: kg(waste[w.key]) }));
+// ── THE PRODUCTION FAMILY: ONE MODAL FOR FOUR CELLS (2026-09-16) ───────────────
+// PRODUCED · YIELD · LOSS · WASTE LOSS are one reading — `yieldPct` is produced ÷
+// fed, `processLossPct` is 1 − yield, `wasteLossPct` is waste ÷ PRODUCED. Four
+// cells over two inputs. Whichever of them is clicked, the SAME modal opens, so a
+// reader answers the whole question once instead of four times.
+//
+// The table shows every campaign in the strip (plus the GROUP row when there is
+// one), because the comparison down a quarter is the reason the four are read at
+// all. Its rows are the payload's own rollups — the GROUP row is `data.group`, never
+// a fold of the three above it.
+
+/** The three definitions, on one line. The modal's `symbols`. */
+const PRODUCTION_SYMBOLS =
+  'Yield = Produced ÷ RC Fed  ·  Loss = 1 − Yield  ·  Waste % = Waste ÷ Produced';
+
+/**
+ * The result bar: the three RATIOS of the row the modal was opened on, printed side
+ * by side. Three separate published fields rendered next to each other — the modal
+ * has four columns of results and no single headline, so picking one would be a
+ * claim about which matters.
+ */
+const ratioResult = (r: { yieldPct: number | null; processLossPct: number | null; wasteLossPct: number | null }) =>
+  `${pctFromFraction(r.yieldPct, 2)} · ${pctFromFraction(r.processLossPct, 2)} · ${pctFromFraction(r.wasteLossPct, 2)}`;
+
+/** Every campaign in the strip, then the GROUP row when the group is shown. */
+function productionRows(ctx: OpsKpiDetailCtx) {
+  const rows = ctx.rollups.map(productionRowFromCampaign);
+  if (ctx.group && ctx.rollups.length > 1) rows.push(productionRowFromGroup(ctx.group));
+  return rows;
 }
+
+function productionDetail(r: OpsCampaignRollup, ctx: OpsKpiDetailCtx): KpiDetail {
+  return {
+    title: `${r.label} · PRODUCTION`,
+    subtitle: campaignSpan(r),
+    tone: 'produced',
+    symbols: PRODUCTION_SYMBOLS,
+    inputs: [],
+    contentWidth: productionTablesWidth(),
+    table: <OpsProductionTables rows={productionRows(ctx)} />,
+    result: { label: 'Yield · Loss · Waste %', value: ratioResult(r) },
+    notes: [
+      `Waste coverage — ${r.wasteShiftCount} of ${count(r.shiftCount) || 0} shifts filed a waste row. NULL IS NEVER 0: a campaign none of whose shifts filed one reads blank on every stream, which is not the claim that it produced no waste.`,
+      ...(r.productionReported
+        ? []
+        : [
+            'This campaign reported NO production, so PRODUCED, YIELD, LOSS and WASTE % are NULL rather than 0 — "nothing was filed" and "nothing was made" are different answers.',
+          ]),
+      'A CAMPAIGN yield is the real one. The ledger below also prints a per-DAY yield and loss, and those are indicative only: the feed tank is continuous flow, so a day’s fed kilos and its produced kilos are not the same charcoal.',
+    ],
+  };
+}
+
+function productionGroupDetail(g: OpsGroupRollup, ctx: OpsKpiDetailCtx): KpiDetail {
+  return {
+    title: 'GROUP · PRODUCTION',
+    subtitle: groupSpan(g),
+    tone: 'produced',
+    symbols: PRODUCTION_SYMBOLS,
+    inputs: [],
+    contentWidth: productionTablesWidth(),
+    table: <OpsProductionTables rows={productionRows(ctx)} />,
+    result: { label: 'Yield · Loss · Waste %', value: ratioResult(g) },
+    notes: [
+      `YIELD’s denominator is NARROWED: ${kg(g.fedKgProductionReported)} kg — the fed kilos of the ${g.campaignsProductionReported} of ${g.campaignCount} campaigns that reported production, not the group’s whole ${kg(g.fedKg)} kg.`,
+      `WASTE %’s denominator is narrowed the same way: ${kg(g.producedKgWasteReported)} kg — the produced kilos of the ${g.campaignsWasteReported} of ${g.campaignCount} campaigns that filed any waste, out of ${kg(g.producedKg)} kg produced. Production reporting begins 2025-11-27, so counting a pre-reporting campaign’s kilos against no waste would understate the ratio.`,
+      `Waste coverage — ${g.wasteShiftCount} of ${count(g.shiftCount) || 0} shifts filed a waste row.`,
+      'Every ratio on the GROUP row is WEIGHTED in SQL. It is never the mean of the campaign rows above it — the average of three yields belongs to no quarter.',
+    ],
+  };
+}
+
+// ── RC FED: THE LINE THAT SITS ABOVE THE MATRIX ────────────────────────────────
+// Published fields, printed side by side. `RC Fed = Σ MAIN feedings` is the
+// definition the campaign views own (FED = `destination = 'MAIN'`), said in words.
+
+const rcFedNote = (r: OpsCampaignRollup) =>
+  `RC Fed = Σ MAIN feedings · ${tons(r.fedKg)} t (${kg(r.fedKg)} kg) · ` +
+  `${count(r.feedDays)} feed days · ${count(r.blocksFed)} blocks · sundry ${tons(r.sundryKg)} t`;
+
+const rcFedGroupNote = (g: OpsGroupRollup) =>
+  `GROUP · RC Fed = Σ MAIN feedings · ${tons(g.fedKg)} t (${kg(g.fedKg)} kg) · ` +
+  `${g.blocksFedDistinct} distinct blocks · ${g.activeDays} active days · sundry ${tons(g.sundryKg)} t`;
+
+const rcTabs = (ctx: OpsKpiDetailCtx): OpsRcCampaignTab[] =>
+  ctx.rollups.map((r) => ({ key: r.campaignKey, label: r.label, note: rcFedNote(r) }));
 
 const COLUMNS: KpiColumn[] = [
   // ── RC FED ────────────────────────────────────────────────────────────────────
@@ -265,229 +399,80 @@ const COLUMNS: KpiColumn[] = [
     tone: 'fed',
     campaign: (r) => tFig(r.fedKg),
     group: (g) => tFig(g.fedKg),
-    campaignDetail: (r) => ({
+    // RC FED OPENS THE MATRIX, NOT A MATH SHEET (2026-09-16). The cell is the Σ of
+    // exactly the cells `/inventory/rc-movement` prints for this campaign — one
+    // relation, two screens — so the honest breakdown of it IS that matrix, day by
+    // day and block by block. The five-line inputs list it replaced said less than
+    // the line now printed above the grid.
+    campaignModal: (r) => ({
+      kind: 'rcmovement',
       title: `${r.label} · RC FED`,
-      subtitle: campaignSpan(r),
-      tone: 'fed',
-      symbols: 'RC Fed = Σ rc_out.weight_kg where destination = MAIN',
-      inputs: [
-        { label: 'Fed', value: `${kg(r.fedKg)} kg` },
-        { label: 'Out of the yard (feeding + sun-drying)', value: `${kg(r.outKg)} kg` },
-        { label: 'Pulled out to sun-dry', value: `${kg(r.sundryKg)} kg`, note: 'NOT feed' },
-        { label: 'Days the plant was fed', value: count(r.feedDays) },
-        { label: 'Blocks drawn from', value: count(r.blocksFed) },
-      ],
-      result: { label: 'RC Fed', value: `${tons(r.fedKg)} t` },
+      initialKey: r.campaignKey,
+      campaigns: [{ key: r.campaignKey, label: r.label, note: rcFedNote(r) }],
     }),
-    groupDetail: (g) => ({
+    groupModal: (g, ctx) => ({
+      kind: 'rcmovement',
       title: 'GROUP · RC FED',
-      subtitle: groupSpan(g),
-      tone: 'fed',
-      symbols: 'RC Fed = Σ of the member campaigns’ fed kg',
-      inputs: [
-        { label: 'Fed', value: `${kg(g.fedKg)} kg` },
-        { label: 'Pulled out to sun-dry', value: `${kg(g.sundryKg)} kg` },
-        { label: 'Distinct blocks fed', value: String(g.blocksFedDistinct) },
-        {
-          label: 'Naive Σ of per-campaign block counts',
-          value: count(g.blocksFedCampaignSum),
-          note: 'larger when a block was fed by two campaigns',
-        },
-        { label: 'Active days', value: String(g.activeDays) },
-      ],
-      result: { label: 'RC Fed', value: `${tons(g.fedKg)} t` },
+      // ONE CAMPAIGN AT A TIME, with tabs. Three matrices stacked in one dialog
+      // would be three tall grids fighting for one viewport, and the RC Movement
+      // views publish a matrix per CAMPAIGN — there is no group-grain matrix to
+      // render even if the room existed.
+      initialKey: ctx.rollups[0]?.campaignKey ?? g.campaignKeys[0] ?? '',
+      campaigns: rcTabs(ctx),
+      groupNote: rcFedGroupNote(g),
     }),
   },
 
-  // ── PRODUCED ──────────────────────────────────────────────────────────────────
+  // ── PRODUCED · YIELD · LOSS · WASTE LOSS — ONE FAMILY, FOUR COLUMNS ──────────
+  // They stay four cells (a reader scans four numbers down a quarter), but they
+  // HOVER together and they open ONE modal: `productionDetail` shows all four for
+  // every campaign in the strip, plus the eight waste streams underneath.
   {
     key: 'produced',
     label: 'Produced',
     width: 96,
     tone: 'produced',
+    family: FAMILY_PRODUCTION,
     campaign: (r) => (r.productionReported ? tFig(r.producedKg) : DASH),
     group: (g) => tFig(g.producedKg),
-    campaignDetail: (r) => ({
-      title: `${r.label} · PRODUCED`,
-      subtitle: campaignSpan(r),
-      tone: 'produced',
-      symbols: 'Produced = Σ production_runs.ttl_kg for the campaign',
-      inputs: [
-        { label: 'Produced', value: `${kg(r.producedKg)} kg` },
-        { label: 'Days production was reported', value: count(r.reportedDays) },
-        { label: 'Shifts', value: count(r.shiftCount) },
-        { label: 'Runs', value: count(r.runCount) },
-        {
-          label: 'Sacks',
-          value: count(r.sacks),
-          note: `${pctFromPercent(r.sacksCoveragePct, 1)} of runs recorded a bag count`,
-        },
-      ],
-      result: { label: 'Produced', value: r.productionReported ? `${tons(r.producedKg)} t` : '—' },
-      notes: r.productionReported
-        ? undefined
-        : [
-            'This campaign reported NO production, so the figure is NULL rather than 0 — "nothing was filed" and "nothing was made" are different answers.',
-          ],
-    }),
-    groupDetail: (g) => ({
-      title: 'GROUP · PRODUCED',
-      subtitle: groupSpan(g),
-      tone: 'produced',
-      symbols: 'Produced = Σ of the member campaigns’ produced kg',
-      inputs: [
-        { label: 'Produced', value: `${kg(g.producedKg)} kg` },
-        {
-          label: 'Campaigns that reported production',
-          value: `${g.campaignsProductionReported} of ${g.campaignCount}`,
-        },
-        { label: 'Reported campaign-days', value: count(g.reportedCampaignDays) },
-        {
-          label: 'Reported calendar days',
-          value: String(g.reportedCalendarDays),
-          note: 'a changeover date is one calendar day and two campaign-days',
-        },
-        { label: 'Shifts', value: count(g.shiftCount) },
-      ],
-      result: { label: 'Produced', value: `${tons(g.producedKg)} t` },
-    }),
+    campaignDetail: productionDetail,
+    groupDetail: productionGroupDetail,
   },
 
-  // ── YIELD ─────────────────────────────────────────────────────────────────────
   {
     key: 'yield',
     label: 'Yield',
     width: 86,
     tone: 'yield',
+    family: FAMILY_PRODUCTION,
     campaign: (r) => pctFig(r.yieldPct),
     group: (g) => pctFig(g.yieldPct),
-    campaignDetail: (r) => ({
-      title: `${r.label} · YIELD`,
-      subtitle: campaignSpan(r),
-      tone: 'yield',
-      symbols: 'Yield = Produced ÷ RC Fed',
-      inputs: [
-        { label: 'Produced', value: `${kg(r.producedKg)} kg` },
-        { label: 'RC Fed', value: `${kg(r.fedKg)} kg` },
-      ],
-      result: { label: 'Yield', value: pctFromFraction(r.yieldPct, 2) },
-    }),
-    groupDetail: (g) => ({
-      title: 'GROUP · YIELD',
-      subtitle: groupSpan(g),
-      tone: 'yield',
-      symbols: 'Yield = Produced ÷ fed kg of the campaigns that reported',
-      inputs: [
-        { label: 'Produced', value: `${kg(g.producedKg)} kg` },
-        {
-          label: 'Fed kg used as the denominator',
-          value: `${kg(g.fedKgProductionReported)} kg`,
-          note: 'NOT the group’s whole fed total',
-        },
-        { label: 'Fed (whole group)', value: `${kg(g.fedKg)} kg` },
-        {
-          label: 'Campaigns that reported production',
-          value: `${g.campaignsProductionReported} of ${g.campaignCount}`,
-        },
-      ],
-      result: { label: 'Yield', value: pctFromFraction(g.yieldPct, 2) },
-    }),
+    campaignDetail: productionDetail,
+    groupDetail: productionGroupDetail,
   },
 
-  // ── LOSS (%) ──────────────────────────────────────────────────────────────────
   {
     key: 'loss',
     label: 'Loss',
     width: 86,
     tone: 'drift',
+    family: FAMILY_PRODUCTION,
     campaign: (r) => pctFig(r.processLossPct),
     group: (g) => pctFig(g.processLossPct),
-    campaignDetail: (r) => ({
-      title: `${r.label} · PROCESS LOSS`,
-      subtitle: campaignSpan(r),
-      tone: 'drift',
-      symbols: 'Loss = 1 − Yield ·  Loss kg = RC Fed − Produced',
-      inputs: [
-        { label: 'RC Fed', value: `${kg(r.fedKg)} kg` },
-        { label: 'Produced', value: `${kg(r.producedKg)} kg` },
-        { label: 'Process loss', value: `${kg(r.processLossKg)} kg` },
-        { label: 'Yield', value: pctFromFraction(r.yieldPct, 2) },
-      ],
-      result: { label: 'Process loss', value: pctFromFraction(r.processLossPct, 2) },
-      notes: [
-        'This is the RETORT’s loss. The yard’s own shrinkage — evaporation in the pile between arrival and feeding — is the separate RESIKO LOSS column.',
-      ],
-    }),
-    groupDetail: (g) => ({
-      title: 'GROUP · PROCESS LOSS',
-      subtitle: groupSpan(g),
-      tone: 'drift',
-      symbols: 'Loss = 1 − Yield',
-      inputs: [
-        { label: 'RC Fed', value: `${kg(g.fedKg)} kg` },
-        { label: 'Produced', value: `${kg(g.producedKg)} kg` },
-        { label: 'Process loss', value: `${kg(g.processLossKg)} kg` },
-        { label: 'Yield', value: pctFromFraction(g.yieldPct, 2) },
-      ],
-      result: { label: 'Process loss', value: pctFromFraction(g.processLossPct, 2) },
-    }),
+    campaignDetail: productionDetail,
+    groupDetail: productionGroupDetail,
   },
 
-  // ── WASTE LOSS ────────────────────────────────────────────────────────────────
   {
     key: 'waste',
     label: 'Waste Loss',
     width: 112,
     tone: 'waste',
+    family: FAMILY_PRODUCTION,
     campaign: (r) => wasteFig(r.wasteKg, r.wasteLossPct),
     group: (g) => wasteFig(g.wasteKg, g.wasteLossPct),
-    campaignDetail: (r) => ({
-      title: `${r.label} · WASTE LOSS`,
-      subtitle: campaignSpan(r),
-      tone: 'waste',
-      symbols: 'Waste Loss = (TRML 1 + TRML 2 + RS1A + RS1B + RS2/3 + RS5 + BF + GRITS) ÷ Produced',
-      inputs: [
-        ...wasteInputs(r.waste),
-        { label: 'Waste total', value: `${kg(r.wasteKg)} kg` },
-        { label: 'Produced', value: `${kg(r.producedKg)} kg`, note: 'the denominator' },
-        {
-          label: 'Shifts that filed a waste row',
-          value: `${r.wasteShiftCount} of ${count(r.shiftCount)}`,
-          note: 'the coverage behind the total',
-        },
-      ],
-      result: { label: 'Waste loss', value: pctFromFraction(r.wasteLossPct, 2) },
-      notes: [
-        'THESE EIGHT DO NOT SUM TO THE PROCESS LOSS above. Most of what the retort loses leaves as moisture and volatiles that nobody weighs; this is what was swept up and weighed.',
-        'NULL IS NEVER 0 — a campaign none of whose shifts filed a waste row reads blank on every stream, which is not the same as a campaign that produced no waste.',
-      ],
-    }),
-    groupDetail: (g) => ({
-      title: 'GROUP · WASTE LOSS',
-      subtitle: groupSpan(g),
-      tone: 'waste',
-      symbols: 'Waste Loss = Σ member waste ÷ produced kg of the campaigns that filed waste',
-      inputs: [
-        ...wasteInputs(g.waste),
-        { label: 'Waste total', value: `${kg(g.wasteKg)} kg` },
-        {
-          label: 'Produced kg used as the denominator',
-          value: `${kg(g.producedKgWasteReported)} kg`,
-          note: 'the produced kilos of the campaigns that actually filed waste',
-        },
-        { label: 'Produced (whole group)', value: `${kg(g.producedKg)} kg` },
-        {
-          label: 'Campaigns that filed any waste',
-          value: `${g.campaignsWasteReported} of ${g.campaignCount}`,
-        },
-        { label: 'Shifts that filed a waste row', value: `${g.wasteShiftCount} of ${count(g.shiftCount)}` },
-      ],
-      result: { label: 'Waste loss', value: pctFromFraction(g.wasteLossPct, 2) },
-      notes: [
-        'THESE EIGHT DO NOT SUM TO THE PROCESS LOSS above — most of it leaves as moisture and volatiles nobody weighs.',
-        'The denominator is the produced kilos of the campaigns that FILED WASTE, not the group’s whole produced total: production reporting begins 2025-11-27, and counting a pre-reporting campaign’s kilos against no waste would understate the ratio.',
-      ],
-    }),
+    campaignDetail: productionDetail,
+    groupDetail: productionGroupDetail,
   },
 
   // ── FED PRICE ─────────────────────────────────────────────────────────────────
@@ -508,7 +493,7 @@ const COLUMNS: KpiColumn[] = [
       tone: 'money',
       symbols: 'Fed Price = ₱ paid ÷ RC Fed',
       inputs: [],
-      wide: true,
+      contentWidth: blocksTableWidth('fed', ctx.canViewPrices),
       table: (
         <OpsBlocksTable
           variant="fed"
@@ -526,7 +511,7 @@ const COLUMNS: KpiColumn[] = [
       tone: 'money',
       symbols: 'Fed Price = Σ ₱ paid ÷ Σ fed kg',
       inputs: [],
-      wide: true,
+      contentWidth: blocksTableWidth('fed', ctx.canViewPrices),
       table: (
         <OpsBlocksTable
           variant="fed"
@@ -561,7 +546,7 @@ const COLUMNS: KpiColumn[] = [
       tone: 'money',
       symbols: 'Actual Fed Price = whole-block ₱ ÷ whole-block fed kg',
       inputs: [],
-      wide: true,
+      contentWidth: blocksTableWidth('actual', ctx.canViewPrices),
       table: (
         <OpsBlocksTable
           variant="actual"
@@ -582,7 +567,7 @@ const COLUMNS: KpiColumn[] = [
       tone: 'money',
       symbols: 'Actual Fed Price = Σ (campaign-attributed ₱) ÷ Σ fed kg',
       inputs: [],
-      wide: true,
+      contentWidth: blocksTableWidth('actual', ctx.canViewPrices),
       table: (
         <OpsBlocksTable
           variant="actual"
@@ -617,7 +602,7 @@ const COLUMNS: KpiColumn[] = [
       tone: 'money',
       symbols: 'Resiko Cost = Actual Fed Price − Fed Price',
       inputs: [],
-      wide: true,
+      contentWidth: blocksTableWidth('actual', ctx.canViewPrices),
       table: (
         <OpsBlocksTable
           variant="actual"
@@ -639,7 +624,7 @@ const COLUMNS: KpiColumn[] = [
       tone: 'money',
       symbols: 'Resiko Cost = Actual Fed Price − Fed Price',
       inputs: [],
-      wide: true,
+      contentWidth: blocksTableWidth('actual', ctx.canViewPrices),
       table: (
         <OpsBlocksTable
           variant="actual"
@@ -671,7 +656,7 @@ const COLUMNS: KpiColumn[] = [
       tone: 'drift',
       symbols: 'Resiko Loss = resiko weight ÷ arrival weight, over the blocks in the price set',
       inputs: [],
-      wide: true,
+      contentWidth: blocksTableWidth('actual', ctx.canViewPrices),
       table: (
         <OpsBlocksTable
           variant="actual"
@@ -700,7 +685,7 @@ const COLUMNS: KpiColumn[] = [
       tone: 'drift',
       symbols: 'Resiko Loss = weighted over the covered fed kg of the member campaigns',
       inputs: [],
-      wide: true,
+      contentWidth: blocksTableWidth('actual', ctx.canViewPrices),
       table: (
         <OpsBlocksTable
           variant="actual"
@@ -869,11 +854,37 @@ export function OpsKpiStrip({
     () => ({
       blocks: new Map(campaigns.map((c) => [c.key, campaignBlockRows(c.blocks)])),
       groupBlocks: group ? groupBlockRows(group.blocks) : [],
+      rollups,
+      group,
       canViewPrices,
     }),
-    [campaigns, group, canViewPrices],
+    [campaigns, rollups, group, canViewPrices],
   );
-  const [detail, setDetail] = React.useState<KpiDetail | null>(null);
+  const [modal, setModal] = React.useState<OpsModalState | null>(null);
+
+  // RESOLVED ON CLICK, NOT ON RENDER. A `KpiDetail` carries a whole React element
+  // (the BLOCKS USED table, the PRODUCTION tables), so building eleven of them for
+  // every row on every render was eleven tables per campaign that nobody was
+  // looking at. The handler takes the column INDEX and builds exactly one.
+  const openCampaign = React.useCallback(
+    (r: OpsCampaignRollup, col: KpiColumn) => {
+      const direct = col.campaignModal?.(r, ctx);
+      if (direct) return setModal(direct);
+      const detail = col.campaignDetail?.(r, ctx);
+      if (detail) setModal({ kind: 'detail', detail });
+    },
+    [ctx],
+  );
+  const openGroup = React.useCallback(
+    (g: OpsGroupRollup, col: KpiColumn) => {
+      const direct = col.groupModal?.(g, ctx);
+      if (direct) return setModal(direct);
+      const detail = col.groupDetail?.(g, ctx);
+      if (detail) setModal({ kind: 'detail', detail });
+    },
+    [ctx],
+  );
+
   const showGroup = group !== null && rollups.length > 1;
   const minWidth = W_LABEL + cols.reduce((sum, c) => sum + c.width, 0);
 
@@ -919,9 +930,8 @@ export function OpsKpiStrip({
                 key={r.campaignKey}
                 title={r.label}
                 cells={cols.map((c) => c.campaign(r))}
-                details={cols.map((c) => c.campaignDetail(r, ctx))}
                 cols={cols}
-                onOpen={setDetail}
+                onOpen={(col) => openCampaign(r, col)}
               />
             ))}
             {showGroup ? (
@@ -930,9 +940,8 @@ export function OpsKpiStrip({
                 title="GROUP"
                 subtitle={`${group.campaignCount} campaigns`}
                 cells={cols.map((c) => c.group(group))}
-                details={cols.map((c) => c.groupDetail(group, ctx))}
                 cols={cols}
-                onOpen={setDetail}
+                onOpen={(col) => openGroup(group, col)}
               />
             ) : null}
           </tbody>
@@ -971,7 +980,23 @@ export function OpsKpiStrip({
         )}
       </div>
 
-      <OpsKpiModal detail={detail} onClose={() => setDetail(null)} />
+      <OpsKpiModal
+        detail={modal?.kind === 'detail' ? modal.detail : null}
+        onClose={() => setModal(null)}
+      />
+      {modal?.kind === 'rcmovement' ? (
+        // KEYED BY THE CAMPAIGN IT OPENED ON, so re-opening from a different cell
+        // remounts with a fresh tab selection instead of needing a state-sync
+        // effect to push `initialKey` into the component.
+        <OpsRcMovementModal
+          key={modal.initialKey}
+          title={modal.title}
+          campaigns={modal.campaigns}
+          initialKey={modal.initialKey}
+          groupNote={modal.groupNote}
+          onClose={() => setModal(null)}
+        />
+      ) : null}
     </section>
   );
 }
@@ -980,7 +1005,6 @@ function Row({
   title,
   subtitle,
   cells,
-  details,
   cols,
   lead,
   onOpen,
@@ -993,11 +1017,25 @@ function Row({
    */
   subtitle?: string;
   cells: Cell[];
-  details: KpiDetail[];
   cols: KpiColumn[];
   lead?: boolean;
-  onOpen(detail: KpiDetail): void;
+  onOpen(col: KpiColumn): void;
 }) {
+  /**
+   * THE FAMILY UNDER THE POINTER (2026-09-16).
+   *
+   * Renzo: *"Hovering over one of them highlights all 4 of those KPIs."* So a cell
+   * that belongs to a family publishes that family while it is hovered OR focused,
+   * and every cell of the same family in THIS ROW lights with it. Per-row, because
+   * the row is the campaign and the relationship between the four numbers is a
+   * statement about one campaign — lighting the whole column block across three
+   * campaigns would say something the data does not.
+   *
+   * `onFocus` / `onBlur` as well as the pointer, so a keyboard reader tabbing along
+   * the strip sees exactly what a mouse reader sees.
+   */
+  const [family, setFamily] = React.useState<string | null>(null);
+
   return (
     <tr
       style={{ height: ROW_H }}
@@ -1016,15 +1054,36 @@ function Row({
           </span>
         ) : null}
       </td>
-      {cells.map((cell, i) => (
-        <td key={cols[i].key} className="border-r border-border/60 p-0 align-middle">
+      {cells.map((cell, i) => {
+        const col = cols[i];
+        const lit = col.family !== undefined && col.family === family;
+        return (
+        <td
+          key={col.key}
+          onMouseEnter={() => setFamily(col.family ?? null)}
+          onMouseLeave={() => setFamily(null)}
+          className={cn(
+            'border-r border-border/60 p-0 align-middle transition-colors duration-150',
+            // THE SHARED BAND. Compositor-cheap (background + inset ring), applied
+            // to every cell of the family at once so the four read as one group.
+            lit && 'bg-accent/70 ring-1 ring-inset ring-ring/40',
+          )}
+        >
           {/* EVERY CELL IS A BUTTON — full-cell hit area, real button semantics and a
               visible focus ring, so the math is reachable from the keyboard. */}
           <button
             type="button"
             aria-haspopup="dialog"
-            title={`${title} · ${cols[i].label} — show the math`}
-            onClick={() => onOpen(details[i])}
+            title={
+              col.family === FAMILY_PRODUCTION
+                ? `${title} · ${col.label} — Produced, Yield, Loss and Waste Loss are one reading; open all four`
+                : col.key === 'fed'
+                  ? `${title} · ${col.label} — open the RC Movement matrix`
+                  : `${title} · ${col.label} — show the math`
+            }
+            onFocus={() => setFamily(col.family ?? null)}
+            onBlur={() => setFamily(null)}
+            onClick={() => onOpen(col)}
             className={cn(
               // `flex min-h` rather than padding: the hit area stays the full row
               // height while the two-line WASTE LOSS cell keeps the row at `h-8`.
@@ -1039,7 +1098,7 @@ function Row({
               className="leading-tight"
               valueClassName={cn(
                 'font-mono text-xs tabular-nums',
-                cell.absent ? 'text-muted-foreground' : cn('font-medium', TONE[cols[i].tone].text),
+                cell.absent ? 'text-muted-foreground' : cn('font-medium', TONE[col.tone].text),
                 lead && !cell.absent && 'font-semibold',
               )}
             >
@@ -1058,7 +1117,8 @@ function Row({
             ))}
           </button>
         </td>
-      ))}
+        );
+      })}
     </tr>
   );
 }

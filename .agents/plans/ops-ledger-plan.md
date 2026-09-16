@@ -556,3 +556,87 @@ afterwards** — `git status` carries no trace of it. Measured there:
 - frozen spine at 1440px (`position: sticky`, `left: 32px`) **on the child rows too**, with an
   OPAQUE background in dark mode; light AND dark; at 375px `scrollWidth === innerWidth === 375`,
   one vertical scroller, spine `position: static`.
+
+### 3.9 REFINEMENT PASS 4 (2026-09-16) — Renzo's three notes after *"looking great"*
+
+Read on production, on a 1080p 24" monitor, with JULY + AUGUST + SEPTEMBER 2026.
+
+1. **THE MODALS MUST USE THE ROOM THEY HAVE.** *"The modal is causing shrinkage and overflowing
+   of the table UIs. The space can be MUCH better utilized considering how much space we have on
+   my 1080p 24-inch monitor. It should also occupy the space that is available so it can be
+   viewed on any device."* Two independent faults produced one symptom. (a) `sm:max-w-4xl` is
+   **896px** while the ACTUAL FED PRICE table is **1,298px** of declared columns, so the table
+   scrolled sideways inside a dialog with ~900px of monitor empty either side. (b) Round 3 moved
+   the unit onto the header's own line and did not re-size the columns for it, so
+   `BLOCK PRICE ₱/kg` and `RESIKO LOSS %` ellipsised at *any* dialog width. Fixed together:
+   **`ops-modal-size.ts`** owns `width = min(96vw, Σ column widths + 44, 1720px)` +
+   `max-h-[92vh]`, and **the Σ is never a literal** — `blocksTableWidth(variant, canViewPrices)`
+   and `productionTablesWidth()` are exported from the components that declare the columns, so a
+   column that grows widens the dialog with it (a hand-kept number is exactly how the truncation
+   survived three rounds). The columns themselves were re-sized as
+   `measured label + 4px gap + unit + 16px padding`. The dialog is a flex COLUMN with the header,
+   the formula line, the result bar and the caveats PINNED and the table the only scroller, and
+   the table is **`flex-auto`, never `flex-1`** (a `flex-basis: 0%` child in an auto-height,
+   merely-clamped container measures as empty and collapses). `KpiDetail.result` became optional
+   for the PRODUCTION modal, and `transition-none` was added because `duration-200` with
+   `transition-property`'s initial value of `all` would otherwise ANIMATE the width — a layout
+   property, which CLAUDE.md forbids.
+
+2. **PRODUCED · YIELD · LOSS · WASTE LOSS ARE ONE INTERRELATED FAMILY.** *"Hovering over one of
+   them highlights all 4 of those KPIs. Since those 4 are interrelated, what pops up should be a
+   table where we can see all 4 of that data."* Four columns stay four columns; what is new is
+   `KpiColumn.family`. Hover or FOCUS on any of the four lights all four **in that row** (per-row,
+   because the relationship is a statement about one campaign), and clicking any of them opens
+   ONE modal — **`ops-production-table.tsx`** — carrying `RC FED · PRODUCED · YIELD · LOSS ·
+   PROCESS LOSS · WASTE · WASTE %` for every campaign in the strip plus the GROUP row, the three
+   formulas on one line above, the eight waste streams in a second table with `WASTE SHIFTS`
+   coverage, and the narrowed-denominator caveats underneath. `KpiDetail` building moved from
+   render time to CLICK time in the same change (eleven `KpiDetail`s per row, each holding a whole
+   React table element, were being constructed on every render and never looked at).
+
+3. **RC FED OPENS THE RC MOVEMENT MATRIX.** *"RC Fed should pop up to a modal of RC movement. I
+   don't know how you would make it efficient and not heavy for the page, but rendering the RC
+   Movement table in a modal based on which campaign RC Fed you click just makes so much sense."*
+   The unification thesis, made clickable. **The Classic matrix embeds as it stands** — its props
+   are `{ data, onCampaignChange?, onNavigateToBatch? }` and it holds no router hook, so
+   `ops-rc-movement-modal.tsx` is a SECOND HOST and the matrix is not edited, forked or copied.
+   (The v2 grid could not be used: it writes `?campaign=` with `router.replace` and would rewrite
+   `/operations`'s address.) `next/dynamic({ssr:false})` keeps its chunk off the first load; the
+   data comes from the SAME server action the RC Movement page calls, fetched on demand and cached
+   per campaign; the GROUP cell gets campaign TABS rather than three stacked grids; ₱ stays gated
+   inside `fetchRcMovementMatrix`, which the host passes through untouched.
+   **One CSS finding worth keeping:** `backdrop-filter` makes an element the containing block for
+   `position: fixed` descendants, so the canonical dialog glass pinned the matrix's
+   (non-portalled) `BlockingDetailPanel` to the dialog box instead of the viewport — measured
+   x=1299 · right=1819 · y=44. A transform does the same, and `zoom-in-95`'s single `from`
+   keyframe can hold `scale3d(.95)` past the animation and outrank an inline reset. This one
+   dialog is therefore opaque, centred with `inset:0` + `margin:auto`, and carries
+   `transform/translate/filter/animation: none`. The KPI modals keep the glass — they hold no
+   fixed descendant.
+
+**Verification (2026-09-16, round 4).** `npx tsc --noEmit` clean · `npx eslint
+"app/(app)/operations"` 0 errors 0 warnings · `npm run build` passes · `/operations` client JS
+**972.2 kB → 979.9 kB over the same 36 chunks**, with the three chunks carrying the matrix's own
+identifiers proven absent from that set. Driven in Chromium against a temporary three-campaign
+fixture (18 blocks across the four row kinds — closed-and-priced, open, closed-but-unpriced,
+sundry — one campaign reporting no production and filing no waste), mounted at
+`app/dev/table-playground/ops4/` and **deleted afterwards**; `git status` carries no trace of it.
+Measured there:
+
+- **1920×1080, ACTUAL FED PRICE: 12 columns, `scrollWidth === clientWidth === 1298`, ZERO clipped
+  headers and zero `…`**, dialog 1342×494, `document.body.scrollWidth === 1920`. Every modal sizes
+  to itself: 782 (FED PRICE) · 1342 (ACTUAL) · 1146 (PRODUCTION) · 560 (inputs list).
+- hovering YIELD on the JULY row lights **exactly** the four production cells and nothing on any
+  other row; dispatching `focusin` on the LOSS button lights the same four.
+- the PRODUCTION modal renders both tables (8 + 11 header cells), SEPTEMBER 2026 blank on every
+  production figure and every stream (**NULL, never 0**), result bar
+  `77.18% · 22.82% · 14.62%`, both narrowed-denominator caveats printed.
+- the RC FED modal: dynamic chunk fetched on first click, three campaign tabs, tab switch
+  re-fetches and re-renders, matrix frozen panes intact, and the block drawer at **x=1400 ·
+  right=1920 · y=0 · 520×1080 — exactly the viewport**.
+- **1366×768** — the 18-row GROUP modal clamps to exactly **707px = 92vh** with the table the only
+  vertical scroller and the header/formula/result/caveats pinned; **375×812** —
+  `document.scrollWidth === 375`, dialog 360 wide, only the table container scrolls sideways.
+- LIGHT and DARK both rendered; **price-denied payload**: the strip drops its five ₱ columns, the
+  blocks table drops its three, and `document.body.innerText` contains no `₱` at all — inside the
+  RC FED modal included.

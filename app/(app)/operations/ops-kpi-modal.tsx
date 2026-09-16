@@ -11,6 +11,13 @@ import {
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { TONE, type OpsTone } from './ops-color';
+import {
+  OPS_MODAL_BODY,
+  OPS_MODAL_CONTENT,
+  OPS_MODAL_NARROW,
+  OPS_MODAL_PADDING,
+  opsModalWidth,
+} from './ops-modal-size';
 
 // ═════════════════════════════════════════════════════════════════════════════════
 // "SHOW ME THE MATH" — every EOQ cell opens this.
@@ -32,7 +39,20 @@ import { TONE, type OpsTone } from './ops-color';
 // rows) render {@link KpiDetail.table} — the campaign's BLOCKS USED table — in place
 // of the inputs list, because *"the user can distinguish and get a quick look and a
 // breakdown of why the price is the way it is and what the actual price is and why."*
-// A twelve-column table needs the room, so those details set {@link KpiDetail.wide}.
+//
+// ── THE DIALOG IS SIZED TO ITS CONTENT AND CLAMPED TO THE VIEWPORT (2026-09-16) ─
+// Renzo: *"The modal is causing shrinkage and overflowing of the table UIs. The space
+// can be MUCH better utilized considering how much space we have on my 1080p 24-inch
+// monitor. It should also occupy the space that is available so it can be viewed on
+// any device."* The old `sm:max-w-4xl` (896px) was narrower than the twelve-column
+// ACTUAL FED PRICE table, so the table scrolled sideways inside a dialog with ~900px
+// of empty monitor on either side. {@link KpiDetail.contentWidth} now carries the
+// table's OWN Σ-of-widths — `blocksTableWidth()` / `productionTablesWidth()`, never a
+// literal — and `ops-modal-size.ts` turns it into `min(96vw, that + padding)`.
+//
+// On the other axis the dialog is `max-h-[92vh]` and the layout is a flex COLUMN:
+// header, formula, result bar and caveats are pinned, and the TABLE — the only part
+// that can be arbitrarily long — is the flexible child that scrolls.
 //
 // ── THE ONE RULE ────────────────────────────────────────────────────────────────
 // **NOTHING IS COMPUTED HERE.** `a ÷ b = c` is a SENTENCE: `a`, `b` AND `c` are each
@@ -70,9 +90,22 @@ export interface KpiDetail {
    * Built by the caller (`OpsBlocksTable`), so this module stays a shell.
    */
   table?: React.ReactNode;
-  /** Widen the dialog to `sm:max-w-4xl` — a twelve-column table needs it. */
-  wide?: boolean;
-  result: { label: string; value: string };
+  /**
+   * The NATURAL WIDTH of {@link table}, in px — Σ of its own declared column
+   * widths, handed over by the component that owns them. The dialog becomes
+   * `min(96vw, contentWidth + padding, 1720px)`.
+   *
+   * **Never a literal.** A column that grows must widen the dialog with it; that
+   * is exactly what a hand-kept number failed to do when `BLOCK PRICE ₱/kg`
+   * started ellipsising.
+   */
+  contentWidth?: number;
+  /**
+   * The result bar. OPTIONAL — a modal whose table already states every figure
+   * (PRODUCTION, which is four columns of results) has no single "the answer",
+   * and inventing one would mean picking which of the four is the headline.
+   */
+  result?: { label: string; value: string };
   /** Coverage, caveats, and the reason a NULL is a NULL. */
   notes?: string[];
 }
@@ -84,13 +117,19 @@ export interface OpsKpiModalProps {
 
 export function OpsKpiModal({ detail, onClose }: OpsKpiModalProps) {
   const tone = detail ? TONE[detail.tone] : TONE.day;
+  // Sized to what it holds: the table's own Σ-of-widths plus the dialog's padding,
+  // or the narrow default for an inputs LIST (a two-column list gains nothing from
+  // a metre of width — "size to content, not to a fixed max" cuts both ways).
+  const width = opsModalWidth(
+    detail?.contentWidth ? detail.contentWidth + OPS_MODAL_PADDING : OPS_MODAL_NARROW,
+  );
 
   return (
     <Dialog open={detail !== null} onOpenChange={(open) => (open ? undefined : onClose())}>
-      <DialogContent className={detail?.wide ? 'sm:max-w-4xl' : 'sm:max-w-xl'}>
+      <DialogContent className={OPS_MODAL_CONTENT} style={width}>
         {detail ? (
           <>
-            <DialogHeader>
+            <DialogHeader className="shrink-0 pr-8">
               <DialogTitle className="flex items-center gap-2 text-sm">
                 <span className={cn('size-2 shrink-0 rounded-full', tone.dot)} />
                 {detail.title}
@@ -100,48 +139,56 @@ export function OpsKpiModal({ detail, onClose }: OpsKpiModalProps) {
               </DialogDescription>
             </DialogHeader>
 
-            <div className="flex flex-col gap-3">
-              {/* ── The definition, in ONE line ────────────────────────────── */}
-              <p className={cn('font-mono text-[11px] tabular-nums', tone.text)}>{detail.symbols}</p>
+            {/* ── The definition, in ONE line. PINNED. ───────────────────────── */}
+            <p className={cn('shrink-0 font-mono text-[11px] tabular-nums', tone.text)}>
+              {detail.symbols}
+            </p>
 
-              {/* ── What it is made of: a TABLE when there is one, else the list ── */}
+            {/* ── What it is made of: a TABLE when there is one, else the list.
+                   THE ONLY PART THAT SCROLLS. ───────────────────────────────── */}
+            <div className={OPS_MODAL_BODY}>
               {detail.table ? (
                 detail.table
               ) : (
-              <section>
-                <h3 className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  The numbers that went in
-                </h3>
-                <table className="mt-1 w-full table-fixed text-xs">
-                  <colgroup>
-                    <col />
-                    <col style={{ width: 132 }} />
-                  </colgroup>
-                  <tbody>
-                    {detail.inputs.map((inp, i) => (
-                      <tr key={`${inp.label}:${i}`} className="border-b border-border/60 last:border-b-0">
-                        <td className="px-1 py-1 align-top">
-                          <span className="block">{inp.label}</span>
-                          {inp.note ? (
-                            <span className="block text-[10px] leading-snug text-muted-foreground">
-                              {inp.note}
-                            </span>
-                          ) : null}
-                        </td>
-                        <td className="px-1 py-1 text-right align-top font-mono tabular-nums">
-                          {inp.value || <span className="text-muted-foreground">—</span>}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </section>
+                <section className="min-h-0 flex-auto overflow-auto">
+                  <h3 className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    The numbers that went in
+                  </h3>
+                  <table className="mt-1 w-full table-fixed text-xs">
+                    <colgroup>
+                      <col />
+                      <col style={{ width: 132 }} />
+                    </colgroup>
+                    <tbody>
+                      {detail.inputs.map((inp, i) => (
+                        <tr
+                          key={`${inp.label}:${i}`}
+                          className="border-b border-border/60 last:border-b-0"
+                        >
+                          <td className="px-1 py-1 align-top">
+                            <span className="block">{inp.label}</span>
+                            {inp.note ? (
+                              <span className="block text-[10px] leading-snug text-muted-foreground">
+                                {inp.note}
+                              </span>
+                            ) : null}
+                          </td>
+                          <td className="px-1 py-1 text-right align-top font-mono tabular-nums">
+                            {inp.value || <span className="text-muted-foreground">—</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </section>
               )}
+            </div>
 
-              {/* ── The result ─────────────────────────────────────────────── */}
+            {/* ── The result. PINNED. ───────────────────────────────────────── */}
+            {detail.result ? (
               <section
                 className={cn(
-                  'flex items-baseline justify-between gap-3 rounded-md px-2.5 py-2',
+                  'flex shrink-0 items-baseline justify-between gap-3 rounded-md px-2.5 py-2',
                   tone.head,
                 )}
               >
@@ -152,17 +199,19 @@ export function OpsKpiModal({ detail, onClose }: OpsKpiModalProps) {
                   {detail.result.value || '—'}
                 </span>
               </section>
+            ) : null}
 
-              {detail.notes && detail.notes.length > 0 ? (
-                <ul className="flex flex-col gap-1">
-                  {detail.notes.map((n, i) => (
-                    <li key={i} className="text-[11px] leading-snug text-muted-foreground">
-                      {n}
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-            </div>
+            {detail.notes && detail.notes.length > 0 ? (
+              // Pinned, but capped: a long caveat must never push the table's
+              // scroller down to nothing on a short viewport.
+              <ul className="flex max-h-[22vh] shrink-0 flex-col gap-1 overflow-auto">
+                {detail.notes.map((n, i) => (
+                  <li key={i} className="text-[11px] leading-snug text-muted-foreground">
+                    {n}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
           </>
         ) : null}
       </DialogContent>

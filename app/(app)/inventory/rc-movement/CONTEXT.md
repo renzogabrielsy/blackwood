@@ -451,6 +451,20 @@ so the two can still be compared cell-for-cell on the same campaign.
   fed-cell wash, and the zero-fed-day dimming. `scope="focus"` (a plain sticky `<table>`,
   no virtualisation) matches the live matrix's own choice for ~31 × ~44 cells.
 
+## Consumers outside this route
+- **`/operations` (the Plant Operations Ledger) renders the CLASSIC matrix in a modal
+  (2026-09-16).** Clicking the `RC Fed` cell of the EOQ strip opens
+  `app/(app)/operations/ops-rc-movement-modal.tsx`, which imports
+  `rc-movement-matrix#RcMovementMatrix` with `next/dynamic({ ssr: false })` and fills it from
+  **this module's own `actions#fetchRcMovementMatrix`**, fetched on demand and cached per
+  campaign. **Nothing here was changed for it** — the Classic matrix is prop-driven and holds no
+  router hook, so that file is simply a second HOST beside `rc-movement-route-view.tsx`; the ₱
+  gate, the frozen panes and the block drawer all behave exactly as they do on this route. The v2
+  grid is deliberately NOT the one embedded: it writes `?campaign=` with `router.replace` and
+  would rewrite `/operations`'s address. **Keep the Classic matrix prop-driven** — adding a
+  `useSearchParams`/`usePathname` to it would break that consumer. See
+  `app/(app)/operations/CONTEXT.md` → "RC FED OPENS THE RC MOVEMENT MATRIX".
+
 ## Dependencies
 - `@/lib/supabase/server` — used by `actions.ts` (server-side only)
 - `@/lib/supabase/paginate` — `fetchAllRows()` shared pagination helper (DUP-1)
