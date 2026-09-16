@@ -13,9 +13,12 @@ import {
   OpsBlocksTable,
   blocksTableWidth,
   campaignBlockRows,
+  campaignBlocksFooter,
   groupBlockRows,
+  groupBlocksFooter,
   type OpsBlocksRow,
 } from './ops-blocks-table';
+import { OpsPrintControl, type OpsPrintSheetSpec } from './ops-print-sheet';
 import {
   OpsProductionTables,
   productionRowFromCampaign,
@@ -34,7 +37,7 @@ import {
   pctNumFromFraction,
   tons,
 } from './ops-format';
-import { OpsKpiModal, type KpiDetail } from './ops-kpi-modal';
+import { OpsKpiModal, type KpiDetail, type KpiResultTile } from './ops-kpi-modal';
 
 // ═════════════════════════════════════════════════════════════════════════════════
 // THE EOQ ROLLUP — Renzo's `EOQ3 2026` tab, as a table. ONE ROW PER CAMPAIGN, plus
@@ -236,10 +239,30 @@ const wasteFig = (wasteKg: number | null, pct: number | null): Cell => ({
 });
 
 /**
- * A ₱/kg RESULT line. Null prints a bare em-dash, never `₱—/kg` — a currency symbol
- * wrapped around a blank claims a peso figure that does not exist.
+ * A ₱/kg RESULT TILE. A NULL figure drops the glyph with the number — `₱/kg —`
+ * claims a peso figure that does not exist (the {@link DASH} reasoning, applied to
+ * the result bar).
  */
-const phpResult = (n: number | null) => (n === null ? '—' : `₱${php(n)}/kg`);
+const phpTile = (label: string, n: number | null): KpiResultTile => ({
+  label,
+  glyph: n === null ? '' : '₱/kg',
+  value: php(n),
+  tone: 'money',
+});
+
+/**
+ * A FRACTION → a percent TILE, in its own family hue (2026-09-16).
+ *
+ * Renzo, on the combined `YIELD · LOSS · WASTE %` bar: *"It seems weird keeping them
+ * the same colour."* Three figures from three families printed in one hue read as
+ * one number; each now carries the colour it carries everywhere else on the screen.
+ */
+const pctTile = (label: string, f: number | null, tone: OpsTone): KpiResultTile => ({
+  label,
+  glyph: f === null ? '' : '%',
+  value: pctNumFromFraction(f, 2),
+  tone,
+});
 
 /** A ₱ value, or an em-dash. `label` is a caption the line keeps when the value is null. */
 const phpLine = (label: string, n: number | null) =>
@@ -264,7 +287,11 @@ const n0 = (v: number | null | undefined) => (v === null || v === undefined ? '�
 
 const campaignBlockCounts = (r: OpsCampaignRollup) =>
   `${n0(r.blocksFed)} blocks · ${n0(r.blocksClosed)} closed · ${n0(r.blocksOpen)} open · ` +
-  `${n0(r.blocksInPrice)} fully priced · ${n0(r.blocksClosedUnpriced)} closed but unpriced`;
+  `${n0(r.blocksInPrice)} fully priced · ${n0(r.blocksClosedUnpriced)} closed but unpriced · ` +
+  // PRICED COVERAGE rode in the old free-text footer, which the aligned `<tfoot>`
+  // replaced (2026-09-16). It is not a ₱ column — it is a share of KILOGRAMS — so it
+  // belongs on the counts line, which every role sees, rather than being dropped.
+  `${pctFromPercent(r.fedPriceCoveragePct, 1)} priced coverage`;
 
 const campaignPriceSetCounts = (r: OpsCampaignRollup) =>
   `${campaignBlockCounts(r)} · ${kg(r.campaignFedKgIncluded)} kg fed inside the price set ` +
@@ -272,36 +299,48 @@ const campaignPriceSetCounts = (r: OpsCampaignRollup) =>
 
 const groupBlockCounts = (g: OpsGroupRollup) =>
   `${g.blocksFedDistinct} distinct blocks · ${g.blocksClosedDistinct} closed · ` +
-  `${g.blocksOpenDistinct} open · ${count(g.blocksFedCampaignSum)} counting each campaign separately`;
+  `${g.blocksOpenDistinct} open · ${count(g.blocksFedCampaignSum)} counting each campaign ` +
+  `separately · ${pctFromPercent(g.fedPriceCoveragePct, 1)} priced coverage`;
 
 const groupPriceSetCounts = (g: OpsGroupRollup) =>
   `${groupBlockCounts(g)} · ${kg(g.campaignFedKgIncluded)} kg fed inside the price set ` +
   `(${pctFromFraction(g.coveredFedKgShare, 1)})`;
 
-const fedTotals = (r: OpsCampaignRollup | OpsGroupRollup) => [
-  { label: '₱ paid', value: php(r.fedValuePhp) },
-  { label: 'RC fed', value: `${kg(r.fedKg)} kg` },
-  { label: 'Priced coverage', value: pctFromPercent(r.fedPriceCoveragePct, 1) },
-  { label: 'Fed price', value: phpResult(r.fedPhpKg) },
-];
+// ── THE PRINTED SUMMARY (2026-09-16) ──────────────────────────────────────────
+// Renzo: *"When clicking on one campaign, have the option to print a summary of the
+// selected campaign. If clicking on the group row, give the option to print all 3
+// SEPARATELY… Make sure the printed summary is NOT WORDY."* So a sheet is exactly
+// the title, the span, the counts line, the rows, the aligned footer and the result
+// — assembled from the same builders the modal uses, so the paper cannot say
+// something the screen does not.
 
-const actualTotals = (r: OpsCampaignRollup) => [
-  { label: 'Fed price', value: phpResult(r.fedPhpKg) },
-  { label: 'Actual fed price', value: phpResult(r.actualFedPhpKg) },
-  { label: 'Campaign-attributed', value: phpResult(r.campaignWeightedActualFedPhpKg) },
-  { label: 'Resiko cost', value: phpResult(r.upliftPhpKg) },
-  { label: 'Resiko loss', value: pctFromFraction(r.blockResikoLossPct, 2) },
-  { label: 'Resiko weight', value: `${kg(r.blockResikoKg)} kg` },
-];
+const REPORT_LABEL = { fed: 'FED PRICE', actual: 'ACTUAL FED PRICE' } as const;
 
-// THE GROUP HAS NO RESIKO KILOGRAMS AND NO WHOLE-BLOCK ACTUAL PRICE, and the absence
-// is the point: a block can be fed by several campaigns, so both would double-count.
-const groupActualTotals = (g: OpsGroupRollup) => [
-  { label: 'Fed price', value: phpResult(g.fedPhpKg) },
-  { label: 'Actual fed price', value: phpResult(g.actualFedPhpKg) },
-  { label: 'Resiko cost', value: phpResult(g.upliftPhpKg) },
-  { label: 'Resiko loss', value: pctFromFraction(g.blockResikoLossPct, 2) },
-];
+function blocksPrintSpec(
+  variant: 'fed' | 'actual',
+  r: OpsCampaignRollup,
+  ctx: OpsKpiDetailCtx,
+): OpsPrintSheetSpec {
+  return {
+    key: r.campaignKey,
+    name: r.label,
+    title: `${r.label} · ${REPORT_LABEL[variant]}`,
+    span: campaignSpan(r),
+    variant,
+    rows: ctx.blocks.get(r.campaignKey) ?? [],
+    counts: variant === 'fed' ? campaignBlockCounts(r) : campaignPriceSetCounts(r),
+    footer: campaignBlocksFooter(r),
+    results:
+      variant === 'fed'
+        ? [phpTile('Fed price', r.fedPhpKg)]
+        : [phpTile('Actual fed price', r.actualFedPhpKg)],
+    canViewPrices: ctx.canViewPrices,
+  };
+}
+
+/** A GROUP prints ONE SHEET PER CAMPAIGN — never a page of de-duplicated rows. */
+const blocksPrintSheets = (variant: 'fed' | 'actual', ctx: OpsKpiDetailCtx) =>
+  ctx.rollups.map((r) => blocksPrintSpec(variant, r, ctx));
 
 // ── THE PRODUCTION FAMILY: ONE MODAL FOR FOUR CELLS (2026-09-16) ───────────────
 // PRODUCED · YIELD · LOSS · WASTE LOSS are one reading — `yieldPct` is produced ÷
@@ -319,13 +358,22 @@ const PRODUCTION_SYMBOLS =
   'Yield = Produced ÷ RC Fed  ·  Loss = 1 − Yield  ·  Waste % = Waste ÷ Produced';
 
 /**
- * The result bar: the three RATIOS of the row the modal was opened on, printed side
- * by side. Three separate published fields rendered next to each other — the modal
- * has four columns of results and no single headline, so picking one would be a
- * claim about which matters.
+ * The result bar: the three RATIOS of the row the modal was opened on, as THREE
+ * TILES in their own family colours (2026-09-16) — emerald YIELD, amber LOSS, rose
+ * WASTE, the hues each of them carries everywhere else on this screen. Three
+ * separate published fields printed side by side; the modal has four columns of
+ * results and no single headline, so picking one would be a claim about which
+ * matters.
  */
-const ratioResult = (r: { yieldPct: number | null; processLossPct: number | null; wasteLossPct: number | null }) =>
-  `${pctFromFraction(r.yieldPct, 2)} · ${pctFromFraction(r.processLossPct, 2)} · ${pctFromFraction(r.wasteLossPct, 2)}`;
+const ratioTiles = (r: {
+  yieldPct: number | null;
+  processLossPct: number | null;
+  wasteLossPct: number | null;
+}): KpiResultTile[] => [
+  pctTile('Yield', r.yieldPct, 'yield'),
+  pctTile('Loss', r.processLossPct, 'drift'),
+  pctTile('Waste', r.wasteLossPct, 'waste'),
+];
 
 /** Every campaign in the strip, then the GROUP row when the group is shown. */
 function productionRows(ctx: OpsKpiDetailCtx) {
@@ -343,16 +391,12 @@ function productionDetail(r: OpsCampaignRollup, ctx: OpsKpiDetailCtx): KpiDetail
     inputs: [],
     contentWidth: productionTablesWidth(),
     table: <OpsProductionTables rows={productionRows(ctx)} />,
-    result: { label: 'Yield · Loss · Waste %', value: ratioResult(r) },
-    notes: [
-      `Waste coverage — ${r.wasteShiftCount} of ${count(r.shiftCount) || 0} shifts filed a waste row. NULL IS NEVER 0: a campaign none of whose shifts filed one reads blank on every stream, which is not the claim that it produced no waste.`,
-      ...(r.productionReported
-        ? []
-        : [
-            'This campaign reported NO production, so PRODUCED, YIELD, LOSS and WASTE % are NULL rather than 0 — "nothing was filed" and "nothing was made" are different answers.',
-          ]),
-      'A CAMPAIGN yield is the real one. The ledger below also prints a per-DAY yield and loss, and those are indicative only: the feed tank is continuous flow, so a day’s fed kilos and its produced kilos are not the same charcoal.',
-    ],
+    results: ratioTiles(r),
+    notes: r.productionReported
+      ? undefined
+      : [
+          'This campaign reported NO production, so PRODUCED, YIELD, LOSS and WASTE % are NULL rather than 0.',
+        ],
   };
 }
 
@@ -365,12 +409,9 @@ function productionGroupDetail(g: OpsGroupRollup, ctx: OpsKpiDetailCtx): KpiDeta
     inputs: [],
     contentWidth: productionTablesWidth(),
     table: <OpsProductionTables rows={productionRows(ctx)} />,
-    result: { label: 'Yield · Loss · Waste %', value: ratioResult(g) },
+    results: ratioTiles(g),
     notes: [
-      `YIELD’s denominator is NARROWED: ${kg(g.fedKgProductionReported)} kg — the fed kilos of the ${g.campaignsProductionReported} of ${g.campaignCount} campaigns that reported production, not the group’s whole ${kg(g.fedKg)} kg.`,
-      `WASTE %’s denominator is narrowed the same way: ${kg(g.producedKgWasteReported)} kg — the produced kilos of the ${g.campaignsWasteReported} of ${g.campaignCount} campaigns that filed any waste, out of ${kg(g.producedKg)} kg produced. Production reporting begins 2025-11-27, so counting a pre-reporting campaign’s kilos against no waste would understate the ratio.`,
-      `Waste coverage — ${g.wasteShiftCount} of ${count(g.shiftCount) || 0} shifts filed a waste row.`,
-      'Every ratio on the GROUP row is WEIGHTED in SQL. It is never the mean of the campaign rows above it — the average of three yields belongs to no quarter.',
+      `Both denominators are NARROWED to the campaigns that reported: yield over ${kg(g.fedKgProductionReported)} kg fed (${g.campaignsProductionReported} of ${g.campaignCount}), waste over ${kg(g.producedKgWasteReported)} kg produced (${g.campaignsWasteReported} of ${g.campaignCount}).`,
     ],
   };
 }
@@ -500,10 +541,13 @@ const COLUMNS: KpiColumn[] = [
           rows={ctx.blocks.get(r.campaignKey) ?? []}
           canViewPrices={ctx.canViewPrices}
           counts={campaignBlockCounts(r)}
-          totals={fedTotals(r)}
+          footer={campaignBlocksFooter(r)}
         />
       ),
-      result: { label: 'Fed Price', value: phpResult(r.fedPhpKg) },
+      results: [phpTile('Fed Price', r.fedPhpKg)],
+      actions: (
+        <OpsPrintControl sheets={[blocksPrintSpec('fed', r, ctx)]} reportLabel={REPORT_LABEL.fed} />
+      ),
     }),
     groupDetail: (g, ctx) => ({
       title: 'GROUP · FED PRICE',
@@ -518,10 +562,13 @@ const COLUMNS: KpiColumn[] = [
           rows={ctx.groupBlocks}
           canViewPrices={ctx.canViewPrices}
           counts={groupBlockCounts(g)}
-          totals={fedTotals(g)}
+          footer={groupBlocksFooter(g)}
         />
       ),
-      result: { label: 'Fed Price', value: phpResult(g.fedPhpKg) },
+      results: [phpTile('Fed Price', g.fedPhpKg)],
+      actions: (
+        <OpsPrintControl sheets={blocksPrintSheets('fed', ctx)} reportLabel={REPORT_LABEL.fed} />
+      ),
       notes: [
         'FED WT is the kilograms the GROUP drew from each block — one row per DISTINCT block, so a block two campaigns fed appears once and its kilos are not counted twice.',
       ],
@@ -553,10 +600,16 @@ const COLUMNS: KpiColumn[] = [
           rows={ctx.blocks.get(r.campaignKey) ?? []}
           canViewPrices={ctx.canViewPrices}
           counts={campaignPriceSetCounts(r)}
-          totals={actualTotals(r)}
+          footer={campaignBlocksFooter(r)}
         />
       ),
-      result: { label: 'Actual Fed Price', value: phpResult(r.actualFedPhpKg) },
+      results: [phpTile('Actual Fed Price', r.actualFedPhpKg)],
+      actions: (
+        <OpsPrintControl
+          sheets={[blocksPrintSpec('actual', r, ctx)]}
+          reportLabel={REPORT_LABEL.actual}
+        />
+      ),
       notes: [
         'A greyed row is outside the price set and says why on hover — a block must be CLOSED and fully priced before its fed total and its money are both final, and a block with any sun-drying outflow is excluded rather than guessed at.',
       ],
@@ -574,10 +627,13 @@ const COLUMNS: KpiColumn[] = [
           rows={ctx.groupBlocks}
           canViewPrices={ctx.canViewPrices}
           counts={groupPriceSetCounts(g)}
-          totals={groupActualTotals(g)}
+          footer={groupBlocksFooter(g)}
         />
       ),
-      result: { label: 'Actual Fed Price', value: phpResult(g.actualFedPhpKg) },
+      results: [phpTile('Actual Fed Price', g.actualFedPhpKg)],
+      actions: (
+        <OpsPrintControl sheets={blocksPrintSheets('actual', ctx)} reportLabel={REPORT_LABEL.actual} />
+      ),
       notes: [
         'The group publishes the CAMPAIGN-ATTRIBUTED price and no whole-block one: a block can be fed by more than one campaign, so summing per-campaign block figures would charge one pile’s whole-life shrinkage twice.',
       ],
@@ -609,10 +665,10 @@ const COLUMNS: KpiColumn[] = [
           rows={ctx.blocks.get(r.campaignKey) ?? []}
           canViewPrices={ctx.canViewPrices}
           counts={campaignPriceSetCounts(r)}
-          totals={actualTotals(r)}
+          footer={campaignBlocksFooter(r)}
         />
       ),
-      result: { label: 'Resiko Cost', value: phpResult(r.upliftPhpKg) },
+      results: [phpTile('Resiko Cost', r.upliftPhpKg)],
       notes: [
         'RESIKO PRICE is legitimately 0 or NEGATIVE on some blocks — roughly 27% of closed ones — and is not clamped: a block that gained weight back, or whose paperwork was filed late, is a real reading.',
         'It is blank wherever ACTUAL PRICE is, and for the same reasons.',
@@ -631,10 +687,10 @@ const COLUMNS: KpiColumn[] = [
           rows={ctx.groupBlocks}
           canViewPrices={ctx.canViewPrices}
           counts={groupPriceSetCounts(g)}
-          totals={groupActualTotals(g)}
+          footer={groupBlocksFooter(g)}
         />
       ),
-      result: { label: 'Resiko Cost', value: phpResult(g.upliftPhpKg) },
+      results: [phpTile('Resiko Cost', g.upliftPhpKg)],
     }),
   },
 
@@ -663,17 +719,13 @@ const COLUMNS: KpiColumn[] = [
           rows={ctx.blocks.get(r.campaignKey) ?? []}
           canViewPrices={ctx.canViewPrices}
           counts={campaignPriceSetCounts(r)}
-          totals={
-            ctx.canViewPrices
-              ? actualTotals(r)
-              : [
-                  { label: 'Resiko loss', value: pctFromFraction(r.blockResikoLossPct, 2) },
-                  { label: 'Resiko weight', value: `${kg(r.blockResikoKg)} kg` },
-                ]
-          }
+          // THE FOOTER NEEDS NO PRICE BRANCH ANY MORE (2026-09-16): it is one
+          // cell per column, and the ₱ columns are already absent from the layout
+          // for a viewer without price rights.
+          footer={campaignBlocksFooter(r)}
         />
       ),
-      result: { label: 'Resiko Loss', value: pctFromFraction(r.blockResikoLossPct, 2) },
+      results: [pctTile('Resiko Loss', r.blockResikoLossPct, 'drift')],
       notes: [
         'RESIKO is measured over CLOSED blocks only: while a block is open the charcoal left in the pile is stock, so the cell shows that BALANCE instead, muted.',
         'This figure carries NO PESO VALUE and none is derivable from it, so it stays on screen for every role — including Production, which may not see what the shrinkage cost. (The glyph is deliberately not written here: the price-denied check asserts the document contains none.)',
@@ -692,14 +744,10 @@ const COLUMNS: KpiColumn[] = [
           rows={ctx.groupBlocks}
           canViewPrices={ctx.canViewPrices}
           counts={groupPriceSetCounts(g)}
-          totals={
-            ctx.canViewPrices
-              ? groupActualTotals(g)
-              : [{ label: 'Resiko loss', value: pctFromFraction(g.blockResikoLossPct, 2) }]
-          }
+          footer={groupBlocksFooter(g)}
         />
       ),
-      result: { label: 'Resiko Loss', value: pctFromFraction(g.blockResikoLossPct, 2) },
+      results: [pctTile('Resiko Loss', g.blockResikoLossPct, 'drift')],
       notes: [
         'THE GROUP PUBLISHES NO RESIKO KILOGRAMS — a block can be fed by more than one campaign (78 of 523), so adding per-campaign resiko weights would charge one pile’s whole-life shrinkage once per campaign that touched it. The ratio is weighted instead, which does not double-count.',
       ],
@@ -726,7 +774,7 @@ const COLUMNS: KpiColumn[] = [
         { label: 'RC Fed', value: `${kg(r.fedKg)} kg` },
         { label: 'Produced', value: `${kg(r.producedKg)} kg` },
       ],
-      result: { label: 'PC Cost', value: phpResult(r.phpPerProducedKgDelivered) },
+      results: [phpTile('PC Cost', r.phpPerProducedKgDelivered)],
       notes: [
         'DELIVERED basis — it does not carry the yard’s shrinkage. The figure that does is TRUE PC COST beside it.',
       ],
@@ -742,7 +790,7 @@ const COLUMNS: KpiColumn[] = [
         { label: 'RC Fed', value: `${kg(g.fedKg)} kg` },
         { label: 'Produced', value: `${kg(g.producedKg)} kg` },
       ],
-      result: { label: 'PC Cost', value: phpResult(g.phpPerProducedKgDelivered) },
+      results: [phpTile('PC Cost', g.phpPerProducedKgDelivered)],
     }),
   },
 
@@ -768,7 +816,7 @@ const COLUMNS: KpiColumn[] = [
         { label: 'Blocks fully priced', value: count(r.blocksInPrice) },
         { label: 'Closed but unpriced', value: count(r.blocksClosedUnpriced) },
       ],
-      result: { label: 'True PC Cost', value: phpResult(r.phpPerProducedKgTrue) },
+      results: [phpTile('True PC Cost', r.phpPerProducedKgTrue)],
       notes:
         r.phpPerProducedKgTrue === null
           ? [
@@ -797,7 +845,7 @@ const COLUMNS: KpiColumn[] = [
         },
         { label: 'Share of fed kg that is covered', value: pctFromFraction(g.coveredFedKgShare, 1) },
       ],
-      result: { label: 'True PC Cost', value: phpResult(g.phpPerProducedKgTrue) },
+      results: [phpTile('True PC Cost', g.phpPerProducedKgTrue)],
       notes:
         g.phpPerProducedKgTrue === null
           ? [

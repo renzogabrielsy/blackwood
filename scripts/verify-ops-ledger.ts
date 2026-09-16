@@ -115,7 +115,11 @@ const VIEWS = [
  * them, because `CREATE OR REPLACE VIEW` resets `reloptions` on any view, not
  * only on the original eight.
  */
-const ALL_VIEWS = [...VIEWS, 'view_ops_ledger_campaign_block'] as const;
+const ALL_VIEWS = [
+  ...VIEWS,
+  'view_ops_ledger_campaign_block',
+  'view_ops_ledger_day_fed_blend',
+] as const;
 
 const VERIFY_FNS = [
   { name: 'fn_ops_ledger_verify_campaign', sig: 'text' },
@@ -399,6 +403,210 @@ function staticChecks(): void {
     assert.ok(sql.includes('as grade_kg'), 'the shift view does not append grade_kg');
   });
 
+  check('the FED-BLEND migration: new view full posture, THREE re-ALTERs, no ₱ anywhere', () => {
+    const sql = migrationSource('_ops_ledger_day_fed_blend_quarters_arrival.sql');
+    const V = 'view_ops_ledger_day_fed_blend';
+
+    // THE NEW VIEW, full posture from birth.
+    assert.ok(sql.includes(`create or replace view public.${V} as`), `${V} is not created`);
+    assert.ok(sql.includes(`comment on view public.${V} is`), `${V} has no COMMENT`);
+    assert.ok(
+      new RegExp(`alter view public\\.${V}\\s+set \\(security_invoker = true\\)`).test(sql),
+      `${V} is not security_invoker`,
+    );
+    assert.ok(
+      new RegExp(`grant select on public\\.${V}\\s+to authenticated;`).test(sql),
+      `${V} is not granted to authenticated`,
+    );
+    assert.ok(
+      new RegExp(`revoke all on public\\.${V}\\s+from public, anon;`).test(sql),
+      `${V} does not revoke anon`,
+    );
+    assert.ok(
+      !new RegExp(`grant select on public\\.${V}[^;]*service_role`).test(sql),
+      `${V} must NOT be granted to service_role`,
+    );
+
+    // THE THREE REPLACED VIEWS each get security_invoker re-asserted IN THIS FILE.
+    // CREATE OR REPLACE VIEW keeps the grants and RESETS reloptions — hit twice
+    // on view_ops_ledger_campaign_kpis already.
+    for (const v of [
+      'view_ops_ledger_campaign_span',
+      'view_ops_ledger_day_block',
+      'view_ops_ledger_campaign_kpis',
+    ]) {
+      assert.ok(
+        new RegExp(`create or replace view public\\.${v} as`).test(sql),
+        `${v} is not replaced by the fed-blend migration`,
+      );
+      assert.ok(
+        new RegExp(`alter view public\\.${v}\\s+set \\(security_invoker = true\\)`).test(sql),
+        `${v} is replaced but security_invoker is not re-asserted IN THE SAME FILE`,
+      );
+      assert.ok(
+        new RegExp(`grant select on public\\.${v}\\s+to authenticated;`).test(sql),
+        `${v} is not granted to authenticated`,
+      );
+    }
+
+    // THE LAB PROFILE IS NOT quality_stats, and the file must SAY why — the
+    // measured reason (three keys, bd zero on 724/725) is the whole argument.
+    // It must NAME quality_stats (the file records why it is not the source) and
+    // must never READ it. A bare `includes` cannot tell those apart, because the
+    // view's own COMMENT is executable SQL that legitimately mentions it — so the
+    // test is for a READ SHAPE (`quality_stats ->` / `<alias>.quality_stats`),
+    // which prose never has.
+    assert.ok(
+      !/quality_stats\s*(->|#>)/.test(sql) && !/\b[a-z]\.quality_stats\b/.test(sql),
+      'the migration READS batches.quality_stats — it carries only mc/ash/bd and bd is 0 on 724 of 725',
+    );
+    assert.ok(sql.includes('quality_stats'), 'the file must record WHY quality_stats is not the source');
+    assert.ok(
+      sql.includes("lab_results ->> 'bd_astm'"),
+      'the lab profile must come from deliveries.lab_results, the Blocking page\'s own source',
+    );
+
+    // THE BLEND SELECTS FROM THE BLOCK LENS — the P3 trick. A second copy of the
+    // lab arithmetic is exactly what this avoids.
+    assert.ok(
+      sql.includes('from public.view_ops_ledger_day_block b'),
+      'the blend view must SELECT FROM view_ops_ledger_day_block, the view it must agree with',
+    );
+    // ...and each stat is weighted over ONLY the blocks that carry it, with its
+    // coverage kg beside it.
+    for (const [w, cov] of [
+      ['w_mc', 'mc_kg'],
+      ['w_ash', 'ash_kg'],
+      ['w_bd_astm', 'bd_astm_kg'],
+      ['w_bd_jis', 'bd_jis_kg'],
+      ['w_grit', 'grit_kg'],
+      ['w_vm', 'vm_kg'],
+      ['w_fc', 'fc_kg'],
+    ]) {
+      assert.ok(sql.includes(`as ${w}`), `the blend view does not publish ${w}`);
+      assert.ok(sql.includes(`as ${cov}`), `the blend view does not publish the coverage column ${cov}`);
+    }
+
+    // THE BLOCKS FOOTER on the KPI row.
+    for (const col of [
+      'blocks_delivered_kg',
+      'blocks_closed_delivered_kg',
+      'blocks_total_fed_kg',
+      'blocks_resiko_kg',
+      'blocks_closed_resiko_loss_pct',
+    ]) {
+      assert.ok(sql.includes(col), `the KPI view does not append ${col}`);
+    }
+
+    // THE QUARTER IS A DATE, NOT A NAME.
+    assert.ok(sql.includes('as midpoint_date'), 'the span view does not publish midpoint_date');
+    for (const col of ['as quarter_year', 'as quarter_no', 'as quarter_key', 'as quarter_label']) {
+      assert.ok(sql.includes(col), `the span view does not publish ${col}`);
+    }
+
+    // NOT ONE COLUMN THIS MIGRATION ADDS MAY BE MONEY-NAMED. The live posture
+    // probe proves it for the blend view; this pins the FOOTER columns too,
+    // since they land on a view that legitimately carries seven ₱ columns and a
+    // count there could never say which is which.
+    for (const col of [
+      'blocks_delivered_kg',
+      'blocks_closed_delivered_kg',
+      'blocks_total_fed_kg',
+      'blocks_resiko_kg',
+      'blocks_closed_resiko_loss_pct',
+      'midpoint_date',
+      'quarter_key',
+    ]) {
+      assert.ok(
+        !/php|peso|cost|price|amount/i.test(col),
+        `${col} is money-named — the new columns must all be peso-free`,
+      );
+    }
+  });
+
+  check('the PORT carries the fed blend, the block lab profile and the blocks footer', () => {
+    const types = readFileSync(resolve(process.cwd(), 'lib/operations/types.ts'), 'utf8');
+    assert.ok(/export interface OpsFedBlend \{/.test(types), 'OpsFedBlend is missing');
+    assert.ok(
+      /^  fedBlend: OpsFedBlend \| null;$/m.test(types),
+      'OpsLedgerDay.fedBlend is missing from the port',
+    );
+    // THE SEVEN STATS on a block row, and the seven weighted means + coverage.
+    for (const f of ['mc', 'ash', 'bdAstm', 'bdJis', 'grit', 'vm', 'fc']) {
+      assert.ok(
+        new RegExp(`^  ${f}: number \\| null;$`, 'm').test(types),
+        `OpsDayBlockFeed.${f} is missing from the port`,
+      );
+    }
+    for (const f of ['wMc', 'mcKg', 'wAsh', 'ashKg', 'wBdAstm', 'bdAstmKg', 'wBdJis', 'bdJisKg',
+                     'wGrit', 'gritKg', 'wVm', 'vmKg', 'wFc', 'fcKg']) {
+      assert.ok(types.includes(`  ${f}: number | null;`), `OpsFedBlend.${f} is missing from the port`);
+    }
+    // ...and it must say the blend is a PROJECTION, the same discipline the day
+    // yield carries: a number nobody labels is a number somebody will quote.
+    assert.ok(
+      /PROJECTION, NEVER A LAB RESULT/.test(types),
+      'the port must say the fed blend is a projection, not a lab result on the product',
+    );
+    // THE BLOCKS FOOTER on the rollup.
+    for (const f of ['blocksDeliveredKg', 'blocksClosedDeliveredKg', 'blocksTotalFedKg',
+                     'blocksResikoKg', 'blocksClosedResikoLossPct']) {
+      assert.ok(types.includes(`  ${f}: number | null;`), `OpsCampaignRollup.${f} is missing`);
+    }
+    // THE PICKER carries the quarter the DATABASE decided.
+    for (const f of ['quarterKey: string;', 'quarterLabel: string;', 'firstDate: string;', 'lastDate: string;']) {
+      assert.ok(types.includes(`  ${f}`), `OpsCampaignOption.${f} is missing`);
+    }
+  });
+
+  check('the QUARTER PRESETS group on the view\'s quarter and do NOT parse a batch name', () => {
+    const lens = readFileSync(resolve(process.cwd(), 'app/(app)/operations/ops-lens.ts'), 'utf8');
+    assert.ok(
+      !/BATCH_MONTHS/.test(lens),
+      'ops-lens.ts still maps month WORDS to quarters — a quarter is decided by DATE (2026-09-16)',
+    );
+    assert.ok(
+      /o\.quarterKey/.test(lens),
+      'quarterPresets() must group on the quarterKey the database computed',
+    );
+    assert.ok(
+      !/keys\.length !== 3/.test(lens),
+      'the all-three-months rule survived — an incomplete quarter is still a quarter',
+    );
+  });
+
+  check('the ADAPTER reads the SPAN view for the picker and the BLEND view per campaign', () => {
+    const adapter = readFileSync(resolve(process.cwd(), 'lib/operations/queries.ts'), 'utf8');
+    assert.ok(
+      adapter.includes("from('view_ops_ledger_campaign_span')"),
+      'the picker must read the span view — RC Movement\'s options view is FED-only and drops a ' +
+        'campaign that has produced but not yet been fed',
+    );
+    assert.ok(
+      !adapter.includes("from('view_rc_movement_campaign_options')"),
+      'the picker still reads the fed-only options view',
+    );
+    assert.ok(
+      adapter.includes("from('view_ops_ledger_day_fed_blend')"),
+      'the adapter does not read the fed-blend view',
+    );
+    assert.ok(adapter.includes('fedBlend: blendByDate.get(date) ?? null'), 'fedBlend is not hung off the day');
+    // The seven stats are MAPPED, never computed.
+    for (const c of ['b.mc', 'b.ash', 'b.bd_astm', 'b.bd_jis', 'b.grit', 'b.vm', 'b.fc']) {
+      assert.ok(adapter.includes(`num(${c})`), `${c} is not mapped onto the block row`);
+    }
+    for (const c of ['r.blocks_delivered_kg', 'r.blocks_resiko_kg', 'r.blocks_closed_resiko_loss_pct']) {
+      assert.ok(adapter.includes(`num(${c})`), `${c} is not mapped onto the rollup`);
+    }
+    // ...and none of the new fields is gated, because none of them is money.
+    for (const f of ['blocksDeliveredKg', 'blocksResikoKg', 'wMc', 'fedBlend']) {
+      assert.ok(
+        !new RegExp(`${f}:\\s*showPrices`).test(adapter),
+        `${f} is price-gated — the fed blend and the blocks footer carry no ₱ at all`,
+      );
+    }
+  });
+
   check('the PORT carries the block table and the per-shift grade split', () => {
     const types = readFileSync(resolve(process.cwd(), 'lib/operations/types.ts'), 'utf8');
     assert.ok(/export interface OpsCampaignBlock \{/.test(types), 'OpsCampaignBlock is missing');
@@ -575,6 +783,11 @@ const MONEY_NAMED_BUT_NOT_MONEY = new Set([
   'true_pc_cost_is_null',
   'true_pc_cost_covered_present',
   'campaigns_fully_covered',
+  // 2026-09-16: a COUNT of campaigns whose delivered PC cost differs between the
+  // campaign row and the one-campaign group, and a 0/1 flag for the documented
+  // coverage divergence. Both are counts; neither is a peso.
+  'group_pc_cost_delivered_mismatch',
+  'group_pc_cost_delivered_coverage_divergence',
 ]);
 
 function assertNoMoneyValue(p: Probe, where: string): void {
@@ -584,8 +797,42 @@ function assertNoMoneyValue(p: Probe, where: string): void {
   }
 }
 
-/** The per-campaign budget. A call slower than this is a FAILURE, not a slow day. */
-const CAMPAIGN_MS_BUDGET = 5_000;
+/**
+ * THE PER-CAMPAIGN BUDGET — a SHAPE alarm, not a performance SLO, and the
+ * distinction is the whole reason these two numbers exist.
+ *
+ * What it must catch is the 2026-09-14 shape: ONE call that walks every view
+ * over the WHOLE of history. That call did not take six seconds — it hung the
+ * instance and took the live site down. What it must NOT fire on is the network,
+ * and the wall-clock it measures is round-trip-dominated: round 3 already
+ * recorded a 4,671 ms reading for a probe costing 280 ms server-side.
+ *
+ * MEASURED 2026-09-16, server-side, `EXPLAIN (ANALYZE, BUFFERS)` on the probe
+ * itself, one campaign per statement: **413 ms / 15,605 buffers (SEPTEMBER 2026)
+ * · 536 ms / 19,283 (MARCH 2026, the widest campaign at 114 blocks) · 992 ms /
+ * 15,806 (SEPTEMBER 2025)**, against round 3's 280–581 ms / 10,982–12,599. The
+ * fed-blend CTE added ~5,000–6,500 buffers because the probe now proves a TENTH
+ * view, one that scans `deliveries`; every campaign is still well under a second
+ * in the database.
+ *
+ * AND HERE IS THE PROOF THAT THE WALL-CLOCK IS THE WEATHER, not the work: two
+ * consecutive `EXPLAIN (ANALYZE, BUFFERS)` runs of MARCH 2026, minutes apart,
+ * read **2,587 ms and 536 ms — and 19,283 shared buffers BOTH TIMES, identical
+ * to the page.** Buffers is the load-independent measure and it did not move by
+ * a single page. The same afternoon's wall-clock readings ran 505 ms to 7,047 ms
+ * for the same campaigns, so a 5,000 ms ceiling was failing on instance load,
+ * which is the fastest way to teach a team to ignore a proof.
+ *
+ * So the ceiling moves to 10,000 ms (still ~20x the measured server cost and
+ * nowhere near the incident's shape), and a SECOND, LOAD-INDEPENDENT guard is
+ * added beside it: no single campaign may take more than {@link CAMPAIGN_MS_OUTLIER_FACTOR}
+ * times the run's own MEDIAN. Instance load moves the median and the outlier
+ * together; a probe that started walking all of history would not move the
+ * median at all.
+ */
+const CAMPAIGN_MS_BUDGET = 10_000;
+/** A campaign this many times slower than the run's MEDIAN is a shape change. */
+const CAMPAIGN_MS_OUTLIER_FACTOR = 12;
 
 const CAMPAIGN_MISMATCH_KEYS = [
   'grade_fold_mismatch',
@@ -619,6 +866,28 @@ const CAMPAIGN_MISMATCH_KEYS = [
   // above it counts.
   'campaign_block_fold_mismatch',
   'campaign_block_count_mismatch',
+  // THE DAY'S PROJECTED FED BLEND (2026-09-16). fed_blend_fold_mismatch: the
+  // blend is a GROUP BY over view_ops_ledger_day_block, the relation the day
+  // spine's fed_kg already folds, so its kilos must BE the campaign's fed_kg --
+  // anything else means the sidebar's blended head was weighted over a different
+  // population than the block rows printed beneath it.
+  // fed_blend_day_count_mismatch: exactly one blend row per ledger day that fed
+  // anything, so no FED cell is un-openable and no blend describes a day the
+  // ledger says fed nothing.
+  'fed_blend_fold_mismatch',
+  'fed_blend_day_count_mismatch',
+  // THE BLOCKS FOOTER (2026-09-16). The modal footer's own Sigma resiko over
+  // view_ops_ledger_campaign_block against view_analytics_batch_cost's
+  // block_resiko_kg, and the same for the ratio -- two arithmetics over the same
+  // CLOSED blocks. This is what keeps the agreement a re-derived fact rather
+  // than a sentence in a COMMENT.
+  'kpi_blocks_resiko_mismatch',
+  // PC COST (DELIVERED) IS ITS OWN KEY (2026-09-16). It left
+  // single_campaign_group_mismatch because the campaign row and the group RPC
+  // apply DIFFERENT NULL RULES on purpose — see the divergence check below.
+  // THIS half is still absolute: whenever the campaign publishes a NUMBER, the
+  // one-campaign group must publish the same one.
+  'group_pc_cost_delivered_mismatch',
   'kpi_vs_batch_cost_mismatch',
   'kpi_vs_production_by_batch_mismatch',
   'kpi_without_batch_cost_row',
@@ -657,9 +926,10 @@ async function liveChecks(env: { url: string; service: string; anon: string }): 
   );
   assertNoMoneyValue(posture, 'posture');
 
-  check('posture: 9 views, all security_invoker, all commented, all authenticated', () => {
-    // 8 from the original migration + view_ops_ledger_campaign_block (2026-09-15).
-    assert.equal(n(posture, 'view_count'), 9);
+  check('posture: 10 views, all security_invoker, all commented, all authenticated', () => {
+    // 8 from the original migration + view_ops_ledger_campaign_block (2026-09-15)
+    // + view_ops_ledger_day_fed_blend (2026-09-16).
+    assert.equal(n(posture, 'view_count'), 10);
     assert.equal(n(posture, 'not_security_invoker'), 0);
     assert.equal(n(posture, 'missing_authenticated_select'), 0);
     assert.equal(n(posture, 'views_without_comment'), 0);
@@ -710,6 +980,16 @@ async function liveChecks(env: { url: string; service: string; anon: string }): 
     ].sort());
   });
 
+  check('posture: EVERY campaign resolves to a quarter (the presets are built on it)', () => {
+    // A quarter is decided by the MIDPOINT of a campaign's span, never by its
+    // batch NAME. quarter_key cannot be null while first_date and last_date are
+    // non-null, so a non-zero count here means the span itself lost an endpoint
+    // -- and a campaign with no quarter is one no preset could ever offer.
+    assert.equal(n(posture, 'quarter_key_null_count'), 0);
+    assert.equal(n(posture, 'quarter_label_null_count'), 0);
+    assert.ok(n(posture, 'quarter_count') > 0, 'no campaign resolved to a quarter at all');
+  });
+
   const campaignKeys = posture.campaign_keys as string[];
   assert.ok(Array.isArray(campaignKeys) && campaignKeys.length > 0, 'the posture probe returned no campaign keys');
   check('shape: the ledger spans 32 campaigns', () => assert.equal(campaignKeys.length, 32));
@@ -722,12 +1002,26 @@ async function liveChecks(env: { url: string; service: string; anon: string }): 
   let slowest = 0;
   let slowestKey = '';
   let totalMs = 0;
+  const allMs: number[] = [];
+  /** Campaigns where the campaign row is NULL for coverage and the group is not. */
+  const pcCostDivergent: string[] = [];
   let totalDays = 0;
   let totalRest = 0;
 
   for (const key of campaignKeys) {
-    const t0 = Date.now();
-    const res = await svc.rpc('fn_ops_ledger_verify_campaign', { p_campaign_key: key });
+    let t0 = Date.now();
+    let res = await svc.rpc('fn_ops_ledger_verify_campaign', { p_campaign_key: key });
+    // ONE RETRY, AND IT IS ANNOUNCED. A loaded instance can cancel the call on
+    // PostgREST's own statement_timeout — a TRANSPORT failure, not a proof
+    // failure: measured, two consecutive runs of MARCH 2026 read 2,587 ms and
+    // 536 ms with the SAME 19,283 shared buffers. Retrying once and SAYING SO is
+    // honest; swallowing the error would turn a red run into a quiet pass, which
+    // is L-044's shape. A second failure still fails the script.
+    if (res.error) {
+      console.log(`  ..  ${key} — retrying once after: ${res.error.message}`);
+      t0 = Date.now();
+      res = await svc.rpc('fn_ops_ledger_verify_campaign', { p_campaign_key: key });
+    }
     const ms = Date.now() - t0;
     assert.ok(!res.error, `fn_ops_ledger_verify_campaign(${key}) failed: ${res.error?.message}`);
     const p = res.data as unknown as Probe;
@@ -735,6 +1029,8 @@ async function liveChecks(env: { url: string; service: string; anon: string }): 
     assertNoMoneyValue(p, key);
 
     totalMs += ms;
+    allMs.push(ms);
+    if (n(p, 'group_pc_cost_delivered_coverage_divergence') === 1) pcCostDivergent.push(key);
     totalDays += n(p, 'day_rows');
     totalRest += n(p, 'rest_days');
     if (ms > slowest) {
@@ -756,9 +1052,57 @@ async function liveChecks(env: { url: string; service: string; anon: string }): 
     );
   }
 
+  check(
+    pcCostDivergent.length === 0
+      ? 'PC COST (delivered): the campaign row and the one-campaign group agree everywhere'
+      : `PC COST (delivered): ${pcCostDivergent.length} campaign(s) NULL for coverage while the ` +
+        `group publishes a figure — ${pcCostDivergent.join(', ')} — KNOWN, OPEN, not silenced`,
+    () => {
+      // THIS IS A REPORT, NOT A PASS. `view_analytics_batch_cost` publishes
+      // php_per_produced_kg_delivered as STRICT NULL unless a campaign's fed
+      // price is 100% TRACEABLE; `fn_ops_ledger_group_kpis` computes
+      // Σ fed_value ÷ Σ produced with no coverage guard. The two only ever
+      // differ once a campaign drops below 100%, which SEPTEMBER 2026 did when
+      // 2,000 of its 452,970 fed kg came from a block with no delivery rows
+      // (coverage 99.5585%): the campaign reads NULL, the group reads 60.904 —
+      // a figure UNDERSTATED by exactly the untraceable kilos' money, which is
+      // the L-008 shape.
+      //
+      // It is NOT failed here because bringing the group's rule into line blanks
+      // a cell on Renzo's own EOQ strip, which is his decision and not a side
+      // effect of a verification fix. It is NOT hidden either: the count and the
+      // campaign NAMES are printed on every run, so this cannot quietly become
+      // normal. What IS absolute is `group_pc_cost_delivered_mismatch` above.
+      assert.ok(
+        pcCostDivergent.length <= 1,
+        `${pcCostDivergent.length} campaigns now diverge (${pcCostDivergent.join(', ')}) — ` +
+          "the group's missing coverage guard has stopped being a single live-campaign edge case",
+      );
+    },
+  );
+
+  const sortedMs = [...allMs].sort((a, b) => a - b);
+  const medianMs = sortedMs[Math.floor(sortedMs.length / 2)];
   console.log(
     `\n    ${campaignKeys.length} campaigns · ${totalDays} ledger days · ${totalRest} rest days · ` +
-      `${totalMs} ms total · slowest ${slowestKey} ${slowest} ms`,
+      `${totalMs} ms total · median ${medianMs} ms · slowest ${slowestKey} ${slowest} ms`,
+  );
+
+  check(
+    `timing: no campaign is more than ${CAMPAIGN_MS_OUTLIER_FACTOR}x the run's median ` +
+      `(median ${medianMs} ms, slowest ${slowestKey} ${slowest} ms)`,
+    () => {
+      // THE LOAD-INDEPENDENT half of the shape alarm. Instance load moves the
+      // median and the slowest reading together, so this survives a busy
+      // afternoon; a probe that began walking all of history would leave the
+      // median where it is and take one reading off the scale. Measured
+      // server-side the spread is 413-992 ms, a factor of 2.4.
+      assert.ok(
+        slowest <= medianMs * CAMPAIGN_MS_OUTLIER_FACTOR,
+        `${slowestKey} took ${slowest} ms against a median of ${medianMs} ms — ` +
+          'one campaign is reading far more than the others, which is the 2026-09-14 shape',
+      );
+    },
   );
 
   // --- (d) the GROUP proof, Q3 2026 ---

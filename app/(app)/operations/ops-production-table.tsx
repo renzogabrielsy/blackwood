@@ -29,13 +29,20 @@ import { kg, pctFromFraction, tons } from './ops-format';
 // all four and clicking any of them opens THIS — the whole group at once.
 //
 // ── TWO TABLES, ONE ROW SET ─────────────────────────────────────────────────────
-//  (a) the headline: RC FED · PRODUCED · YIELD · LOSS · PROCESS LOSS · WASTE · WASTE %
-//  (b) the eight RECORDED streams that make up the WASTE column of (a), plus the
-//      shift coverage behind them.
+//  (a) the headline: RC FED · PRODUCED · YIELD · LOSS · WASTE · WASTE %
+//  (b) the eight RECORDED streams that make up the WASTE column of (a).
 //
 // Both render the SAME rows — one per campaign in the strip, plus the GROUP row when
 // the modal was opened from it — so (b) is (a)'s waste column opened up, never a
 // second population.
+//
+// ── LEANER, 2026-09-16 ──────────────────────────────────────────────────────────
+// Renzo: *"Take out process loss, take out the description headings — too wordy"*
+// and *"What is waste shifts? That needs to be taken out."* So PROCESS LOSS kg is
+// gone (LOSS % says the same thing in the unit the row is read in, and the kilograms
+// were a third figure nobody asked of this table), WASTE SHIFTS is gone with its
+// coverage prose, both section headings are gone, and the notes under the result are
+// one short line. What survives is the formula line and the numbers.
 //
 // ── THE ONE RULE ────────────────────────────────────────────────────────────────
 // **NOTHING IS COMPUTED.** Every cell is a published field of `OpsCampaignRollup` /
@@ -69,9 +76,6 @@ export interface OpsProductionRow {
   waste: OpsWaste;
   wasteKg: number | null;
   wasteLossPct: number | null;
-  /** Shifts that filed a waste row, of the shifts there were — the coverage. */
-  wasteShiftCount: number;
-  shiftCount: number | null;
 }
 
 export function productionRowFromCampaign(r: OpsCampaignRollup): OpsProductionRow {
@@ -87,8 +91,6 @@ export function productionRowFromCampaign(r: OpsCampaignRollup): OpsProductionRo
     waste: r.waste,
     wasteKg: r.wasteKg,
     wasteLossPct: r.wasteLossPct,
-    wasteShiftCount: r.wasteShiftCount,
-    shiftCount: r.shiftCount,
   };
 }
 
@@ -108,8 +110,6 @@ export function productionRowFromGroup(g: OpsGroupRollup): OpsProductionRow {
     waste: g.waste,
     wasteKg: g.wasteKg,
     wasteLossPct: g.wasteLossPct,
-    wasteShiftCount: g.wasteShiftCount,
-    shiftCount: g.shiftCount,
   };
 }
 
@@ -178,15 +178,6 @@ const HEADLINE_COLS: ProdCol[] = [
     cell: (r) => pct(r.processLossPct, 'font-medium text-amber-700 dark:text-amber-300'),
   },
   {
-    key: 'losskg',
-    label: 'Process loss',
-    unit: 'kg',
-    width: 126,
-    right: true,
-    accent: 'text-amber-700 dark:text-amber-300',
-    cell: (r) => num(kg(r.processLossKg), 'text-muted-foreground'),
-  },
-  {
     key: 'wastekg',
     label: 'Waste',
     unit: 'kg',
@@ -227,15 +218,6 @@ const STREAM_COLS: ProdCol[] = [
     accent: 'text-rose-700 dark:text-rose-300',
     cell: (r) => num(kg(r.wasteKg), 'font-medium text-rose-700 dark:text-rose-300'),
   },
-  {
-    key: 'coverage',
-    label: 'Waste shifts',
-    width: 110,
-    right: true,
-    // TWO PUBLISHED COUNTS PRINTED SIDE BY SIDE — the coverage behind the total,
-    // not a ratio computed from them.
-    cell: (r) => num(`${r.wasteShiftCount} of ${r.shiftCount ?? 0}`, 'text-muted-foreground'),
-  },
 ];
 
 const width = (cols: ProdCol[]) => W_LABEL + cols.reduce((s, c) => s + c.width, 0);
@@ -250,21 +232,10 @@ export function productionTablesWidth(): number {
 
 // ─── THE TABLE ───────────────────────────────────────────────────────────────────
 
-function ProdTable({
-  caption,
-  cols,
-  rows,
-}: {
-  caption: string;
-  cols: ProdCol[];
-  rows: readonly OpsProductionRow[];
-}) {
+function ProdTable({ cols, rows }: { cols: ProdCol[]; rows: readonly OpsProductionRow[] }) {
   const minWidth = width(cols);
   return (
     <section className="flex min-h-0 shrink-0 flex-col gap-1">
-      <h3 className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {caption}
-      </h3>
       {/* NEVER CRUSH, ALWAYS SCROLL — an explicit min-width equal to Σ of the
           declared widths, inside an `overflow-x-auto` wrapper. On a phone this is
           the only thing that scrolls sideways; the dialog itself never does. */}
@@ -370,18 +341,12 @@ export function OpsProductionTables({ rows, className }: OpsProductionTablesProp
 
   return (
     <div className={cn('flex min-h-0 flex-auto flex-col gap-3 overflow-auto', className)}>
-      <ProdTable caption="The four figures, side by side" cols={HEADLINE_COLS} rows={rows} />
-      <ProdTable
-        caption="What the WASTE column is made of — the eight recorded streams"
-        cols={STREAM_COLS}
-        rows={rows}
-      />
-      {/* The caveat that belongs to table (b) and nowhere else. */}
+      <ProdTable cols={HEADLINE_COLS} rows={rows} />
+      <ProdTable cols={STREAM_COLS} rows={rows} />
+      {/* ONE caveat line, and only the one a reader cannot get from the numbers. */}
       <p className="shrink-0 text-[11px] leading-snug text-muted-foreground">
-        THESE EIGHT DO NOT SUM TO THE PROCESS LOSS. Most of what the retort loses leaves as
-        moisture and volatiles that nobody weighs; this is what was swept up off the screens
-        and trommels and put on a scale — a recovery figure, never a second process-loss
-        number.
+        The eight streams do NOT sum to the process loss — most of what the retort loses leaves
+        as moisture and volatiles nobody weighs.
       </p>
     </div>
   );

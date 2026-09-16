@@ -80,54 +80,97 @@ export function lensSpec(id: OpsLensId): OpsLensSpec {
   return OPS_LENSES.find((l) => l.id === id) ?? OPS_LENSES[0];
 }
 
-// ─── Quarter presets, DERIVED from the campaign list ─────────────────────────────
+// ─── Quarter presets, DERIVED from the SPAN'S OWN QUARTER ────────────────────────
 
 /**
- * The twelve production-batch names, in order, so a quarter can be derived.
+ * ⚠ REWRITTEN 2026-09-16: A QUARTER IS DECIDED BY DATE, NEVER BY THE BATCH NAME.
  *
- * A campaign's `productionBatch` is the month word MC's report opens the batch with
- * (`JULY`), and the campaign clock is never the calendar month — JULY 2026 opens on
- * 2026-06-30. That does not make the NAME ambiguous, and the quarter presets are
- * built from the names of campaigns that actually exist, never from a hardcoded
- * `['JULY-2026', …]`: a quarter is offered only when all three of its campaigns are
- * in the option list, so a preset can never point at a campaign the database has
- * never heard of.
+ * This used to map the twelve month WORDS to quarters and require all three
+ * months of a quarter to be present. Both halves were wrong.
+ *
+ *  1. **A production_batch is a NAME A PERSON TYPED** — the L-039 / L-042 /
+ *     L-048 lesson one level up. `TEST BATCH` is a legal batch name with no
+ *     month in it, and a name-driven preset cannot place it anywhere at all.
+ *     And the campaign clock is never the calendar month: JULY 2026 runs
+ *     2026-06-30 → 2026-08-01, SEPTEMBER 2026 opens 2026-08-29.
+ *  2. **An incomplete quarter is still a quarter** (Renzo, 2026-09-16). The
+ *     old "all three or nothing" rule meant the CURRENT quarter never appeared
+ *     until its third campaign opened — the one quarter an owner most wants.
+ *
+ * `quarterKey` / `quarterLabel` come from `view_ops_ledger_campaign_span`, which
+ * places a campaign in the quarter containing the MIDPOINT of its span. **This
+ * function does no date arithmetic** — it groups on a value the database already
+ * decided, so the picker and the database can never disagree about which quarter
+ * a campaign is in. Measured on all 32 campaigns today: every midpoint quarter
+ * agrees with the quarter its month-name implies, so nothing visible changed on
+ * current data.
  */
-const BATCH_MONTHS = [
-  'JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE',
-  'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER',
-] as const;
-
 export interface OpsGroupPreset {
   id: string;
   /** `Q3 2026`. */
   label: string;
+  /** The quarter's campaign keys, CHRONOLOGICAL by `firstDate`. */
   keys: string[];
+  /** How many campaigns the quarter holds — a preset of 1 is legitimate. */
+  campaignCount: number;
+  /** The quarter's own span: the earliest `firstDate` and the latest `lastDate`. */
+  firstDate: string;
+  lastDate: string;
 }
 
-export function quarterPresets(
-  options: readonly { key: string; productionBatch: string; campaignYear: number }[],
-): OpsGroupPreset[] {
-  const byYear = new Map<number, Map<string, string>>();
+/** The shape `quarterPresets` reads — the four fields, and nothing else. */
+export interface OpsQuarterOption {
+  key: string;
+  quarterKey: string;
+  quarterLabel: string;
+  firstDate: string;
+  lastDate: string;
+}
+
+export function quarterPresets(options: readonly OpsQuarterOption[]): OpsGroupPreset[] {
+  const byQuarter = new Map<string, { label: string; rows: OpsQuarterOption[] }>();
   for (const o of options) {
-    const batch = o.productionBatch.toUpperCase();
-    if (!BATCH_MONTHS.includes(batch as (typeof BATCH_MONTHS)[number])) continue;
-    const bucket = byYear.get(o.campaignYear) ?? new Map<string, string>();
-    bucket.set(batch, o.key);
-    byYear.set(o.campaignYear, bucket);
+    if (!o.quarterKey) continue;
+    const bucket = byQuarter.get(o.quarterKey) ?? { label: o.quarterLabel || o.quarterKey, rows: [] };
+    bucket.rows.push(o);
+    byQuarter.set(o.quarterKey, bucket);
   }
 
-  const out: OpsGroupPreset[] = [];
-  for (const year of [...byYear.keys()].sort((a, b) => b - a)) {
-    const bucket = byYear.get(year)!;
-    for (let q = 4; q >= 1; q--) {
-      const months = BATCH_MONTHS.slice((q - 1) * 3, q * 3);
-      const keys = months.map((m) => bucket.get(m)).filter((k): k is string => Boolean(k));
-      // All three, or it is not that quarter — a two-month "Q3" is a different
-      // period wearing a quarter's name, which is worse than no preset at all.
-      if (keys.length !== 3) continue;
-      out.push({ id: `Q${q}-${year}`, label: `Q${q} ${year}`, keys });
-    }
-  }
-  return out;
+  // `quarterKey` is `YYYY-Qn`, so a plain string sort IS chronological order — and
+  // `firstDate` / `lastDate` are `yyyy-MM-dd`, so the same is true of them. NO DATE
+  // ARITHMETIC: every comparison here is a string comparison over values the
+  // database decided.
+  return [...byQuarter.keys()]
+    .sort((a, b) => b.localeCompare(a))
+    .map((qk) => {
+      const b = byQuarter.get(qk)!;
+      const rows = [...b.rows].sort((x, y) =>
+        x.firstDate === y.firstDate ? x.key.localeCompare(y.key) : x.firstDate < y.firstDate ? -1 : 1,
+      );
+      return {
+        id: qk,
+        label: b.label,
+        keys: rows.map((r) => r.key),
+        campaignCount: rows.length,
+        firstDate: rows[0]?.firstDate ?? '',
+        lastDate: rows.reduce((acc, r) => (r.lastDate > acc ? r.lastDate : acc), ''),
+      };
+    });
+}
+
+/**
+ * THE DEFAULT GROUP — every campaign of the LATEST quarter.
+ *
+ * Renzo, 2026-09-16: *"It is not showing the current Q3 2026 group because it
+ * isn't complete yet. It should show it and default to it since it is the
+ * latest."* The old default was the single newest campaign, which on the day a
+ * quarter's third campaign opened made the screen read as one month.
+ *
+ * "Latest" is the quarter holding the newest `firstDate` — the first preset, since
+ * `quarterPresets` is already newest-first and `quarterKey` sorts chronologically.
+ * Returns `[]` when the options carry no quarter at all, so the caller keeps its
+ * own fallback rather than this one inventing a group.
+ */
+export function latestQuarterKeys(options: readonly OpsQuarterOption[]): string[] {
+  return quarterPresets(options)[0]?.keys ?? [];
 }

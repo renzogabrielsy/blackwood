@@ -6,7 +6,7 @@ import { Check, Layers, Search, X } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
-import type { OpsCampaignOption } from '@/lib/operations/types';
+import type { OpsCampaignOption, OpsCampaignRollup } from '@/lib/operations/types';
 import { quarterPresets } from './ops-lens';
 import { tons } from './ops-format';
 
@@ -14,23 +14,35 @@ import { tons } from './ops-format';
 // THE GROUP BUILDER — "pick what batches/months are in the group view."
 //
 // A chip rail showing what IS in the group (so the quarter is visible without
-// opening anything) plus a popover holding the full campaign list, a search box and
-// the quarter presets. The drafts put every campaign in the rail; the live option
-// list is ~32 campaigns, which is a rail nobody reads, so the rail shows the
-// SELECTION and the popover owns the pick.
+// opening anything) plus a popover holding the campaign list GROUPED UNDER ITS
+// QUARTER HEADINGS, a search box and the quarter presets. The drafts put every
+// campaign in the rail; the live option list is ~32 campaigns, which is a rail
+// nobody reads, so the rail shows the SELECTION and the popover owns the pick.
 //
-// ── THREE DECISIONS ────────────────────────────────────────────────────────────
+// ── FOUR DECISIONS ─────────────────────────────────────────────────────────────
 //
 //  • **THE ORDER IS THE CAMPAIGN'S, NEVER THE CLICK ORDER.** Ticking AUGUST then
 //    JULY writes `JULY-2026,AUGUST-2026`. A quarter whose months reshuffle when you
 //    untick and retick one is not a quarter — and because the order is normalised
 //    HERE, two people who built the same group by different routes share the same
-//    URL.
-//  • **THE PRESETS ARE DERIVED, never hardcoded.** `quarterPresets()` offers a
-//    quarter only when all three of its campaigns exist in the option list, so a
-//    preset can never point at a campaign the database has never heard of.
+//    URL. It sorts on `firstDate`, the LEDGER's own opening day, which every
+//    campaign has; `maxDate` is the last FEED and is NULL on a campaign that has
+//    produced but not yet been fed (SEPTEMBER 2026 on the day it opened).
+//  • **THE PRESETS ARE DERIVED FROM A DATE, never from a batch NAME** (2026-09-16).
+//    `quarterPresets()` groups the options on the `quarterKey` the database
+//    computed from the MIDPOINT of each campaign's span, so a preset can never
+//    point at a campaign the database has never heard of AND can never disagree
+//    with it about which quarter a campaign belongs to. An INCOMPLETE quarter is
+//    still a quarter — the current one appears the day its first campaign opens,
+//    and `page.tsx` DEFAULTS to it through the same function.
+//  • **A ROW STATES ITS SPAN, NOT ITS TONNAGE** (2026-09-16). The option list is
+//    `view_ops_ledger_campaign_span`, a calendar spine that carries no tonnage at
+//    all — `OpsCampaignOption.totalFedKg` reads 0 for every row — so printing it
+//    would have been printing a zero. `firstDate → lastDate` is what the list is
+//    for; the SELECTED chips get a real fed total from `rollups[].fedKg`, which is
+//    the payload that was actually resolved.
 //  • **THE LAST CAMPAIGN CANNOT BE UNTICKED.** An empty group has no ledger and no
-//    rollup, and an absent `?campaigns=` means "the newest campaign" — so writing an
+//    rollup, and an absent `?campaigns=` means "the latest quarter" — so writing an
 //    empty selection would silently re-resolve to something the reader did not pick.
 //    The chip refuses instead, which is the honest and reversible direction.
 // ═════════════════════════════════════════════════════════════════════════════════
@@ -38,6 +50,11 @@ import { tons } from './ops-format';
 export interface OpsGroupPickerProps {
   options: readonly OpsCampaignOption[];
   selected: readonly string[];
+  /**
+   * The rollups the payload actually resolved — read ONLY for `fedKg`, the tonnage
+   * on a selected chip. A key with no rollup simply shows no tonnage.
+   */
+  rollups?: readonly OpsCampaignRollup[];
   onChange(next: string[]): void;
   disabled?: boolean;
   className?: string;
@@ -46,6 +63,7 @@ export interface OpsGroupPickerProps {
 export function OpsGroupPicker({
   options,
   selected,
+  rollups,
   onChange,
   disabled,
   className,
@@ -59,12 +77,19 @@ export function OpsGroupPicker({
     return m;
   }, [options]);
 
+  /** campaignKey → the fed kilos the payload published for it. A LOOKUP, never a sum. */
+  const fedByKey = React.useMemo(() => {
+    const m = new Map<string, number | null>();
+    for (const r of rollups ?? []) m.set(r.campaignKey, r.fedKg);
+    return m;
+  }, [rollups]);
+
   /** Chronological, always — see the class note. Unknown keys sort last, in place. */
   const order = React.useCallback(
     (keys: readonly string[]) =>
       [...keys].sort((a, b) => {
-        const da = byKey.get(a)?.maxDate ?? '';
-        const db = byKey.get(b)?.maxDate ?? '';
+        const da = byKey.get(a)?.firstDate ?? '';
+        const db = byKey.get(b)?.firstDate ?? '';
         if (da === db) return a.localeCompare(b);
         if (!da) return 1;
         if (!db) return -1;
@@ -86,11 +111,28 @@ export function OpsGroupPicker({
   );
 
   const presets = React.useMemo(() => quarterPresets(options), [options]);
-  const filtered = React.useMemo(() => {
+
+  /**
+   * THE LIST, GROUPED UNDER ITS QUARTER HEADINGS.
+   *
+   * The sections and their order ARE the presets — same function, same field, same
+   * newest-first order — so a heading can never name a quarter the preset above it
+   * does not build. The filter narrows the rows inside a section and drops a section
+   * that ends up empty; it never re-orders anything.
+   */
+  const sections = React.useMemo(() => {
     const q = query.trim().toUpperCase();
-    if (!q) return options;
-    return options.filter((o) => o.key.includes(q) || o.label.toUpperCase().includes(q));
-  }, [options, query]);
+    const match = (o: OpsCampaignOption) =>
+      !q || o.key.includes(q) || o.label.toUpperCase().includes(q);
+    return presets
+      .map((p) => ({
+        id: p.id,
+        label: p.label,
+        span: `${p.firstDate || '—'} → ${p.lastDate || '—'}`,
+        rows: p.keys.map((k) => byKey.get(k)).filter((o): o is OpsCampaignOption => !!o && match(o)),
+      }))
+      .filter((s) => s.rows.length > 0);
+  }, [presets, byKey, query]);
 
   const selectedOrdered = order(selected);
 
@@ -113,7 +155,7 @@ export function OpsGroupPicker({
           </button>
         </PopoverTrigger>
 
-        <PopoverContent align="start" className="w-[360px] bg-popover/95 p-0 backdrop-blur-lg">
+        <PopoverContent align="start" className="w-[380px] bg-popover/95 p-0 backdrop-blur-lg">
           <div className="border-b border-border px-3 py-2">
             <div className="relative">
               <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -135,59 +177,75 @@ export function OpsGroupPicker({
                   key={p.id}
                   type="button"
                   onClick={() => onChange(order(p.keys))}
-                  title={p.keys.join(' · ')}
+                  title={`${p.firstDate} → ${p.lastDate} · ${p.keys.join(' · ')}`}
                   className="h-6 rounded border border-input px-2 text-[11px] transition-colors duration-150 hover:bg-muted"
                 >
                   {p.label}
+                  <span className="ml-1 font-mono tabular-nums text-muted-foreground">
+                    {p.campaignCount}
+                  </span>
                 </button>
               ))}
             </div>
           ) : null}
 
-          <div className="max-h-[300px] overflow-y-auto py-1">
-            {filtered.length === 0 ? (
+          <div className="max-h-[320px] overflow-y-auto py-1">
+            {sections.length === 0 ? (
               <p className="px-3 py-4 text-xs text-muted-foreground">
                 No campaign matches “{query}”.
               </p>
             ) : (
-              filtered.map((o) => {
-                const on = selected.includes(o.key);
-                const last = on && selected.length === 1;
-                return (
-                  <button
-                    key={o.key}
-                    type="button"
-                    role="checkbox"
-                    aria-checked={on}
-                    aria-disabled={last}
-                    onClick={() => toggle(o.key)}
-                    title={last ? 'A group needs at least one campaign.' : o.key}
-                    className={cn(
-                      'flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors duration-150',
-                      on ? 'bg-muted/70' : 'hover:bg-muted/40',
-                      last && 'cursor-not-allowed',
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        'flex size-4 shrink-0 items-center justify-center rounded border',
-                        on ? 'border-primary bg-primary text-primary-foreground' : 'border-input',
-                      )}
-                    >
-                      {on ? <Check className="size-3" /> : null}
+              sections.map((s) => (
+                <section key={s.id}>
+                  {/* OPAQUE — a sticky heading sits on top of the scrolling rows
+                      beneath it (CLAUDE.md → "Frozen Panes"). */}
+                  <h4 className="sticky top-0 z-10 flex items-baseline justify-between gap-2 border-b border-border bg-muted px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    <span>{s.label}</span>
+                    <span className="font-mono text-[9px] font-normal normal-case tabular-nums">
+                      {s.span}
                     </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-xs font-medium">{o.label}</span>
-                      <span className="block truncate font-mono text-[10px] tabular-nums text-muted-foreground">
-                        {o.minDate ?? '—'} → {o.maxDate ?? '—'} · {o.feedDays} feed days
-                      </span>
-                    </span>
-                    <span className="shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
-                      {tons(o.totalFedKg)} t
-                    </span>
-                  </button>
-                );
-              })
+                  </h4>
+                  {s.rows.map((o) => {
+                    const on = selected.includes(o.key);
+                    const last = on && selected.length === 1;
+                    return (
+                      <button
+                        key={o.key}
+                        type="button"
+                        role="checkbox"
+                        aria-checked={on}
+                        aria-disabled={last}
+                        onClick={() => toggle(o.key)}
+                        title={last ? 'A group needs at least one campaign.' : o.key}
+                        className={cn(
+                          'flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors duration-150',
+                          on ? 'bg-muted/70' : 'hover:bg-muted/40',
+                          last && 'cursor-not-allowed',
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            'flex size-4 shrink-0 items-center justify-center rounded border',
+                            on
+                              ? 'border-primary bg-primary text-primary-foreground'
+                              : 'border-input',
+                          )}
+                        >
+                          {on ? <Check className="size-3" /> : null}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-xs font-medium">
+                          {o.label}
+                        </span>
+                        {/* THE SPAN, not a tonnage — the option list is a calendar
+                            spine and carries none. */}
+                        <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
+                          {o.firstDate || '—'} → {o.lastDate || '—'}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </section>
+              ))
             )}
           </div>
 
@@ -212,16 +270,18 @@ export function OpsGroupPicker({
         {selectedOrdered.map((key) => {
           const o = byKey.get(key);
           const last = selected.length === 1;
+          const fedKg = fedByKey.get(key);
+          const fed = fedKg === null || fedKg === undefined ? '' : tons(fedKg);
           return (
             <span
               key={key}
               className="flex h-7 shrink-0 items-center gap-1 rounded-md border border-foreground/25 bg-foreground px-2 text-background"
-              title={o ? `${o.minDate ?? '—'} → ${o.maxDate ?? '—'}` : 'Not a known campaign'}
+              title={o ? `${o.firstDate} → ${o.lastDate}` : 'Not a known campaign'}
             >
               <span className="whitespace-nowrap text-[11px] font-medium">{o?.label ?? key}</span>
-              {o ? (
+              {fed ? (
                 <span className="whitespace-nowrap font-mono text-[9px] tabular-nums text-background/70">
-                  {tons(o.totalFedKg)} t
+                  {fed} t
                 </span>
               ) : null}
               <button

@@ -10,10 +10,13 @@
 // THIS FILE OWNS THREE THINGS AND NOTHING ELSE:
 //
 //  1. **The address → the payload.** `?campaigns=` is a comma-separated list of
-//     campaign keys (`JULY-2026,AUGUST-2026,SEPTEMBER-2026`); absent means the
-//     newest campaign, resolved from the SAME option list `/inventory/rc-movement`
-//     drives its picker from, so the two screens can never offer different
-//     campaigns. `?lens=` picks the right pane.
+//     campaign keys (`JULY-2026,AUGUST-2026,SEPTEMBER-2026`); absent means EVERY
+//     CAMPAIGN OF THE LATEST QUARTER (2026-09-16), resolved from the same
+//     `quarter_key` the picker's presets group on — the quarter containing the
+//     MIDPOINT of each campaign's span, decided in SQL. An INCOMPLETE quarter is
+//     still a quarter, which is the whole point: the current one is the one an
+//     owner most wants and it used to be unreachable until its third campaign
+//     opened. `?lens=` picks the right pane.
 //  2. **The fetch.** `fetchOpsLedger` reads PER CAMPAIGN and folds —
 //     `view_ops_ledger_day_block` is 2,148 rows over all history, so a
 //     whole-history read would truncate at PostgREST's 1,000-row cap in silence.
@@ -31,7 +34,7 @@
 // ═════════════════════════════════════════════════════════════════════════════════
 
 import { fetchOpsLedger, fetchOpsLedgerCampaignOptions } from '@/lib/operations/queries';
-import { parseLens } from './ops-lens';
+import { latestQuarterKeys, parseLens } from './ops-lens';
 import { OperationsView } from './operations-view';
 
 type Param = string | string[] | undefined;
@@ -65,10 +68,27 @@ export default async function OperationsPage({
 
   const options = await fetchOpsLedgerCampaignOptions();
   const requested = parseCampaigns(params.campaigns);
-  // Absent → the newest campaign. `fetchOpsLedgerCampaignOptions` is already ordered
-  // newest-first (by `max_date`), the same order and the same `campaign_year >= 2025`
-  // filter the RC Movement picker uses.
-  const keys = requested.length > 0 ? requested : options[0] ? [options[0].key] : [];
+  // ── ABSENT `?campaigns=` → THE WHOLE LATEST QUARTER (2026-09-16) ─────────────
+  // Renzo: *"It is not showing the current Q3 2026 group because it isn't complete
+  // yet. It should show it and default to it since it is the latest. Quarters are
+  // based on date, not on batch."* The old default was the single newest campaign,
+  // which opened the EOQ tab on one month of a quarter the owner reads as a whole.
+  //
+  // The quarter comes from `view_ops_ledger_campaign_span.quarter_key` — the
+  // MIDPOINT of each campaign's span — so this page does no date arithmetic and
+  // cannot disagree with the picker's presets, which read the same field through
+  // the same function. `latestQuarterKeys` returns the campaigns in their own
+  // chronological order; the single-newest fallback survives only for the case
+  // where no option carries a quarter at all.
+  const defaultKeys = latestQuarterKeys(options);
+  const keys =
+    requested.length > 0
+      ? requested
+      : defaultKeys.length > 0
+        ? defaultKeys
+        : options[0]
+          ? [options[0].key]
+          : [];
 
   if (keys.length === 0) {
     return (
@@ -95,8 +115,8 @@ export default async function OperationsPage({
               (<span className="font-mono">{data.campaignsMissing.join(', ')}</span>)
             </>
           ) : null}
-          . Open <span className="font-mono">/operations</span> with no query to read the most
-          recent campaign.
+          . Open <span className="font-mono">/operations</span> with no query to read the
+          latest quarter.
         </p>
       </div>
     );

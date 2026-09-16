@@ -640,3 +640,96 @@ Measured there:
 - LIGHT and DARK both rendered; **price-denied payload**: the strip drops its five ₱ columns, the
   blocks table drops its three, and `document.body.innerText` contains no `₱` at all — inside the
   RC FED modal included.
+
+### 3.10 REFINEMENT PASS 5 (2026-09-16) — Renzo's seven notes after *"getting better and better"*
+
+Read on production with JULY + AUGUST + SEPTEMBER 2026. The data half of three of these landed
+the same morning (migration `20260916030358_ops_ledger_day_fed_blend_quarters_arrival`): the
+day's projected fed blend, the block lab panel, the MIDPOINT quarter columns and the blocks-table
+footer totals. This pass is the UI on top of it, plus four presentation notes.
+
+1. **THE FED CELL OPENS THE DAY.** *"Per cell in the Fed column, it should be clickable like the
+   KPI and once clicked show a table of the blocks that were fed on that day, like a sidebar. And
+   it should show me the stats of what was fed — a table / mini KPI strip that shows me the
+   projected MC, BD, Ash etc. of the final product. Not to be taken as truth but a good figure to
+   see."* New **`ops-fed-day-sheet.tsx`**: an OPAQUE right-hand `Sheet` (it slides over the
+   scrolling ledger — "Frozen Panes", and the `supports-[backdrop-filter]` twin has to be
+   overridden too, since a variant-prefixed class is its own utility group). Head = the seven
+   weighted stats from `day.fedBlend`, three decimals on the two BDs and two elsewhere, unit
+   pinned left via the platform `UnitValue`, a coverage caption whenever `<stat>Kg < fedKg`, and a
+   permanent *"Projected from what was fed — not a lab result"* line. Body = `day.blocksFed` with
+   the blend as the footer; the batch cell opens `BlockingDetailPanel`. **A day that fed nothing
+   gets no button**, the same rule the expand chevron already follows.
+2. **QUARTERS BY DATE, LATEST QUARTER AS THE DEFAULT.** *"It is not showing the current Q3 2026
+   group because it isn't complete yet. It should show it and default to it since it is the
+   latest. Quarters are based on date, not on batch."* `quarterPresets()` gained the quarter's own
+   span and chronological (`firstDate`) key order; new **`latestQuarterKeys()`** is what
+   `page.tsx` resolves an absent `?campaigns=` to — **all three campaigns of Q3, not the newest
+   one**. The picker's list is now GROUPED UNDER QUARTER HEADINGS, a row prints
+   `firstDate → lastDate` rather than the dead `totalFedKg` (0 on every row — the span view is a
+   calendar spine), and the selected chips take a real tonnage from `rollups[].fedKg`.
+3. **THE BLOCKS-TABLE FOOTER ALIGNS WITH ITS COLUMNS.** *"Footers I don't really like. It should
+   align with the columns. Also add the same kind of pop in the colour as the rest of the table —
+   don't overly colour it, old people are reading this as a report, legibility is king."* A real
+   `<tfoot>` row from `campaignBlocksFooter()` / `groupBlocksFooter()`, one published rollup field
+   per column. Header takes the palette's OPAQUE `head` tint, the footer an opaque `bg-muted` cell
+   with the TRANSLUCENT `cell` tint on an inner layer; numbers stay neutral `font-mono`. The GROUP
+   leaves ARRV and RESIKO blank and says why (a shared block would double-count — the refusal the
+   group RPC already makes). Priced coverage moved to the counts line rather than being dropped.
+4. **PRODUCTION MODAL, LEANER.** *"Take out process loss, take out the description headings — too
+   wordy."* PROCESS LOSS column, both section captions and the long notes are gone; one formula
+   line and one caveat line remain.
+5. **WASTE SHIFTS OUT.** *"What is waste shifts? That needs to be taken out."* Column and prose
+   gone; `OpsProductionRow` lost `wasteShiftCount` / `shiftCount` so it cannot return by accident.
+6. **THE RESULT BAR IS TILES.** *"It seems weird keeping them the same colour."* `KpiDetail.result`
+   became `results: KpiResultTile[]` — `YIELD · LOSS · WASTE %` in emerald / amber / rose, label
+   and unit pinned left, value large; a single-result modal renders ONE tile through the identical
+   component.
+7. **PRINT THE PRICE SUMMARIES.** *"When clicking on one campaign, have the option to print a
+   summary of the selected campaign. If clicking on the group row, give the option to print all 3
+   SEPARATELY… Make sure the printed summary is NOT WORDY."* `printCard` + `GroupPrintStage` /
+   `GroupPrintPage` MOVED to **`components/shared/print/`** (platform: zero tenant knowledge), with
+   one-line re-exports left in `/analytics` so nothing there moved; the stage gained an optional
+   `showHeader` (default = today's analytics behaviour). New **`ops-print-sheet.tsx`** renders one
+   page per campaign — title · span · counts · rows · aligned footer · result, black on white, no
+   prose — and `KpiDetail.actions` carries the button (campaign) or the menu (group:
+   `Print all N separately` + one entry each).
+
+**TWO CSS FINDINGS WORTH KEEPING.** (a) `printCard` flattens ancestors with `transform: none`, but
+Tailwind v4 centres a dialog with the INDIVIDUAL `translate` property, which that does not reset —
+the sheet landed at `left: -960` on a 1920px viewport. (b) It could not be fixed in the print
+stylesheet: **Lightning CSS folds `translate`/`rotate`/`scale` into a `transform` shorthand**, so
+the rule compiled to `transform: translate3d(0,0,0)…` and did nothing — measured in the served CSS
+with the resets both before and after `transform: none`. The stage is therefore PORTALLED to
+`<body>`, which removes the translated ancestor instead of arguing with the compiler, and
+`app/globals.css` was left untouched.
+
+**Verification (2026-09-16, round 5).** `npx tsc --noEmit` clean · `npx eslint "app/(app)/operations"
+components/shared/print "app/(app)/analytics/print-card.ts" "app/(app)/analytics/group-print.tsx"`
+0 errors 0 warnings · `npm run build` passes. Driven in the Browser pane against a temporary
+four-campaign fixture (three in `2026-Q3`, one in `2026-Q2`; blend data on fed days including one
+day with a no-lab block; blocks in all four row kinds; one campaign reporting no production and
+filing no waste) mounted at `app/dev/table-playground/ops7/` and **deleted afterwards** — `git
+status` carries no trace. Measured there:
+
+- **12 FED buttons** for 3 campaigns × 4 fed days — none on a rest day or on the day that produced
+  without feeding. The sidebar prints all seven stats, `from 26,192 of 31,992 kg` on every one of
+  them for the partial day, and the no-lab block reads blank across the panel.
+- The picker: `Quarters Q3 2026 (3) · Q2 2026 (1)`, then headings `Q3 2026 — 2026-06-30 →
+  2026-09-15` over JULY / AUGUST / SEPTEMBER in that order and `Q2 2026` over JUNE. The bare
+  address resolved to all three Q3 campaigns.
+- **ACTUAL FED PRICE at 1920×1080: twelve footer `left` offsets identical to their headers'**,
+  `scrollWidth === clientWidth === 1298`, dialog 1342. The GROUP footer reads
+  `GROUP · 1,867,340 · — · — · 4.50% · 45.90 · 47.90 · 2.00`.
+- The PRODUCTION modal: 7 + 10 header cells (no PROCESS LOSS, no WASTE SHIFTS), no section
+  headings, one caveat line, and three tiles `YIELD 79.52 · LOSS 20.48 · WASTE 15.24` in three
+  hues.
+- **PRINT**, with the print media queries re-scoped to `all` and the teardown timers frozen: one
+  campaign → 1 page and `document.body.innerText` is the sheet alone; the group's
+  `Print all 3 separately` → **3 pages**, `break-after` = `page · page · auto`, `window.print()`
+  called once, STATE rendered as plain text and the sheet at `left: 0` full width.
+- **1366×768** (dialog clamps, table the only scroller) and **375×812**
+  (`document.scrollWidth === 375`, sheet full width, only the inner table scrolls sideways);
+  LIGHT and DARK both rendered; **price-denied**: strip = `RC Fed · Produced · Yield · Loss ·
+  Waste Loss · Resiko Loss`, the blocks table nine columns, **no `₱` glyph anywhere in the
+  document**, sidebar included — and no print button exists, because neither price column does.

@@ -108,7 +108,21 @@ export interface OpsCampaign {
   blocks: OpsCampaignBlock[];
 }
 
-/** One option in the campaign picker. */
+/**
+ * One option in the campaign picker.
+ *
+ * ⚠ THE QUARTER IS A FACT ABOUT DATES, NOT ABOUT THE NAME (2026-09-16).
+ * {@link quarterKey} / {@link quarterLabel} come from
+ * `view_ops_ledger_campaign_span`, which places a campaign in the quarter
+ * containing the MIDPOINT of its span. Never re-derive a quarter from
+ * `productionBatch` — JULY 2026 opens 2026-06-30 and closes 2026-08-01, and a
+ * campaign named `TEST BATCH` has no month in it at all.
+ *
+ * ⚠ THE OPTION LIST IS NOW THE SPAN VIEW, NOT `view_rc_movement_campaign_options`.
+ * The RC Movement picker is FED-only, so a campaign that has PRODUCED but not yet
+ * been fed is missing from it; this list includes it. The two pickers therefore
+ * legitimately differ — see `app/(app)/operations/CONTEXT.md`.
+ */
 export interface OpsCampaignOption {
   key: string;
   label: string;
@@ -116,8 +130,17 @@ export interface OpsCampaignOption {
   campaignYear: number;
   feedDays: number;
   totalFedKg: number;
+  /** The campaign's first FEED (null if it has only produced). */
   minDate: string | null;
+  /** The campaign's last FEED. */
   maxDate: string | null;
+  /** The LEDGER span — the earlier/later of feeding and production. `yyyy-MM-dd`. */
+  firstDate: string;
+  lastDate: string;
+  /** `2026-Q3` — from the MIDPOINT of the span. Sortable, and the preset's id. */
+  quarterKey: string;
+  /** `Q3 2026` — the preset's label. */
+  quarterLabel: string;
 }
 
 /** One grade a campaign produced, and how much of the campaign it was. */
@@ -136,13 +159,83 @@ export interface OpsCampaignGrade {
 // THE DAY AND ITS LENSES
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** One block a campaign drew from on one day — the RC Movement lens cell. */
+/**
+ * One block a campaign drew from on one day — the RC Movement lens cell, and a
+ * row of the FED-cell sidebar.
+ *
+ * THE SEVEN LAB STATS (2026-09-16) are the block's DELIVERY-WEIGHTED lab
+ * averages — the same numbers the Blocking page shows, `view_blocking_grid`'s
+ * own expressions, proven byte-identical to it on all 168 of its rows. They are
+ * NOT `batches.quality_stats`, which carries only three keys and whose `bd` is
+ * 0.0 on 724 of 725 batches.
+ *
+ * NULL IS NEVER 0: 53 of the 525 blocks a campaign has ever fed carry no lab
+ * reading at all, and a published 0.0 would read as "0 % moisture" rather than
+ * "not measured". All seven have identical coverage — a delivery carries the
+ * whole panel or none of it.
+ */
 export interface OpsDayBlockFeed {
   batchId: string;
   batchCode: string;
   blockLoc: string | null;
   fedKg: number | null;
   sundryKg: number | null;
+  /** % moisture. NULL = no delivery into this block carries a reading. */
+  mc: number | null;
+  /** % ash. */
+  ash: number | null;
+  /** g/cc, ASTM method. */
+  bdAstm: number | null;
+  /** g/cc, JIS method. */
+  bdJis: number | null;
+  /** % grit. */
+  grit: number | null;
+  /** % volatile matter. */
+  vm: number | null;
+  /** % fixed carbon. */
+  fc: number | null;
+}
+
+/**
+ * THE DAY'S PROJECTED FED BLEND — the head of the FED-cell sidebar, above the
+ * block list.
+ *
+ * ⚠ IT IS A PROJECTION, NEVER A LAB RESULT ON THE PRODUCT, and it must be
+ * labelled that way wherever it is shown. These are the lab averages of the RAW
+ * CHARCOAL that went in, carried forward because the finished product is heavily
+ * determined by what was fed. No lab measured what this describes (Renzo,
+ * 2026-09-16: "not to be taken as truth but a good figure to have"). Same
+ * posture as {@link OpsLedgerDay.yieldPct}.
+ *
+ * Every weighted mean was computed IN SQL, weighted by FED KG — not by pile
+ * balance, which is what `fn_blend_proposal` weights by and which answers a
+ * different question about a different population. Each stat is weighted over
+ * ONLY the blocks that carry it, and the fed kilos that did carry it ride beside
+ * it as `…Kg`, so the UI can say "projected from 41,200 of 47,000 kg". NULL —
+ * never 0 — when no fed block that day carries the stat.
+ *
+ * ⚠ `gritKg` HERE IS COVERAGE (fed kilos carrying a grit READING) and is
+ * unrelated to {@link OpsWaste.gritKg}, the GRITS waste stream.
+ */
+export interface OpsFedBlend {
+  /** Σ of the day's fed kg — equal to {@link OpsLedgerDay.fedKg}. */
+  fedKg: number | null;
+  blocksFedCount: number;
+
+  wMc: number | null;
+  mcKg: number | null;
+  wAsh: number | null;
+  ashKg: number | null;
+  wBdAstm: number | null;
+  bdAstmKg: number | null;
+  wBdJis: number | null;
+  bdJisKg: number | null;
+  wGrit: number | null;
+  gritKg: number | null;
+  wVm: number | null;
+  vmKg: number | null;
+  wFc: number | null;
+  fcKg: number | null;
 }
 
 /** One run inside a shift, exactly as the plant filed it. */
@@ -286,6 +379,14 @@ export interface OpsLedgerDay {
   producedByGrade: Record<string, number | null>;
   /** The RC Movement lens: one entry per block fed that day. */
   blocksFed: OpsDayBlockFeed[];
+  /**
+   * THE DAY'S PROJECTED FED BLEND (2026-09-16) — the head of the FED-cell
+   * sidebar. `null` on a day that fed nothing, which is exactly the set of days
+   * whose FED cell has nothing to open. Computed in SQL over the SAME relation
+   * {@link blocksFed} comes from, so the blended head and the list beneath it
+   * can never describe different populations. INDICATIVE — see {@link OpsFedBlend}.
+   */
+  fedBlend: OpsFedBlend | null;
   /**
    * THE DAY EXPAND — one CHILD ROW per shift, in the same columns as the parent
    * (2026-09-15, round 3). A day with none is not expandable.
@@ -487,6 +588,32 @@ export interface OpsCampaignRollup {
   /** BLOCK RESIKO LOSS — the yard's shrinkage, kg and FRACTION. */
   blockResikoKg: number | null;
   blockResikoLossPct: number | null;
+
+  /**
+   * THE BLOCKS-USED TABLE'S OWN FOOTER (2026-09-16), totalled in SQL over
+   * {@link OpsCampaign.blocks} — the very rows the FED PRICE / ACTUAL FED PRICE
+   * modals render, so the footer cannot disagree with the table above it.
+   *
+   * {@link blocksResikoKg} and {@link blocksClosedResikoLossPct} are PROVEN
+   * equal to {@link blockResikoKg} / {@link blockResikoLossPct} on all 32
+   * campaigns (`view_analytics_batch_cost` already restricts itself to CLOSED
+   * blocks) — neither replaces the other; the pair exists so a reader can check
+   * the total against the rows, and `kpi_blocks_resiko_mismatch` re-derives the
+   * agreement on every verify run.
+   *
+   * NULL, never 0, when the campaign has no block rows; the ratio is NULL until
+   * a block closes. NO ₱ — none of the four is gated.
+   */
+  /** ARRV WT KG — total arrival weight over EVERY block the campaign fed. */
+  blocksDeliveredKg: number | null;
+  /** The same over the CLOSED blocks only — the denominator of the ratio below. */
+  blocksClosedDeliveredKg: number | null;
+  /** Σ the blocks' ALL-TIME fed kg. NOT {@link fedKg} — a shared block fed others too. */
+  blocksTotalFedKg: number | null;
+  /** Σ RESIKO KG over the CLOSED blocks. */
+  blocksResikoKg: number | null;
+  /** `blocksResikoKg ÷ blocksClosedDeliveredKg`, a FRACTION. */
+  blocksClosedResikoLossPct: number | null;
 
   /**
    * WASTE LOSS — the eight RECORDED streams, totalled for the campaign.
