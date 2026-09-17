@@ -26,6 +26,7 @@ import type { ProgressEmitter } from "../../lib/progress.js";
 import { loadProductionWorkbook } from "./sheet.js";
 import { extractMc, type McExtract } from "./extractMc.js";
 import { extractIvy, type IvyExtract } from "./extractIvy.js";
+import { auditWasteGap, type WasteGapNote } from "./wasteGap.js";
 import {
   resolveRunningBatch,
   type BatchResolution,
@@ -54,13 +55,14 @@ import {
 } from "./apply.js";
 
 export type { ProductionHumanEdit } from "./apply.js";
+export type { WasteGapNote } from "./wasteGap.js";
 
 export const REPORT_TYPE = "production";
 
 const CODIFIED_RULES = [
   "rounding-null-zero-noop", "L-007", "L-014", "L-025", "L-026", "L-027", "L-028",
   "parent-shift-first-fk-order", "generated-cols-never-written",
-  "batch-from-running-state",
+  "batch-from-running-state", "L-052",
 ] as const;
 
 // ── DB-window shape the classify oracle consumes (matches fixtures/production) ──
@@ -124,11 +126,14 @@ async function runClassify(
   }
 
   // Ivy role (waste). Absent → empty extract.
-  let ivy: IvyExtract = { waste: [] };
+  let ivy: IvyExtract = { waste: [], belowSince: [] };
   if (workbookPaths.ivy) {
     const wb = await loadProductionWorkbook(await readFile(workbookPaths.ivy));
     ivy = extractIvy(wb, since);
   }
+  // NOTE `ivy.belowSince` is deliberately IGNORED here. The frozen parity entrypoint
+  // composes from `ivy.waste` alone, exactly as it always did, so the L-052 audit cannot
+  // move the oracle envelope by so much as a key.
 
   return composeClassify(mc, ivy, shifts, win);
 }
@@ -218,6 +223,36 @@ export async function runReport(
   const since = opts.since ?? (watermark ?? "2025-01-01");
   const year = parseInt(since.slice(0, 4), 10);
 
+  // ── WASTE GETS ITS OWN FRONTIER (L-052, 2026-09-17) ──────────────────────────
+  // A CUMULATIVE SOURCE MUST NOT INHERIT ANOTHER SOURCE'S WATERMARK. The line above is
+  // MC's frontier and it used to gate Ivy's rows too — so every day MC reported before
+  // Ivy had filed it was skipped, silently and permanently (five real waste days, see
+  // db.productionWasteFrontier + wasteGap.ts).
+  //
+  // THE FLOOR IS `min(wasteFrontier, runsFrontier) − 3 days`, and every term earns its
+  // place:
+  //   · `wasteFrontier` is the frontier of the ONLY writer of `production_waste`, so it
+  //     is the one that can never run ahead of what Ivy has actually filed. This is the
+  //     whole fix: when MC races ahead (the bug), `min` pins the floor to waste.
+  //   · `runsFrontier` can only LOWER it. In the steady state Ivy's cumulative file runs
+  //     AHEAD of MC, so `min` pulls the window back to where MC is — which is exactly
+  //     where the operator is still correcting things.
+  //   · the 3-day pad covers a row filed a couple of days late, which the frontier alone
+  //     cannot: a waste row added BEHIND the frontier is invisible to any `>` test.
+  // The pad is slack, not a guarantee; the guarantee is `auditWasteGap` below, which
+  // checks every excluded row against the database and NAMES anything wrong. Re-comparing
+  // a few already-present days is free — `production_waste` is UNIQUE(shift_id) and an
+  // unchanged row classifies DUPLICATE_NOOP.
+  //
+  // MEASURED, and the reason the window is not simply removed: classifying her WHOLE
+  // cumulative workbook yields NEW 5 · VALUE_CHANGED 141 · NOOP 80, and 140 of the 141
+  // differ only in `remarks`. The VALUE_CHANGED write path is live, so an unbounded
+  // window would silently rewrite 141 historical rows. From 2026-07-24 onward there is
+  // exactly ONE VALUE_CHANGED in the whole file (the known 2026-08-01 collision), so a
+  // window of days — even a couple of weeks when MC lags — re-compares cleanly.
+  const wasteFrontier = await db.productionWasteFrontier();
+  const wasteSince = opts.since ?? resolveWasteSince(watermark, wasteFrontier);
+
   // The `production_batch` already RUNNING before this run's first sheet. `since`
   // is EXCLUSIVE at sheet level (sheets are `> since`), so every shift dated at or
   // below it is strictly before every sheet we are about to read. One small read;
@@ -241,7 +276,7 @@ export async function runReport(
     const emptyApply: ApplyResult = {
       report_type: REPORT_TYPE, ok: true, inserts: 0, updates: 0, held: [],
       labeled: false, watermark_updated: false, errors: [], production_batch_starts: [],
-      production_human_edits: [], downtime_notes: [],
+      production_human_edits: [], downtime_notes: [], waste_notes: [],
     };
     return {
       classify: {
@@ -269,10 +304,10 @@ export async function runReport(
       runningBatch,
     });
   }
-  let ivy: IvyExtract = { waste: [] };
+  let ivy: IvyExtract = { waste: [], belowSince: [] };
   if (ivyAtt) {
     const path = await deps.fetchToLocalPath(ivyAtt.storagePath);
-    ivy = extractIvy(await loadProductionWorkbook(await readFile(path)), since);
+    ivy = extractIvy(await loadProductionWorkbook(await readFile(path)), wasteSince);
   }
 
   // DB window for shifts + children (sync_production.py:146-184). lo/hi = min/max of
@@ -307,11 +342,17 @@ export async function runReport(
   // migration 20260803080000) so the apply can name a disagreement it must not write,
   // at ZERO extra round trips. It is inert for classify — the classifiers read named
   // fields and echo the EMAIL row as `record`, never the DB row — so parity is untouched.
+  // The UNFILTERED read of each child table, kept beside the windowed one. The L-052 gap
+  // audit asks about shifts BELOW the classify window, whose children are by definition
+  // filtered out of the classifier's view — so it needs the full set, and re-reading the
+  // same table twice would be a second answer to the same question.
+  const childAll = new Map<string, Row[]>();
   const childDb = async (table: string, extra: string[]): Promise<Row[]> => {
     const rows = await db.readRows(table, {
       sinceColumn: null,
       columns: ["id", "shift_id", "human_edited_at", ...extra],
     });
+    childAll.set(table, rows);
     const out: Row[] = [];
     for (const r of rows) {
       if (shiftById.has(String(r.shift_id))) out.push(r);
@@ -334,6 +375,50 @@ export async function runReport(
   })) as TruckDbRow[];
 
   const humanEditedIds = collectHumanEditedIds([dbRuns, dbDowntime, dbWaste, dbElec, dbTruck]);
+
+  // ── L-052: audit every Ivy row the window excluded ──────────────────────────
+  // Nothing here writes and nothing here classifies. It answers one question about rows
+  // no future run would ever look at again: does the database actually hold them? See
+  // wasteGap.ts for why this is an audit rather than a wider window.
+  let wasteNotes: WasteGapNote[] = [];
+  if (ivy.belowSince.length > 0) {
+    const auditLo = ivy.belowSince
+      .map((r) => r.transaction_date)
+      .reduce((a, b) => (a < b ? a : b));
+    // `shiftsAll` was read from `lo` with NO upper bound, so it already covers everything
+    // at or after `lo`. Only a row OLDER than that needs a second read.
+    const auditShifts =
+      auditLo >= lo
+        ? shiftsAll
+        : ((await db.readRows("production_shifts", {
+            sinceDate: auditLo,
+            columns: ["id", "transaction_date", "production_batch", "shift"],
+          })) as ShiftDbRow[]);
+    const allRuns = (childAll.get("production_runs") ?? []) as RunDbRow[];
+    const allWaste = (childAll.get("production_waste") ?? []) as WasteDbRow[];
+    wasteNotes = auditWasteGap({
+      belowSince: ivy.belowSince,
+      shifts: auditShifts,
+      wasteRows: allWaste,
+      shiftIdsWithRuns: new Set(allRuns.map((r) => String(r.shift_id))),
+      wasteSince,
+    });
+    for (const n of wasteNotes) {
+      await emit?.(
+        "classify",
+        n.kind === "waste_row_missing"
+          ? `Waste for ${n.transaction_date} (${n.production_batch}) is in the report ` +
+            `(${n.sheet_total_kg.toLocaleString("en-US")} kg) but not in the database.`
+          : `Waste for ${n.transaction_date} (${n.production_batch}) disagrees with the ` +
+            `report on ${n.differing_streams.length} stream(s): ` +
+            `${n.db_total_kg?.toLocaleString("en-US") ?? "?"} kg stored vs ` +
+            `${n.sheet_total_kg.toLocaleString("en-US")} kg in the report.`,
+        54,
+        undefined,
+        "warn",
+      );
+    }
+  }
 
   await emit?.("classify", "Comparing the reports against the database…", 55);
   const classified = composeClassify(mc, ivy, shifts, {
@@ -428,6 +513,7 @@ export async function runReport(
     sections,
     batch_starts: batchStarts,
     human_edited_ids: humanEditedIds,
+    waste_notes: wasteNotes,
   };
 
   const apply = await applyProduction(compact, {
@@ -482,6 +568,23 @@ function emptyMcExtract(): McExtract {
 function firstAttachment(manifest: ProductionManifest, key: string): StoredAttachmentLike | null {
   const arr = manifest.reports?.[key];
   return arr && arr.length ? arr[0] : null;
+}
+
+/**
+ * The waste `since` floor: `min(wasteFrontier, runsFrontier) − 3 days`, never earlier
+ * than the cold-start floor. A NULL waste frontier means `production_waste` is empty, so
+ * there is nothing to be behind and the whole workbook is the window — MC's frontier must
+ * NOT stand in for it there either, which is the bug in one line.
+ */
+export function resolveWasteSince(
+  runsFrontier: string | null,
+  wasteFrontier: string | null,
+  coldStart = "2025-01-01",
+): string {
+  if (wasteFrontier === null) return coldStart;
+  const base = runsFrontier !== null && runsFrontier < wasteFrontier ? runsFrontier : wasteFrontier;
+  const padded = shiftDaysISO(base, -3);
+  return padded < coldStart ? coldStart : padded;
 }
 
 /** ISO date ± N days (UTC). */

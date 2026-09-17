@@ -26,6 +26,18 @@ const NUM_TOLERANCE = 0.01;
 const VALID_GRADES = new Set(["3X50", "6X50", "8X50", "2X6", "4X8"]);
 const WASTE_STREAMS = ["rs1a_kg", "rs1b_kg", "bf_kg", "rs23_kg", "rs5_kg", "trml1_kg", "trml2_kg", "grit_kg"] as const;
 
+/**
+ * THE eight waste stream columns, and THE test for "these two waste figures agree" —
+ * exported so the L-052 gap audit (`wasteGap.ts`) reuses the classifier's own definition
+ * instead of growing a second one that can drift. `wasteFieldDiff` below uses the exact
+ * same helper on the exact same list, so the audit and the classifier can never disagree
+ * about whether a row differs.
+ */
+export const WASTE_STREAM_FIELDS = WASTE_STREAMS;
+export function wasteStreamsEqual(a: unknown, b: unknown): boolean {
+  return numsEqual(a, b);
+}
+
 // ── Normalizers (mirror the Python norm_* per-file semantics) ───────────────
 function normStr(s: unknown): string | null {
   if (s === null || s === undefined) return null;

@@ -1623,3 +1623,111 @@ extended. Files: `workers/sync/src/reports/production/{downtimeRanges,shiftHours
 `lib/sync/findings.ts`, `app/(app)/sync/types.ts`, `types/supabase.ts`.
 Tests: `production-downtime-ranges.test.ts` (38, +9), `production-downtime-extract.test.ts`
 (6, +1), `scripts/verify-findings.ts` (90, +3).
+
+---
+
+## L-052 — A CUMULATIVE SOURCE MUST NOT INHERIT ANOTHER SOURCE'S WATERMARK (2026-09-17)
+
+**What happened.** `reports/production/index.ts::runReport` computed ONE `since` from
+`db.productionRunsFrontier()` — MC's frontier, which is correct for MC — and handed it to
+**BOTH** extractors. `extractIvy`'s per-row filter is `txnIso <= since -> continue`:
+**EXCLUSIVE and SILENT**. Ivy's WASTE PRODUCTION REPORT is CUMULATIVE and always lands
+LATER than MC's daily report, so the moment MC's frontier crossed a day Ivy had not yet
+filed, that day's waste was skipped with **no finding, no hold and no log line** — and a
+frontier only ever moves forward, so **no later run could retry it**.
+
+Found by a read-only probe that replayed Ivy's live workbook through the real extractor.
+**FIVE waste days lost**, every one on a shift that already carried MC's own runs:
+
+| date | batch | kg | tab · row |
+|---|---|---|---|
+| 2026-07-24 | JULY | 5,746.5 | `JULY 2026` row 24 |
+| 2026-07-30 | JULY | 4,318.5 | `JULY 2026` row 29 |
+| 2026-07-31 | JULY | 1,199.5 | `JULY 2026` row 30 |
+| 2026-08-01 | JULY (carryover) | 590.5 | `JULY 2026` row 31 |
+| 2026-08-04 | AUGUST | 4,185.5 | `AUGUST 2026` row 7 |
+
+**Plus one shift holding the WRONG row.** 2026-08-01 AUGUST/M stores JULY's 590.5 kg
+carryover (`PCG`) rather than AUGUST's own 993.5 kg opening day (`ZAMBAONGA`) — the L-046
+collision held `already_exists` in run `88bfbf03` and never resolved, because `since` had
+already passed the date. And the hold said only *"UNIQUE(shift_id) already present"*, which
+is a statement about a database constraint and gave nobody a way to tell which row belonged.
+
+**Why it is the same mistake as L-043 and L-044, one level up.** There a grant that was
+right for ONE role was applied to another; here a WATERMARK that is right for one WRITER
+was applied to another. In all three the failure lands inside something that returns
+quietly — a `catch`, a missing GRANT, a `continue`.
+
+### The fix
+
+1. **Waste has its OWN frontier.** `db.productionWasteFrontier()` — the exact mirror of the
+   runs frontier, roles reversed. The floor is **`min(wasteFrontier, runsFrontier) − 3 days`**:
+   `wasteFrontier` can never run ahead of what Ivy filed (that IS the fix), `runsFrontier`
+   can only lower it, and the pad covers a row filed a couple of days late, which a
+   frontier alone cannot see. A NULL waste frontier means the table is empty, so the window
+   is the whole workbook — MC's frontier must not stand in for it there either.
+2. **The skip is no longer a discard.** `extractIvy` returns `{ waste, belowSince }`;
+   `waste` is byte-for-byte the array it always was, so the frozen classify entrypoint —
+   and parity — cannot move. `waste.length + belowSince.length` is the whole workbook, for
+   every `since`.
+3. **A remaining gap is LOUD.** `wasteGap.ts::auditWasteGap` checks every excluded row
+   against the database: `waste_row_missing` (the shift exists, no waste child — 5 today)
+   and `waste_row_disagrees` (a STREAM differs — 1 today). Nothing is written; the repair
+   is a human running `scripts/backfill-waste-frontier-gap.ts`, so there is one repair
+   mechanism rather than two, and Ivy's cumulative file makes the note restate itself every
+   run until it is fixed.
+4. **The collision hold shows BOTH rows** — stored streams, incoming streams, both totals,
+   `db_human_edited` — re-read on the collision path only. Still a hold; nothing is
+   overwritten.
+
+### Three rules that generalise
+
+**(a) A WINDOW IS A PROPERTY OF THE SOURCE, NOT OF THE RUN.** Two sources with different
+cadences need two windows. Sharing one is the same category error as sharing a natural key
+across two writers (BUG-016) or a grant across two roles (L-043).
+
+**(b) THE WIDE WINDOW WAS MEASURED BEFORE IT WAS REJECTED.** The obvious fix — classify the
+whole cumulative workbook and let `DUPLICATE_NOOP` absorb the rest — yields, over her live
+226-row 2026 file: **NEW 5 · VALUE_CHANGED 141 · DUPLICATE_NOOP 80**. 140 of the 141 differ
+only in `remarks` (a buyer note the early-2026 rows lack), and the VALUE_CHANGED write path
+has been live since 2026-08-04 — so it would have **silently rewritten 141 historical rows
+on the first run after deploy**, including an in-place overwrite of the very incident
+nobody had seen yet. A bug fix must not smuggle a mass edit of history in beside it. The
+same measurement is what justifies the bounded window: from 2026-07-24 on, the whole file
+holds exactly ONE VALUE_CHANGED.
+
+**(c) AN ALARM MUST NOT POINT AT A POPULATION IT CANNOT ACT ON** (L-050's rule, applied
+again). Both audit arms are floored at the SYNC ERA, **2026-05-25** — below it the database
+holds Renzo's own `MASTER ICTC INPUT FILE V1.xlsx` figures (measured: 158 waste rows seeded
+in ONE write on 2026-05-27, covering 2025-11-27 … 2026-05-23, the identical era the L-051
+downtime backfill floored at). A parser must not raise an alarm against a human's number,
+and the backfill would refuse it anyway. The floor's cost is STATED, not hidden: it holds
+back exactly one real disagreement, the 2026-02-02 JANUARY→FEBRUARY changeover, and both it
+and any unmatched date are COUNTED on every note.
+
+### AND A SECOND ALARM WAS FOUND DISCONNECTED WHILE WIRING THIS ONE
+
+**`normalizeReport.ts::toApplyResult` was dropping `downtime_notes` outright.** `apply.ts`
+built them, `cases-fold.ts` read `apply.downtime_notes`, `findings.ts` had three builders
+ready — and the assembly boundary in between constructs a FIXED-KEY object that did not
+list the field. Measured against every stored run: **the key is absent from all of them**,
+i.e. L-051's and L-051b's three downtime findings have never once fired in production.
+That is L-044's exact shape — built, wired at both ends, silently disconnected in the
+middle — and it is why this change plumbs both channels rather than adding a new one beside
+a broken sibling. **A new note channel is not finished at `apply.ts`; it is finished when a
+stored `sync_runs.result` carries the key.**
+
+### Measured effect and proof
+
+| | before | after |
+|---|---|---|
+| parity | 12/12, 79 expected deviations | 12/12, **79** — re-run against the OLD extractor to establish the baseline, not assumed |
+| worker tests | 1012 | **1043** (`production-waste-frontier.test.ts`, 31) |
+| findings checks | 90 | **96** |
+| backfill dry run | — | **5 inserts + 1 replace**, exactly the measured victims |
+
+Files: `src/lib/db.ts`, `src/reports/production/{index,extractIvy,classify,apply}.ts`,
+`src/reports/production/wasteGap.ts` (new), `src/workflows/normalizeReport.ts`,
+`scripts/backfill-waste-frontier-gap.ts` (new), `app/(app)/sync/types.ts`,
+`lib/sync/{cases-fold,findings}.ts`, `scripts/verify-findings.ts`.
+Spec: `workers/sync/specs/production.md` §3a.

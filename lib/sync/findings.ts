@@ -30,6 +30,7 @@ import type {
   ProductionHumanEdit,
   DeliveryHumanEdit,
   DowntimeNote,
+  WasteGapNote,
   RcOutBackfill,
   RcOutSource,
   ReportArtifact,
@@ -60,6 +61,7 @@ import {
   collectProductionHumanEdits,
   collectDeliveryHumanEdits,
   collectDowntimeNotes,
+  collectWasteGapNotes,
   collectReportArtifact,
   collectReportsNotReceived,
   collectScheduleConflicts,
@@ -314,6 +316,32 @@ function fromHeld(reportType: SyncReportType, held: HeldRow): RunFinding {
   if (block) data.block_loc = block
   if (weight != null) data.weight_kg = num(weight)
   if (held.detail) data.detail = held.detail
+
+  // L-052 (2026-09-17) — a UNIQUE(shift_id) collision must SHOW BOTH ROWS. The hold used
+  // to say only "already present", which is a fact about a database constraint and not
+  // about the plant: on 2026-08-01 the stored row was JULY's carryover (590.5 kg) and the
+  // incoming one was AUGUST's own opening day (993.5 kg), and nothing in the message let
+  // a person tell which belonged. The worker re-reads the stored row on the collision
+  // path and puts both sides here; neither is a ₱ field (production carries none).
+  if (kind === 'already_exists' && (row.stored != null || row.incoming != null)) {
+    if (row.stored != null) data.stored = row.stored
+    if (row.incoming != null) data.incoming = row.incoming
+    const storedTotal = num(row.stored_total_kg)
+    if (storedTotal != null) data.stored_total_kg = storedTotal
+    const incomingTotal = num(row.incoming_total_kg)
+    if (incomingTotal != null) data.incoming_total_kg = incomingTotal
+    const shiftId = str(row.shift_id)
+    if (shiftId) data.shift_id = shiftId
+    const dbRowId = str(row.db_row_id)
+    if (dbRowId) data.db_row_id = dbRowId
+    if (row.db_human_edited === true) data.db_human_edited = true
+    const section = str(row.section)
+    if (section) data.section = section
+    const batch = str(row.production_batch)
+    if (batch) data.production_batch = batch
+    const shift = str(row.shift)
+    if (shift) data.shift = shift
+  }
 
   // Both sides of a block clash ride in `data` so the panel, the Copy button and the
   // Excel report all get the actual figures — including `db_error`, the verbatim Postgres
@@ -1324,6 +1352,116 @@ function fromDowntimeNote(n: DowntimeNote): RunFinding {
   }
 }
 
+/** "rs1a 520 → 239; filter 210 → 0" — the report's figure against the stored one. */
+function wasteStreamDeltas(n: WasteGapNote): string {
+  if (!n.db_streams) return ''
+  return n.differing_streams
+    .map((f) => {
+      const sheet = n.sheet_streams[f]
+      const db = n.db_streams?.[f]
+      const show = (v: unknown) =>
+        typeof v === 'number' ? v.toLocaleString('en-US') : v == null ? 'nothing' : String(v)
+      return `${WASTE_STREAM_LABEL[f] ?? f} ${show(sheet)} ${ARROW} ${show(db)}`
+    })
+    .join('; ')
+}
+
+/** Ivy's eight waste streams in plain words. Her own column headings, not the DB names. */
+const WASTE_STREAM_LABEL: Record<string, string> = {
+  rs1a_kg: 'RS 1A dust',
+  rs1b_kg: 'RS 1B',
+  bf_kg: 'filter',
+  rs23_kg: 'RS 2&3',
+  rs5_kg: 'RS 5',
+  trml1_kg: 'uncooked/shell',
+  trml2_kg: 'stones',
+  grit_kg: 'grit',
+}
+
+/**
+ * ONE waste row Ivy's cumulative workbook states that the database does not agree with,
+ * found BELOW the sync window (L-052, 2026-09-17).
+ *
+ * WHY IT EXISTS. The production run derived ONE `since` from MC's runs frontier and gave
+ * it to BOTH extractors, and Ivy's per-row filter is exclusive AND silent. Her waste
+ * workbook always lands later than MC's daily report, so every day MC reported before Ivy
+ * had filed it was dropped without a word — and a frontier only moves forward, so no
+ * later run could retry it. Five real waste days were lost that way. Waste now has its
+ * own frontier; this finding is the backstop that makes any remaining gap LOUD instead of
+ * invisible, which is the whole of L-049's rule applied one source over.
+ *
+ * `attention`, never `high`: nothing was overwritten and nothing is at risk — what is
+ * wrong is that a number the report states is not in the database. It is also never a
+ * durable case: the workbook is cumulative, so the note restates itself every run and
+ * stops the moment the row is repaired.
+ */
+function fromWasteGapNote(n: WasteGapNote): RunFinding {
+  const where = [n.transaction_date, n.production_batch, n.shift].filter(Boolean).join(` ${DOT} `)
+  const data: Record<string, unknown> = {
+    transaction_date: n.transaction_date,
+    production_batch: n.production_batch,
+    shift: n.shift,
+    shift_id: n.shift_id,
+    shift_has_runs: n.shift_has_runs,
+    source_sheet: n.source_sheet,
+    source_row: n.source_row,
+    sheet_streams: n.sheet_streams,
+    sheet_total_kg: n.sheet_total_kg,
+    sheet_remarks: n.sheet_remarks,
+    waste_since: n.waste_since,
+  }
+  if (n.unmatched_dates.length > 0) data.unmatched_dates = n.unmatched_dates
+  if (n.pre_sync_era_rows > 0) data.pre_sync_era_rows = n.pre_sync_era_rows
+
+  if (n.kind === 'waste_row_disagrees') {
+    data.db_waste_id = n.db_waste_id
+    data.db_streams = n.db_streams
+    data.db_total_kg = n.db_total_kg
+    data.db_remarks = n.db_remarks
+    data.differing_streams = n.differing_streams
+    data.db_human_edited = n.db_human_edited
+    return {
+      key: `waste_row_disagrees:${n.transaction_date}:${n.production_batch}:${n.shift}`,
+      kind: 'waste_row_disagrees',
+      kindLabel: 'Waste stored for this day is a different row',
+      source: 'Waste report',
+      title:
+        `${n.transaction_date} (${n.production_batch}): the waste report says ` +
+        `${fmtKg(n.sheet_total_kg)} but the database holds ${fmtKg(n.db_total_kg)}`,
+      location: where,
+      data,
+      reason:
+        `The ${n.production_batch} shift on ${n.transaction_date} already has a waste row, ` +
+        `and it does not match the one on the report's "${n.source_sheet}" tab — ` +
+        `${n.differing_streams.length} of the eight figures differ (${wasteStreamDeltas(n)}). ` +
+        `Nothing was overwritten. This day is older than the sync window, so no ordinary ` +
+        `run will look at it again — check which row belongs to this shift, then repair it ` +
+        `with the waste-gap backfill.`,
+      severity: 'attention',
+      section: 'production',
+    }
+  }
+
+  return {
+    key: `waste_row_missing:${n.transaction_date}:${n.production_batch}:${n.shift}`,
+    kind: 'waste_row_missing',
+    kindLabel: 'Waste in the report, missing from the database',
+    source: 'Waste report',
+    title:
+      `${n.transaction_date} (${n.production_batch}): ${fmtKg(n.sheet_total_kg)} of waste is ` +
+      `on the report but not in the database`,
+    location: where,
+    data,
+    reason:
+      `The waste report's "${n.source_sheet}" tab records ${fmtKg(n.sheet_total_kg)} for this ` +
+      `shift${n.shift_has_runs ? ', which already has the day\u2019s production recorded against it' : ''}, ` +
+      `but no waste was ever saved for it. This day is older than the sync window, so no ` +
+      `ordinary run will pick it up — run the waste-gap backfill to write it.`,
+    severity: 'attention',
+    section: 'production',
+  }
+}
+
 /**
  * A production row the sync refused to overwrite because a human edited it in the app
  * (the human-edit latch). The report's value is NOT applied and NOT parked — MC's/Ivy's
@@ -2320,6 +2458,7 @@ export function flattenRunFindings(result: SyncRunResult): RunFinding[] {
   // 10a. Downtime days whose typed total and listed times disagree (L-051). Never held —
   //      the row was written from the times either way; this only makes it visible.
   for (const n of collectDowntimeNotes(result)) out.push(fromDowntimeNote(n))
+  for (const n of collectWasteGapNotes(result)) out.push(fromWasteGapNote(n))
 
   // 10b. Deliveries the sync refused to overwrite (the 2026-08-08 deliveries latch).
   //      TWO reports can raise these — the emailed report and the Google Sheet.
@@ -2732,6 +2871,8 @@ const SHORT_KIND: Record<string, string> = {
   downtime_duration_mismatch: 'downtime total off',
   downtime_ranges_unreadable: 'downtime times unreadable',
   downtime_incident_no_stop: 'ran through it',
+  waste_row_missing: 'waste not saved',
+  waste_row_disagrees: 'waste row differs',
   delivery_human_edited: 'your edit kept',
   stale_stream: 'report overdue',
   price_tab_unresolved: 'no price tab',
@@ -2778,6 +2919,8 @@ const EXTRA_KIND_LABEL: Record<string, string> = {
   downtime_duration_mismatch: 'Downtime total disagrees with the times written',
   downtime_ranges_unreadable: 'Downtime read from the typed total, not the times',
   downtime_incident_no_stop: 'Trouble the plant ran through — not counted as downtime',
+  waste_row_missing: 'Waste in the report, missing from the database',
+  waste_row_disagrees: 'Waste stored for this day is a different row',
   delivery_human_edited: 'Delivery you edited — the source disagrees',
   stale_stream: 'Report stream has gone quiet',
   // Delivery price kinds (2026-08-07). Kept in sync with PRICE_KIND_LABEL above — that

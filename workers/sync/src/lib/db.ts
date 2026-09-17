@@ -949,6 +949,48 @@ export class DbClient {
     return val ? String(val).slice(0, 10) : null;
   }
 
+  /**
+   * The IVY WASTE frontier = MAX(production_shifts.transaction_date) among shifts that
+   * have at least one `production_waste` child. Same contract as `dataWatermark`:
+   * "YYYY-MM-DD" or null.
+   *
+   * WHY IT EXISTS (L-052, 2026-09-17). `runReport` computed ONE `since` from
+   * `productionRunsFrontier()` — MC's frontier — and handed it to BOTH extractors.
+   * `extractIvy`'s per-row filter is `txnIso <= since -> continue`: EXCLUSIVE and SILENT.
+   * Ivy's cumulative WASTE workbook always lands LATER than MC's daily report, so the
+   * moment MC's runs frontier crossed a day Ivy had not yet filed, that day's waste was
+   * skipped — with no finding, no hold and no log line — and could never be retried,
+   * because the frontier only ever moves forward.
+   *
+   * Measured victims (all present in her workbook with real figures, all on shifts that
+   * already carried MC's runs): 2026-07-24 (5,746.5 kg), 2026-07-30 (4,318.5),
+   * 2026-07-31 (1,199.5), JULY's 2026-08-01 carryover (590.5) and 2026-08-04 (4,185.5).
+   *
+   * A CUMULATIVE SOURCE MUST NOT INHERIT ANOTHER SOURCE'S WATERMARK. Waste is written by
+   * Ivy alone, so its own presence test is its own watermark — exactly the argument
+   * `productionRunsFrontier` makes for MC one method up, with the roles reversed.
+   *
+   * Issued over PostgREST as the same inner embed:
+   *   production_shifts?select=transaction_date,production_waste!inner(id)
+   *     &order=transaction_date.desc&limit=1
+   */
+  async productionWasteFrontier(): Promise<string | null> {
+    const { data, error } = await this.sb
+      .from("production_shifts")
+      .select("transaction_date,production_waste!inner(id)")
+      .order("transaction_date", { ascending: false })
+      .limit(1);
+    if (error) {
+      throw new Error(
+        `production_waste_frontier failed ${error.code ?? ""}: ${sliceMsg(error.message)}`
+      );
+    }
+    const rows = (data ?? []) as Array<{ transaction_date?: unknown }>;
+    if (!rows.length) return null;
+    const val = rows[0].transaction_date;
+    return val ? String(val).slice(0, 10) : null;
+  }
+
   // -- sync_runs / sync_run_events (new for the worker) --------------------
   async insertProgressEvent(ev: ProgressEventRow): Promise<void> {
     const { error } = await this.sb.from("sync_run_events").insert(ev);

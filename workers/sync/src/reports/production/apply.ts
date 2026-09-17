@@ -32,6 +32,7 @@
 import type { DbClient, Row } from "../../lib/db.js";
 import type { ProgressEmitter } from "../../lib/progress.js";
 import { type HeldRow, label } from "../held.js";
+import type { WasteGapNote } from "./wasteGap.js";
 import { operatorError, errText } from "../../lib/operatorError.js";
 
 const WASTE_STREAMS = ["rs1a_kg", "rs1b_kg", "bf_kg", "rs23_kg", "rs5_kg", "trml1_kg", "trml2_kg", "grit_kg"] as const;
@@ -203,6 +204,9 @@ export interface ProductionCompact {
   sections: ProductionSections;
   /** Changeovers detected this run (usually empty — once a month at most). */
   batch_starts?: ProductionBatchStart[];
+  /** Waste rows the `since` floor excluded that the database does not agree with
+   *  (L-052). Computed in `index.ts`; echoed here so the run result carries it. */
+  waste_notes?: WasteGapNote[];
 }
 
 export interface ApplyResult {
@@ -220,6 +224,46 @@ export interface ApplyResult {
   production_human_edits: ProductionHumanEdit[];
   /** Downtime days whose typed total and listed stop times disagree (L-051). */
   downtime_notes: DowntimeNote[];
+  /** Waste rows Ivy's cumulative workbook states that the database is missing or
+   *  disagrees with, found BELOW the sync window (L-052). ALWAYS present (default []). */
+  waste_notes: WasteGapNote[];
+}
+
+/**
+ * Re-read the row that WON a `UNIQUE(shift_id)` collision, so the hold can show both
+ * sides. Called only when `insertIfAbsent` actually skipped, so it costs nothing on an
+ * ordinary run. A read failure degrades to `null` — a collision must still be reported
+ * even if we cannot describe the other half of it.
+ */
+async function readCollidingRow(
+  db: DbClient,
+  table: string,
+  shiftId: string,
+  cols: string[],
+): Promise<Record<string, unknown> | null> {
+  try {
+    const rows = await db.readRows(table, {
+      sinceColumn: null,
+      columns: ["id", "shift_id", "human_edited_at", ...cols],
+      extraFilters: { shift_id: `eq.${shiftId}`, limit: "1" },
+    });
+    return rows.length ? (rows[0] as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Sum of the eight waste streams on a payload-shaped object. Null for a non-waste row. */
+function streamTotal(row: Record<string, unknown> | null | undefined): number | null {
+  if (!row) return null;
+  let t = 0;
+  for (const f of WASTE_STREAMS) t += Number(row[f] ?? 0);
+  return Math.round(t * 10000) / 10000;
+}
+
+/** Thousands-separated, at most 2dp. */
+function fmtNum(n: number): string {
+  return n.toLocaleString("en-US", { maximumFractionDigits: 2 });
 }
 
 /** Human label for a production child record: "2026-06-30 · JUNE-26 · Morning · runs". */
@@ -521,12 +565,44 @@ export async function applyProduction(compact: ProductionCompact, deps: ApplyDep
             comment: prov(table, runTs), snapshot: payload,
           });
         } else {
+          // ── L-052 (2026-09-17): a collision must SHOW BOTH ROWS ──────────────
+          // This hold used to say only "already present", which is a statement about the
+          // database's uniqueness constraint and not about the plant. The 2026-08-01
+          // AUGUST shift is why that is not enough: the stored row was JULY's carryover
+          // (590.5 kg, "PCG") and the incoming one was AUGUST's own opening day (993.5 kg,
+          // "ZAMBAONGA") — two different real rows, and the message gave a human no way to
+          // tell which one belonged. The stored row is re-read HERE, on the collision path
+          // only (so an ordinary run pays nothing), and BOTH sides ride in the held row.
+          // Nothing is overwritten: the latch rule stands, and the repair is
+          // `scripts/backfill-waste-frontier-gap.ts`.
+          const stored = await readCollidingRow(db, table, sid, cols);
+          const incoming: Record<string, unknown> = {};
+          for (const col of cols) incoming[col] = rec[col] ?? null;
+          const storedTotal = secName === "waste" ? streamTotal(stored) : null;
+          const incomingTotal = secName === "waste" ? streamTotal(incoming) : null;
+          const bothTotals =
+            storedTotal !== null && incomingTotal !== null
+              ? ` The stored row totals ${fmtNum(storedTotal)} kg (${String(stored?.remarks ?? "no note")}); ` +
+                `the report's row totals ${fmtNum(incomingTotal)} kg (${String(rec.remarks ?? "no note")}).`
+              : "";
           held.push({
             reason: "already_exists_or_collision",
             natural_key: prodKey(secName, rec),
-            detail: `${secName} UNIQUE(shift_id) already present — held (L-028/L-007 collision review)`,
+            detail:
+              `This shift already has a ${sectionWord(secName)} row, so the report's row was ` +
+              `NOT written and nothing was overwritten.${bothTotals} Check which one belongs ` +
+              `to this shift before repairing it.`,
             kind: "already_exists",
-            row: prodHeldRow(secName, rec),
+            row: {
+              ...prodHeldRow(secName, rec),
+              shift_id: sid,
+              db_row_id: stored?.id ? String(stored.id) : null,
+              db_human_edited: stored?.human_edited_at != null,
+              stored,
+              incoming,
+              stored_total_kg: storedTotal,
+              incoming_total_kg: incomingTotal,
+            },
           });
         }
       } catch (exc) {
@@ -758,5 +834,6 @@ export async function applyProduction(compact: ProductionCompact, deps: ApplyDep
     production_batch_starts: compact.batch_starts ?? [],
     production_human_edits: humanEdits,
     downtime_notes: buildDowntimeNotes(sections),
+    waste_notes: compact.waste_notes ?? [],
   };
 }

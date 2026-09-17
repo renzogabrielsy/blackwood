@@ -128,11 +128,17 @@ describe("runReport — anchors `since` on the runs frontier, not the waste-infl
   /** Empty-DB stub: every read returns [], every write succeeds — so extracted MC runs
    *  classify NEW and apply completes. `productionRunsFrontier`/`dataWatermark` are the
    *  two dials under test. */
-  function mkDb(frontier: string | null, shiftsMax: string | null) {
+  function mkDb(frontier: string | null, shiftsMax: string | null, wasteFrontier?: string | null) {
     const dataWatermark = vi.fn(async (_table: string) => shiftsMax);
     const productionRunsFrontier = vi.fn(async () => frontier);
+    // L-052: waste has its OWN frontier now. These cases are about MC's, so the waste
+    // side is pinned to the (waste-inflated) shifts max unless a case says otherwise.
+    const productionWasteFrontier = vi.fn(async () =>
+      wasteFrontier === undefined ? shiftsMax : wasteFrontier,
+    );
     const db: Partial<DbClient> = {
       productionRunsFrontier,
+      productionWasteFrontier,
       dataWatermark,
       readRows: async (_table: string, _opts: ReadRowsOptions = {}) => [] as Row[],
       insertIfAbsent: async (_table: string, rows: Row[]): Promise<InsertIfAbsentResult> => ({
@@ -146,7 +152,7 @@ describe("runReport — anchors `since` on the runs frontier, not the waste-infl
       writeIngestionAudit: async () => ({ id: "audit-1" }),
       upsertIngestionWatermark: async () => true,
     };
-    return { db: db as DbClient, dataWatermark, productionRunsFrontier };
+    return { db: db as DbClient, dataWatermark, productionRunsFrontier, productionWasteFrontier };
   }
 
   function deps(db: DbClient): RunReportDeps {

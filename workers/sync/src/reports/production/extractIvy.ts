@@ -11,6 +11,17 @@
  * month) is still emitted with its TRUE date, plus a note.
  *
  * ─────────────────────────────────────────────────────────────────────────────
+ * THE SKIP IS NO LONGER SILENT (L-052, 2026-09-17).
+ * ─────────────────────────────────────────────────────────────────────────────
+ * That filter used to `continue` — the row vanished with no finding, no hold and no log
+ * line. Combined with waste inheriting MC's runs frontier (see db.productionWasteFrontier),
+ * five real waste days were dropped forever. `since` still decides what is CLASSIFIED,
+ * and `waste` is byte-for-byte the array it always was (parity is untouched); the skipped
+ * rows are now RETURNED in `belowSince` so `index.ts` can audit them against the shifts
+ * already in the database. Nothing here writes, and nothing here decides — this file only
+ * stops throwing evidence away.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
  * THE TAB IS THE BATCH (L-046, 2026-09-01) — not the date's calendar month.
  * ─────────────────────────────────────────────────────────────────────────────
  * `production_batch` used to be `NUM_TO_MONTH_NAME[row date's month]`. That is the
@@ -193,7 +204,22 @@ export interface WasteRow {
 }
 
 export interface IvyExtract {
+  /** Rows STRICTLY ABOVE `since` — the classify set. Unchanged semantics; the parity
+   *  entrypoint composes from this array alone, so the oracle envelope cannot move. */
   waste: WasteRow[];
+  /**
+   * Rows AT OR BELOW `since` — the ones the old filter threw away without a word
+   * (L-052, 2026-09-17). They are NOT classified and NOT written; `index.ts` audits them
+   * against the shifts already in the database so a waste day Ivy filed late can never
+   * again be dropped in silence. See `wasteGap.ts`.
+   */
+  belowSince: WasteRow[];
+}
+
+/** One sheet's rows, split by the `since` floor. */
+interface SheetExtract {
+  waste: WasteRow[];
+  belowSince: WasteRow[];
 }
 
 const STREAM_COLS: Array<[keyof Pick<WasteRow, "rs1a_kg" | "rs1b_kg" | "bf_kg" | "rs23_kg" | "rs5_kg" | "trml1_kg" | "trml2_kg" | "grit_kg">, number]> = [
@@ -207,17 +233,21 @@ const STREAM_COLS: Array<[keyof Pick<WasteRow, "rs1a_kg" | "rs1b_kg" | "bf_kg" |
   ["grit_kg", COL_GRIT],
 ];
 
-function extractWasteSheet(ws: LoadedSheet, since: string | null): WasteRow[] {
+function extractWasteSheet(ws: LoadedSheet, since: string | null): SheetExtract {
   const sheetMonth = sheetNameToMonth(ws.name);
-  if (sheetMonth === null) return [];
+  if (sheetMonth === null) return { waste: [], belowSince: [] };
 
   const rows: WasteRow[] = [];
+  const belowSince: WasteRow[] = [];
   const maxRow = ws.rowCount;
   for (let r = DATA_START_ROW; r <= maxRow; r++) {
     const ymd = coerceDate(ws.cell(r, COL_DATE));
     if (ymd === null) continue;
     const txnIso = isoDate(ymd);
-    if (since !== null && txnIso <= since) continue; // exclusive, silent
+    // `since` is still EXCLUSIVE at row level and still decides what is CLASSIFIED —
+    // but it no longer decides what is READ (L-052). A row at or below it is shaped
+    // exactly like any other and parked in `belowSince` for the gap audit.
+    const below = since !== null && txnIso <= since;
 
     // The TAB names the batch (L-046). A carryover row is the changeover signal,
     // not an error — so the note says where the row was FILED, and never implies
@@ -250,7 +280,7 @@ function extractWasteSheet(ws: LoadedSheet, since: string | null): WasteRow[] {
     const sumStreams = STREAM_COLS.reduce((acc, [f]) => acc + streams[f], 0);
     const summed = roundHalfToEven(sumStreams, 4);
 
-    rows.push({
+    (below ? belowSince : rows).push({
       transaction_date: txnIso,
       production_batch: productionBatch,
       shift,
@@ -270,7 +300,7 @@ function extractWasteSheet(ws: LoadedSheet, since: string | null): WasteRow[] {
       warnings: rowWarnings,
     });
   }
-  return rows;
+  return { waste: rows, belowSince };
 }
 
 /**
@@ -279,10 +309,13 @@ function extractWasteSheet(ws: LoadedSheet, since: string | null): WasteRow[] {
  */
 export function extractIvy(wb: LoadedWorkbook, since: string | null): IvyExtract {
   const waste: WasteRow[] = [];
+  const belowSince: WasteRow[] = [];
   for (const name of wb.sheetNames) {
     const ws = wb.sheet(name);
     if (!ws) continue;
-    waste.push(...extractWasteSheet(ws, since));
+    const out = extractWasteSheet(ws, since);
+    waste.push(...out.waste);
+    belowSince.push(...out.belowSince);
   }
-  return { waste };
+  return { waste, belowSince };
 }

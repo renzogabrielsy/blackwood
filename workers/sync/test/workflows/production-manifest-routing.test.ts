@@ -39,6 +39,8 @@ function okInsert(row: Row): InsertIfAbsentResult {
 function mockDb(): DbClient {
   const stub: Partial<DbClient> = {
     productionRunsFrontier: async () => "2026-06-25",
+    // L-052 — waste keeps its own frontier; this case has no waste workbook at all.
+    productionWasteFrontier: async () => "2026-06-25",
     readRows: async () => [],
     insertIfAbsent: async (_table: string, rows: Row[]) => okInsert(rows[0]),
     update: async () => [],
