@@ -325,7 +325,7 @@ describe("L-046 — the TAB is the batch, not the date's calendar month", () => 
     // day (it groups on transaction_date, which the fix does not touch), and the
     // per-ROW internal check compares each row against its OWN reported total.
     const mc = { runs: [], downtime: [], electricity: [], trucks: [], dayTotals: {} };
-    const rep = reconcile(mc as unknown as McExtract, { waste }, { "2026-08-29": 100000 });
+    const rep = reconcile(mc as unknown as McExtract, { waste, belowSince: [] }, { "2026-08-29": 100000 });
     const day = rep.rc_out_drift.find((r) => r.date === "2026-08-29")!;
     expect(day.total_waste_kg).toBe(1509.5 + 1528.5);
     expect(rep.waste_mismatches).toEqual([]);

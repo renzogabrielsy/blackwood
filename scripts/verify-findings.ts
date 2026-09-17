@@ -38,6 +38,7 @@ import type {
   BlockDiff,
   DeliveryHumanEdit,
   DowntimeNote,
+  WasteGapNote,
   HeldRow,
   PriceNote,
   ProductNote,
@@ -2134,6 +2135,169 @@ check('L-051: identity is the DAY, and the numbers are what expire it', () => {
   const b = findingIdentity(downtimeFinding({ ranges_mins: 145 }))
   assert.equal(a.fingerprint, b.fingerprint, 'the same day is the same discrepancy')
   assert.notEqual(a.contentHash, b.contentHash, 'a different delta is a new situation')
+})
+
+// ---------------------------------------------------------------------------
+// L-052 (2026-09-17) — Ivy's CUMULATIVE waste workbook inherited MC's runs frontier, so
+// every day MC reported before she had filed it was skipped exclusively, SILENTLY and
+// permanently. Five real waste days were lost. Waste has its own frontier now; these
+// checks pin the BACKSTOP — that a remaining gap is named, that a cosmetic difference is
+// not, and that saying it never escalates past `attention`.
+// ---------------------------------------------------------------------------
+
+const wasteGapNote = (over: Partial<WasteGapNote> = {}): WasteGapNote => ({
+  kind: 'waste_row_missing',
+  transaction_date: '2026-07-24',
+  production_batch: 'JULY',
+  shift: 'M',
+  shift_id: 'SID-24',
+  shift_has_runs: true,
+  source_sheet: 'JULY 2026',
+  source_row: 24,
+  sheet_streams: {
+    rs1a_kg: 2800, rs1b_kg: 2200, bf_kg: 300, rs23_kg: 200,
+    rs5_kg: 150, trml1_kg: 70, trml2_kg: 0.5, grit_kg: 26,
+  },
+  sheet_total_kg: 5746.5,
+  sheet_remarks: 'PCG/ZAMBAONGA',
+  db_waste_id: null,
+  db_streams: null,
+  db_total_kg: null,
+  db_remarks: null,
+  differing_streams: [],
+  db_human_edited: false,
+  waste_since: '2026-09-12',
+  unmatched_dates: [],
+  pre_sync_era_rows: 0,
+  ...over,
+})
+
+const wasteGapRun = (notes: WasteGapNote[]): SyncRunResult =>
+  ({
+    reports: {
+      production: {
+        apply: {
+          report_type: 'production',
+          ok: true,
+          held: [],
+          labeled: false,
+          watermark_updated: false,
+          errors: [],
+          waste_notes: notes,
+        },
+      },
+    },
+  }) as unknown as SyncRunResult
+
+const wasteGapFinding = (over: Partial<WasteGapNote> = {}) =>
+  flattenRunFindings(wasteGapRun([wasteGapNote(over)])).find((f) => f.kind.startsWith('waste_row_'))!
+
+check('L-052: a missing waste day names the kilos, the tab and the day, under production', () => {
+  const f = wasteGapFinding()
+  assert.equal(f.kind, 'waste_row_missing')
+  assert.equal(f.section, 'production')
+  assert.match(f.title, /2026-07-24/)
+  assert.match(f.title, /5,747 kg|5,746/)
+  assert.match(f.reason, /JULY 2026/)
+  assert.equal(f.data.sheet_total_kg, 5746.5)
+  assert.equal(f.data.shift_has_runs, true)
+})
+
+check('L-052: a DISAGREEING row shows BOTH totals and names the streams that differ', () => {
+  const f = wasteGapFinding({
+    kind: 'waste_row_disagrees',
+    db_waste_id: 'W-1',
+    db_total_kg: 590.5,
+    db_remarks: 'PCG',
+    db_streams: {
+      rs1a_kg: 239, rs1b_kg: 239, bf_kg: 0, rs23_kg: 27,
+      rs5_kg: 35, trml1_kg: 25, trml2_kg: 0.5, grit_kg: 25,
+    },
+    differing_streams: ['rs1a_kg', 'bf_kg'],
+  })
+  assert.equal(f.kind, 'waste_row_disagrees')
+  assert.match(f.title, /5,747 kg|5,746/)
+  assert.match(f.title, /591 kg|590/)
+  // The deltas must be readable without opening the workbook.
+  assert.match(f.reason, /RS 1A dust/)
+  assert.match(f.reason, /filter/)
+  assert.equal(f.data.db_total_kg, 590.5)
+})
+
+check('L-052: it is `attention`, never `high` — nothing was overwritten and nothing is held', () => {
+  assert.equal(wasteGapFinding().severity, 'attention')
+  assert.equal(wasteGapFinding({ kind: 'waste_row_disagrees', db_total_kg: 1 }).severity, 'attention')
+})
+
+check('L-052: the note carries no ₱ and nothing cost-shaped — production has no money', () => {
+  const f = wasteGapFinding({ unmatched_dates: ['2026-07-25'], pre_sync_era_rows: 124 })
+  assert.doesNotMatch(JSON.stringify(f), /₱/)
+  for (const k of Object.keys(f.data)) assert.equal(isCostKey(k), false, k)
+  // What the audit deliberately did NOT judge is visible, never pretended away.
+  assert.deepEqual(f.data.unmatched_dates, ['2026-07-25'])
+  assert.equal(f.data.pre_sync_era_rows, 124)
+})
+
+check('L-052: identity is the SHIFT, and the figures are what expire it', () => {
+  const a = findingIdentity(wasteGapFinding())
+  const b = findingIdentity(wasteGapFinding({ sheet_total_kg: 9999 }))
+  assert.equal(a.fingerprint, b.fingerprint, 'the same shift is the same discrepancy')
+  assert.notEqual(a.contentHash, b.contentHash, 'different figures are a new situation')
+  // A different BATCH on the same date is a DIFFERENT row (the 2026-08-01 JULY/AUGUST
+  // pair) and must never share an acknowledgement.
+  const c = findingIdentity(wasteGapFinding({ production_batch: 'AUGUST', shift_id: 'SID-AUG' }))
+  assert.notEqual(a.fingerprint, c.fingerprint)
+})
+
+check('L-052: a waste/downtime UNIQUE(shift_id) collision hold shows BOTH rows', () => {
+  // The hold used to say only "already present" — a fact about a database constraint, not
+  // about the plant. On 2026-08-01 the stored row was JULY's carryover and the incoming
+  // one was AUGUST's opening day, and nothing let a person tell which belonged.
+  const run = {
+    reports: {
+      production: {
+        apply: {
+          report_type: 'production',
+          ok: true,
+          labeled: false,
+          watermark_updated: false,
+          errors: [],
+          held: [
+            {
+              reason: 'already_exists_or_collision',
+              natural_key: '2026-08-01 · AUGUST · M · waste',
+              detail:
+                'This shift already has a waste row, so the report\u2019s row was NOT written ' +
+                'and nothing was overwritten. The stored row totals 590.5 kg (PCG); the ' +
+                'report\u2019s row totals 993.5 kg (ZAMBAONGA).',
+              kind: 'already_exists',
+              row: {
+                section: 'waste',
+                transaction_date: '2026-08-01',
+                production_batch: 'AUGUST',
+                shift: 'M',
+                shift_id: 'SID-AUG',
+                db_row_id: 'W-AUG',
+                db_human_edited: false,
+                stored: { rs1a_kg: 239, remarks: 'PCG' },
+                incoming: { rs1a_kg: 520, remarks: 'ZAMBAONGA' },
+                stored_total_kg: 590.5,
+                incoming_total_kg: 993.5,
+              },
+            },
+          ],
+        },
+      },
+    },
+  } as unknown as SyncRunResult
+  const f = flattenRunFindings(run).find((x) => x.kind === 'already_exists')!
+  assert.ok(f, 'the collision still surfaces as a finding')
+  assert.equal(f.data.stored_total_kg, 590.5)
+  assert.equal(f.data.incoming_total_kg, 993.5)
+  assert.deepEqual(f.data.stored, { rs1a_kg: 239, remarks: 'PCG' })
+  assert.deepEqual(f.data.incoming, { rs1a_kg: 520, remarks: 'ZAMBAONGA' })
+  assert.equal(f.data.db_row_id, 'W-AUG')
+  assert.doesNotMatch(JSON.stringify(f), /₱/)
 })
 
 console.log(`\nAll ${passed} findings checks passed.`)

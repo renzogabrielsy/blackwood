@@ -477,6 +477,130 @@ For every extracted row: `summed = round(sum(8 streams), 4)`. Compared against `
 > reproducing the real two-tab 2026-08-29 shape; 4 of its 6 cases fail against the old
 > derivation.
 
+### § 3a. THE WASTE FRONTIER — a CUMULATIVE source must not inherit another source's watermark (L-052, 2026-09-17)
+
+**The defect.** `runReport` computed ONE `since` from `db.productionRunsFrontier()` — MC's
+frontier, correct for MC — and handed it to **BOTH** extractors. The row filter above is
+`txn_date <= since -> continue`: **exclusive AND silent**. Ivy's workbook is CUMULATIVE and
+always lands LATER than MC's daily report, so the moment MC's frontier crossed a day Ivy
+had not yet filed, that day's waste was skipped with **no finding, no hold and no log
+line** — and a frontier only moves forward, so **no later run could ever retry it**.
+
+**Measured (2026-09-17, replaying Ivy's live workbook through the real extractor): FIVE
+waste days lost**, every one of them on a shift that already carried MC's own runs:
+
+| date | batch | kg | tab · row |
+|---|---|---|---|
+| 2026-07-24 | JULY | 5,746.5 | `JULY 2026` row 24 |
+| 2026-07-30 | JULY | 4,318.5 | `JULY 2026` row 29 |
+| 2026-07-31 | JULY | 1,199.5 | `JULY 2026` row 30 |
+| 2026-08-01 | JULY (carryover) | 590.5 | `JULY 2026` row 31 |
+| 2026-08-04 | AUGUST | 4,185.5 | `AUGUST 2026` row 7 |
+
+Plus one shift holding the WRONG row: **2026-08-01 AUGUST/M stores JULY's 590.5 kg
+carryover** (remarks `PCG`) instead of AUGUST's own 993.5 kg opening day (`ZAMBAONGA`) —
+the L-046 collision that was held `already_exists` in run `88bfbf03` and never resolved,
+because `since` had already passed the date.
+
+**This is L-043/L-044's shape at the source level**: a frontier that is right for ONE
+writer, applied to ANOTHER, with the failure landing entirely inside a silent `continue`.
+
+#### The rule
+
+`db.productionWasteFrontier()` = `MAX(production_shifts.transaction_date)` among shifts
+that have a `production_waste` child — the exact mirror of `productionRunsFrontier`, roles
+reversed, and the same PostgREST inner embed. **`production_waste` is written by Ivy
+alone, so its own presence test is its own watermark.**
+
+The floor is **`min(wasteFrontier, runsFrontier) − 3 days`** (`index.ts::resolveWasteSince`,
+never earlier than the `2025-01-01` cold-start floor), and every term earns its place:
+
+- **`wasteFrontier`** can never run ahead of what Ivy has actually filed. This is the fix:
+  when MC races ahead, `min` pins the floor to waste.
+- **`runsFrontier`** can only LOWER it. In the steady state Ivy's cumulative file runs
+  AHEAD of MC, so `min` pulls the window back to where MC is — which is where the operator
+  is still correcting things.
+- **the 3-day pad** covers a row filed a couple of days late, which a frontier alone cannot:
+  a waste row added BEHIND the frontier is invisible to any `>` test.
+- **a NULL `wasteFrontier`** means `production_waste` is empty, so the window is the whole
+  workbook. MC's frontier must not stand in for it there either — that is the bug in one
+  line.
+
+Re-comparing a few already-present days is free: `production_waste` is `UNIQUE(shift_id)`
+and an unchanged row classifies `DUPLICATE_NOOP`.
+
+#### THE SKIP IS NO LONGER A DISCARD
+
+`extractIvy` returns **`{ waste, belowSince }`**. `waste` is byte-for-byte the array it
+always was — strictly above `since` — so `classifyCase` composes exactly as before and
+**parity is untouched (12/12, 79 expected deviations, the same 68 + 11 as before the
+change, MEASURED by re-running the harness against the old extractor)**. `belowSince`
+carries the rows the floor excluded, fully shaped, so they can be AUDITED instead of
+vanishing. `waste.length + belowSince.length` is the whole workbook, for every `since`.
+
+#### THE AUDIT (`wasteGap.ts`) — zero silent drops
+
+`auditWasteGap` checks every excluded row against what the database actually holds. Two
+arms, and exactly two:
+
+- **`waste_row_missing`** — the shift EXISTS and has no `production_waste` child. That is
+  the dropped row. Measured today: **5**, all five victims above.
+- **`waste_row_disagrees`** — the shift has a waste row and at least one of the eight
+  **STREAM** figures differs beyond the classifier's own 0.01 tolerance. Measured today:
+  **1**, the 2026-08-01 AUGUST shift.
+
+**`remarks` alone is deliberately not enough.** 140 rows of the live workbook differ from
+the database only in a buyer note the early-2026 rows were written without; an alarm that
+fires 140 times is an alarm nobody reads.
+
+**Both arms are floored at the SYNC ERA, `2026-05-25`** (`wasteGap.ts::SYNC_ERA_START`,
+imported by the backfill, never restated). Below it the database's waste is Renzo's own
+`MASTER ICTC INPUT FILE V1.xlsx` figures — **158 rows seeded in ONE write on 2026-05-27
+covering 2025-11-27 … 2026-05-23**, the identical era the L-051 downtime backfill floored
+at, for the identical reason: replacing a human's number with a parser's is not a repair.
+The floor's measured cost is stated rather than hidden — it holds back **one** real
+disagreement, the 2026-02-02 JANUARY→FEBRUARY changeover, where Ivy's tabs put the day's
+2,380.5 kg on JANUARY and the seeded rows put it on FEBRUARY (with a 0 kg row on the other
+side). It is COUNTED on every note (`pre_sync_era_rows`), as are rows matching no shift at
+all (`unmatched_dates` — measured 0 of 226).
+
+**Nothing in the audit writes.** The repair is `scripts/backfill-waste-frontier-gap.ts`,
+run by a human — one repair mechanism, not two. The notes ride on
+`apply.waste_notes` → `cases-fold.ts::collectWasteGapNotes` → `findings.ts` as `attention`
+findings; Ivy's workbook is cumulative, so each restates itself every run and stops the
+moment the row is repaired. Never a durable case, never a `HeldKind`.
+
+#### WHY THE WINDOW IS BOUNDED AT ALL — the measurement that decided it
+
+The obvious fix is to classify the WHOLE cumulative workbook and let `DUPLICATE_NOOP`
+absorb what is already there. Measured over her live 2026 workbook (226 rows, JANUARY …
+SEPTEMBER): **NEW 5 · VALUE_CHANGED 141 · DUPLICATE_NOOP 80 · MALFORMED 0**. The
+`VALUE_CHANGED` write path has been LIVE since 2026-08-04 (§6a), so an unbounded window
+would **silently rewrite 141 historical rows on the first run after deploy** — 140 of them
+cosmetic, and the 141st an in-place overwrite of a data-integrity incident no human had
+seen. A frontier fix must not smuggle a mass edit of history in beside it. From 2026-07-24
+onward the whole file contains exactly ONE `VALUE_CHANGED` (the known collision), so a
+window of days — even a couple of weeks when MC lags — re-compares cleanly.
+
+#### A COLLISION MUST SHOW BOTH ROWS
+
+`apply.ts`'s `already_exists_or_collision` hold said only *"UNIQUE(shift_id) already
+present"* — a fact about a database constraint, not about the plant. The stored row is now
+re-read **on the collision path only** (so an ordinary run pays nothing; a read failure
+degrades to `null` and the collision is still reported) and the held row carries `stored`,
+`incoming`, both totals, `db_row_id` and `db_human_edited`, with a `detail` a person can
+act on. Nothing is overwritten — the latch rule stands and the repair is the backfill.
+
+#### One thing this change also repaired, because it could not be left broken beside it
+
+**`normalizeReport.ts::toApplyResult` was DROPPING `downtime_notes` entirely.** `apply.ts`
+built them, `cases-fold.ts` read `apply.downtime_notes` and `findings.ts` had three
+builders waiting — but the assembly boundary constructs a FIXED-KEY object and the array
+was not in it. Measured: **zero of the stored runs carry the key**, i.e. L-051's three
+downtime findings had never once fired in production. That is L-044's shape exactly — an
+alarm built, wired at both ends, and silently disconnected in the middle. Both channels
+are plumbed now.
+
 ---
 
 ## 4. Classification spec (5 classifiers, shift-resolution shared pattern)
@@ -676,6 +800,7 @@ Rolled-back `DO` block (MCP `execute_sql`), accumulating a `log text` and ending
 | L-027 (4X8 / 3-gate grade allowlist) | extract_daily_production.py:79, classify_production_runs.py:71 | `VALID_GRADES` sets in BOTH files contain exactly `{3X50,6X50,8X50,2X6,4X8}`; a grade outside this set is dropped at extract (silent) and/or MALFORMED at classify. |
 | L-028 (month-transition 2nd waste row = new shift) | **The "IF" is what L-046 supplied.** `extract_waste_production.py`'s carryover detection is a warning only, and its date-derived `production_batch` gave BOTH rows the same batch — so the two never resolved to different shifts and `UNIQUE(shift_id)` collided instead of separating them. `extractIvy.ts` now derives the batch from the TAB (L-046 row below), which is what makes this rule hold. | A carryover waste row dated on the outgoing month's last day, appearing on the NEW month's sheet, must resolve to a DISTINCT shift (different production_batch) rather than colliding with the outgoing shift's existing waste row. |
 | L-046 (the TAB is the batch) 2026-09-01 | `extractIvy.ts::extractWasteSheet` — `production_batch = NUM_TO_MONTH_NAME[sheetMonth]`, never the row date's month. Python oracle unchanged; parity deviation registered for `production_real_latest` at `/waste/classifications/**`. | Two waste rows on ONE date, one per tab, extract under their OWN tabs' batches with their OWN figures (no crossover); only the carryover row carries a note and the note names the batch it was filed under; classify gives them DIFFERENT `shift_id`s so the second is NEW, never a VALUE_CHANGED overwrite of the first; apply upserts TWO `production_shifts` parents and inserts BOTH waste rows with no `already_exists` hold. An ordinary in-month row is unchanged. Covered by `test/reports/production.test.ts` → `describe("L-046 …")`. |
+| L-052 (waste gets its OWN frontier; the skip is never silent) 2026-09-17 | `db.productionWasteFrontier()`; `index.ts::resolveWasteSince` + the `auditWasteGap` call; `extractIvy.ts` returns `{waste, belowSince}`; `wasteGap.ts`. Orchestrator-layer only — `classifyCase` composes from `ivy.waste`, unchanged. | Waste's floor is `min(wasteFrontier, runsFrontier) − 3 days` and NEVER MC's frontier alone; with MC ahead of waste, Ivy's rows between the two frontiers are still extracted (negative control: feeding waste MC's frontier drops them). `waste.length + belowSince.length` is the whole workbook for every `since`. An excluded row whose shift exists with no waste child raises `waste_row_missing`; one whose streams differ raises `waste_row_disagrees`; a `remarks`-only difference raises NOTHING; the sync-era floor holds back the master-file era and COUNTS what it held back. A `UNIQUE(shift_id)` collision hold carries BOTH rows' figures and writes nothing. Covered by `test/reports/production-waste-frontier.test.ts` (31) + `scripts/verify-findings.ts` (+6). |
 | parent-shift-first FK order | sync_production.py apply step 1-2 | Shifts always insert/resolve BEFORE any child row referencing them is attempted. |
 | generated-cols-never-written | sync_production.py:413-415 | `diff_kwh`, `consumption_kwh`, `ttl_km` never appear in any INSERT or UPDATE payload. |
 

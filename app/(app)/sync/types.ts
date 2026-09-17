@@ -763,6 +763,75 @@ export interface DowntimeNote {
   warnings: string[]
 }
 
+/**
+ * ONE waste row Ivy's CUMULATIVE workbook states that the database does not agree with —
+ * found BELOW the sync window, i.e. among the rows no future run would ever have looked
+ * at again (L-052, 2026-09-17).
+ *
+ * WHY THIS CHANNEL EXISTS. The production run computed ONE `since` from MC's runs
+ * frontier and handed it to BOTH extractors. Ivy's waste workbook is cumulative and
+ * always lands later than MC's daily report, so every day MC reported before Ivy had
+ * filed it was skipped — exclusively, SILENTLY, and permanently, because a frontier only
+ * moves forward. Five real waste days were lost that way (2026-07-24, 07-30, 07-31,
+ * JULY's 08-01 carryover and 08-04), every one of them on a shift that already carried
+ * MC's own production runs.
+ *
+ * Waste now has its own frontier, so the ongoing bug is closed. This note is the
+ * BACKSTOP: every row the (still bounded) window excluded is checked against what the
+ * database actually holds, and anything genuinely wrong is NAMED. Nothing is written from
+ * it — the repair is `workers/sync/scripts/backfill-waste-frontier-gap.ts`, run by a
+ * human, so there is one repair mechanism rather than two.
+ *
+ * TWO FLAVOURS, both `attention`:
+ *   · `waste_row_missing`   — the shift exists and has NO waste row at all.
+ *   · `waste_row_disagrees` — it has one, and at least one of the eight STREAM figures
+ *     differs. `remarks` alone is deliberately not enough: 140 historical rows differ only
+ *     in a buyer note, and an alarm that fires 140 times is an alarm nobody reads.
+ *
+ * Never a durable case: Ivy's workbook is cumulative, so the note re-fires every run until
+ * the row is repaired and stops the moment it is. Production carries no ₱ column at all,
+ * so nothing here can be a price.
+ */
+export interface WasteGapNote {
+  /** `waste_row_missing` | `waste_row_disagrees`. A field, not a literal. */
+  kind: string
+  /** The production day, `YYYY-MM-DD`. */
+  transaction_date: string
+  /** The batch the row was filed under — the TAB it lives on (L-046). */
+  production_batch: string
+  /** `M` | `E`. */
+  shift: string
+  /** The `production_shifts` row the triplet resolved to. */
+  shift_id: string
+  /** Does that shift already carry MC's production runs? (A day the plant reported.) */
+  shift_has_runs: boolean
+  /** The tab and row the figures came from, so the workbook can be opened to them. */
+  source_sheet: string
+  source_row: number
+  /** The eight streams as the REPORT states them, their sum, and her buyer note. */
+  sheet_streams: Record<string, number>
+  sheet_total_kg: number
+  sheet_remarks: string | null
+  /** The STORED row — present only on `waste_row_disagrees`. */
+  db_waste_id: string | null
+  db_streams: Record<string, number | null> | null
+  db_total_kg: number | null
+  db_remarks: string | null
+  /** Which of the eight streams differ (`waste_row_disagrees` only). */
+  differing_streams: string[]
+  /** Is the stored row claimed by a human? (A repair would be refused by the latch.) */
+  db_human_edited: boolean
+  /** The waste `since` this run used — the floor that excluded the row. */
+  waste_since: string | null
+  /** Dates of below-window rows whose triplet matched NO shift at all. Measured 0 today;
+   *  carried so a future one is visible rather than silent. */
+  unmatched_dates: string[]
+  /** Below-window rows older than the SYNC ERA (2026-05-25), which the audit deliberately
+   *  does not judge — the database holds Renzo's own master-file figures there, and a
+   *  parser must not raise an alarm against a human's number. */
+  pre_sync_era_rows: number
+}
+
 export interface SourceTabNote {
   /** `source_tabs_unreadable` today. A field, not a literal, so a second flavour of
    *  "the file is here and unreadable" can join without a second channel. */
@@ -891,6 +960,11 @@ export interface ApplyResult {
    *  as `auto_created_batches` — read it as `apply?.downtime_notes ?? []` (see
    *  `collectDowntimeNotes`). Only the `production` report ever fills it. */
   downtime_notes?: DowntimeNote[]
+  /** Waste rows Ivy's CUMULATIVE workbook states that the database is missing, or
+   *  disagrees with, found BELOW the sync window (L-052). Same optionality contract as
+   *  `auto_created_batches` — read it as `apply?.waste_notes ?? []` (see
+   *  `collectWasteGapNotes`). Only the `production` report ever fills it. */
+  waste_notes?: WasteGapNote[]
   /** Set ONLY when this report's source file never arrived (L-044). Absent on every
    *  ordinary run, so the KEY'S PRESENCE is the fact — never an array with a length to
    *  check. Read it via `collectReportsNotReceived`. */

@@ -22,6 +22,7 @@ import type {
   ProductionHumanEdit,
   DeliveryHumanEdit,
   DowntimeNote,
+  WasteGapNote,
   RcMovementDrift,
   RcOutBackfill,
   ReportArtifact,
@@ -325,6 +326,29 @@ export function collectDowntimeNotes(result: SyncRunResult): DowntimeNote[] {
     const report = reports[key]
     if (!report) continue
     for (const note of report.apply?.downtime_notes ?? []) out.push(note)
+  }
+  return out
+}
+
+/**
+ * Flatten every waste row Ivy's cumulative workbook states that the database is missing
+ * or disagrees with, found below the sync window (`apply.waste_notes`, L-052). Only the
+ * `production` report fills it; the fold is generic + guarded so a pre-feature or
+ * hand-built result simply yields [].
+ *
+ * Like the downtime notes these are NOT folded into durable cases — Ivy's workbook is
+ * cumulative, so the note restates itself every run until the row is repaired and stops
+ * on its own the moment it is. There is nothing to close by hand.
+ */
+export function collectWasteGapNotes(result: SyncRunResult): WasteGapNote[] {
+  const reports = result.reports
+  if (!reports) return []
+
+  const out: WasteGapNote[] = []
+  for (const key of Object.keys(reports) as SyncReportType[]) {
+    const report = reports[key]
+    if (!report) continue
+    for (const note of report.apply?.waste_notes ?? []) out.push(note)
   }
   return out
 }

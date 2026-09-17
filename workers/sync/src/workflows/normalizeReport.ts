@@ -207,6 +207,55 @@ export interface ProductionHumanEditNote {
 }
 
 /**
+ * One downtime day whose typed DURATION cell disagrees with MC's own list of stop times,
+ * or which was read from the typed total because no range parsed, or which the report
+ * says the plant ran through (L-051 / L-051b). Mirror of the frontend `DowntimeNote` and
+ * of `reports/production/apply.ts::DowntimeNote`. Production carries no ₱/cost field.
+ */
+export interface DowntimeNoteEntry {
+  kind: string;
+  transaction_date: string;
+  production_batch: string | null;
+  duration_mins: number | null;
+  ranges_mins: number | null;
+  minutes_source: string;
+  dt_ranges: string | null;
+  dt_incident_ranges: string | null;
+  shift_hrs: number | null;
+  shift_hrs_source: string | null;
+  warnings: string[];
+}
+
+/**
+ * One waste row Ivy's CUMULATIVE workbook states that the database is missing or
+ * disagrees with, found BELOW the sync window (L-052, 2026-09-17). Mirror of the frontend
+ * `WasteGapNote` and of `reports/production/wasteGap.ts::WasteGapNote`. Production carries
+ * no ₱/cost field, so nothing here can be a price.
+ */
+export interface WasteGapNoteEntry {
+  kind: string;
+  transaction_date: string;
+  production_batch: string;
+  shift: string;
+  shift_id: string;
+  shift_has_runs: boolean;
+  source_sheet: string;
+  source_row: number;
+  sheet_streams: Record<string, number>;
+  sheet_total_kg: number;
+  sheet_remarks: string | null;
+  db_waste_id: string | null;
+  db_streams: Record<string, number | null> | null;
+  db_total_kg: number | null;
+  db_remarks: string | null;
+  differing_streams: string[];
+  db_human_edited: boolean;
+  waste_since: string | null;
+  unmatched_dates: string[];
+  pre_sync_era_rows: number;
+}
+
+/**
  * One DELIVERY the sync REFUSED to overwrite because a human edited it in the app (the
  * deliveries human-edit latch, 2026-08-08 — see reports/deliveryHumanEdit.ts). Mirror of
  * the frontend `DeliveryHumanEdit`.
@@ -454,6 +503,23 @@ export interface ApplyResult {
   /** What the `products` report noticed about the PRODUCTS INVENTORY sheet's shape
    *  (2026-09-07). ALWAYS present (default []). */
   product_notes: ProductNoteEntry[];
+  /**
+   * Downtime days whose typed DURATION cell disagrees with MC's own list of stop times
+   * (L-051, 2026-09-14). ALWAYS present (default []).
+   *
+   * ⚠️ THIS KEY WAS MISSING FROM THIS BOUNDARY UNTIL 2026-09-17 (L-052). `apply.ts` built
+   * the notes, `cases-fold.ts` read `apply.downtime_notes` and `findings.ts` had three
+   * builders ready for them — but `toApplyResult` below constructs a FIXED-KEY object, so
+   * the array was dropped here and never reached `sync_runs.result`. Measured: zero of the
+   * stored runs carry the key, i.e. L-051's three findings had never once fired. This is
+   * L-044's shape exactly — an alarm that was built, wired at both ends, and silently
+   * disconnected in the middle — and it is why the L-052 channel below was added in the
+   * same change rather than beside a still-broken sibling.
+   */
+  downtime_notes: DowntimeNoteEntry[];
+  /** Waste rows Ivy's CUMULATIVE workbook states that the database is missing or
+   *  disagrees with, found BELOW the sync window (L-052). ALWAYS present (default []). */
+  waste_notes: WasteGapNoteEntry[];
   /** Set ONLY when this report's source file never arrived (L-044). Absent otherwise. */
   report_not_received?: ReportNotReceivedNote;
 }
@@ -527,6 +593,10 @@ interface RawApply {
   production_batch_starts?: unknown;
   /** production only — rows the sync refused to overwrite (human-edit latch). */
   production_human_edits?: unknown;
+  /** production only — downtime days whose two halves disagree (L-051). */
+  downtime_notes?: unknown;
+  /** production only — waste rows below the window the DB is missing / disagrees with. */
+  waste_notes?: unknown;
   delivery_human_edits?: unknown;
   /** deliveries only — price-step problems (tab miss, fuzzy match, out-of-band). */
   price_notes?: unknown;
@@ -882,6 +952,93 @@ function toSourceTabNotes(v: unknown): SourceTabNoteEntry[] {
   return Array.isArray(v) ? v.map(toSourceTabNote) : [];
 }
 
+/**
+ * Coerce one raw downtime note → DowntimeNoteEntry (L-051). Every numeric stays NULLABLE:
+ * a blank DURATION cell states nothing, and 0 would claim it stated zero.
+ */
+function toDowntimeNote(v: unknown): DowntimeNoteEntry {
+  const o = (v ?? {}) as Record<string, unknown>;
+  const nullableStr = (x: unknown): string | null =>
+    typeof x === "string" && x.trim() ? x : null;
+  const nnum = (x: unknown): number | null => {
+    const n = typeof x === "number" ? x : Number(x);
+    return Number.isFinite(n) ? n : null;
+  };
+  return {
+    kind: str(o.kind) || "downtime_duration_mismatch",
+    transaction_date: str(o.transaction_date),
+    production_batch: nullableStr(o.production_batch),
+    duration_mins: nnum(o.duration_mins),
+    ranges_mins: nnum(o.ranges_mins),
+    minutes_source: str(o.minutes_source),
+    dt_ranges: nullableStr(o.dt_ranges),
+    dt_incident_ranges: nullableStr(o.dt_incident_ranges),
+    shift_hrs: nnum(o.shift_hrs),
+    shift_hrs_source: nullableStr(o.shift_hrs_source),
+    warnings: strArray(o.warnings),
+  };
+}
+
+function toDowntimeNotes(v: unknown): DowntimeNoteEntry[] {
+  return Array.isArray(v) ? v.map(toDowntimeNote) : [];
+}
+
+/** Coerce one raw waste-gap note → WasteGapNoteEntry (L-052). Production carries no ₱
+ *  column at all, so nothing here can be a price. */
+function toWasteGapNote(v: unknown): WasteGapNoteEntry {
+  const o = (v ?? {}) as Record<string, unknown>;
+  const nullableStr = (x: unknown): string | null =>
+    typeof x === "string" && x.trim() ? x : null;
+  const nnum = (x: unknown): number | null => {
+    const n = typeof x === "number" ? x : Number(x);
+    return Number.isFinite(n) ? n : null;
+  };
+  const numMap = (x: unknown): Record<string, number> => {
+    const src = (x ?? {}) as Record<string, unknown>;
+    const out: Record<string, number> = {};
+    for (const [k, val] of Object.entries(src)) {
+      const n = typeof val === "number" ? val : Number(val);
+      if (Number.isFinite(n)) out[k] = n;
+    }
+    return out;
+  };
+  const nullableNumMap = (x: unknown): Record<string, number | null> | null => {
+    if (x == null || typeof x !== "object") return null;
+    const out: Record<string, number | null> = {};
+    for (const [k, val] of Object.entries(x as Record<string, unknown>)) {
+      const n = typeof val === "number" ? val : Number(val);
+      out[k] = Number.isFinite(n) ? n : null;
+    }
+    return out;
+  };
+  return {
+    kind: str(o.kind) || "waste_row_missing",
+    transaction_date: str(o.transaction_date),
+    production_batch: str(o.production_batch),
+    shift: str(o.shift),
+    shift_id: str(o.shift_id),
+    shift_has_runs: o.shift_has_runs === true,
+    source_sheet: str(o.source_sheet),
+    source_row: num(o.source_row),
+    sheet_streams: numMap(o.sheet_streams),
+    sheet_total_kg: num(o.sheet_total_kg),
+    sheet_remarks: nullableStr(o.sheet_remarks),
+    db_waste_id: nullableStr(o.db_waste_id),
+    db_streams: nullableNumMap(o.db_streams),
+    db_total_kg: nnum(o.db_total_kg),
+    db_remarks: nullableStr(o.db_remarks),
+    differing_streams: strArray(o.differing_streams),
+    db_human_edited: o.db_human_edited === true,
+    waste_since: nullableStr(o.waste_since),
+    unmatched_dates: strArray(o.unmatched_dates),
+    pre_sync_era_rows: num(o.pre_sync_era_rows),
+  };
+}
+
+function toWasteGapNotes(v: unknown): WasteGapNoteEntry[] {
+  return Array.isArray(v) ? v.map(toWasteGapNote) : [];
+}
+
 /** Coerce one raw products note. Every field is guarded; `rename_overlap_pct` is kept
  *  NULLABLE on purpose (see ProductNoteEntry) rather than being flattened to 0. */
 function toProductNote(v: unknown): ProductNoteEntry {
@@ -1053,6 +1210,8 @@ export function normalizeApply(
     awaiting_batch_assignment: toAwaitingBatchAssignments(raw.awaiting_batch_assignment),
     source_tab_notes: toSourceTabNotes(raw.source_tab_notes),
     product_notes: toProductNotes(raw.product_notes),
+    downtime_notes: toDowntimeNotes(raw.downtime_notes),
+    waste_notes: toWasteGapNotes(raw.waste_notes),
     // L-044 — spread, not assigned: the KEY'S PRESENCE is the fact ("no report arrived"),
     // so an ordinary run must keep the byte-identical shape it had before this existed.
     ...(notReceived ? { report_not_received: notReceived } : {}),
@@ -1128,6 +1287,8 @@ export function failedReportResult(
       awaiting_batch_assignment: [],
       source_tab_notes: [],
       product_notes: [],
+      downtime_notes: [],
+      waste_notes: [],
     },
     status: "error",
     error: message,
