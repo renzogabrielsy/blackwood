@@ -175,3 +175,34 @@ The `Checks` tab was not touched.
 
 **Practical note for the automated builder:** write Short Date as the built-in format id, never as
 a literal pattern, so the date follows the reader's locale the way his hand-edited file does.
+
+## 10. FORMAT RULES, ROUND 2 — Renzo's second edit (2026-09-17, supersedes §9 where they differ)
+
+Renzo edited the regenerated workbook again (the generator's own output, `generated-v2.xlsx`).
+This round the edits were STRUCTURAL, not stylistic, and they all say one thing:
+**no explanatory prose in the report.**
+
+| Tab | What he removed | Resulting layout |
+|---|---|---|
+| `EOQ Summary` | the subtitle line under the title, and the whole six-line "HOW TO READ THIS FILE" notes block | title r1 · header **r3** · campaigns **r4–r6** · GROUP **r7** · CHECKS status **r9** (visible) · sheet ends at r9 · freeze `B4` |
+| every month tab | the subtitle line (`<span> · N days · R rest · colour legend`) | title r1 · EOM rollup **r3/r4** · band **r7** · column headers **r8** · first day **r9** |
+| `RC Movement` | the subtitle/legend line | title r1 · first table title **r3** · headers r4–r5 · first day r6 · freeze `F3` |
+
+**Kept as built (so they stay in the generator):** the one-line note beside `BLOCKS USED`, every
+cell comment, the `Checks` tab including its two-line header, all fills / borders / widths, the
+grey block-location sub-labels and the green linked footer rows on `RC Movement`.
+
+**Round-1 EOQ styling was NOT repeated** (Arial 11 bold, 130 % zoom, hidden CHECKS row): on the
+second pass he left the EOQ fonts as generated (Arial 9 bold headers, Arial 10 values, bold GROUP
+row) and the CHECKS line visible. The second edit is the later and therefore the standing one.
+
+**Proof the rules are captured:** the generator script rebuilt with these rules matches his file
+with **0 differing cells on all six tabs** (value-or-formula, font colour, weight, size,
+alignment and number format, after normalising Excel's save noise), recalculates with
+**1,075 formulas / 0 errors**, and its `Checks` tab reads **39 of 39 OK**.
+
+**Method note for next time** — a row deletion shifts every coordinate, so a cell-by-cell diff
+reports hundreds of false changes. Detect the deleted row first (align on column A), diff with
+the shift applied, and read a restructured tab row by row instead of by coordinate. And find the
+file he actually edited before diffing anything: this round it was the generator's output sitting
+beside the mock-up, identified by its `lastModifiedBy` and an Excel lock file, not by its name.
