@@ -550,10 +550,10 @@ cannot come back unnoticed. Full table in `.agents/plans/ops-ledger-plan.md` §2
 | ~~`ops-day-detail.tsx`~~ | **DELETED 2026-09-15 (round 3).** A day now expands into ordinary child rows, so the shift cards and the day-grain BLOCKS USED table had no caller left. |
 | `ops-group-picker.tsx` | The GROUP builder — selection chips + a popover holding the campaign list **GROUPED UNDER ITS QUARTER HEADINGS (2026-09-16)**, a filter box and the derived quarter presets. A row states its **`firstDate → lastDate`**, never a tonnage (the option list is the calendar SPAN view and carries none); the selected CHIPS take their tonnage from `rollups[].fedKg`. Ordering is on `firstDate`, which every campaign has — `maxDate` is the last FEED and is NULL on a campaign that has produced but not yet been fed. |
 | `ops-fed-day-sheet.tsx` | **THE FED CELL'S SIDEBAR (2026-09-16)** — a right-hand `Sheet`, OPAQUE, titled `<date> · <campaign> · FED`: the day's seven PROJECTED lab stats from `day.fedBlend` with their coverage captions, the caveat line, and the `BATCH · BLOCK LOC · FED kg · MC · ASH · BD ASTM · BD JIS · GRIT · VM · FC` table from `day.blocksFed` with the blend as its footer. A batch cell opens `BlockingDetailPanel`. **NO ₱ ANYWHERE** — neither source view carries one. |
-| `ops-page-print.tsx` | **THE PRINTED PAGE (2026-09-17)** — `OpsPagePrintControl`, the toolbar `Print` button, and the pages it builds: **page 1 the EOQ ROLLUP** (only when there IS a group), then **one page per campaign** carrying that campaign's own KPI strip (which IS its EOM rollup) over its day ledger in KEY COLUMNS ONLY. Drives the same `GroupPrintStage` / `GroupPrintPage` / `printCard`, portalled to `<body>`, and injects its own `@page` block for the duration. |
+| `ops-page-print.tsx` | **THE PRINTED PAGE (2026-09-17)** — `OpsPagePrintControl`, the toolbar `Print` button, and the pages it builds: **page 1 the EOQ ROLLUP** (only when there IS a group), then **one page per campaign** carrying that campaign's own KPI strip (which IS its EOM rollup) over its day ledger in KEY COLUMNS ONLY. Drives the same `GroupPrintStage` / `GroupPrintPage` / `printCard`, portalled to `<body>`, and injects its own `@page` block for the duration. Since round 9 (2026-09-17) it owns the **vertical budget** — `ledgerMetrics(dayCount)` derives the row height and body font from the measured page box, `OPS_PRINT_MAX_ROWS_PER_PAGE` is the promise (45) — and the print **colour**, and it exports `OpsPrintRollupPage` / `OpsPrintCampaignPage` / `OPS_PAGE_PRINT_RULES` so the sheet can be mounted statically and measured in a real print box. |
 | `ops-print-sheet.tsx` | **THE PRINTED PRICE SUMMARY (2026-09-16)** — `OpsPrintSheet` (one page: title · span · counts · rows · aligned footer · result, black on white) and `OpsPrintControl` (a Print BUTTON on a campaign modal, a small MENU on a group's: `Print all N separately` plus one entry per campaign). It drives the platform `GroupPrintStage` / `GroupPrintPage` / `printCard`, PORTALLED to `<body>` — see "THE STAGE IS PORTALLED" below. |
 | `ops-lens.ts` | The lens registry (`production` · `grades` · `losses` · `blocks`), `DEFAULT_LENS`, `parseLens`, **`RATIOS_PARAM` / `RATIOS_OFF` / `parseRatios` (2026-09-17 — `?ratios=off`; ON is the default and is spelled as ABSENCE, the same contract `?lens=` keeps)**, `quarterPresets()` and **`latestQuarterKeys()`** — **which since 2026-09-16 do NO date arithmetic: they group the options on the `quarter_key` `view_ops_ledger_campaign_span` computed from each campaign's MIDPOINT, an incomplete quarter is still a quarter, and a preset's campaigns come back chronological by `firstDate` with the quarter's own span beside them.** `latestQuarterKeys()` is what `page.tsx` defaults to. |
-| `ops-color.ts` | The semantic palette — `TONE` (one entry per meaning) and `CAMPAIGN_ACCENTS`. Opaque `head` for frozen surfaces, translucent `cell` for scrolling ones. |
+| `ops-color.ts` | The semantic palette — `TONE` (one entry per meaning) and `CAMPAIGN_ACCENTS`. Opaque `head` for frozen surfaces, translucent `cell` for scrolling ones. Since 2026-09-17 also **`PRINT_TONE`** (+ `PRINT_NEUTRAL_FILL` / `PRINT_MUTED_TEXT` / `PRINT_WEEKEND_TEXT`) — the SAME six meanings in explicit LIGHT values with no `dark:` twin and no semantic token, so a printed sheet comes out identical whichever theme it was printed from. Every `value` colour clears 7:1 on white. |
 | `ops-format.ts` | `kg` · `tons` · `php` · `pctFromFraction` · **`pctNumFromFraction`** (the bare percent NUMBER, for a cell that states its unit on the left) · `pctFromPercent` · **`lab`** (a lab reading at a fixed precision — 2 dp, 3 dp for the two BDs; NULL blank, never `0.00`) · `hours` · `count` · `shortDate`. Renderers only. |
 
 ---
@@ -1146,15 +1146,20 @@ little table giving the EOM rollup for that month. Maybe its own KPI strip up to
   1031px, `scrollWidth === clientWidth`, and not one header clips.*
 - **THE `@page` RULE IS INJECTED AND REMOVED, BECAUSE IT CANNOT BE SCOPED.** `app/globals.css`
   already sets `@page { size: A4 landscape; margin: 12mm }` and `@page` takes no class, so it
-  governs every print in the app. This report wants **10mm** plus the row/head break rules a
-  multi-page table needs (`tr { break-inside: avoid }`, `thead { display: table-header-group }`,
-  both scoped to `[data-ops-print]`), and it must not take them from `/analytics`. A `<style>`
-  block is appended at print time and removed when the stage unmounts, which is on
-  `afterprint`. **`app/globals.css` was not touched.** *Measured: the block is present during
-  the print and gone 2.6s later, with `bw-printing` cleared and the stage unmounted.*
-- **A CAMPAIGN LONGER THAN ONE PAGE FLOWS**, with `thead` repeating and no row split across
+  governs every print in the app. This report wants its own margin (**10mm**, tightened to
+  **8mm** in round 9) plus the row/head break rules a multi-page table needs
+  (`tr { break-inside: avoid }`, `thead { display: table-header-group }`, both scoped to
+  `[data-ops-print]`), and it must not take them from `/analytics`. A `<style>` block is
+  appended at print time and removed when the stage unmounts, which is on `afterprint`.
+  **`app/globals.css` was not touched.** *Measured: the block is present during the print and
+  gone 2.6s later, with `bw-printing` cleared and the stage unmounted.*
+- ~~**A CAMPAIGN LONGER THAN ONE PAGE FLOWS**, with `thead` repeating and no row split across
   the break. *Measured: a 5-day campaign page is 283px at the real page width, so a 33-day one
-  crosses onto a second sheet — accepted.*
+  crosses onto a second sheet — accepted.*~~ **ACCEPTED IN ROUND 8, REJECTED BY RENZO IN ROUND
+  9** — the 33-day JULY sheet spilling five rows onto a third page is the first thing he named
+  in the returned PDF. A campaign now fits one sheet up to **45 day rows**; see "COLOUR ON
+  PAPER, AND ONE SHEET PER CAMPAIGN" below. The flow behaviour itself is unchanged and is what
+  happens ABOVE that ceiling.
 - **₱ IS ABSENT ON PAPER TOO.** *Verified against a price-denied payload: the printed strip
   reads `CAMPAIGN · RC FED · PRODUCED · YIELD · LOSS · WASTE LOSS · RESIKO LOSS`, the ledger
   drops `FED PRICE`, and the document contains no `₱` glyph in text OR markup.*
@@ -1163,6 +1168,87 @@ little table giving the EOM rollup for that month. Maybe its own KPI strip up to
   `translate`; Lightning CSS folds a `translate` reset into a `transform` shorthand). Here the
   trigger is a toolbar button rather than a dialog, but the portal costs nothing and keeps the
   two print paths on this screen identical.
+
+**COLOUR ON PAPER, AND ONE SHEET PER CAMPAIGN (2026-09-17, round 9).** Renzo printed Q3 2026
+to PDF and sent it back: *"Print output lacks color. Hard to determine which data is which.
+Would be nice to have it follow the current operations sheet a bit (in light mode) but have
+colors that work well on print. Make it a point to make sure all rows + KPI strip per month
+fit in ONE page and not overflow to another. Making sure 32-33 rows fit in one A4 landscape
+page would be nice."* Three things were wrong in that PDF and all three are fixed.
+
+- **THE ROW HEIGHT WAS A CONSTANT WHERE IT HAD TO BE A FUNCTION.** Every row was whatever
+  `text-[8pt]` with an inherited line-height happened to be (~19.5px), so JULY's 33 days ran
+  five rows onto a third sheet and AUGUST's 29 ran **one** row onto a fifth. It is now derived
+  from the day COUNT against the sheet's **measured** vertical budget: A4 landscape is 210mm
+  tall, an 8mm margin leaves **733.2px**, the fixed chrome is **81px** (title+span on one line
+  **17** · single-line KPI strip **34** · one-line ledger header **16** · two `gap-1` **8** ·
+  **6** of measured sub-pixel slack), so **652px** is left for rows and
+  `rowH = clamp(floor(652 / (days + 1)), 14, 22)`. The body font steps down with it —
+  9 / 8.5 / 8 / 7.5 / **7pt floor, never lower** — and `lineHeight` is set to `rowH − 3`
+  explicitly, because a `<tr>` height is a FLOOR in the table model and the only way to pin a
+  row is to pin its content.
+- **THE TOTALS ROW IS IN THE DIVISOR, NOT IN THE CHROME — and that is the fix, not a
+  refinement.** It is a `<tbody>` row drawn at the body font, so its height IS `rowH`. Pinning
+  it at a constant produced the first miss of this round: AUGUST's 29 days computed to 22px
+  rows and *measured 736px against a 733px box*, i.e. it would still have spilled by one row.
+  Counting it as the `days + 1`-th row removes the circularity rather than approximating it.
+- **THE TOTALS ROW STOPPED BEING A `<tfoot>`.** Chrome REPEATS a `<tfoot>` on every printed
+  page, so in the returned PDF `JULY 28 D 45.34 781,234 …` printed at the foot of page 2 AND
+  again at the foot of page 3 and read as a duplicated total. It is the last `<tbody>` row now.
+  `<thead>` keeps `display: table-header-group`: **a header that repeats is a help, a total
+  that repeats is a lie.**
+- **THE SHEET CARRIES THE SCREEN'S OWN PALETTE, IN EXPLICIT LIGHT VALUES.** `PRINT_TONE` in
+  `ops-color.ts` — the same six {@link OpsTone} meanings (sky FED · emerald PRODUCED/YIELD ·
+  amber LOSS · rose WASTE · violet ₱ · zinc spine), declared with **no `dark:` twin and no
+  semantic token**, so the paper comes out identical whichever theme the button was pressed in.
+  Three strengths: the family's **100** step under **900** text on a header, a 2px **500** top
+  border, and a body column tint hand-mixed at **≈7% of the 500 step into white** (the 50 step
+  is ~3% and vanishes on a laser printer). **Every KPI value colour clears 7:1 against white,
+  computed not eyeballed** — sky-800 7.56 · emerald-800 7.68 · amber-900 9.07 · rose-800 8.02 ·
+  violet-800 8.98 — which is the greyscale insurance: a 7:1 colour is still a dark grey once
+  the hue is thrown away. Weekend DAY labels amber-800 (7.09), rest-day rows a neutral zinc-100
+  fill with muted zinc-500 text, totals bold on zinc-100 under a 1.5px rule.
+- **THE COLUMN-GROUP BAND IS FOLDED INTO THE HEADER ROW, and the reason is the budget.** A band
+  row of its own costs ~17px, which is most of a day row. The tinted fill plus the 2px coloured
+  top border says the same thing for nothing. The EOQ page uses the identical treatment.
+- **`print-color-adjust: exact` IS LOAD-BEARING, NOT POLISH.** Without it a browser drops every
+  background fill unless the person ticks "Background graphics", i.e. the colour would be in
+  the markup and absent from the paper. It is in the injected block (`globals.css` already sets
+  it on `[data-print-card] *`, but this report's colour must not depend on a rule written for
+  another one).
+- **THE HEADERS ARE SHORTENED FOR PRINT, THE KPI NAMES ARE NOT.** `FED PRICE ₱/kg` and `DT HRS
+  h` both wrapped in the returned PDF, and a wrapped header is a two-line header that costs a
+  day row — so paper gets `FED ₱/kg`, `FED kg`, `PROD kg`, `WASTE kg`, `WASTE %`, `SHIFTS`,
+  `DT h`, `3X50 kg`. The **screen keeps the long forms**; this is a rendering of the column,
+  not a renaming of it. That escape is deliberately NOT taken in the KPI strip — those eleven
+  are the EOQ rollup's own column names and abbreviating them would make the printed strip and
+  the screen strip disagree — so its **widths** move instead (`ACTUAL FED PRICE` clipped to
+  `ACTUAL FED PR` at a flat 78px). Its `tone` comes across from `opsKpiPrintTable()`, so the
+  family hue is stated once for both surfaces.
+- **THE KPI STRIP IS ONE LINE.** WASTE LOSS was two (kg over %), which made the whole strip two
+  lines tall for one cell; it prints `KG 106,507 · % 17.15` side by side now. A single-figure
+  cell keeps the Excel Standard's accounting shape (unit pinned left, digits right); two
+  figures become a right-aligned run, because pinning two units to one left edge is not a shape.
+- **THE EIGHT WASTE STREAMS ARE STILL OUT, AND NOW FOR A SECOND REASON.** The width measurement
+  from round 8 stands; round 9 adds the stronger one — the sheet's whole contract is a VERTICAL
+  budget, and eight more columns force the body font down a step to keep the width, and the
+  font step is exactly what buys the rows.
+- **THE CEILING, MEASURED IN REAL PDFs.** The code promises **45 day rows** on one sheet
+  (`OPS_PRINT_MAX_ROWS_PER_PAGE`); headless Chrome is two days more forgiving — **47 fits, 48
+  takes a second sheet** — because collapsed borders are shared between rows, so the constant
+  under-promises by design. Above the ceiling the page flows CLEANLY: *verified on a 48-day
+  page, `<thead>` repeats on sheet two and the totals row appears exactly ONCE.* JULY 2026 at
+  33 ledger days is the longest campaign the plant has ever run.
+- **VERIFIED AGAINST ACTUAL PDFs, NOT AN ESTIMATE.** A throwaway fixture at
+  `app/dev/table-playground/opsprint/` mounted the real pages in the real print context
+  (`bw-printing` on `<body>`, the sheet `data-print-card`, ancestors `data-print-ancestor`, the
+  `@page` block injected — everything `printCard()` does except `window.print()`), rendered by
+  `chrome --headless=new --print-to-pdf`. Three campaigns of **33 / 29 / 19** days with rest
+  days, weekends and a five-grade union: **4 pages** (1 EOQ + 3 campaigns), page heights
+  **722 / 706 / 516** against a 733px box, `scrollWidth === clientWidth`, **zero** clipped or
+  wrapped headers, **zero** clipped cells, **zero** `<tfoot>` elements, the totals row the last
+  `<tbody>` row. Price-denied: **4 pages**, no `₱` in text OR markup, `FED ₱/kg` absent and six
+  KPI columns. A 34-day campaign: **4 pages**. *Fixture deleted; `git status` carries no trace.*
 
 **THE RC FED MODAL GAINED THE `Actual ₱` SWITCH (2026-09-17, round 8).** Beside the campaign
 tabs, as **LOCAL REACT STATE — deliberately not the URL**: this page's address describes which
