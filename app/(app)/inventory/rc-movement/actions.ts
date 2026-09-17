@@ -32,6 +32,21 @@ export type RcMovementMatrixColumn = {
   batchCode: string;
   blockLoc: string | null;
   firstFedDate: string; // YYYY-MM-DD — drives chronological column order
+  // ── THIS CAMPAIGN's own draw from the block (view_ops_ledger_campaign_block) ──
+  // THE FIGURE THE FOOTER WAS MISSING (2026-09-17). Every other footer number on
+  // this column is the block's LIFETIME total, while the cells above it show only
+  // this campaign's days — so AUGUST 2026 · JAN-26-BLK15 printed `FED 69,013` over
+  // a column that sums to 54,941 (JULY opened the block and took the other 14,072),
+  // and the footer read as a column total that disagreed with the column.
+  // `campaign_fed_kg` is SQL-aggregated over view_rc_movement_campaign_cells — the
+  // SAME relation this matrix pivots — so it equals the column sum by construction
+  // and is NEVER summed in TS. Peso-free (no ₱ column is selected), so it is NOT
+  // price-gated and Production sees it.
+  /** kg THIS campaign fed out of this block. NULL only when the ops-ledger view has
+   *  no row for the (campaign, block) pair — render BLANK, never 0. */
+  campaignFedKg: number | null;
+  /** Distinct days THIS campaign fed from this block (the hover tooltip's context). */
+  campaignFeedDays: number | null;
   // ── Summary fields (footer) — computed in one batched pass over the campaign's
   //    batches. mc/ash are weighted averages from RC IN deliveries (same approach
   //    as Blocking's fetchBlockDataForBatch). totalOut/totalIn are SUMs from SQL.
@@ -390,6 +405,10 @@ export async function fetchRcMovementMatrix(campaign?: string): Promise<RcMoveme
           batchCode: r.batch_code ?? r.batch_id,
           blockLoc: r.block_loc && r.block_loc.trim() !== '' ? r.block_loc : null,
           firstFedDate: r.date,
+          // Filled from view_ops_ledger_campaign_block below. NULL, never 0 — a
+          // missing row means "not published", not "fed nothing".
+          campaignFedKg: null,
+          campaignFeedDays: null,
           // Summary fields filled in the batched pass below (see "Footer summary").
           totalOut: 0,
           totalIn: 0,
@@ -721,8 +740,18 @@ export async function fetchRcMovementMatrix(campaign?: string): Promise<RcMoveme
       weight_lost_kg: number | null;
       loss_pct: number | null;
     };
+    // (E) THIS CAMPAIGN's kg per block — view_ops_ledger_campaign_block, the ONLY
+    //     published per-(campaign, block) fed total. ~30 rows for one campaign
+    //     (523 over all history, so it is read PER CAMPAIGN, never whole-history).
+    //     NOT price-gated: only peso-free columns are selected, and none of the
+    //     three is derivable back into a ₱ figure.
+    type CampaignBlockRow = {
+      batch_id: string | null;
+      campaign_fed_kg: number | null;
+      campaign_feed_days: number | null;
+    };
 
-    const [batchRows, deliveryRows, rcOutSumRows, batchPriceRows, blockActualRows] = await Promise.all([
+    const [batchRows, deliveryRows, rcOutSumRows, batchPriceRows, blockActualRows, campaignBlockRows] = await Promise.all([
       batchIds.length
         ? fetchAll<BatchRow>((from, to) => supabase.from('batches').select('id, status').in('id', batchIds).range(from, to))
         : Promise.resolve([] as BatchRow[]),
@@ -760,7 +789,26 @@ export async function fetchRcMovementMatrix(campaign?: string): Promise<RcMoveme
               .range(from, to),
           )
         : Promise.resolve([] as BlockActualRow[]),
+      // Filtered on the campaign's own two key columns, exactly as every other
+      // campaign view on this screen is. `.catch` is not used — fetchAll's throw
+      // surfaces as the action's `empty` fallback, same as its five siblings.
+      fetchAll<CampaignBlockRow>((from, to) =>
+        supabase
+          .from('view_ops_ledger_campaign_block')
+          .select('batch_id, campaign_fed_kg, campaign_feed_days')
+          .eq('production_batch', pb)
+          .eq('campaign_year', yr)
+          .range(from, to),
+      ),
     ]);
+
+    // THIS CAMPAIGN's fed kg by batch_id. SQL-aggregated over the same
+    // view_rc_movement_campaign_cells this matrix pivots, so it equals the
+    // column's own cell sum by construction — never re-added in TS.
+    const campaignBlockById = new Map<string, CampaignBlockRow>();
+    for (const r of campaignBlockRows) {
+      if (r.batch_id) campaignBlockById.set(r.batch_id, r);
+    }
 
     // batch_price by batch_id (NULL passes straight through — zero-fed batch).
     // Price-gated: when !showPrices, store null so no per-column ₱ reaches the client.
@@ -839,6 +887,11 @@ export async function fetchRcMovementMatrix(campaign?: string): Promise<RcMoveme
       col.upliftPhpKg = actual?.uplift_php_kg ?? null;
       col.weightLostKg = actual?.weight_lost_kg ?? null;
       col.lossPct = actual?.loss_pct ?? null;
+      // THIS CAMPAIGN's own draw — the figure that makes the lifetime numbers
+      // beside it readable. Absent row leaves null (BLANK), never 0.
+      const camp = campaignBlockById.get(col.batchId);
+      col.campaignFedKg = camp?.campaign_fed_kg ?? null;
+      col.campaignFeedDays = camp?.campaign_feed_days ?? null;
     }
 
     const grandTotalFed = out.reduce((s, r) => s + r.totalFed, 0);

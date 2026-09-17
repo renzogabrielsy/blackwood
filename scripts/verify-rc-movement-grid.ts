@@ -179,6 +179,69 @@ check('the header budget is stated against the platform that produces it', () =>
   assert.match(CODE, /sortable: false,\s*\n\s*filterable: false,/)
 })
 
+// ═══ 1b · THE SUMMARY ROW'S OWN WIDTH BUDGET ══════════════════════════════════
+//
+// A block column has TWO width floors, not one — the header (§1) and the SUMMARY cell,
+// which since 2026-09-17 leads with a labelled `this camp <kg>` row. That label is wider
+// than any it replaced, and the live matrix's own `W_BLOCK` had to go 92 → 124 for exactly
+// this reason (at 116 it wrapped to two lines on the FIRST block column). This grid's 148
+// clears it with room to spare — but the budget is written down, because the next person
+// to narrow `W_BLOCK` back toward the Classic matrix's number needs to fail here rather
+// than ship a wrapped label.
+//
+// The summary cell pays NO header chrome (no sort/filter buttons live in a `<tfoot>`) —
+// its own `px-2` + the `border-r`, plus the 2px GROUP_DIVIDER that the FIRST block column
+// carries and every block column is therefore sized for.
+const SUMMARY_CELL_CHROME = 16 + 1 + 2
+/**
+ * MEASURED in Chrome at the real computed fonts, the same method as HEADER_PX — Node has
+ * no font engine, so these can only be ENFORCED here, never re-derived.
+ *   53.36 — `this camp` at `text-[9px] uppercase tracking-wide`
+ *   46.83 — a 7-digit kg value (`781,234`) at `font-mono text-xs`; the measured 6-digit
+ *           `54,941` is 40.14, and the extra digit is the headroom that matters
+ *    4.00 — the row's `gap-1` between label and value
+ */
+const SUMMARY_ROW_PX: Readonly<Record<string, number>> = {
+  W_BLOCK: 53.36 + 4 + 46.83,
+}
+
+check('every block column is wide enough for the SUMMARY row\'s widest line', () => {
+  const widths = declaredWidths()
+  for (const [key, label] of Object.entries(SUMMARY_ROW_PX)) {
+    const floor = label + SUMMARY_CELL_CHROME
+    const declared = widths.get(key)!
+    assert.ok(
+      declared >= floor,
+      `${key}: declared ${declared}px but the summary row's \`this camp <kg>\` line needs ` +
+        `${floor.toFixed(2)}px (label+value ${label.toFixed(2)} + ${SUMMARY_CELL_CHROME} of ` +
+        `cell chrome) — it would wrap to two lines`,
+    )
+  }
+})
+
+check('the summary row names its TWO CLOCKS and never prints a negative loss', () => {
+  // Renzo, 2026-09-17: `FED 69,013` on AUGUST 2026 · JAN-26-BLK15 read as the sum of a
+  // column that totals 54,941 kg, and the loss formula took the blame. Every figure in a
+  // block's summary cell except the first is the block's LIFETIME total; the fix is that
+  // the cell now SAYS so. Pinned on BOTH grids, because the misread is reachable on either.
+  const matrix = readFileSync(join(MODULE, 'rc-movement-matrix.tsx'), 'utf8')
+  for (const [name, src] of [['v2 grid', CODE], ['Classic matrix', stripComments(matrix)]] as const) {
+    assert.ok(src.includes('this camp'), `${name}: the summary must LEAD with THIS CAMPAIGN`)
+    assert.ok(src.includes('campaignFedKg'), `${name}: …and read it from the payload, not re-add cells`)
+    assert.ok(src.includes('all campaigns'), `${name}: the lifetime figures must be captioned`)
+    assert.ok(src.includes('>life</span>'), `${name}: the lifetime kg row must be labelled \`life\`, not \`fed\``)
+    assert.ok(!src.includes('>fed</span>'), `${name}: nothing here may still be labelled \`fed\` — that label IS the bug`)
+    // THE SIGN. `blockLoss` is `(out - in) / in`, so a real loss is NEGATIVE and the old
+    // `fmtSignedPct` printed `LOSS -0.86%` — "negative loss", the opposite of the truth.
+    assert.ok(
+      !src.includes('fmtSignedPct'),
+      `${name}: fmtSignedPct must be gone — it put a minus in front of every ordinary loss`,
+    )
+    assert.match(src, /function fmtLossPct\(blockLoss: number \| null\): string \{[\s\S]{0,160}?\(-blockLoss \* 100\)\.toFixed\(2\)/,
+      `${name}: fmtLossPct must flip the sign so a loss prints POSITIVE`)
+  }
+})
+
 check('NOTHING on this sheet wraps its header any more', () => {
   // `headerWrap` was the old answer to two of these columns and it was the wrong one
   // twice over: the header row grows to its TALLEST cell, so one wrapped header raises

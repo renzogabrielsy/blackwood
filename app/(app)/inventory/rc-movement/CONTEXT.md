@@ -24,7 +24,7 @@ A cross-tab / pivot of feeding activity, mirroring how the user reasons about a 
 > The folder now HAS a `page.tsx` (Phase 2) — `/inventory/rc-movement` is a real standalone route. The matrix is reached there (no longer via a tab).
 
 ### Mobile (Archetype E phone-summary)
-The frozen matrix can't shrink to a phone (its frozen-left region alone is 384px > a 375px screen), so `rc-movement-matrix.tsx` is **additive-responsive**: the full `<table>` is wrapped `hidden sm:flex` (byte-for-byte unchanged, desktop/landscape only) and a `sm:hidden` **`RcMovementSummaryMobile`** renders below it. The summary = a **campaign KPI strip** (Fed `grandTotalFed`, Produced `campaignTotalProduced`, Yield `campaignYieldPct`, Loss = `1 − yield` display transform, and a price-gated Camp. ₱/kg from `campaignAvgFedPrice`) + a **tappable block list** (`columns[].{batchCode, blockLoc, totalOut, blockLoss, status}` → taps through to the SAME `BlockingDetailPanel` via `handleHeaderClick`) + a **per-day feed list** (`rows[].{date, dayOfWeek, totalFed, totalProduced, avgFedPriceDay}`). **Every number is reused verbatim from `data` — nothing is recomputed** (CLAUDE.md); ₱ honors `data.canViewPrices` exactly as the desktop `showFedPrice` gate does (no ₱ for Production). The toolbar row is `flex-wrap` so it doesn't overflow at 375px. Helpers `KpiTile` / `StatusPill` are local to the file.
+The frozen matrix can't shrink to a phone (its frozen-left region alone is 384px > a 375px screen), so `rc-movement-matrix.tsx` is **additive-responsive**: the full `<table>` is wrapped `hidden sm:flex` (byte-for-byte unchanged, desktop/landscape only) and a `sm:hidden` **`RcMovementSummaryMobile`** renders below it. The summary = a **campaign KPI strip** (Fed `grandTotalFed`, Produced `campaignTotalProduced`, Yield `campaignYieldPct`, Loss = `1 − yield` display transform, and a price-gated Camp. ₱/kg from `campaignAvgFedPrice`) + a **tappable block list** (`columns[].{batchCode, blockLoc, campaignFedKg, totalOut, blockLoss, status}` → taps through to the SAME `BlockingDetailPanel` via `handleHeaderClick`; it carries the SAME two labelled clocks as the desktop footer — `<kg> / this camp.` on top, `<kg> life` and `<pct> loss` beneath) + a **per-day feed list** (`rows[].{date, dayOfWeek, totalFed, totalProduced, avgFedPriceDay}`). **Every number is reused verbatim from `data` — nothing is recomputed** (CLAUDE.md); ₱ honors `data.canViewPrices` exactly as the desktop `showFedPrice` gate does (no ₱ for Production). The toolbar row is `flex-wrap` so it doesn't overflow at 375px. Helpers `KpiTile` / `StatusPill` are local to the file.
 
 ## Data
 - **Source:** the **8 campaign-keyed views** (`view_rc_movement_campaign_*`, see below) + `batches`/`deliveries`/`rc_out`/`view_rc_movement_batch_price` for the all-time per-block footer pass. (The selected campaign's `production_batch` comes straight from the resolved campaign — no separate `rc_out` dominant-batch query.)
@@ -48,6 +48,25 @@ All eight are SECURITY-INVOKER (granted authenticated/anon). `production_batch` 
 | `view_rc_movement_campaign_yield` | `total_fed`, `total_produced`, `yield_pct` (FRACTION), `loss_kg` | `matrix.campaignTotalProduced` / `campaignYieldPct` (fraction, kept as-is) / `campaignLossKg` (`.maybeSingle()`) |
 
 Migration: `supabase/migrations/20260609010000_create_rc_movement_fed_price_views.sql` (and sibling campaign-view migrations). `view_rc_movement_batch_price` (per-block ₱/kg footer) is **campaign-independent** and reused unchanged.
+
+### THIS CAMPAIGN's fed kg per block — `view_ops_ledger_campaign_block` (2026-09-17)
+The ONE published per-`(campaign, block)` fed total, and the fix for the footer misread
+above. Migration `20260915073755_ops_ledger_campaign_blocks_and_shift_grades.sql`; it is the
+ops ledger's BLOCKS-USED table (see `app/(app)/operations/CONTEXT.md`), read here for exactly
+three columns.
+
+| Column | Maps to |
+|---|---|
+| `batch_id` | join key onto the matrix column |
+| `campaign_fed_kg` | `column.campaignFedKg` — footer Line 1, tooltip row 1 |
+| `campaign_feed_days` | `column.campaignFeedDays` — tooltip context only |
+
+Five things that make this read safe, and one that would break it:
+1. **It is not a new definition.** The view's campaign half is `sum(fed_kg) … group by production_batch, campaign_year, batch_id` over **`view_rc_movement_campaign_cells`** — the *same relation this matrix pivots into its cells*. So `campaignFedKg` equals the column's own cell sum by construction, and **`Σ campaignFedKg` is the campaign's `fed_kg`, proven in SQL on all 32 campaigns every `scripts/verify-ops-ledger.ts` run** (`campaign_block_fold_mismatch`). Nothing is summed in TS.
+2. **Filtered on `production_batch` + `campaign_year`**, exactly like every other campaign view on this screen (the ops ledger's own adapter filters the same rows by the derived `campaign_key`; both are indexed the same way — **~28 ms, ≤ ~30 rows for one campaign**).
+3. **READ PER CAMPAIGN, NEVER WHOLE HISTORY** — 523 rows over all time would approach PostgREST's 1000-row cap. It still goes through the shared `fetchAll` pager like its five siblings.
+4. **NOT price-gated, and that is a fact about the SELECT, not an oversight.** The view carries four ₱ columns (`delivered_php_kg`, `priced_delivered_php_kg`, `actual_fed_php_kg`, `uplift_php_kg`) and **none of them is selected**; the three that are carry no money and none is derivable back into a price. So Production sees `THIS CAMP 54,941` exactly as an Owner does — which is right, because the whole defect was a kg figure being unreadable. **If a ₱ column is ever added to this select, it must move behind `showPrices` like `view_rc_movement_block_actual_price` already is.**
+5. **NULL is never 0.** A missing row means "not published", not "fed nothing", and renders as an em-dash.
 
 ### ACTUAL FED ₱/kg views (2026-08-07 — WIRED INTO THE UI, see "ACTUAL FED ₱/kg — UI" below)
 Migration: `supabase/migrations/20260807090554_rc_movement_actual_fed_price.sql`. **Three new `security_invoker` views, strictly additive** — nothing above was altered, and `view_rc_movement_campaign_price` remains the **delivered-price reference line** the UI draws against.
@@ -86,6 +105,13 @@ Migration: `supabase/migrations/20260807090554_rc_movement_actual_fed_price.sql`
     batchCode: string;
     blockLoc: string | null;      // '' / null FEED blocks -> null
     firstFedDate: string;         // YYYY-MM-DD
+    // ── THIS CAMPAIGN's own draw (view_ops_ledger_campaign_block; 2026-09-17) ──
+    campaignFedKg: number | null;   // kg THIS campaign fed out of this block. NULL (never 0)
+                                    //   when the ops-ledger view has no row for the pair.
+                                    //   SQL-aggregated over the SAME view_rc_movement_campaign_cells
+                                    //   this matrix pivots, so it EQUALS the column's cell sum by
+                                    //   construction. Peso-free -> NOT price-gated.
+    campaignFeedDays: number | null; // distinct days THIS campaign fed from this block
     // ── Footer summary (ALL-TIME per-batch, campaign-independent; ONE batched pass) ──
     totalOut: number;             // all-time SUM(rc_out.weight_kg) for this batch (= total fed)
     totalIn: number;              // all-time SUM(deliveries.weight_kg) for this batch
@@ -143,7 +169,7 @@ Four surfaces, all in `rc-movement-matrix.tsx`, all **additive — nothing exist
 
 | Surface | What it shows | Blank rule |
 |---|---|---|
-| **Per-column footer, Line 4** (`actual`) | `column.actualFedPrice`, directly under Line 3, separated by a `border-border/60` hairline. Bolder + one step larger (`text-[11px] font-bold` vs Line 3's `text-[10px]`) so it reads as the more important figure at grid density. | **BLANK** when null. The LABEL slot is kept so every per-column footer stays the same height; the hover tooltip says *why* (`block still open` / `awaiting price`). |
+| **Per-column footer, Line 5** (`actual`) | `column.actualFedPrice`, directly under Line 4 (`₱/kg`), separated by a `border-border/60` hairline. Bolder + one step larger (`text-[11px] font-bold` vs Line 4's `text-[10px]`) so it reads as the more important figure at grid density. | **BLANK** when null. The LABEL slot is kept so every per-column footer stays the same height; the hover tooltip says *why* (`block still open` / `awaiting price`). |
 | **Footer campaign cell** (frozen `Fed ₱/kg` column) | `camp. avg ₱44.55` (unchanged) → hairline → **`actual fed ₱47.27`** (bold, `text-[13px]`) → `16/19 priced`. Uses `actualFedPhpKg`, the PRIMARY form. The coverage line reads **`blocksInPrice`, NOT `blocksClosed`** — a closed-but-unpriced block is closed and *still excluded*, so printing 18 here would overstate what the ₱ above it covers (JULY 2026: 18 closed, 16 in the price). The hover title spells out all four counts. | Value blank when null; the coverage line always shows so a partial figure is never read as the whole campaign. |
 | **Toolbar coverage badge** | `● 18 of 19 blocks closed · 1 open` — a **button** when `openBlocks.length > 0`, an inert pill otherwise. Counts come from `blocksClosed`/`blocksFed`. | Absent entirely when `campaignActualFedPrice` is null (no row, or price-gated). |
 | **`OpenBlocksDialog`** (the badge's modal) | One dense `table-fixed` row per open block: Block (code + loc, click-through to `BlockingDetailPanel`), Status, Fed here, Share, Balance, Feeds, **Last fed = the BLOCK's own `lastFedDate`** (its campaign window is on the hover title — `JAN-26-BLK18` last fed `2026-08-06`, after this campaign closed on `2026-07-29`), ₱/kg in. Header states `16 of 19` + `83.21% of the campaign's fed kg` + the `blocksClosedUnpriced` exclusion. | `deliveredPhpKg` null → falls back to `pricedDeliveredPhpKg` with a `*` and a footnote; never ₱0.00. |
@@ -153,7 +179,7 @@ Plus the phone summary (`RcMovementSummaryMobile`): an `ACTUAL FED ₱/KG` KpiTi
 Three rules this UI holds to:
 1. **NULL renders as BLANK, never ₱0.00 and never a dash that looks like a value.** Verified on `JAN-26-BLK18` (open) and `FEB-26-BLK1`/`FEB-26-BLK4` (closed, unpriced) — the `ACTUAL` label renders with nothing after it.
 2. **Zero / negative uplift is rendered neutrally** — no red, no warning icon, no badge. `JULY-26-FEED1`/`FEED2`/`JUNE-26-FEED7` all read `₱/KG 36.00 → ACTUAL 36.00` and look completely normal, which is correct: ~27% of closed blocks fed exactly or more than was delivered.
-3. **Price gating is structural, not cosmetic.** `showFedPrice = data.canViewPrices` drops the whole frozen `Fed ₱/kg` column (Line 3 AND Line 4, the campaign cell, the tooltip rows) and the coverage badge, and `LEFT_TOTAL` collapses to `LEFT_FEDPRICE` so the frozen offsets stay cumulative (measured under Production: `0 / 48 / 148 / 200` with `frozen-edge` on `Total fed`). Measured on the gated render: **0 `₱` glyphs and no `ACTUAL` / `blocks closed` text in the DOM at all.**
+3. **Price gating is structural, not cosmetic.** `showFedPrice = data.canViewPrices` drops the whole frozen `Fed ₱/kg` column (footer Lines 4 AND 5, the campaign cell, the tooltip rows) and the coverage badge, and `LEFT_TOTAL` collapses to `LEFT_FEDPRICE` so the frozen offsets stay cumulative (measured under Production: `0 / 48 / 148 / 200` with `frozen-edge` on `Total fed`). Measured on the gated render: **0 `₱` glyphs and no `ACTUAL` / `blocks closed` text in the DOM at all.**
 
 Footer height grew by one line; the frozen geometry is unchanged (`.frozen-corner-bottom` + `.frozen-edge-top`, solid `bg-muted`, `border-collapse: separate` still load-bearing). The dialog's sticky `<thead>` puts `sticky` + opaque `bg-muted` on each `<th>` (not just the row) for the same collapsed-border reason.
 
@@ -175,16 +201,21 @@ Footer height grew by one line; the frozen geometry is unchanged (`.frozen-corne
   - **Header:** the TOTAL PRODUCED cell carries a small uppercased `produced` group caption over a `Total` label; each grade header is the grade code (`font-mono text-[11px]`). All are scrolling header cells (`frozen-row` + OPAQUE `bg-muted`, sticky-top only), right-aligned.
   - **Body:** after the Total fed frozen cell — TOTAL PRODUCED (`row.totalProduced`, kg, `font-mono font-medium tabular-nums`, blank when null/0) then one cell per grade (`row.producedByGrade[grade]`, blank when 0/absent). `group-hover:bg-accent` repaints the row hover tint to match the frozen + block cells. Numbers are KG (no ₱); blank on zero via `text-transparent`.
   - **Footer — the yield/loss PAYOFF (LABEL-LESS TRICOLOR highlight):** the TOTAL PRODUCED footer cell is a compact 3-line stack of **color-highlighted bold numbers with NO text labels** — color alone encodes each metric, and a `title` attr per line ("Produced" / "Yield" / "Loss") keeps the meaning discoverable on hover. **FULL-BLEED:** the cell is `p-0` (overrides the helper's `px-2 py-0.5`) so the bands reach every edge; the inner stack is `flex h-full flex-col`, each band `flex-1 w-full` (equal thirds), NO rounded corners, NO gaps, NO per-band padding — only a tiny `pr-1` keeps the digits off the right border. The result reads as three solid horizontal color bands (yellow/green/red) filling the cell completely, bold numbers on top. Each band is `font-bold font-mono text-[11px] tabular-nums`, right-aligned: **Produced (kg) → amber** (`bg-amber-100 dark:bg-amber-950 text-amber-950 dark:text-amber-50`), **Yield (%) → emerald**, **Loss (%) → red** — the same OPAQUE tint-pair style as `statusTint()` (frozen-pane rule: no glass/translucency on a sticky surface). Values: `campaignTotalProduced` (`—` when null), `yield = campaignYieldPct × 100, 1 dp` (`fmtYieldPct`, `—` when null/total_fed = 0), `loss = (1 − campaignYieldPct) × 100, 1 dp` (a PERCENT, reusing `fmtYieldPct`; `—` when yield null, `100.0%` when yield = 0 / fed-but-no-production). `campaignLossKg` stays in the data layer but is no longer rendered. Each grade footer cell = that grade's `campaignTotal` (kg, bold mono, blank when null). These scrolling footer cells use the **same `.frozen-row-bottom` (z20) + `.frozen-edge-top` OPAQUE `bg-muted` pattern as the block-column footers** (NOT corner — they scroll); the cell base stays neutral muted (not a batch state, so no `statusTint`) — only the inner tricolor strips are tinted. The 3-line produced footer matches the existing 3-line per-block footer band height — no new height pressure.
-- **Frozen summary footer (bottom-pinned, mirror of the header) — COMPACT 2-LINE layout, WHOLE-CELL state tint, MC/Ash in a hover tooltip:** a sticky `<tfoot>` pinned to the container bottom (`bottom:0`). Each per-column cell is **two tight lines** (`px-2 py-0.5`, no inter-line gap) wrapped in a `Tooltip`/`TooltipTrigger` (reusing the table's existing `TooltipProvider`); the trigger content carries `cursor-default`:
-  - **Line 1 (headline):** a `flex justify-between` row — tiny `text-[10px]` uppercase muted `fed` label pinned left + total fed kg (`totalOut`, bold `font-mono text-xs`) pinned right, mirroring the loss row's label/value rhythm.
-  - **Line 2 (loss):** a `flex justify-between` row — tiny `text-[10px]` uppercase muted `loss` label pinned left + the signed block-loss % (`fmtSignedPct(blockLoss)`, `font-mono text-[10px]`) pinned right. "—" when `blockLoss` is null.
-  - **Line 3 (₱/kg — per-block weighted-avg fed price):** a `flex justify-between` row — tiny `text-[10px]` uppercase muted `₱/kg` label pinned left + `column.avgFedPrice` in accounting format (`fmtPrice`, `font-mono text-[10px]`) pinned right. **Blank value when null** (the label slot is KEPT so every per-column footer stays the same height). The price also appears in the hover tooltip's `<dl>` as a **Fed price** row (`₱{value}/kg`, "—" when null).
-  - **MC & Ash live in the hover tooltip** (de-clutters the previously cramped 3-col `mc | ash | loss` grid, which was REMOVED). **Tooltip = a polished info card, not stacked text.** The `TooltipContent` (`side="top"`, `w-[180px]`, `p-0`) uses the canonical popover **glass** surface `bg-popover/95 backdrop-blur-lg` (correct here — it floats over empty space, unlike the OPAQUE frozen cells). Structure: a **header** (`px-2.5 py-2`) with the batch code (`font-mono text-xs font-semibold`) over the `block_loc` (muted `text-[10px]`) on the left and a compact **state pill** on the right (colored dot + uppercase status text — blue for IN-USE, red for CLOSED/FEED, neutral muted otherwise, matching the footer tint convention); a `border-t border-border` **divider**; then a `<dl>` **label/value list** (`px-2.5 py-2`, `space-y-1`) with muted left labels + `font-mono tabular-nums` right-aligned values via `flex justify-between` per row — **Fed** (`totalOut` kg), **In** (`totalIn` kg), **MC** (2-dec %), **Ash** (2-dec %), **Fed price** (`avgFedPrice` → `₱{value}/kg`, "—" when null), **Loss** (signed %, keeps red-neg/emerald-pos/muted-null coloring), **Opened** (`firstFedDate`). All `text-[11px]`, semantic tokens (light + dark).
+- **Frozen summary footer (bottom-pinned, mirror of the header) — TWO CLOCKS, LABELLED; WHOLE-CELL state tint; MC/Ash in a hover tooltip:** a sticky `<tfoot>` pinned to the container bottom (`bottom:0`). Each per-column cell is a tight stack (`px-2 py-0.5`, no inter-line gap) wrapped in a `Tooltip`/`TooltipTrigger` (reusing the table's existing `TooltipProvider`); the trigger content carries `cursor-default`.
+
+  > **⚠ THE FOOTER ANSWERS TWO DIFFERENT QUESTIONS AND MUST SAY WHICH IS WHICH (2026-09-17).** Renzo read `FED 69,013` on **AUGUST 2026 · JAN-26-BLK15** as the sum of the column above it — that column totals **54,941 kg** — and concluded the loss formula was broken. It was not: the campaign yield is computed over the campaign's own 709,627 kg and is correct. Every figure on the old footer was the block's **LIFETIME** total (JULY 2026 opened that block and took the other **14,072 kg**), while the cells above show only THIS campaign's days. A number that answers a different question than the column it sits under has to say so, so the footer is now **Line 1 = THIS CAMPAIGN**, then a hairline + an `all campaigns` caption, then the lifetime figures. Nothing was removed and no number changed; the campaign figure was ADDED and the lifetime ones RELABELLED.
+  - **Line 1 (headline — THIS CAMPAIGN):** a `flex justify-between` row — tiny `text-[9px]` uppercase `this camp` label pinned left + **`column.campaignFedKg`** (bold `font-mono text-xs`, same weight/size as the frozen `Total fed` grand-total cell so the two read as one family) pinned right. **"—" when null, never `0`.** A `title` spells it out in words and names the campaign feed-day count. This is the ONLY figure on the footer that answers the same question as the cells above it, and it equals the column's own cell sum **by construction** — both are `view_rc_movement_campaign_cells` (see "THIS CAMPAIGN's fed kg" below). Never re-added in TS.
+  - **The `all campaigns` group:** a `border-t border-border/60` hairline + a `text-[8px]` uppercase `all campaigns` caption (`leading-none`, `opacity-55`) introduce everything below, all of it **block-lifetime / campaign-independent**. The caption is what stops `life 69,013` being read as a column total again.
+  - **Line 2 (life):** tiny `text-[10px]` uppercase `life` label + `totalOut` (`font-mono text-[11px] font-medium`). **Was labelled `fed`, which is precisely how it got misread.** It is every kg that ever left the block, sun-drying pulls included.
+  - **Line 3 (loss):** tiny `text-[10px]` uppercase `loss` label + **`fmtLossPct(blockLoss)`**, `font-mono text-[10px]`. "—" when `blockLoss` is null. **NO LEADING MINUS ON AN ORDINARY LOSS (2026-09-17).** `column.blockLoss` is the SIGNED ratio `(totalOut − totalIn) / totalIn`, so a block that lost weight carries a NEGATIVE ratio and the old `fmtSignedPct` printed `LOSS -0.86%` — which reads as "negative loss", the opposite of what happened. `fmtLossPct` (which REPLACED `fmtSignedPct`; there are no other callers) drops the sign: an ordinary loss prints **positive**, and the ~27% of blocks that fed MORE than was delivered keep an explicit minus, because they lost nothing. Same quantity SQL publishes as `view_rc_movement_block_actual_price.loss_pct`; that column is deliberately NOT read here because it rides on a **price-gated** view that is not queried at all for Production, and the loss figure must stay visible to every role. Sign-flipping one already-computed field for display is the same class of transform as the produced footer's `(1 − yield) × 100`, not a second definition of loss. The red(loss)/emerald(gain)/muted(null) coloring is UNCHANGED (it keys off `blockLoss`, not the printed string).
+  - **Line 4 (₱/kg — per-block weighted-avg fed price):** a `flex justify-between` row — tiny `text-[10px]` uppercase muted `₱/kg` label pinned left + `column.avgFedPrice` in accounting format (`fmtPrice`, `font-mono text-[10px]`) pinned right. **Blank value when null** (the label slot is KEPT so every per-column footer stays the same height). The price also appears in the hover tooltip's `<dl>` as a **Fed price** row (`₱{value}/kg`, "—" when null). All-time per batch, like everything else inside the `all campaigns` group.
+  - **Line 5 (`actual` — ACTUAL FED ₱/kg):** unchanged, see the table in "ACTUAL FED ₱/kg — UI" above. Also inside the `all campaigns` group.
+  - **MC & Ash live in the hover tooltip** (de-clutters the previously cramped 3-col `mc | ash | loss` grid, which was REMOVED). **Tooltip = a polished info card, not stacked text.** The `TooltipContent` (`side="top"`, `w-[180px]`, `p-0`) uses the canonical popover **glass** surface `bg-popover/95 backdrop-blur-lg` (correct here — it floats over empty space, unlike the OPAQUE frozen cells). Structure: a **header** (`px-2.5 py-2`) with the batch code (`font-mono text-xs font-semibold`) over the `block_loc` (muted `text-[10px]`) on the left and a compact **state pill** on the right (colored dot + uppercase status text — blue for IN-USE, red for CLOSED/FEED, neutral muted otherwise, matching the footer tint convention); a `border-t border-border` **divider**; then a `<dl>` **label/value list** (`px-2.5 py-2`, `space-y-1`) with muted left labels + `font-mono tabular-nums` right-aligned values via `flex justify-between` per row — **This campaign** (`campaignFedKg` kg + `· Nd` feed days, bold, FIRST — the only row that matches the column above; "—" when null), **Fed (all camp.)** (`totalOut` kg), **In (all camp.)** (`totalIn` kg), **MC** (2-dec %), **Ash** (2-dec %), **Fed price** (`avgFedPrice` → `₱{value}/kg`, "—" when null), **Loss** (`fmtLossPct` — POSITIVE for an ordinary loss, keeps red-loss/emerald-gain/muted-null coloring), **Opened** (`firstFedDate`). All `text-[11px]`, semantic tokens (light + dark).
   - **STATE = ENTIRE-CELL COLOR (the `StateBadge` dot/label was REMOVED).** The whole per-column footer cell background is tinted by `batches.status` via the `statusTint()` helper, which **replaces** `bg-muted` on these cells (one bg per element — never a translucent tint layered over `bg-muted`). The cell itself is `p-0`; the inner trigger `<div>` owns the `px-2 py-0.5` padding. **CRITICAL: the tints are OPAQUE solid tokens** (this is a frozen/sticky surface — any `/opacity`/glass reopens the bleed-through bug). Mapping: **IN-USE → `bg-blue-100 dark:bg-blue-950`** (blue), **CLOSED / FEED → `bg-red-100 dark:bg-red-950`** (red), **everything else (STORED / SUNDRYING / SUNDRIED / …) → neutral `bg-muted`**. Each tint pairs a readable foreground for both modes (blue/red `text-…-950 dark:text-…-50`; neutral `text-foreground`). On the RED (CLOSED/FEED) tint the loss red/green would clash, so **loss inherits the cell foreground there**; on the blue and neutral tints loss keeps the red(neg)/emerald(pos)/muted(null) sign coloring.
   - The 5 cells under the frozen LEFT columns are the **bottom-left corner** — sticky on BOTH axes via `.frozen-corner-bottom` (z30), `align-middle`; they stay **NEUTRAL opaque `bg-muted`** (not per-column, so no state tint). The "Total fed" footer cell shows the **grand total** (`grandTotalFed`, bold) and carries `.frozen-edge` for the vertical seam, the Date footer cell shows a muted "Totals" label, the rest are blank. The scrolling per-column footer cells use `.frozen-row-bottom` (z20) + `.frozen-edge-top` to kill the seam against the scrolling body above. All footer surfaces remain fully OPAQUE.
   - **State tint convention (footer-specific):** IN-USE = **blue**, CLOSED/FEED = **red**, other = **neutral**. This is distinct from the Blocking heatmap's status palette — it reflects feed-completion, not warehouse occupancy.
   - **Block loss formula (PENDING SIGN CONFIRMATION):** implemented exactly as `(totalOut − totalIn) / totalIn`, rendered as a signed % (negative tinted red, positive emerald). Divide-by-zero guarded: `totalIn = 0` → `blockLoss = null` → renders "—". The sign/direction is a first-look; confirm with the user before treating it as final.
-  - **Summary data is computed in ONE batched pass** in `fetchRcMovementMatrix` — **four** `.in(...)` queries (`batches` for status, `deliveries` for totalIn + weighted mc/ash, `rc_out` for totalOut, **`view_rc_movement_batch_price` for `avgFedPrice`**) keyed on the column batch_ids/codes, NOT a per-column action call. Weighted-avg mc/ash mirrors Blocking's `fetchBlockDataForBatch` (`SUM(metric × weight) / SUM(weight_with_metric)`). totalOut/totalIn are all-time SUMs (campaign-independent). Fed-price columns come straight from SQL (NEVER recomputed in TS). The per-day (`view_rc_movement_campaign_day_price`) and per-campaign (`view_rc_movement_campaign_price`) prices are fetched separately (both campaign-filtered).
+  - **Summary data is computed in ONE batched pass** in `fetchRcMovementMatrix` — **six** parallel queries: four `.in(...)` on the column batch_ids/codes (`batches` for status, `deliveries` for totalIn + weighted mc/ash, `rc_out` for totalOut, **`view_rc_movement_batch_price` for `avgFedPrice`**), the price-gated `view_rc_movement_block_actual_price`, and **`view_ops_ledger_campaign_block` for `campaignFedKg`** (below) — NOT a per-column action call. Weighted-avg mc/ash mirrors Blocking's `fetchBlockDataForBatch` (`SUM(metric × weight) / SUM(weight_with_metric)`). totalOut/totalIn are all-time SUMs (campaign-independent). Fed-price columns come straight from SQL (NEVER recomputed in TS). The per-day (`view_rc_movement_campaign_day_price`) and per-campaign (`view_rc_movement_campaign_price`) prices are fetched separately (both campaign-filtered).
 - **No virtualization:** ~44 cols × ~31 rows (~1.3k cells) — a plain sticky `<table>` is sufficient and simpler.
 - **Density:** `table-fixed` + `<colgroup>` explicit px widths, `px-2 py-1`, `text-xs`, `h-8` rows. Numerics `font-mono tabular-nums`, right-aligned, integer kg, thousands separators, blank for zero. Active (fed) cells get a subtle `bg-emerald-500/10` tint.
 - **Gridlines (full spreadsheet grid):** every column boundary carries a SUBTLE vertical separator (`border-r border-border/50`, matching the horizontal `border-b border-border/50` gridline weight), giving a continuous vertical line down each column from header → body → footer. Applied to: the scrolling block cells in all three sections (header `<th>`, body `<td>`, footer `<td>` — footer already had it), AND the frozen LEFT columns (Row#/Date/Day/Fed ₱/kg) via the `FrozenHeaderCell`/`FrozenBodyCell`/`FrozenFooterCell` helpers (each adds `border-r` only when its `className` does NOT include `frozen-edge`). The LAST frozen-left column (**Total fed**) is the exception — it keeps `.frozen-edge` as its right divider/anti-seam and gets NO competing `border-r` (the helpers detect `frozen-edge` and skip the border). Borders only — no change to sticky positioning, z-scale, offsets, or opacity.
@@ -270,8 +301,12 @@ Three decisions inside that table:
    the longest the naming convention produces with an ordinary `BLK` kind. A hypothetical
    `SEPTEMBER-26-SUNDRY12` would still truncate and its full code is on the `title`; the line
    is drawn where a wider column would cost every campaign real scroll width for a code
-   nobody has typed. **This is the one place the two headers deliberately differ — the
-   Classic matrix truncates a 16-character code at 92px and this does not.**
+   nobody has typed. ~~**This is the one place the two headers deliberately differ — the
+   Classic matrix truncates a 16-character code at 92px and this does not.**~~ **NO LONGER
+   TRUE (2026-09-17):** the Classic matrix's `W_BLOCK` went **92 → 124** so its footer could
+   carry a labelled `this camp` row (see "Frozen summary footer" above), which incidentally
+   clears the 16-character floor there too. The two still differ — 124 vs 148 — because the
+   Classic `<th>` pays no header-chrome budget.
 3. **Every declared width clears its floor with a few px of slack**, deliberately: a column
    sized to the exact measurement is one font-hinting change away from an ellipsis.
 
@@ -298,12 +333,53 @@ scrolled away with the rows it summarises. It is now **one `sticky` `TableSummar
   opaque — a pinned surface that overlaps scrolling content is opaque or the rows bleed),
   the tricolor produced/yield/loss bands still get `p-0` for their full bleed, and the ₱
   lines are still gated on the server-resolved `showFedPrice`.
-- `height: TOTALS_H` (62) is a **floor**: measured 76px for a price-seeing viewer (four
-  stacked lines per block), and legitimately shorter for Production.
+- `height: TOTALS_H` (62) is a **floor**: measured 76px for a price-seeing viewer when a
+  block cell stacked four lines — since 2026-09-17 it stacks two more (see below), so the
+  priced render is taller again — and legitimately shorter for Production. It stays a floor
+  rather than being pinned to the measurement, because a hard number leaves the gated
+  render an empty band.
 - Measured after the change: the footer's pinned `left` offsets are **identical** to the
   body's on every frozen column, in both the priced and the gated render; the bottom-left
   corner is `position: sticky; bottom: 0; left: 0; z-index: 30` with an opaque background,
   and it carries **both** seams via the new `.frozen-edge-corner` (see below).
+
+#### The per-block summary cell shows TWO CLOCKS, and they are LABELLED (2026-09-17)
+
+**Changed in LOCKSTEP with the Classic matrix's block footer** — the misread was reachable
+on either grid, and the paramless URL serves THIS one, so fixing only the Classic matrix
+would have left the default screen wrong. See "Frozen summary footer" above for the
+incident (AUGUST 2026 · JAN-26-BLK15 printing `FED 69,013` over a column that totals
+54,941 kg) and the reasoning; the cell is identical here, line for line:
+
+| Line | Content |
+|---|---|
+| 1 | `this camp` (`text-[9px]`, `shrink-0 whitespace-nowrap`) + **`block.campaignFedKg`** (`font-mono text-xs font-semibold`). **"—" when null, never `0`.** |
+| — | hairline + `all campaigns` caption (`text-[8px]`, `leading-none`, `opacity-55`) |
+| 2 | `life` + `totalOut` (`text-[11px] font-medium`) — the block's LIFETIME outflow. Was labelled `fed`; that label IS the bug. |
+| 3 | `loss` + **`fmtLossPct(blockLoss)`** — POSITIVE for an ordinary loss, **no leading minus** |
+| 4 / 5 | `₱/kg` / `actual`, unchanged, both inside the all-campaigns group, both gated on `showFedPrice` |
+
+Four things worth knowing:
+
+1. **No loader change was needed.** This grid takes the SAME `RcMovementMatrix` payload as
+   the Classic matrix (`RcMovementGridV2Props.data`, fetched by `page.tsx` from
+   `fetchRcMovementMatrix`), so `campaignFedKg` / `campaignFeedDays` arrived with the
+   action change — one read of `view_ops_ledger_campaign_block`, feeding both grids.
+2. **`fmtSignedPct` is GONE from this file too** (it had exactly two callers, the cell and
+   its `title`), replaced by a `fmtLossPct` byte-identical to the matrix's. The two grids
+   must not disagree about the sign of the same field, and the verify script now asserts
+   that on BOTH sources.
+3. **`W_BLOCK` did NOT move — it is already 148** (sized for the header, §"Header widths"),
+   and a summary cell pays no header chrome, so its budget is `148 − 16 (px-2) − 1
+   (border-r) − 2 (the first block column's GROUP_DIVIDER) = 129px` against a measured
+   `this camp` + a 7-digit value + the `gap-1` = **104.19px**. It is now PINNED in
+   `scripts/verify-rc-movement-grid.ts` §1b (`SUMMARY_ROW_PX` / `SUMMARY_CELL_CHROME`), so
+   narrowing `W_BLOCK` back toward the Classic matrix's number fails the script instead of
+   shipping a wrapped label. **The Classic matrix, whose `<th>` is cheaper, DID have to
+   move — 92 → 124.**
+4. **The `title` leads with `This campaign fed N kg over M days`**, then
+   `ALL CAMPAIGNS — life … · in …`, then MC/Ash/Loss — the same ordering as the matrix's
+   hover card, so a user who checks one grid against the other reads the same sentence.
 
 **`.frozen-edge-corner` (new in `globals.css`).** `box-shadow` is ONE property, so
 `.frozen-edge` + `.frozen-edge-top` on the same element is not two shadows — the later rule
@@ -483,9 +559,12 @@ so the two can still be compared cell-for-cell on the same campaign.
 - **`scripts/verify-rc-movement-grid.ts`** — the tenant-side guard for this module: it parses
   every `W_*` off `rc-movement-grid-v2.tsx` and enforces it against the MEASURED header and
   value widths, pins the header-chrome budget against `HeaderCell.tsx` (where the 40px + 4px
-  actually come from), asserts the totals row is a pinned summary row rather than a chrome
-  row, and asserts the Classic matrix and its host were not edited by the flip. Run it after
-  ANY width change on this sheet — Node has no font engine, so a width is enforceable here
+  actually come from), enforces the SUMMARY row's own width budget (§1b — the `this camp`
+  line, which pays cell chrome rather than header chrome), asserts **both** grids name their
+  two clocks (`this camp` / `all campaigns` / `life`, never `fed`) and use `fmtLossPct`
+  rather than the retired `fmtSignedPct`, asserts the totals row is a pinned summary row
+  rather than a chrome row, and asserts the Classic matrix and its host were not edited by
+  the flip. Run it after ANY width change on this sheet — Node has no font engine, so a width is enforceable here
   and not re-derivable. `scripts/verify-table-core.ts` owns the platform half (the seam and
   the `FLIPPED_PAGES` registry).
 
