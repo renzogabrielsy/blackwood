@@ -5,6 +5,7 @@ import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { RcMovementMatrix } from './rc-movement-matrix';
+import { ACTUAL_ON, ACTUAL_PARAM, parseActualPrice } from './actual-price-toggle';
 import { fetchRcMovementMatrix, type RcMovementMatrix as RcMovementMatrixData } from './actions';
 import type { BlockingDetailNavTarget } from '../_shared/blocking-detail-panel';
 
@@ -28,6 +29,13 @@ export function RcMovementRouteView() {
 
     // URL is the source of truth for the campaign. '' (absent) => server resolves default.
     const campaignParam = searchParams.get('campaign') ?? '';
+
+    // ── `?actual=on` — the block footer's FOURTH line (2026-09-17) ──────────────
+    // The URL is the state here exactly as `?campaign=` is, so the setting survives a
+    // reload and a shared link. The matrix itself holds no router hook (it is also
+    // hosted inside `/operations`' RC FED modal), so the param is read HERE and the
+    // switch is handed down as a controlled value + callback.
+    const showActualPrice = parseActualPrice(searchParams.get(ACTUAL_PARAM) ?? undefined);
 
     const [data, setData] = useState<RcMovementMatrixData | null>(null);
     // `loading` starts true and only ever flips to false after the first fetch resolves.
@@ -67,6 +75,21 @@ export function RcMovementRouteView() {
             else params.delete('campaign');
             const qs = params.toString();
             setSwitching(true);
+            startTransition(() => {
+                router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+            });
+        },
+        [router, pathname, searchParams],
+    );
+
+    const handleActualPriceChange = useCallback(
+        (next: boolean) => {
+            const params = new URLSearchParams(searchParams.toString());
+            // OFF is spelled as ABSENCE, so the plain address stays clean and the
+            // param's presence always means something.
+            if (next) params.set(ACTUAL_PARAM, ACTUAL_ON);
+            else params.delete(ACTUAL_PARAM);
+            const qs = params.toString();
             startTransition(() => {
                 router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
             });
@@ -120,6 +143,8 @@ export function RcMovementRouteView() {
                     data={data}
                     onCampaignChange={handleCampaignChange}
                     onNavigateToBatch={handleNavigateToBatch}
+                    showActualPrice={showActualPrice}
+                    onShowActualPriceChange={handleActualPriceChange}
                 />
             </div>
             {busy && (

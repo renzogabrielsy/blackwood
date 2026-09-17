@@ -133,12 +133,23 @@ const W_BLOCK = 150; // label + the block loc INLINE — one header line, so it 
 /**
  * Below this the frozen spine would leave no room for the lens.
  *
- * The spine is **922px with ₱ / 820 without** (96 → 102 on FED PRICE, so its label and
- * its inline unit fit on the one header line). The rule is the one it always was —
- * un-freeze while the spine is within ~10% of the frame — and at 1023px it still
- * holds, so the breakpoint did not move.
+ * ⚠ IT IS DERIVED FROM THE SPINE, NOT DECLARED (2026-09-17). The spine's width now
+ * has FOUR values, not two — the ₱ column goes for a price-denied reader and the two
+ * OUTPUT RATIOS columns go when `?ratios=off` — so a hardcoded breakpoint would be
+ * right for one of them and wrong for three. The rule is the one it always was:
+ * **un-freeze while the spine would occupy more than ~90% of the frame**, i.e.
+ * `round(spineWidth / 0.9) − 1`, which reproduces the 1023px that was hardcoded here
+ * for the 922px priced spine EXACTLY and moves with the other three:
+ *
+ * | spine | ₱ | ratios | breakpoint |
+ * |---|---|---|---|
+ * | 922 | ✓ | ✓ | 1023 |
+ * | 820 | — | ✓ | 910 |
+ * | 770 | ✓ | — | 855 |
+ * | 668 | — | — | 741 |
  */
-const NARROW_MQ = '(max-width: 1023px)';
+const narrowQuery = (spineWidth: number) =>
+  `(max-width: ${Math.round(spineWidth / 0.9) - 1}px)`;
 
 /**
  * THE ONE CAVEAT, on the two columns it applies to.
@@ -198,6 +209,15 @@ interface SpineCol {
   group: string;
   /** Dropped from the coordinate space entirely when the viewer may not see prices. */
   price?: boolean;
+  /**
+   * PART OF THE `OUTPUT RATIOS` GROUP — dropped from the coordinate space entirely
+   * when `?ratios=off` (2026-09-17).
+   *
+   * ABSENT, never blank: the frozen `left` offsets, the table's `minWidth` and the
+   * un-freeze breakpoint are all computed from the columns that survive, which is
+   * the same contract {@link price} has kept since the spine was frozen.
+   */
+  ratio?: boolean;
   /** The chevron column — rendered by the row, not by `day()`. */
   expand?: boolean;
   /**
@@ -359,6 +379,7 @@ const SPINE: SpineCol[] = [
     width: W_YIELDPCT,
     tone: 'drift',
     group: 'OUTPUT RATIOS',
+    ratio: true,
     day: (d) => mono(pctFromFraction(d.yieldPct, 2), 'text-muted-foreground'),
     campaign: (c) => mono(pctFromFraction(c.yieldPct, 2)),
     total: (g, s) => mono(pctFromFraction(g ? g.yieldPct : (s?.yieldPct ?? null), 2)),
@@ -371,6 +392,7 @@ const SPINE: SpineCol[] = [
     width: W_LOSSPCT,
     tone: 'drift',
     group: 'OUTPUT RATIOS',
+    ratio: true,
     day: (d) => mono(pctFromFraction(d.lossPct, 2), 'text-muted-foreground'),
     campaign: (c) => mono(pctFromFraction(c.processLossPct, 2)),
     total: (g, s) => mono(pctFromFraction(g ? g.processLossPct : (s?.processLossPct ?? null), 2)),
@@ -662,12 +684,23 @@ function buildRows(data: OpsLedgerData, withFooters: boolean): LedgerRow[] {
 export interface OpsLedgerTableProps {
   data: OpsLedgerData;
   lens: OpsLensId;
+  /**
+   * `?ratios=` — FALSE drops YIELD % and LOSS % from the spine's coordinate space
+   * (2026-09-17). WASTE and WASTE % stay: they carry no indicative caveat.
+   */
+  showRatios: boolean;
   /** Opens a block's detail drawer — a block column header, or a BLOCKS USED row. */
   onOpenBlock(batchId: string, batchCode: string, blockLoc: string | null): void;
   className?: string;
 }
 
-export function OpsLedgerTable({ data, lens, onOpenBlock, className }: OpsLedgerTableProps) {
+export function OpsLedgerTable({
+  data,
+  lens,
+  showRatios,
+  onOpenBlock,
+  className,
+}: OpsLedgerTableProps) {
   const showPrices = data.canViewPrices;
   const multi = data.rollups.length > 1;
 
@@ -678,8 +711,8 @@ export function OpsLedgerTable({ data, lens, onOpenBlock, className }: OpsLedger
   }, [data.rollups]);
 
   const spineCols = React.useMemo(
-    () => SPINE.filter((c) => showPrices || !c.price),
-    [showPrices],
+    () => SPINE.filter((c) => (showPrices || !c.price) && (showRatios || !c.ratio)),
+    [showPrices, showRatios],
   );
   const spineLefts = React.useMemo(() => {
     const out: number[] = [];
@@ -724,19 +757,23 @@ export function OpsLedgerTable({ data, lens, onOpenBlock, className }: OpsLedger
   }, []);
 
   // ── Phone: UN-FREEZE the spine rather than hide it ──────────────────────────
-  // 692px of frozen columns on a 375px screen would leave no room at all for the
-  // lens, so below 768px the spine simply scrolls with everything else — one table,
-  // one horizontal scroll, nothing hidden and no second layout to maintain. The
-  // HEADER stays pinned at every width. `narrow` starts false on server AND client
-  // and is set in an effect, so the first client render matches the server's.
+  // ~900px of frozen columns on a 375px screen would leave no room at all for the
+  // lens, so below the derived breakpoint (see `narrowQuery`) the spine simply
+  // scrolls with everything else — one table, one horizontal scroll, nothing hidden
+  // and no second layout to maintain. The HEADER stays pinned at every width.
+  // `narrow` starts false on server AND client and is set in an effect, so the first
+  // client render matches the server's.
   const [narrow, setNarrow] = React.useState(false);
+  // The query is DERIVED from the spine that actually rendered, so turning the ₱
+  // column or the OUTPUT RATIOS pair off lowers the breakpoint with it.
+  const narrowMq = narrowQuery(spineWidth);
   React.useEffect(() => {
-    const mq = window.matchMedia(NARROW_MQ);
+    const mq = window.matchMedia(narrowMq);
     const apply = () => setNarrow(mq.matches);
     apply();
     mq.addEventListener('change', apply);
     return () => mq.removeEventListener('change', apply);
-  }, []);
+  }, [narrowMq]);
   const frozen = !narrow;
 
   if (data.days.length === 0) {

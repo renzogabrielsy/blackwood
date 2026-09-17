@@ -1170,3 +1170,78 @@ function Row({
     </tr>
   );
 }
+
+// ═════════════════════════════════════════════════════════════════════════════════
+// THE SAME ELEVEN COLUMNS, AS PLAIN DATA — for the printed report (2026-09-17).
+//
+// `ops-page-print.tsx` prints the EOQ rollup as page 1 and each campaign's own row as
+// that campaign's KPI strip. Both are THIS table, on paper, so they read it from
+// {@link COLUMNS} rather than listing eleven fields again — a second list is a second
+// definition, and the first time one of them gained a column the two would disagree
+// about what the EOQ rollup IS.
+//
+// It hands back PLAIN DATA (a unit glyph and a formatted string per cell), never a
+// React node: the printed sheet is black on white with no tint, no `UnitValue` and no
+// button, so sharing the RENDER would mean sharing the screen's chrome too. What is
+// shared is the part that must not drift — which columns, in which order, reading
+// which published field, formatted how.
+//
+// NOTHING IS COMPUTED HERE either: every cell is `col.campaign(r)` / `col.group(g)`,
+// the identical call the screen makes.
+// ═════════════════════════════════════════════════════════════════════════════════
+
+export interface OpsKpiPrintColumn {
+  key: string;
+  label: string;
+}
+
+export interface OpsKpiPrintCell {
+  /** The unit — `t` · `%` · `kg` · `₱/kg`. EMPTY when the figure is absent. */
+  glyph: string;
+  value: string;
+  absent: boolean;
+  /** WASTE LOSS is legitimately two lines: the kilograms AND the share of produced. */
+  extra: { glyph: string; value: string }[];
+}
+
+export interface OpsKpiPrintRow {
+  /** `JULY 2026`, or `GROUP`. */
+  label: string;
+  /** `3 campaigns` on the GROUP row, absent on a campaign row. */
+  subtitle?: string;
+  cells: OpsKpiPrintCell[];
+}
+
+const printCell = (c: Cell): OpsKpiPrintCell => ({
+  glyph: c.glyph,
+  value: c.value,
+  absent: c.absent === true,
+  extra: (c.extra ?? []).map((e) => ({ glyph: e.glyph, value: e.value })),
+});
+
+/**
+ * The strip, as rows and columns a printed table can lay out.
+ *
+ * The GROUP row is included on exactly the condition the screen includes it —
+ * `group !== null && rollups.length > 1` — so a one-campaign report never prints a
+ * "GROUP" line that restates the only row above it.
+ */
+export function opsKpiPrintTable(
+  rollups: readonly OpsCampaignRollup[],
+  group: OpsGroupRollup | null,
+  canViewPrices: boolean,
+): { columns: OpsKpiPrintColumn[]; rows: OpsKpiPrintRow[] } {
+  const cols = COLUMNS.filter((c) => canViewPrices || !c.price);
+  const rows: OpsKpiPrintRow[] = rollups.map((r) => ({
+    label: r.label,
+    cells: cols.map((c) => printCell(c.campaign(r))),
+  }));
+  if (group !== null && rollups.length > 1) {
+    rows.push({
+      label: 'GROUP',
+      subtitle: `${group.campaignCount} campaigns`,
+      cells: cols.map((c) => printCell(c.group(group))),
+    });
+  }
+  return { columns: cols.map((c) => ({ key: c.key, label: c.label })), rows };
+}

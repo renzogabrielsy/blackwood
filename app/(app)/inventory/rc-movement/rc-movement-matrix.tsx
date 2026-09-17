@@ -27,6 +27,7 @@ import type {
     RcMovementMatrixColumn,
     RcMovementOpenBlock,
 } from './actions';
+import { ActualPriceToggle } from './actual-price-toggle';
 import { BlockingDetailPanel, type BlockingDetailNavTarget } from '../_shared/blocking-detail-panel';
 import { fetchBlockDataForBatch } from '../blocking/actions';
 import type { BlockData } from '../blocking/types';
@@ -40,17 +41,31 @@ const W_DATE = 100;
 const W_DAY = 52;
 const W_FEDPRICE = 96; // frozen "Fed ₱/kg" column, BETWEEN Day and Total fed
 const W_TOTAL = 88;
-// Each dynamic block column. WIDENED 92 → 124 on 2026-09-17 so the footer can carry a
-// LABELLED "this campaign" figure above the block's lifetime ones. MEASURED in Chrome
-// at the real computed fonts, not eyeballed: the `this camp` label is 53.36px and a
-// 6-digit kg value at `font-mono text-xs` is 40.14px, + the 4px flex gap = 97.5px of
-// content. The FIRST block column is the tight one — it also carries the 2px
-// GROUP_DIVIDER — so its budget is `declared − 16 (px-2) − 1 (border-r) − 2 (divider)`:
-// at 116 that is 97px and the label wrapped to two lines; 124 buys 105px, which also
-// clears a 7-digit value (≈46.8px). The table is `width: max-content` inside an
-// overflow-x-auto wrapper, so the extra 32px per column becomes horizontal SCROLL,
-// never crushed cells (CLAUDE.md, "Never crush, always scroll").
-const W_BLOCK = 124;
+// Each dynamic block column. It went 92 → 124 earlier on 2026-09-17 to carry a
+// labelled `this camp` line; the footer was then cut to THREE lines the same day
+// (Renzo: *"it is best that the footer remains just these values"*), so the widest
+// label shrank and the width was RE-MEASURED rather than left at its old number.
+//
+// MEASURED in Chrome with `Range.getBoundingClientRect()` at the real computed fonts —
+// Node has no font engine, so `scripts/verify-rc-movement-grid.ts` can only ENFORCE
+// these, never re-derive them. The three (four with the `Actual ₱` switch on) lines:
+//
+//   FED     `FED` 18.45    + 4 gap + `781,234` at font-mono text-xs      46.83 = 69.28
+//   ₱/KG    `₱/KG` 24.92   + 4 + `1,234.56` at font-mono text-[10px]     40.98 = 69.90
+//   LOSS %  `LOSS %` 40.83 + 4 + `-10.56%` at font-mono text-[10px]      34.71 = 79.54
+//   ACTUAL  `ACTUAL` 42.26 + 4 + `1,234.56` at font-mono text-[11px]     47.18 = 93.44 ← widest
+//
+// The FIRST block column is the tight one — it also carries the 2px GROUP_DIVIDER —
+// so the budget is `declared − 16 (px-2) − 1 (border-r) − 2 (divider)`. 116 buys 97px,
+// which clears the ACTUAL line's 93.44 with 3.5px of slack; 108 would clear the three
+// default lines and WRAP the switched-on one, which is how a width sized to the state
+// you happened to be looking at regresses. The ₱ figures are measured at `1,234.56` —
+// twenty times any real fed price, so the slack is real rather than nominal.
+//
+// The table is `width: max-content` inside an overflow-x-auto wrapper, so a block
+// column is never crushed — it becomes horizontal SCROLL (CLAUDE.md, "Never crush,
+// always scroll").
+const W_BLOCK = 116;
 // ── Scrolling PRODUCED section (after the frozen Total fed, BEFORE the block cols) ──
 const W_PRODUCED = 88; // TOTAL PRODUCED column (matches W_TOTAL rhythm)
 const W_GRADE = 80; // each dynamic per-grade column
@@ -177,9 +192,31 @@ interface RcMovementMatrixProps {
      * InventoryTabProvider tab switch.
      */
     onNavigateToBatch?: (target: BlockingDetailNavTarget) => void;
+    /**
+     * Whether each block's footer carries its ACTUAL ₱/kg as a FOURTH line
+     * (2026-09-17). DEFAULT FALSE, so every existing host is unaffected by the
+     * addition — `/operations`' RC FED modal and `?grid=v1` both opted in explicitly.
+     * Ignored entirely when the payload is price-denied.
+     */
+    showActualPrice?: boolean;
+    /**
+     * Render the `Actual ₱` switch in THIS component's toolbar and report a change.
+     *
+     * Present on the standalone route, where the toolbar is the only toolbar there
+     * is and the state lives in `?actual=`. ABSENT in the `/operations` RC FED modal,
+     * which owns a toolbar of its own (the campaign tabs) and puts the switch there —
+     * so the matrix renders no control and simply obeys `showActualPrice`.
+     */
+    onShowActualPriceChange?: (next: boolean) => void;
 }
 
-export function RcMovementMatrix({ data, onCampaignChange, onNavigateToBatch }: RcMovementMatrixProps) {
+export function RcMovementMatrix({
+    data,
+    onCampaignChange,
+    onNavigateToBatch,
+    showActualPrice = false,
+    onShowActualPriceChange,
+}: RcMovementMatrixProps) {
     const {
         campaign, campaignLabel, columns, rows, campaignOptions, grandTotalFed, campaignAvgFedPrice,
         producedGrades, campaignTotalProduced, campaignYieldPct, canViewPrices,
@@ -204,6 +241,10 @@ export function RcMovementMatrix({ data, onCampaignChange, onNavigateToBatch }: 
     // is null and `openBlocks` empty for Production; this flag keeps the coverage badge
     // and the footer's actual line from rendering an empty shell.
     const actual = showFedPrice ? campaignActualFedPrice : null;
+
+    // The FOURTH footer line. Gated on the price flag as well as the switch, so a
+    // stale `?actual=on` in a link opened by Production reveals nothing.
+    const showActualLine = showFedPrice && showActualPrice;
 
     // Open-blocks slide-in list ("N of M blocks closed" badge → modal).
     const [openBlocksOpen, setOpenBlocksOpen] = React.useState(false);
@@ -289,6 +330,19 @@ export function RcMovementMatrix({ data, onCampaignChange, onNavigateToBatch }: 
                         <span className="font-medium text-foreground">{rows.length}</span> days
                     </div>
                 )}
+
+                {/* ── THE `ACTUAL ₱` SWITCH (2026-09-17) ──────────────────────────
+                    Rendered only when a HOST asked for it (the standalone route) and
+                    only when the payload carries prices at all — a Production reader
+                    has no actual price to reveal, so the control is ABSENT rather
+                    than disabled. The `/operations` modal passes no callback and
+                    renders the identical component beside its own campaign tabs. */}
+                {showFedPrice && onShowActualPriceChange ? (
+                    <ActualPriceToggle
+                        value={showActualPrice}
+                        onChange={onShowActualPriceChange}
+                    />
+                ) : null}
 
                 {/* ── ACTUAL FED ₱/kg coverage badge ──
                     The actual price only exists for a CLOSED, fully-priced block, so a
@@ -753,28 +807,38 @@ export function RcMovementMatrix({ data, onCampaignChange, onNavigateToBatch }: 
                                         REPLACES bg-muted (no /opacity, no glass — this is a frozen
                                         surface; alpha would bleed through).
 
-                                        TWO CLOCKS, AND THEY ARE NOW LABELLED (2026-09-17).
-                                        Renzo read `FED 69,013` on AUGUST 2026 · JAN-26-BLK15 as the
-                                        sum of the column above it, which totals 54,941 kg, and
-                                        concluded the loss arithmetic was broken. It was not — every
-                                        figure on this footer except the first is the block's
-                                        LIFETIME total (JULY 2026 opened that block and took the
-                                        other 14,072 kg), while the cells above show only THIS
-                                        campaign's days. A number that answers a different question
-                                        than the column it sits under has to say so.
-                                          Line 1  : THIS CAMPAIGN — `campaignFedKg`, the SQL-published
-                                                    per-(campaign, block) total. Equals the column's
-                                                    own cell sum by construction.
-                                          hairline + `all campaigns` caption — everything below it is
-                                                    block-lifetime, campaign-independent.
-                                          Line 2  : `life`   — totalOut, every kg that ever left.
-                                          Line 3  : `loss`   — POSITIVE for an ordinary loss (see
-                                                    fmtLossPct); em-dash when null.
-                                          Line 4/5: `₱/kg` / `actual` — price-gated, unchanged.
-                                        MC & Ash live in the hover tooltip to de-clutter the grid. On
-                                        the red (CLOSED) tint the loss red/green could clash, so loss
-                                        inherits the cell foreground there; on the blue and neutral
-                                        tints it keeps the red(loss)/emerald(gain) coloring. */}
+                                        ── THREE VALUES, AND NOTHING ELSE (2026-09-17) ──────────
+                                        Renzo, after the two-clock labelling landed earlier the same
+                                        day: *"It is best that the footer remains just these values
+                                        (top to bottom): kg fed (fed for the batch/campaign and not
+                                        lifetime), php/kg (not actual), loss. The other values
+                                        currently on that footer can be viewed on hover anyway."*
+
+                                        So the footer now answers ONE question — this campaign's —
+                                        and the block's whole-life figures move entirely onto the
+                                        hover card, which already carried every one of them:
+
+                                          Line 1  FED      `campaignFedKg`, the SQL-published
+                                                           per-(campaign, block) total. It equals the
+                                                           column's own cell sum BY CONSTRUCTION
+                                                           (both are view_rc_movement_campaign_cells)
+                                                           and is never re-added in TS. Em-dash, never
+                                                           0, when the view has no row for the pair.
+                                          Line 2  ₱/KG     the block's DELIVERED weighted-average fed
+                                                           price — NOT the actual. Price-gated.
+                                          Line 3  LOSS %   `fmtLossPct(blockLoss)` — POSITIVE for an
+                                                           ordinary loss; em-dash when null.
+                                          Line 4  ACTUAL   ONLY with the `Actual ₱` switch on, which
+                                                           is Renzo's second note the same day.
+
+                                        WHAT LEFT THE VISIBLE CELL AND WHERE IT WENT: the `life`
+                                        (lifetime outflow) line, the `all campaigns` caption and the
+                                        always-on `actual` line are all on the hover card / the cell
+                                        `title` below, together with arrival weight, MC, Ash, uplift
+                                        and the open date. Nothing was deleted — the footer stopped
+                                        printing it. On the red (CLOSED) tint the loss red/green
+                                        could clash, so loss inherits the cell foreground there; on
+                                        the blue and neutral tints it keeps red(loss)/emerald(gain). */}
                                     {columns.map((c, ci) => {
                                         const isClosedTint = c.status === 'CLOSED' || c.status === 'FEED';
                                         const lossClass = c.blockLoss === null
@@ -796,95 +860,82 @@ export function RcMovementMatrix({ data, onCampaignChange, onNavigateToBatch }: 
                                             <Tooltip>
                                                 <TooltipTrigger asChild>
                                                     <div className="flex cursor-default flex-col gap-0 px-2 py-0.5 leading-tight">
-                                                        {/* Line 1 — THIS CAMPAIGN's own draw from this block.
-                                                            The headline, and the ONLY figure on this footer
-                                                            that answers the same question as the cells above
-                                                            it. Same weight/size as the frozen "Total fed"
-                                                            grand-total cell so the two read as one family.
-                                                            Em-dash (never 0) when the ops-ledger view has no
-                                                            row for the pair. */}
+                                                        {/* Line 1 — FED: THIS CAMPAIGN's own draw from this
+                                                            block. Same weight/size as the frozen "Total fed"
+                                                            grand-total cell, so the two read as one family.
+                                                            The label is a compact `FED` and the `title` is
+                                                            what says which clock it is on. */}
                                                         <div
                                                             className="flex items-baseline justify-between gap-1 tabular-nums"
-                                                            title={`This campaign fed ${c.campaignFedKg !== null ? `${fmtKg(c.campaignFedKg) || '0'} kg` : 'an unpublished amount'} out of ${c.batchCode}${c.campaignFeedDays ? ` over ${c.campaignFeedDays} day${c.campaignFeedDays === 1 ? '' : 's'}` : ''}. The figures below it are the BLOCK'S WHOLE LIFE, across every campaign that ever drew from it.`}
+                                                            title={`Fed by this campaign — ${c.campaignFedKg !== null ? `${fmtKg(c.campaignFedKg) || '0'} kg` : 'an unpublished amount'} out of ${c.batchCode}${c.campaignFeedDays ? ` over ${c.campaignFeedDays} day${c.campaignFeedDays === 1 ? '' : 's'}` : ''}. Hover for the block's whole-life figures.`}
                                                         >
                                                             <span className="shrink-0 whitespace-nowrap text-[9px] uppercase tracking-wide opacity-70">
-                                                                this camp
+                                                                fed
                                                             </span>
                                                             <span className="font-mono text-xs font-semibold">
                                                                 {c.campaignFedKg !== null ? fmtKg(c.campaignFedKg) || '0' : '—'}
                                                             </span>
                                                         </div>
-                                                        {/* ── ALL-CAMPAIGNS GROUP ──────────────────────────
-                                                            A hairline and a caption, because everything under
-                                                            them is campaign-independent. The caption is what
-                                                            stops `life 69,013` being read as a column total. */}
-                                                        <div className="mt-0.5 border-t border-border/60 pt-0.5">
-                                                            <div className="whitespace-nowrap text-[8px] uppercase leading-none tracking-wide opacity-55">
-                                                                all campaigns
-                                                            </div>
-                                                            {/* Line 2 — the block's LIFETIME outflow ("life"),
-                                                                every kg that ever left it, sun-drying pulls
-                                                                included. Was labelled `fed`, which is exactly
-                                                                how it got read as this campaign's total. */}
+                                                        {/* Line 2 — the block's DELIVERED weighted-average fed
+                                                            price (₱/kg), NOT the actual. Blank value when
+                                                            null; the label slot is kept so every per-column
+                                                            footer stays the SAME height. Price-gated — the
+                                                            whole line is dropped for Production. */}
+                                                        {showFedPrice && (
                                                             <div
                                                                 className="flex items-baseline justify-between gap-1 tabular-nums"
-                                                                title={`${fmtKg(c.totalOut) || '0'} kg have left ${c.batchCode} in its whole life, across every campaign — NOT this campaign's total.`}
+                                                                title={`${c.batchCode}'s delivered weighted-average fed price. The ACTUAL price — what a kilogram that reached the plant cost after the pile lost weight — is on hover, and on the footer itself with the Actual ₱ switch on.`}
                                                             >
-                                                                <span className="text-[10px] uppercase tracking-wide opacity-70">life</span>
-                                                                <span className="font-mono text-[11px] font-medium">
-                                                                    {fmtKg(c.totalOut) || '0'}
-                                                                </span>
+                                                                <span className="text-[10px] uppercase tracking-wide opacity-70">&#8369;/kg</span>
+                                                                {c.avgFedPrice !== null && (
+                                                                    <span className="font-mono text-[10px]">
+                                                                        {fmtPrice(c.avgFedPrice)}
+                                                                    </span>
+                                                                )}
                                                             </div>
-                                                            {/* Line 3 — "loss" label + POSITIVE loss % */}
-                                                            <div
-                                                                className="flex items-baseline justify-between gap-1 tabular-nums"
-                                                                title="Weight the block lost over its whole life, across every campaign: (delivered − everything out) ÷ delivered. Positive = lost weight."
-                                                            >
-                                                                <span className="text-[10px] uppercase tracking-wide opacity-70">loss</span>
-                                                                <span className={cn('font-mono text-[10px]', lossClass)}>
-                                                                    {fmtLossPct(c.blockLoss)}
-                                                                </span>
-                                                            </div>
-                                                            {/* Line 4 — weighted-avg fed price (₱/kg). Accounting
-                                                                format (₱ left / value right). Blank when null. The
-                                                                label slot is kept even when blank so all per-column
-                                                                footers stay the SAME height. Price-gated — the whole
-                                                                line is dropped for Production. ALL-TIME per batch,
-                                                                like everything else inside this group. */}
-                                                            {showFedPrice && (
-                                                                <div className="flex items-baseline justify-between gap-1 tabular-nums">
-                                                                    <span className="text-[10px] uppercase tracking-wide opacity-70">₱/kg</span>
-                                                                    {c.avgFedPrice !== null && (
-                                                                        <span className="font-mono text-[10px]">
-                                                                            {fmtPrice(c.avgFedPrice)}
-                                                                        </span>
-                                                                    )}
-                                                                </div>
-                                                            )}
-                                                            {/* Line 5 — ACTUAL FED ₱/kg: what a kilogram that
-                                                                actually reached the plant cost. Sits directly
-                                                                below Line 4 (the delivered reference, kept
-                                                                unchanged) and reads as the MORE important
-                                                                number — bolder, one step larger, separated by
-                                                                a hairline.
-                                                                BLANK when null — an OPEN block, or a closed
-                                                                block with an unpriced delivery, has no actual
-                                                                price. Never ₱0.00, never a dash that looks like
-                                                                a value (that is the avg_cost ₱11.01-vs-₱39.99
-                                                                bug class). The label slot is kept even when
-                                                                blank so every per-column footer stays the SAME
-                                                                height. Price-gated with Line 4. */}
-                                                            {showFedPrice && (
-                                                                <div className="mt-0.5 flex items-baseline justify-between gap-1 border-t border-border/60 pt-0.5 tabular-nums">
-                                                                    <span className="text-[10px] uppercase tracking-wide opacity-70">actual</span>
-                                                                    {c.actualFedPrice !== null && (
-                                                                        <span className="font-mono text-[11px] font-bold">
-                                                                            {fmtPrice(c.actualFedPrice)}
-                                                                        </span>
-                                                                    )}
-                                                                </div>
-                                                            )}
+                                                        )}
+                                                        {/* Line 3 — LOSS %, POSITIVE for an ordinary loss. */}
+                                                        <div
+                                                            className="flex items-baseline justify-between gap-1 tabular-nums"
+                                                            title="Weight the block lost over its whole life: (delivered − everything out) ÷ delivered. Positive = lost weight."
+                                                        >
+                                                            <span className="text-[10px] uppercase tracking-wide opacity-70">loss %</span>
+                                                            <span className={cn('font-mono text-[10px]', lossClass)}>
+                                                                {fmtLossPct(c.blockLoss)}
+                                                            </span>
                                                         </div>
+                                                        {/* Line 4 — ACTUAL FED ₱/kg, ON THE SWITCH (2026-09-17).
+                                                            Renzo: *"Being able to toggle on/off the ability to
+                                                            see the actual price of the block in the footer
+                                                            would be really cool."*
+                                                            BLANK when null — an OPEN block, a closed block with
+                                                            an unpriced delivery, or one with a sun-drying
+                                                            outflow has no actual price. Never ₱0.00 and never a
+                                                            dash that looks like a value (the avg_cost
+                                                            ₱11.01-vs-₱39.99 bug class); the `title` says WHICH
+                                                            of the three reasons it is. The label slot is kept
+                                                            when blank so every footer stays the same height. */}
+                                                        {showActualLine && (
+                                                            <div
+                                                                className="mt-0.5 flex items-baseline justify-between gap-1 border-t border-border/60 pt-0.5 tabular-nums"
+                                                                title={
+                                                                    c.actualFedPrice !== null
+                                                                        ? `What a kilogram of ${c.batchCode} that actually reached the plant cost, after the pile lost weight.`
+                                                                        : !c.isClosed
+                                                                          ? 'No actual price — the block is still open, so its fed total is not final.'
+                                                                          : c.hasUnpricedDelivery
+                                                                            ? 'No actual price — the block carries a delivery that is still awaiting a price.'
+                                                                            : 'No actual price is published for this block.'
+                                                                }
+                                                            >
+                                                                <span className="text-[10px] uppercase tracking-wide opacity-70">actual</span>
+                                                                {c.actualFedPrice !== null && (
+                                                                    <span className="font-mono text-[11px] font-bold">
+                                                                        {fmtPrice(c.actualFedPrice)}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 </TooltipTrigger>
                                                 <TooltipContent
@@ -1568,8 +1619,11 @@ function RcMovementSummaryMobile({
                                             {c.blockLoc ?? '—'}
                                         </div>
                                     </div>
-                                    {/* Same two clocks as the desktop footer, same labels:
-                                        THIS CAMPAIGN on top, the block's whole life beneath. */}
+                                    {/* THIS CAMPAIGN on top, the block's whole life beneath.
+                                        The DESKTOP footer was cut to three values on
+                                        2026-09-17 and moved its lifetime figures onto the hover
+                                        card; this phone list keeps both clocks because it has
+                                        no hover to move them to and the room to print them. */}
                                     <div className="flex shrink-0 flex-col items-end leading-tight">
                                         <span className="font-mono text-xs font-semibold tabular-nums">
                                             {c.campaignFedKg !== null ? `${fmtKg(c.campaignFedKg) || '0'} kg` : '—'}

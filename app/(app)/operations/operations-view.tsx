@@ -13,10 +13,18 @@ import {
   type BlockingDetailNavTarget,
 } from '../inventory/_shared/blocking-detail-panel';
 import { TONE } from './ops-color';
-import { DEFAULT_LENS, OPS_LENSES, lensSpec, type OpsLensId } from './ops-lens';
+import {
+  DEFAULT_LENS,
+  OPS_LENSES,
+  RATIOS_OFF,
+  RATIOS_PARAM,
+  lensSpec,
+  type OpsLensId,
+} from './ops-lens';
 import { OpsGroupPicker } from './ops-group-picker';
 import { OpsKpiStrip } from './ops-kpi-strip';
 import { OpsLedgerTable } from './ops-ledger-table';
+import { OpsPagePrintControl } from './ops-page-print';
 
 // ═════════════════════════════════════════════════════════════════════════════════
 // `/operations` — the client half. It owns the CONTROLS and the block drawer; the
@@ -48,16 +56,24 @@ export interface OperationsViewProps {
   /** The campaign keys the server actually resolved the payload for. */
   selected: string[];
   lens: OpsLensId;
+  /** `?ratios=` — FALSE drops the OUTPUT RATIOS column group from the ledger. */
+  showRatios: boolean;
 }
 
-export function OperationsView({ data, options, selected, lens }: OperationsViewProps) {
+export function OperationsView({
+  data,
+  options,
+  selected,
+  lens,
+  showRatios,
+}: OperationsViewProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [isPending, startTransition] = React.useTransition();
 
   const writeParams = React.useCallback(
-    (patch: { campaigns?: string[]; lens?: OpsLensId }) => {
+    (patch: { campaigns?: string[]; lens?: OpsLensId; ratios?: boolean }) => {
       const params = new URLSearchParams(searchParams.toString());
       if (patch.campaigns) params.set('campaigns', patch.campaigns.join(','));
       if (patch.lens) {
@@ -65,6 +81,12 @@ export function OperationsView({ data, options, selected, lens }: OperationsView
         // and the param's presence always means something.
         if (patch.lens === DEFAULT_LENS) params.delete('lens');
         else params.set('lens', patch.lens);
+      }
+      if (patch.ratios !== undefined) {
+        // Same contract: ON is the default, so it is spelled as absence and only
+        // `?ratios=off` ever appears in the address.
+        if (patch.ratios) params.delete(RATIOS_PARAM);
+        else params.set(RATIOS_PARAM, RATIOS_OFF);
       }
       const qs = params.toString();
       startTransition(() => {
@@ -166,6 +188,48 @@ export function OperationsView({ data, options, selected, lens }: OperationsView
                 Loading…
               </span>
             ) : null}
+
+            {/* ── PRINT THE WHOLE PAGE, ONE SECTION PER SHEET (2026-09-17) ──────
+                `options` is read for ONE thing — the quarter LABEL of the group
+                being printed, via the same `quarterPresets()` the picker and the
+                page default already read, so the sheet cannot name a quarter the
+                picker does not build. */}
+            <OpsPagePrintControl data={data} options={options} />
+
+            {/* ── THE OUTPUT RATIOS SWITCH (2026-09-17) ────────────────────────
+                Renzo: *"Would be nice to have an option to toggle on and off the
+                visibility of the column group 'output ratios', since the more
+                accurate stat for loss and yield is the overall average when a batch
+                closes. EOQ remains as is."* A real toggle button — `aria-pressed`,
+                a focus ring, and the same hue its columns are drawn in — sitting
+                beside the lens tabs because it is the same kind of control: which
+                columns the ledger shows. OFF removes the two columns from the
+                spine's coordinate space; it never blanks them. */}
+            <button
+              type="button"
+              aria-pressed={showRatios}
+              onClick={() => writeParams({ ratios: !showRatios })}
+              title={
+                showRatios
+                  ? 'Hide the OUTPUT RATIOS columns (YIELD % and LOSS %). A day ratio is indicative — the feed tank is continuous flow; the campaign figure in the rollup above is the real one, and it is unaffected.'
+                  : 'Show the OUTPUT RATIOS columns (YIELD % and LOSS %). They are day-level and indicative only.'
+              }
+              className={cn(
+                'flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-input px-2.5 text-xs font-medium transition-colors duration-150',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                showRatios ? cn(TONE.drift.head, 'shadow-sm') : 'bg-background text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <span
+                className={cn(
+                  'size-1.5 shrink-0 rounded-full transition-opacity duration-150',
+                  TONE.drift.dot,
+                  showRatios ? 'opacity-100' : 'opacity-40',
+                )}
+              />
+              Ratios
+            </button>
+
             <div
               role="tablist"
               aria-label="Lens"
@@ -257,7 +321,12 @@ export function OperationsView({ data, options, selected, lens }: OperationsView
           isPending && 'pointer-events-none opacity-50',
         )}
       >
-        <OpsLedgerTable data={data} lens={lens} onOpenBlock={handleOpenBlock} />
+        <OpsLedgerTable
+          data={data}
+          lens={lens}
+          showRatios={showRatios}
+          onOpenBlock={handleOpenBlock}
+        />
       </div>
 
       <BlockingDetailPanel

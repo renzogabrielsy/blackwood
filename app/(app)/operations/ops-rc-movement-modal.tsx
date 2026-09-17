@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils';
 import { errorToast } from '@/lib/toast';
 import { fetchRcMovementMatrix } from '../inventory/rc-movement/actions';
 import type { RcMovementMatrix as RcMovementMatrixData } from '../inventory/rc-movement/actions';
+import { ActualPriceToggle } from '../inventory/rc-movement/actual-price-toggle';
 import type { BlockingDetailNavTarget } from '../inventory/_shared/blocking-detail-panel';
 import { OPS_MODAL_MAX_WIDTH, opsModalWidth } from './ops-modal-size';
 
@@ -124,6 +125,15 @@ export function OpsRcMovementModal({
   const [cache, setCache] = React.useState<Record<string, RcMovementMatrixData>>({});
   const [loading, setLoading] = React.useState(false);
   const [failed, setFailed] = React.useState<string | null>(null);
+  // ── THE `Actual ₱` SWITCH — LOCAL STATE, NOT THE URL (2026-09-17) ─────────────
+  // `/operations`' address describes which CAMPAIGNS and which LENS the ledger is
+  // showing; a disclosure inside one dialog over one campaign's matrix is the same
+  // category as the expanded day and the block drawer, both of which this screen
+  // deliberately keeps out of the address. Writing it would also re-run the server
+  // page to change nothing the server computes. It is deliberately NOT reset when
+  // the campaign tab changes: a reader who asked to see actual prices asked about
+  // the report, not about one month.
+  const [showActualPrice, setShowActualPrice] = React.useState(false);
 
   const data = cache[key];
 
@@ -235,6 +245,7 @@ export function OpsRcMovementModal({
             viewport; a group reads one campaign at a time, which is also the only
             grain the RC Movement views publish a matrix for. A single-campaign
             cell renders no tablist at all — a tab strip of one is chrome. */}
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
         {campaigns.length > 1 ? (
           <div
             role="tablist"
@@ -269,6 +280,18 @@ export function OpsRcMovementModal({
           </div>
         ) : null}
 
+        {/* THE `Actual ₱` SWITCH, beside the campaign tabs — the SAME component the
+            RC Movement route renders in the matrix's own toolbar, so the two
+            surfaces cannot drift. The matrix here is given no
+            `onShowActualPriceChange`, so it renders no second control of its own.
+            ABSENT for a price-denied payload: `fetchRcMovementMatrix` does not even
+            query the actual-price views for that reader, so there is nothing to
+            reveal and a disabled switch would claim otherwise. */}
+        {data?.canViewPrices ? (
+          <ActualPriceToggle value={showActualPrice} onChange={setShowActualPrice} />
+        ) : null}
+        </div>
+
         {/* The active campaign's own RC FED line — always visible, even on the
             GROUP view where the header carries the group's. */}
         {campaigns.length > 1 && active ? (
@@ -280,7 +303,11 @@ export function OpsRcMovementModal({
         {/* ── The matrix. The only flexible child; it owns its own scrolling. ── */}
         <div className="min-h-0 flex-auto">
           {data ? (
-            <RcMovementMatrix data={data} onNavigateToBatch={handleNavigateToBatch} />
+            <RcMovementMatrix
+              data={data}
+              onNavigateToBatch={handleNavigateToBatch}
+              showActualPrice={showActualPrice}
+            />
           ) : failed === key ? (
             // A failed fetch keeps the dialog open with a persistent, copyable
             // surface — the toast above — plus a retry, never an empty frame.

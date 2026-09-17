@@ -34,7 +34,7 @@
 // ═════════════════════════════════════════════════════════════════════════════════
 
 import { fetchOpsLedger, fetchOpsLedgerCampaignOptions } from '@/lib/operations/queries';
-import { latestQuarterKeys, parseLens } from './ops-lens';
+import { latestQuarterKeys, parseLens, parseRatios } from './ops-lens';
 import { OperationsView } from './operations-view';
 
 type Param = string | string[] | undefined;
@@ -65,6 +65,9 @@ export default async function OperationsPage({
 }) {
   const params = await searchParams;
   const lens = parseLens(params.lens);
+  // `?ratios=off` drops the OUTPUT RATIOS column group from the ledger spine. ON is
+  // the default and is spelled as ABSENCE, exactly as `?lens=` is.
+  const showRatios = parseRatios(params.ratios);
 
   const options = await fetchOpsLedgerCampaignOptions();
   const requested = parseCampaigns(params.campaigns);
@@ -131,6 +134,7 @@ export default async function OperationsPage({
       // is in the group, even when the address carried a key nothing matched.
       selected={data.campaigns.map((c) => c.key)}
       lens={lens}
+      showRatios={showRatios}
     />
   );
 }

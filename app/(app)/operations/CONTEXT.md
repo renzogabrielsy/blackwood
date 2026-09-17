@@ -546,12 +546,13 @@ cannot come back unnoticed. Full table in `.agents/plans/ops-ledger-plan.md` §2
 | `ops-modal-size.ts` | **THE ONE definition of how big a modal is** — `opsModalWidth()`, `OPS_MODAL_CONTENT`, `OPS_MODAL_BODY`, `OPS_MODAL_MAX_WIDTH` (1720). No JSX, so both dialog components read it without a cycle. |
 | `ops-blocks-table.tsx` | **The BLOCKS USED table** the FED PRICE / ACTUAL FED PRICE / RESIKO COST / RESIKO LOSS modals render — two column sets (`fed` · `actual`) over one normalised row shape, plus `campaignBlockRows()` / `groupBlockRows()`, **`campaignBlocksFooter()` / `groupBlocksFooter()`** (the aligned `<tfoot>` row, 2026-09-16) and **`blocksTableWidth(variant, canViewPrices)`**, the Σ the dialog is sized from. A `print` prop draws the same table black-on-white with no tint, no sticky surface and no scroller. |
 | `ops-production-table.tsx` | **The PRODUCTION breakdown** — the two tables the PRODUCED · YIELD · LOSS · WASTE LOSS family opens: the four figures per campaign (+ GROUP), and the eight waste streams underneath. `productionRowFromCampaign()` / `productionRowFromGroup()` / `productionTablesWidth()`. |
-| `ops-rc-movement-modal.tsx` | **RC FED's modal** — `/inventory/rc-movement`'s Classic matrix, `next/dynamic({ssr:false})`, fetched on demand per campaign with `fetchRcMovementMatrix`, with campaign tabs for a GROUP cell. **Inherits the 2026-09-17 block-footer fix for free** (no edit here): each block column's footer now leads with `THIS CAMP <kg>` — `view_ops_ledger_campaign_block.campaign_fed_kg`, the same peso-free figure `OpsCampaignBlock.campaignFedKg` carries — over a labelled `all campaigns` group holding the block's LIFETIME `life` / `loss` / `₱/kg` / `actual`, and LOSS no longer prints a leading minus. See `app/(app)/inventory/rc-movement/CONTEXT.md` → "Frozen summary footer". |
+| `ops-rc-movement-modal.tsx` | **RC FED's modal** — `/inventory/rc-movement`'s Classic matrix, `next/dynamic({ssr:false})`, fetched on demand per campaign with `fetchRcMovementMatrix`, with campaign tabs for a GROUP cell. **Inherits the 2026-09-17 block-footer trim for free** (no edit to the matrix): each block column's footer is now `FED <kg>` (this campaign's own draw — `view_ops_ledger_campaign_block.campaign_fed_kg`, the same peso-free figure `OpsCampaignBlock.campaignFedKg` carries) · `₱/KG` (DELIVERED, not actual) · `LOSS %` (no leading minus), with the block's lifetime figures on the hover card. It DOES own one new control: the **`Actual ₱` switch beside the campaign tabs**, local state, which adds the fourth `ACTUAL` footer line. See `app/(app)/inventory/rc-movement/CONTEXT.md` → "Frozen summary footer" and "The `Actual ₱` switch". |
 | ~~`ops-day-detail.tsx`~~ | **DELETED 2026-09-15 (round 3).** A day now expands into ordinary child rows, so the shift cards and the day-grain BLOCKS USED table had no caller left. |
 | `ops-group-picker.tsx` | The GROUP builder — selection chips + a popover holding the campaign list **GROUPED UNDER ITS QUARTER HEADINGS (2026-09-16)**, a filter box and the derived quarter presets. A row states its **`firstDate → lastDate`**, never a tonnage (the option list is the calendar SPAN view and carries none); the selected CHIPS take their tonnage from `rollups[].fedKg`. Ordering is on `firstDate`, which every campaign has — `maxDate` is the last FEED and is NULL on a campaign that has produced but not yet been fed. |
 | `ops-fed-day-sheet.tsx` | **THE FED CELL'S SIDEBAR (2026-09-16)** — a right-hand `Sheet`, OPAQUE, titled `<date> · <campaign> · FED`: the day's seven PROJECTED lab stats from `day.fedBlend` with their coverage captions, the caveat line, and the `BATCH · BLOCK LOC · FED kg · MC · ASH · BD ASTM · BD JIS · GRIT · VM · FC` table from `day.blocksFed` with the blend as its footer. A batch cell opens `BlockingDetailPanel`. **NO ₱ ANYWHERE** — neither source view carries one. |
+| `ops-page-print.tsx` | **THE PRINTED PAGE (2026-09-17)** — `OpsPagePrintControl`, the toolbar `Print` button, and the pages it builds: **page 1 the EOQ ROLLUP** (only when there IS a group), then **one page per campaign** carrying that campaign's own KPI strip (which IS its EOM rollup) over its day ledger in KEY COLUMNS ONLY. Drives the same `GroupPrintStage` / `GroupPrintPage` / `printCard`, portalled to `<body>`, and injects its own `@page` block for the duration. |
 | `ops-print-sheet.tsx` | **THE PRINTED PRICE SUMMARY (2026-09-16)** — `OpsPrintSheet` (one page: title · span · counts · rows · aligned footer · result, black on white) and `OpsPrintControl` (a Print BUTTON on a campaign modal, a small MENU on a group's: `Print all N separately` plus one entry per campaign). It drives the platform `GroupPrintStage` / `GroupPrintPage` / `printCard`, PORTALLED to `<body>` — see "THE STAGE IS PORTALLED" below. |
-| `ops-lens.ts` | The lens registry (`production` · `grades` · `losses` · `blocks`), `DEFAULT_LENS`, `parseLens`, `quarterPresets()` and **`latestQuarterKeys()`** — **which since 2026-09-16 do NO date arithmetic: they group the options on the `quarter_key` `view_ops_ledger_campaign_span` computed from each campaign's MIDPOINT, an incomplete quarter is still a quarter, and a preset's campaigns come back chronological by `firstDate` with the quarter's own span beside them.** `latestQuarterKeys()` is what `page.tsx` defaults to. |
+| `ops-lens.ts` | The lens registry (`production` · `grades` · `losses` · `blocks`), `DEFAULT_LENS`, `parseLens`, **`RATIOS_PARAM` / `RATIOS_OFF` / `parseRatios` (2026-09-17 — `?ratios=off`; ON is the default and is spelled as ABSENCE, the same contract `?lens=` keeps)**, `quarterPresets()` and **`latestQuarterKeys()`** — **which since 2026-09-16 do NO date arithmetic: they group the options on the `quarter_key` `view_ops_ledger_campaign_span` computed from each campaign's MIDPOINT, an incomplete quarter is still a quarter, and a preset's campaigns come back chronological by `firstDate` with the quarter's own span beside them.** `latestQuarterKeys()` is what `page.tsx` defaults to. |
 | `ops-color.ts` | The semantic palette — `TONE` (one entry per meaning) and `CAMPAIGN_ACCENTS`. Opaque `head` for frozen surfaces, translucent `cell` for scrolling ones. |
 | `ops-format.ts` | `kg` · `tons` · `php` · `pctFromFraction` · **`pctNumFromFraction`** (the bare percent NUMBER, for a cell that states its unit on the left) · `pctFromPercent` · **`lab`** (a lab reading at a fixed precision — 2 dp, 3 dp for the two BDs; NULL blank, never `0.00`) · `hours` · `count` · `shortDate`. Renderers only. |
 
@@ -568,7 +569,8 @@ param's presence always means something; `?lens=grades` and `?lens=losses` are u
 back already folded — no client fetch and no second copy of the resolution logic. The outgoing
 ledger stays mounted at `opacity-50` while the new one resolves (compositor-only, nothing
 reflows). **Absent `?campaigns=` = EVERY CAMPAIGN OF THE LATEST QUARTER (2026-09-16)** — see
-"QUARTERS ARE DECIDED BY DATE" below. It was the newest campaign alone.
+"QUARTERS ARE DECIDED BY DATE" below. It was the newest campaign alone. **`?ratios=off`
+joined them on 2026-09-17** — see "THE OUTPUT RATIOS GROUP IS ON A SWITCH".
 
 **EXPANDING A DAY INSERTS CHILD ROWS, NOT A PANEL (2026-09-15, round 3).** Renzo: *"An
 identical row in the format of the parent row but ONLY showing the SHIFTS groups. So if
@@ -1065,6 +1067,114 @@ WORDY.**"*
   else; the GROUP's `Print all 3 separately` → **3 pages**, titled `JULY/AUGUST/SEPTEMBER 2026 ·
   ACTUAL FED PRICE`, `break-after` reading `page · page · auto` (no trailing blank sheet), and
   `window.print()` called exactly ONCE.
+
+**THE OUTPUT RATIOS GROUP IS ON A SWITCH (2026-09-17, round 8).** Renzo: *"Would be nice
+to have an option to toggle on and off the visibility of the column group 'output ratios',
+since the more accurate stat for loss and yield is the overall average when a batch closes.
+EOQ remains as is."* He is describing the caveat those two columns already carry in their
+header `title` — a DAY yield is indicative, because the feed tank is continuous flow — and
+asking to be able to put the indicative pair away without losing the WASTE pair beside it,
+which carries no such caveat.
+
+- **A `Ratios` toggle sits beside the lens tabs**, because it is the same kind of control:
+  which columns the ledger shows. A real `<button aria-pressed>` with a focus ring, drawn in
+  the amber `drift` hue its columns are drawn in, and its `title` states the day/campaign
+  distinction at both settings.
+- **THE STATE IS `?ratios=off`, AND ON IS SPELLED AS ABSENCE** — the contract `?lens=` keeps,
+  so a plain `/operations` address stays clean and the param's presence always means
+  something. Anything other than the literal `off` reads as ON, so a stale or mistyped value
+  can never silently hide a column group. Written with the same `router.replace` inside a
+  `useTransition` as the other two params.
+- **THE COLUMNS ARE ABSENT, NOT BLANK.** `SpineCol.ratio` is the twin of `SpineCol.price`,
+  and `spineCols` filters on both — so the frozen `left` offsets, the table's `minWidth`, the
+  campaign footers, the sticky group footer and the expanded child rows all follow from the
+  columns that survive. *Measured at 1920×1080: SHIFTS moves 780 → 628 and DT HRS 842 → 690,
+  every row kind carries the same 21 cells, and the document never scrolls sideways.*
+- **THE UN-FREEZE BREAKPOINT IS NOW DERIVED, NOT DECLARED.** The spine has FOUR widths rather
+  than two (the ₱ column and the ratio pair each come and go), so `NARROW_MQ`'s hardcoded
+  `1023px` became `narrowQuery(spineWidth)` = `round(spineWidth / 0.9) − 1` — the rule it
+  always was (*un-freeze while the spine would take more than ~90% of the frame*), which
+  reproduces **1023** for the 922px priced spine EXACTLY and gives **910 / 855 / 741** for the
+  other three. *Measured at 900px: ratios OFF stays frozen (855 < 900) and ratios ON
+  un-freezes (1023 ≥ 900) — the breakpoint really does move with the columns.*
+- **THE EOQ STRIP IS UNTOUCHED at either setting**, as asked: its YIELD and LOSS are the
+  CAMPAIGN figures, which is exactly the "more accurate stat" the note names.
+
+**PRINTING THE WHOLE PAGE, ONE SECTION PER SHEET (2026-09-17, round 8).** Renzo: *"Have a
+print button on the main page. It should print each section separately. For this Q3 2026
+view: first the EOQ Roll Up in one page, then the 1st month in one page, 2nd month in
+another, 3rd in another. Legibility is key, so just the key data. Output ratios group should
+be off by default when printing since it is redundant. Each month page should also have a
+little table giving the EOM rollup for that month. Maybe its own KPI strip up top also."*
+
+- **THE SHAPE.** Page 1 is the EOQ ROLLUP — one row per campaign plus the GROUP row, headed
+  `Q3 2026 · EOQ ROLLUP`. Pages 2..N are one per campaign: the campaign's own KPI strip, then
+  its day ledger. **The strip IS the month's EOM rollup** — the same eleven published figures
+  — so it is printed ONCE and not again as a separate little table underneath; printing the
+  same numbers on one sheet twice is the wordiness this report was told to avoid.
+- **A ONE-CAMPAIGN SELECTION PRINTS ONE PAGE, NOT TWO.** With a single campaign there is no
+  GROUP row, so page 1 would be one row byte-identical to the campaign page's own strip. The
+  EOQ page is therefore rendered only when `group !== null && rollups.length > 1`. *Measured:
+  3 campaigns → 4 pages (`Q3 2026 · EOQ ROLLUP · JULY · AUGUST · SEPTEMBER`, `break-after` =
+  `page · page · page · auto`); 1 campaign → 1 page titled `JULY 2026`.*
+- **THE ELEVEN KPI COLUMNS ARE NOT LISTED TWICE.** `ops-kpi-strip.tsx` exports
+  **`opsKpiPrintTable(rollups, group, canViewPrices)`**, which reads its own `COLUMNS` and
+  hands back PLAIN DATA (a unit glyph and a formatted string per cell, plus WASTE LOSS's
+  second line). What is shared is the part that must not drift — which columns, in which
+  order, reading which published field; what is NOT shared is the render, because paper is
+  black on white with no `UnitValue`, no tint and no button. The GROUP row is included on
+  exactly the screen's own condition.
+- **KEY DATA ONLY, AND OUTPUT RATIOS ALWAYS OFF.** The printed ledger is
+  `DATE · DAY · FED ₱/KG · TTL FED · TTL PROD · WASTE kg · WASTE % · SHIFTS · DT HRS` plus one
+  column per GRADE (`data.grades`, never a hardcoded list), and the campaign footer row from
+  the rollup. YIELD % / LOSS % are never printed at any `?ratios=` setting — their caveat is a
+  hover `title` that paper cannot carry, which is precisely why the note calls them redundant
+  here; the CAMPAIGN yield and loss are on the strip at the top of the same page. **A REST DAY
+  IS STILL A ROW**, blank but for its date and weekday.
+- **THE EIGHT WASTE STREAMS DID NOT MAKE IT, AND THE MEASUREMENT IS WHY.** At 8pt — the
+  legibility floor this report was given — a waste-stream column needs ~56px and a grade
+  column ~58px. A4 landscape at a 10mm margin is **~1047px** of printable width; the nine
+  spine columns are **600px** with two grades, so eight streams (**448px**) put a two-grade
+  campaign at **1048px** and a four-grade one 117px over. Squeezing them in would trade the
+  stated floor for a column nobody asked for. The day's WASTE kg and WASTE % carry the total,
+  and the per-stream split is on screen under the Losses lens.
+- **NO SPACER COLUMN — the opposite of the screen ledger, for a stated reason.** Paper does
+  not scroll, so "never crush, always scroll" has no scroll half to offer and the only
+  question left is how the page width is shared. `width: 100%` + `table-fixed` makes the
+  declared widths a RATIO, so the columns fill the sheet instead of leaving ~40% of it blank.
+  *Measured with the sheet pinned to 1047px: the ledger and the KPI table both lay out at
+  1031px, `scrollWidth === clientWidth`, and not one header clips.*
+- **THE `@page` RULE IS INJECTED AND REMOVED, BECAUSE IT CANNOT BE SCOPED.** `app/globals.css`
+  already sets `@page { size: A4 landscape; margin: 12mm }` and `@page` takes no class, so it
+  governs every print in the app. This report wants **10mm** plus the row/head break rules a
+  multi-page table needs (`tr { break-inside: avoid }`, `thead { display: table-header-group }`,
+  both scoped to `[data-ops-print]`), and it must not take them from `/analytics`. A `<style>`
+  block is appended at print time and removed when the stage unmounts, which is on
+  `afterprint`. **`app/globals.css` was not touched.** *Measured: the block is present during
+  the print and gone 2.6s later, with `bw-printing` cleared and the stage unmounted.*
+- **A CAMPAIGN LONGER THAN ONE PAGE FLOWS**, with `thead` repeating and no row split across
+  the break. *Measured: a 5-day campaign page is 283px at the real page width, so a 33-day one
+  crosses onto a second sheet — accepted.*
+- **₱ IS ABSENT ON PAPER TOO.** *Verified against a price-denied payload: the printed strip
+  reads `CAMPAIGN · RC FED · PRODUCED · YIELD · LOSS · WASTE LOSS · RESIKO LOSS`, the ledger
+  drops `FED PRICE`, and the document contains no `₱` glyph in text OR markup.*
+- **THE STAGE IS PORTALLED TO `<body>`** for the reason `ops-print-sheet.tsx` records
+  (`printCard` flattens with `transform: none`; Tailwind v4 centres with the INDIVIDUAL
+  `translate`; Lightning CSS folds a `translate` reset into a `transform` shorthand). Here the
+  trigger is a toolbar button rather than a dialog, but the portal costs nothing and keeps the
+  two print paths on this screen identical.
+
+**THE RC FED MODAL GAINED THE `Actual ₱` SWITCH (2026-09-17, round 8).** Beside the campaign
+tabs, as **LOCAL REACT STATE — deliberately not the URL**: this page's address describes which
+CAMPAIGNS and which LENS the ledger shows, and a disclosure inside one dialog over one
+campaign's matrix is the same category as the expanded day and the block drawer, both of which
+this screen already keeps out of the address. It is the SAME `ActualPriceToggle` component the
+RC Movement route renders, and the matrix is handed `showActualPrice` with **no callback**, so
+it renders no second control of its own. ABSENT for a price-denied payload — there is no actual
+price to reveal. The modal also inherits the trimmed **three-line block footer** for free (no
+edit here): `FED` (this campaign's own draw) · `₱/KG` (delivered, not actual) · `LOSS %`, with a
+fourth `ACTUAL` line under the switch and everything else on the hover card. See
+`app/(app)/inventory/rc-movement/CONTEXT.md` → "Frozen summary footer".
 
 ---
 
