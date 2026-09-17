@@ -1193,6 +1193,16 @@ function Row({
 export interface OpsKpiPrintColumn {
   key: string;
   label: string;
+  /**
+   * THE FAMILY HUE, CARRIED ACROSS RATHER THAN RE-DECLARED.
+   *
+   * The printed sheet tints its headers by family (2026-09-17), and a `key → tone`
+   * map inside the print file would be a SECOND statement of which column means
+   * money and which means waste — the first time a column moved family the two would
+   * disagree. It is `col.tone`, the identical value the screen header reads; only the
+   * light/dark VALUES differ on paper (`PRINT_TONE`, see `ops-color.ts`).
+   */
+  tone: OpsTone;
 }
 
 export interface OpsKpiPrintCell {
@@ -1243,5 +1253,8 @@ export function opsKpiPrintTable(
       cells: cols.map((c) => printCell(c.group(group))),
     });
   }
-  return { columns: cols.map((c) => ({ key: c.key, label: c.label })), rows };
+  return {
+    columns: cols.map((c) => ({ key: c.key, label: c.label, tone: c.tone })),
+    rows,
+  };
 }

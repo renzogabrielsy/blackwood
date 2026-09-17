@@ -116,6 +116,115 @@ export const TONE: Record<OpsTone, OpsToneStyle> = {
   },
 };
 
+// ═════════════════════════════════════════════════════════════════════════════════
+// THE SAME SIX MEANINGS, FOR PAPER (2026-09-17).
+//
+// Renzo, after printing Q3 2026 to PDF: *"Print output lacks color. Hard to determine
+// which data is which. Would be nice to have it follow the current operations sheet a
+// bit (in light mode) but have colors that work well on print."*
+//
+// ── WHY A SECOND MAP AND NOT {@link TONE} ──────────────────────────────────────
+// Every value in `TONE` carries a `dark:` twin, and the printed sheet must come out
+// IDENTICAL whichever theme the dialog was opened from — a reader who happens to be
+// in dark mode must not get a black page with pale text. So the print palette is
+// declared ONCE, in explicit LIGHT values, with no `dark:` variant and no semantic
+// token (`bg-muted` / `text-foreground` both flip). The MEANINGS are the same six and
+// the keys are the same {@link OpsTone}, so a column tinted sky on screen is tinted
+// sky on paper — which is precisely the "follow the operations sheet" half of the ask.
+//
+// ── THE THREE STRENGTHS, AND WHY THEY DIFFER ───────────────────────────────────
+//  * `head` — the family's **100** step under its **900** text. It is the surface that
+//    does the orienting, so it is the strong one.
+//  * `edge` — a 2px **500** top border. On the campaign pages the column-group BAND is
+//    folded into this border rather than given a row of its own: a band row costs
+//    ~17px of the vertical budget, and the budget is what decides whether 33 day rows
+//    fit on one sheet.
+//  * `cell` — the body column tint, hand-mixed at **≈7% of the family's 500 step into
+//    white** rather than taken from the 50 step (which is ~3% and vanishes on a laser
+//    printer). Black numerals on every one of these reads better than 17:1, so the
+//    digits keep their contrast and the tint only says which column the eye is in.
+//
+// **EVERY `value` COLOUR CLEARS 7:1 AGAINST WHITE**, computed not eyeballed:
+// sky-800 7.56 · emerald-800 7.68 · amber-900 9.07 · rose-800 8.02 · violet-800 8.98 ·
+// zinc-900 ~17. That is the greyscale insurance — a sheet printed on a mono laser has
+// to stay readable, and a 7:1 colour is still a dark grey when the hue is thrown away.
+// ═════════════════════════════════════════════════════════════════════════════════
+
+export interface OpsPrintToneStyle {
+  /** OPAQUE header fill + its dark family text. */
+  head: string;
+  /** The 2px coloured top border that names the column group. */
+  edge: string;
+  /** The body column tint — ≈7%, so black numerals stay high-contrast. */
+  cell: string;
+  /** The family's dark shade for a KPI figure. ≥ 7:1 on white, every one. */
+  value: string;
+}
+
+export const PRINT_TONE: Record<OpsTone, OpsPrintToneStyle> = {
+  day: {
+    head: 'bg-zinc-200 text-zinc-900',
+    edge: 'border-t-zinc-500',
+    cell: '',
+    value: 'text-zinc-900',
+  },
+  shift: {
+    head: 'bg-zinc-200 text-zinc-900',
+    edge: 'border-t-zinc-500',
+    cell: '',
+    value: 'text-zinc-900',
+  },
+  fed: {
+    head: 'bg-sky-100 text-sky-900',
+    edge: 'border-t-sky-500',
+    cell: 'bg-[#e9f4fd]',
+    value: 'text-sky-800',
+  },
+  block: {
+    head: 'bg-sky-100 text-sky-900',
+    edge: 'border-t-sky-500',
+    cell: 'bg-[#e9f4fd]',
+    value: 'text-sky-800',
+  },
+  produced: {
+    head: 'bg-emerald-100 text-emerald-900',
+    edge: 'border-t-emerald-500',
+    cell: 'bg-[#e8f6ef]',
+    value: 'text-emerald-800',
+  },
+  yield: {
+    head: 'bg-emerald-100 text-emerald-900',
+    edge: 'border-t-emerald-500',
+    cell: 'bg-[#e8f6ef]',
+    value: 'text-emerald-800',
+  },
+  drift: {
+    head: 'bg-amber-100 text-amber-900',
+    edge: 'border-t-amber-500',
+    cell: 'bg-[#fcf3e4]',
+    value: 'text-amber-900',
+  },
+  waste: {
+    head: 'bg-rose-100 text-rose-900',
+    edge: 'border-t-rose-500',
+    cell: 'bg-[#fdeef0]',
+    value: 'text-rose-800',
+  },
+  money: {
+    head: 'bg-violet-100 text-violet-900',
+    edge: 'border-t-violet-500',
+    cell: 'bg-[#f0ecfd]',
+    value: 'text-violet-800',
+  },
+};
+
+/** A rest day's row, and the totals row: neutral, opaque, no family hue. */
+export const PRINT_NEUTRAL_FILL = 'bg-zinc-100';
+/** A rest day's own date/weekday — present, but visibly not a working row. */
+export const PRINT_MUTED_TEXT = 'text-zinc-500';
+/** A weekend DAY label. amber-800 is 7.09:1 on white — it survives greyscale. */
+export const PRINT_WEEKEND_TEXT = 'text-amber-800';
+
 /**
  * The per-campaign accent, cycled by the campaign's position in the group.
  *

@@ -816,3 +816,83 @@ Actual fed · Uplift · Lost · Opened`; the modal composition renders exactly O
 print stage yields 4 pages / `page·page·page·auto` / one `window.print()` / 8pt cells / no
 `YIELD %`, and 1 page for a single campaign; price-denied prints carry no `₱` in text or
 markup. 1920 / 1366 / phone widths, light and dark.
+
+### 3.12 REFINEMENT PASS 7 (2026-09-17) — the printed sheet, after Renzo printed it
+
+Round 6 shipped the whole-page print. Renzo printed Q3 2026 (JULY + AUGUST + SEPTEMBER) to
+PDF and sent the file back: *"Print output lacks color. Hard to determine which data is which.
+Would be nice to have it follow the current operations sheet a bit (in light mode) but have
+colors that work well on print. Make it a point to make sure all rows + KPI strip per month fit
+in ONE page and not overflow to another. Making sure 32-33 rows fit in one A4 landscape page
+would be nice."* No data-layer change and no new figure: the same fields, laid out honestly.
+
+**THREE DEFECTS IN THAT PDF, AND WHAT EACH ONE ACTUALLY WAS.**
+
+1. **The row height was a CONSTANT where it had to be a FUNCTION.** Every row was whatever
+   `text-[8pt]` with an inherited line-height happened to be (~19.5px), so JULY's 33 days ran
+   five rows onto a third sheet and AUGUST's 29 ran **one** row onto a fifth. It is derived now:
+   A4 landscape is 210mm tall, an **8mm** margin (was 10) leaves **733.2px**, the fixed chrome
+   is **81px** — title+span forced onto one line **17** · single-line KPI strip **34** ·
+   one-line ledger header **16** · two `gap-1` **8** · **6** of measured sub-pixel slack — so
+   **652px** is left and `rowH = clamp(floor(652 / (days + 1)), 14, 22)`, with the body font
+   stepping 9 / 8.5 / 8 / 7.5 / **7pt, floor**. `lineHeight` is written explicitly as `rowH − 3`
+   because a `<tr>` height is a FLOOR in the table model — the only way to pin a row is to pin
+   its content.
+2. **The totals row was a `<tfoot>`, and Chrome REPEATS a `<tfoot>` on every page.** So
+   `JULY 28 D 45.34 781,234 …` printed at the foot of page 2 AND page 3 and read as a
+   duplicated total. It is the last `<tbody>` row now. `<thead>` keeps
+   `display: table-header-group`: **a header that repeats is a help, a total that repeats is a
+   lie.**
+3. **It was black on white.** `PRINT_TONE` in `ops-color.ts` carries the screen's own six
+   meanings in explicit LIGHT values — no `dark:` twin, no semantic token — so the sheet is
+   identical whichever theme the button was pressed in.
+
+**FOUR MEASUREMENTS THAT DECIDED SOMETHING.**
+
+- **THE TOTALS ROW BELONGS IN THE DIVISOR, NOT THE CHROME.** It is a `<tbody>` row at the body
+  font, so its height IS `rowH` — the thing being solved for. Pinning it at a constant produced
+  the first miss of the round: AUGUST's 29 days computed to 22px rows and the page **measured
+  736px against a 733px box**, i.e. it would still have spilled by one row, which is the exact
+  bug being fixed. Counting it as the `days + 1`-th row removes the circularity.
+- **THE CEILING IS 45 PROMISED, 47 MEASURED.** `floor(652 / 14) − 1` is what the code claims;
+  headless Chrome fits **47** and spills at **48**, because collapsed borders are shared between
+  rows. The constant under-promises by design — a page-fitting guarantee derived from an
+  over-estimate is the only kind worth publishing. Above it the page flows CLEANLY: verified on
+  a 48-day page, `<thead>` repeats and the totals row appears exactly ONCE.
+- **EVERY KPI VALUE COLOUR CLEARS 7:1 ON WHITE, COMPUTED NOT EYEBALLED** — sky-800 7.56 ·
+  emerald-800 7.68 · amber-900 9.07 · rose-800 8.02 · violet-800 8.98 (weekend labels amber-800,
+  7.09). That is greyscale insurance: a 7:1 colour is still a dark grey once the hue is thrown
+  away. Body column tints are hand-mixed at **≈7% of the family's 500 step into white** rather
+  than taken from the 50 step, which is ~3% and vanishes on a laser printer.
+- **THE COLUMN-GROUP BAND IS FOLDED INTO THE HEADER ROW.** A band row of its own costs ~17px,
+  most of a day row; a tinted fill plus a 2px coloured top border says the same for nothing.
+  Likewise `print-color-adjust: exact` is load-bearing and not polish — without it a browser
+  drops every fill unless the reader ticks "Background graphics", i.e. the colour would be in
+  the markup and absent from the paper.
+
+**TWO SHORTENINGS, AND THE ONE THAT WAS REFUSED.** `FED PRICE ₱/kg` and `DT HRS h` both wrapped
+in the returned PDF, and a wrapped header is a two-line header that costs a day row — so paper
+gets `FED ₱/kg`, `FED kg`, `PROD kg`, `WASTE kg`, `WASTE %`, `SHIFTS`, `DT h`, `3X50 kg`, while
+the SCREEN keeps the long forms (a rendering of the column, not a renaming of it). The same
+escape is **refused** in the KPI strip: those eleven are the EOQ rollup's own column names and
+abbreviating them on paper would make the printed strip and the screen strip disagree about what
+a column is called, so its WIDTHS move instead (`ACTUAL FED PRICE` had clipped to
+`ACTUAL FED PR`). The strip also became single-line — WASTE LOSS prints `KG 106,507 · % 17.15`
+side by side, where two stacked lines had made the whole strip two lines tall for one cell.
+
+**Verification (2026-09-17, round 7).** `npx tsc --noEmit` clean · `npx eslint
+"app/(app)/operations" components/shared/print` 0 errors 0 warnings · `npm run build` ✓ compiled
+in 7.1s, 30/30 static pages. **Verified against ACTUAL PDFs, not an estimate**: a throwaway
+fixture at `app/dev/table-playground/opsprint/` mounted the real pages in the real print context
+(`bw-printing` on `<body>`, the sheet `data-print-card`, ancestors `data-print-ancestor`, the
+`@page` block injected — everything `printCard()` does except `window.print()`), rendered with
+`chrome --headless=new --no-pdf-header-footer --print-to-pdf`. Three campaigns of **33 / 29 /
+19** days with rest days, weekends, a day that produced on no feed and a five-grade union:
+**4 pages** (1 EOQ + 3 campaigns), page heights **722 / 706 / 516** against a 733px box,
+`scrollWidth === clientWidth`, **0** clipped or wrapped headers, **0** clipped cells, **0**
+`<tfoot>`, totals the last `<tbody>` row, rest rows zinc-100 with muted dates, weekends amber.
+Price-denied: **4 pages**, no `₱` in text OR markup, `FED ₱/kg` absent, six KPI columns. 34-day
+campaign: **4 pages**. Day-count sweep 44…48: one sheet through 47, two at 48, header repeated
+and totals printed once. `OpsPagePrintControl`'s one-campaign condition
+(`group !== null && rollups.length > 1`) is unchanged from round 6, where it measured 1 page.
+**Fixture deleted; `git status` carries no trace.**

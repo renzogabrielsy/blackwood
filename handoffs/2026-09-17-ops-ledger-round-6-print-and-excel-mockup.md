@@ -24,3 +24,8 @@ Live figures with a session (fixture-verified only). Printed output from product
 
 ## 6. Next
 Renzo answers §4; then build the Excel export (plan X1–X4). Standing open items: group PC-cost coverage rule, dead `OpsCampaignOption.totalFedKg`, unused `view_ops_ledger_day_blocks_used`, `/dev/ops-ledger` drafts, Escape double-close in the RC Fed modal.
+
+## 7. Addendum (same day) — print colour + one page per campaign, and Excel format round 2
+- **Print:** `ops-page-print.tsx` rewritten — row height computed from the day count (`clamp(floor(652/(days+1)),14,22)` px, 7 pt floor), totals as the last `<tbody>` row (a `<tfoot>` repeats per page), single-line title / KPI strip / ledger header, 8 mm margins, `PRINT_TONE` palette with `print-color-adjust: exact`. Real headless-Chrome PDFs: 4 pages for 33/29/19 days, ceiling 47 day rows per sheet (code promises 45). `OpsPrintRollupPage` / `OpsPrintCampaignPage` / `OPS_PAGE_PRINT_RULES` are exported only so the sheet can be mounted statically for that PDF test.
+- **Excel:** Renzo's SECOND edit was to `generated-v2.xlsx` (the generator output, not the mock-up) and was structural: every explanatory prose line removed (subtitle rows on EOQ / month tabs / RC; the EOQ notes block). Generator now matches his file with 0 differing cells on all six tabs; rules in `.agents/plans/ops-ledger-excel-plan.md` §10.
+- **Noted, not changed:** a rest day still prints a lone `—` under WASTE % (screen and print). Arguably rest days should be fully blank.
