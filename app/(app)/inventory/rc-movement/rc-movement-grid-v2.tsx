@@ -21,6 +21,7 @@ import {
     SelectValue,
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
+import { ACTUAL_ON, ACTUAL_PARAM, ActualPriceToggle, parseActualPrice } from './actual-price-toggle';
 import { BlockingDetailPanel, type BlockingDetailNavTarget } from '../_shared/blocking-detail-panel';
 import { fetchBlockDataForBatch } from '../blocking/actions';
 import type { BlockData } from '../blocking/types';
@@ -179,14 +180,17 @@ const W_BLOCK = 148;
 const ROW_H = 32; // h-8, Excel Standard
 /**
  * The totals rule-off's MINIMUM height — a `<tr>` height is a floor, and content taller
- * than it wins. Measured 76px for a price-viewer when a block cell stacked four lines;
- * since 2026-09-17 it stacks the `this camp` headline + the `all campaigns` caption on top
- * of those, so the priced render is taller again. This stays a FLOOR rather than being
- * pinned to the measurement, for the reason it always was: the same row is two lines
- * shorter for Production, where the ₱/kg and ACTUAL lines do not render at all, and a hard
- * number would leave that render with an empty band.
+ * than it wins.
+ *
+ * It went 62 → 46 on 2026-09-17 when the block cell was cut to THREE lines (FED · ₱/KG ·
+ * LOSS %) from the five it had stacked. It stays a FLOOR rather than being pinned to a
+ * measurement, for the reason it always was: the SAME row is one line shorter for
+ * Production (no ₱/KG) and one line taller with the `Actual ₱` switch on, so a hard
+ * number would leave one of those three renders an empty band or a clipped one. The
+ * tallest cell decides, and the tricolor PRODUCED/YIELD/LOSS stack is three full bands —
+ * which is what 46 is sized for.
  */
-const TOTALS_H = 62;
+const TOTALS_H = 46;
 
 /** The 2px section rule the live matrix draws at the start of each scrolling group. */
 const GROUP_DIVIDER = 'border-l-2 border-l-border';
@@ -812,6 +816,29 @@ export function RcMovementGridV2({ data, searchParams }: RcMovementGridV2Props) 
     /** The same gate the live matrix derives, under the same name. */
     const showFedPrice = canViewPrices;
     const actual = showFedPrice ? campaignActualFedPrice : null;
+
+    // ── `?actual=on` — the block footer's FOURTH line (2026-09-17) ───────────────
+    // OFF is the default and is spelled as ABSENCE, the same contract `?campaign=`
+    // and `?grid=` keep on this route. Gated on the price flag as well, so a stale
+    // link opened by Production reveals nothing.
+    const showActualPrice = parseActualPrice(searchParams[ACTUAL_PARAM]);
+    const showActualLine = showFedPrice && showActualPrice;
+    const onToggleActualPrice = React.useCallback(
+        (next: boolean) => {
+            const query = new URLSearchParams();
+            for (const [key, value] of Object.entries(searchParams)) {
+                if (key === ACTUAL_PARAM) continue;
+                if (Array.isArray(value)) for (const v of value) query.append(key, v);
+                else if (value !== undefined) query.append(key, value);
+            }
+            if (next) query.append(ACTUAL_PARAM, ACTUAL_ON);
+            const qs = query.toString();
+            startTransition(() => {
+                router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+            });
+        },
+        [pathname, router, searchParams],
+    );
     const firstBlockKey = columns.length > 0 ? blockKey(columns[0].batchId) : null;
 
     // ── The 2px group rules, in the header ───────────────────────────────────────
@@ -992,39 +1019,54 @@ export function RcMovementGridV2({ data, searchParams }: RcMovementGridV2Props) 
                     `${block.batchCode} · ${block.blockLoc ?? '—'} · ${block.status}`,
                     // THIS CAMPAIGN first and NAMED — the only figure in this cell that
                     // answers the same question as the column above it. Everything after
-                    // it is the block's whole life and says so.
+                    // it is the block's whole life and says so. Since 2026-09-17 the
+                    // VISIBLE cell prints only the campaign figure, so this `title` is
+                    // where the lifetime half now lives rather than a duplicate of it.
                     `This campaign fed ${
                         block.campaignFedKg !== null
                             ? `${fmtKg(block.campaignFedKg) || '0'} kg`
                             : 'an unpublished amount'
                     }${block.campaignFeedDays ? ` over ${block.campaignFeedDays} day${block.campaignFeedDays === 1 ? '' : 's'}` : ''}`,
-                    `ALL CAMPAIGNS — life ${fmtKg(block.totalOut) || '0'} kg · in ${fmtKg(block.totalIn) || '0'} kg`,
+                    `Whole life — out ${fmtKg(block.totalOut) || '0'} kg · in ${fmtKg(block.totalIn) || '0'} kg`,
                     `MC ${fmtPct2(block.mc)} · Ash ${fmtPct2(block.ash)} · Loss ${fmtLossPct(block.blockLoss)}`,
-                    showFedPrice && block.actualFedPrice === null
-                        ? `Actual fed: ${!block.isClosed ? 'block still open' : block.hasUnpricedDelivery ? 'awaiting price' : '—'}`
+                    // THE ACTUAL PRICE IS ALWAYS HERE, whether or not the switch is on —
+                    // the footer's fourth line is a convenience, this is the fallback,
+                    // and it names WHICH of the three reasons a blank one is blank.
+                    showFedPrice
+                        ? block.actualFedPrice !== null
+                            ? `Actual fed ${fmtPrice(block.actualFedPrice)} /kg`
+                            : `Actual fed: ${!block.isClosed ? 'block still open' : block.hasUnpricedDelivery ? 'awaiting price' : 'not published'}`
                         : '',
                     `Opened ${block.firstFedDate}`,
                 ]
                     .filter(Boolean)
                     .join('\n'),
                 content: (
-                    /* TWO CLOCKS, AND THEY ARE LABELLED (2026-09-17) — the live matrix's
-                       block footer and this summary cell were changed in lockstep, because
-                       the same misread is reachable on either. Renzo read `FED 69,013` on
-                       AUGUST 2026 · JAN-26-BLK15 as the sum of the column above it, which
-                       totals 54,941 kg, and concluded the loss arithmetic was broken. It was
-                       not: every figure here except the first is the block's LIFETIME total
-                       (JULY 2026 opened that block and took the other 14,072 kg), while the
-                       cells above show only THIS campaign's days. A number that answers a
-                       different question than the column it sits under has to say so. */
+                    /* THREE VALUES, AND NOTHING ELSE (2026-09-17) — changed in
+                       LOCKSTEP with the Classic matrix's block footer, because the
+                       paramless URL serves THIS grid and the two must not disagree
+                       about what a block's summary says. Renzo: *"It is best that the
+                       footer remains just these values (top to bottom): kg fed (fed
+                       for the batch/campaign and not lifetime), php/kg (not actual),
+                       loss. The other values currently on that footer can be viewed on
+                       hover anyway."*
+
+                         FED     `campaignFedKg`, SQL-aggregated over the SAME
+                                 view_rc_movement_campaign_cells this grid pivots, so it
+                                 equals the column's cell sum by construction. Em-dash,
+                                 never 0, when the view has no row for the pair.
+                         ₱/KG    the block's DELIVERED weighted-average fed price — NOT
+                                 the actual. Price-gated.
+                         LOSS %  POSITIVE for an ordinary loss (see fmtLossPct).
+                         ACTUAL  only with the `Actual ₱` switch on.
+
+                       The lifetime outflow, the arrival weight, MC, Ash and the actual
+                       price all stay on the cell `title` above — nothing was deleted,
+                       the footer stopped printing it. */
                     <div className="flex flex-col gap-0 px-2 py-0.5 leading-tight">
-                        {/* Line 1 — THIS CAMPAIGN's own draw. `campaignFedKg` is SQL-
-                            aggregated over the SAME view_rc_movement_campaign_cells this
-                            grid pivots, so it equals the column's cell sum by construction.
-                            Em-dash (never 0) when the ops-ledger view has no row. */}
                         <div className="flex items-baseline justify-between gap-1 tabular-nums">
                             <span className="shrink-0 whitespace-nowrap text-[9px] uppercase tracking-wide opacity-70">
-                                this camp
+                                fed
                             </span>
                             <span className="font-mono text-xs font-semibold">
                                 {block.campaignFedKg !== null
@@ -1032,65 +1074,48 @@ export function RcMovementGridV2({ data, searchParams }: RcMovementGridV2Props) 
                                     : '—'}
                             </span>
                         </div>
-                        {/* ── ALL-CAMPAIGNS GROUP — a hairline and a caption, because
-                            everything under them is campaign-independent. The caption is
-                            what stops `life 69,013` being read as a column total. ── */}
-                        <div className="mt-0.5 border-t border-border/60 pt-0.5">
-                            <div className="whitespace-nowrap text-[8px] uppercase leading-none tracking-wide opacity-55">
-                                all campaigns
-                            </div>
-                            {/* Line 2 — the block's LIFETIME outflow, every kg that ever
-                                left it, sun-drying pulls included. Was labelled `fed`,
-                                which is exactly how it got misread. */}
+                        {showFedPrice ? (
                             <div className="flex items-baseline justify-between gap-1 tabular-nums">
-                                <span className="text-[10px] uppercase tracking-wide opacity-70">life</span>
-                                <span className="font-mono text-[11px] font-medium">
-                                    {fmtKg(block.totalOut) || '0'}
+                                <span className="text-[10px] uppercase tracking-wide opacity-70">
+                                    &#8369;/kg
                                 </span>
-                            </div>
-                            {/* Line 3 — POSITIVE for an ordinary loss (see fmtLossPct). */}
-                            <div className="flex items-baseline justify-between gap-1 tabular-nums">
-                                <span className="text-[10px] uppercase tracking-wide opacity-70">loss</span>
-                                <span className={cn('font-mono text-[10px]', lossClass)}>
-                                    {fmtLossPct(block.blockLoss)}
-                                </span>
-                            </div>
-                            {showFedPrice ? (
-                                <div className="flex items-baseline justify-between gap-1 tabular-nums">
-                                    <span className="text-[10px] uppercase tracking-wide opacity-70">
-                                        &#8369;/kg
+                                {block.avgFedPrice !== null ? (
+                                    <span className="font-mono text-[10px]">
+                                        {fmtPrice(block.avgFedPrice)}
                                     </span>
-                                    {block.avgFedPrice !== null ? (
-                                        <span className="font-mono text-[10px]">
-                                            {fmtPrice(block.avgFedPrice)}
-                                        </span>
-                                    ) : null}
-                                </div>
-                            ) : null}
-                            {/* ACTUAL FED ₱/kg. BLANK when null — an OPEN block, or a closed
-                                block with an unpriced delivery, has no actual price. Never
-                                ₱0.00, never a dash that reads as a value. The label slot is
-                                KEPT when blank so every per-block cell stays the same height. */}
-                            {showFedPrice ? (
-                                <div className="mt-0.5 flex items-baseline justify-between gap-1 border-t border-border/60 pt-0.5 tabular-nums">
-                                    <span className="text-[10px] uppercase tracking-wide opacity-70">
-                                        actual
-                                    </span>
-                                    {block.actualFedPrice !== null ? (
-                                        <span className="font-mono text-[11px] font-bold">
-                                            {fmtPrice(block.actualFedPrice)}
-                                        </span>
-                                    ) : null}
-                                </div>
-                            ) : null}
+                                ) : null}
+                            </div>
+                        ) : null}
+                        <div className="flex items-baseline justify-between gap-1 tabular-nums">
+                            <span className="text-[10px] uppercase tracking-wide opacity-70">loss %</span>
+                            <span className={cn('font-mono text-[10px]', lossClass)}>
+                                {fmtLossPct(block.blockLoss)}
+                            </span>
                         </div>
+                        {/* ACTUAL FED ₱/kg, ON THE SWITCH. BLANK when null — an OPEN
+                            block, a closed block with an unpriced delivery, or one with
+                            a sun-drying outflow has no actual price. Never ₱0.00 and
+                            never a dash that reads as a value; the label slot is KEPT
+                            when blank so every per-block cell stays the same height. */}
+                        {showActualLine ? (
+                            <div className="mt-0.5 flex items-baseline justify-between gap-1 border-t border-border/60 pt-0.5 tabular-nums">
+                                <span className="text-[10px] uppercase tracking-wide opacity-70">
+                                    actual
+                                </span>
+                                {block.actualFedPrice !== null ? (
+                                    <span className="font-mono text-[11px] font-bold">
+                                        {fmtPrice(block.actualFedPrice)}
+                                    </span>
+                                ) : null}
+                            </div>
+                        ) : null}
                     </div>
                 ),
             };
         },
         [
-            byKey, gradeTotals, showFedPrice, actual, campaignAvgFedPrice, grandTotalFed,
-            campaignTotalProduced, campaignYieldPct, firstBlockKey,
+            byKey, gradeTotals, showFedPrice, showActualLine, actual, campaignAvgFedPrice,
+            grandTotalFed, campaignTotalProduced, campaignYieldPct, firstBlockKey,
         ],
     );
 
@@ -1171,6 +1196,14 @@ export function RcMovementGridV2({ data, searchParams }: RcMovementGridV2Props) 
                         {' · '}
                         <span className="font-medium text-foreground">{rows.length}</span> days
                     </div>
+                ) : null}
+
+                {/* ── THE `ACTUAL ₱` SWITCH (2026-09-17) — the SAME component the
+                    Classic matrix and the `/operations` RC FED modal render, so the
+                    three surfaces cannot drift. ABSENT (never disabled) for a
+                    price-denied reader: there is no actual price to reveal. */}
+                {showFedPrice ? (
+                    <ActualPriceToggle value={showActualPrice} onChange={onToggleActualPrice} />
                 ) : null}
 
                 {/* Coverage — the counts come from SQL (`blocks_closed` / `blocks_fed`);

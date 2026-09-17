@@ -80,6 +80,35 @@ export function lensSpec(id: OpsLensId): OpsLensSpec {
   return OPS_LENSES.find((l) => l.id === id) ?? OPS_LENSES[0];
 }
 
+// ─── The OUTPUT RATIOS column group, on a switch (2026-09-17) ────────────────────
+
+/**
+ * `?ratios=off` → the ledger drops YIELD % and LOSS % from the spine ENTIRELY.
+ *
+ * Renzo: *"Would be nice to have an option to toggle on and off the visibility of
+ * the column group 'output ratios', since the more accurate stat for loss and yield
+ * is the overall average when a batch closes. EOQ remains as is."* He is describing
+ * the caveat those two columns already carry in their header `title` — a DAY yield
+ * is indicative, because the feed tank is continuous flow — and asking to be able
+ * to put the indicative pair away without losing the WASTE pair beside it, which
+ * carries no such caveat.
+ *
+ * **ON is the default and is spelled as ABSENCE**, the same contract `?lens=` keeps:
+ * a plain `/operations` address stays clean and the param's presence always means
+ * something. Anything other than the literal `off` reads as ON, so a stale or
+ * mistyped value can never silently hide a column group.
+ *
+ * The EOQ strip is untouched at either setting — its YIELD and LOSS are the
+ * CAMPAIGN figures, which is exactly the "more accurate stat" the note names.
+ */
+export const RATIOS_PARAM = 'ratios';
+export const RATIOS_OFF = 'off';
+
+export function parseRatios(raw: string | string[] | undefined): boolean {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  return v !== RATIOS_OFF;
+}
+
 // ─── Quarter presets, DERIVED from the SPAN'S OWN QUARTER ────────────────────────
 
 /**

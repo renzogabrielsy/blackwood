@@ -181,58 +181,157 @@ check('the header budget is stated against the platform that produces it', () =>
 
 // ═══ 1b · THE SUMMARY ROW'S OWN WIDTH BUDGET ══════════════════════════════════
 //
-// A block column has TWO width floors, not one — the header (§1) and the SUMMARY cell,
-// which since 2026-09-17 leads with a labelled `this camp <kg>` row. That label is wider
-// than any it replaced, and the live matrix's own `W_BLOCK` had to go 92 → 124 for exactly
-// this reason (at 116 it wrapped to two lines on the FIRST block column). This grid's 148
-// clears it with room to spare — but the budget is written down, because the next person
-// to narrow `W_BLOCK` back toward the Classic matrix's number needs to fail here rather
-// than ship a wrapped label.
+// A block column has TWO width floors, not one — the header (§1) and the SUMMARY cell.
+// The cell was cut to THREE lines on 2026-09-17 (Renzo: *"it is best that the footer
+// remains just these values (top to bottom): kg fed …, php/kg (not actual), loss"*), plus
+// a FOURTH when the `Actual ₱` switch is on — so the widest line is no longer the old
+// `this camp <kg>` headline and the budget was RE-MEASURED rather than left alone. The
+// Classic matrix's `W_BLOCK` came back down 124 → 108 on that measurement; this grid's
+// 148 is set by its HEADER floor and did not move.
 //
 // The summary cell pays NO header chrome (no sort/filter buttons live in a `<tfoot>`) —
 // its own `px-2` + the `border-r`, plus the 2px GROUP_DIVIDER that the FIRST block column
 // carries and every block column is therefore sized for.
 const SUMMARY_CELL_CHROME = 16 + 1 + 2
 /**
- * MEASURED in Chrome at the real computed fonts, the same method as HEADER_PX — Node has
- * no font engine, so these can only be ENFORCED here, never re-derived.
- *   53.36 — `this camp` at `text-[9px] uppercase tracking-wide`
- *   46.83 — a 7-digit kg value (`781,234`) at `font-mono text-xs`; the measured 6-digit
- *           `54,941` is 40.14, and the extra digit is the headroom that matters
- *    4.00 — the row's `gap-1` between label and value
+ * MEASURED in Chrome with `Range.getBoundingClientRect()` at the real computed fonts, the
+ * same method as HEADER_PX — Node has no font engine, so these can only be ENFORCED here,
+ * never re-derived. The widest of the four lines is `ACTUAL` (the switched-on one);
+ * `LOSS %` is the widest of the three that always render.
+ *
+ *   FED     18.45 + 4 + 46.83  =  69.28   (`781,234` at `font-mono text-xs`)
+ *   ₱/KG    24.92 + 4 + 40.98  =  69.90   (`1,234.56` at `font-mono text-[10px]`)
+ *   LOSS %  40.83 + 4 + 34.71  =  79.54   (`-10.56%` at `font-mono text-[10px]`)
+ *   ACTUAL  42.26 + 4 + 47.18  =  93.44   (`1,234.56` at `font-mono text-[11px]`)
+ *
+ * The ₱ figures are measured at `1,234.56`, twenty times any real fed price, so the slack
+ * the floors leave is real rather than nominal.
  */
 const SUMMARY_ROW_PX: Readonly<Record<string, number>> = {
-  W_BLOCK: 53.36 + 4 + 46.83,
+  W_BLOCK: 42.26 + 4 + 47.18,
 }
+
+/** The Classic matrix, whose block footer moves in LOCKSTEP with the v2 summary cell. */
+const MATRIX_SRC = stripComments(readFileSync(join(MODULE, 'rc-movement-matrix.tsx'), 'utf8'))
 
 check('every block column is wide enough for the SUMMARY row\'s widest line', () => {
   const widths = declaredWidths()
-  for (const [key, label] of Object.entries(SUMMARY_ROW_PX)) {
-    const floor = label + SUMMARY_CELL_CHROME
-    const declared = widths.get(key)!
+  const floor = SUMMARY_ROW_PX.W_BLOCK + SUMMARY_CELL_CHROME
+  const fail = (name: string, declared: number) =>
+    `${name} W_BLOCK: declared ${declared}px but the footer's widest line (\`ACTUAL <₱/kg>\`) ` +
+    `needs ${floor.toFixed(2)}px (label+value ${SUMMARY_ROW_PX.W_BLOCK.toFixed(2)} + ` +
+    `${SUMMARY_CELL_CHROME} of cell chrome) — it would wrap to two lines`
+
+  const v2 = widths.get('W_BLOCK')!
+  assert.ok(v2 >= floor, fail('v2 grid', v2))
+
+  // …AND THE CLASSIC MATRIX'S OWN NUMBER, pinned here rather than left to whoever next
+  // trims it: its footer carries the identical four lines, and it came DOWN 124 → 116 on
+  // 2026-09-17 when the footer was cut to three (plus the switched-on fourth). 108 would
+  // have cleared the three default lines and wrapped the fourth — which is exactly how a
+  // width sized to the state you happened to be looking at regresses.
+  const m = /const W_BLOCK = (\d+);/.exec(MATRIX_SRC)
+  assert.ok(m, 'the Classic matrix\'s W_BLOCK must be findable')
+  const classic = Number(m[1])
+  assert.ok(classic >= floor, fail('Classic matrix', classic))
+})
+
+/**
+ * Just the block footer / summary cell of each grid — asserting on the WHOLE file would
+ * pass on a lifetime figure that merely moved into a hover card, which is exactly where
+ * this change put them.
+ */
+function footerSlice(src: string, start: string, end: string): string {
+  const a = src.indexOf(start)
+  const b = src.indexOf(end, a)
+  assert.ok(a > 0 && b > a, `the block footer must be findable (${start})`)
+  return src.slice(a, b)
+}
+
+check('the block footer prints THREE values, all of them THIS CAMPAIGN\'s or the block\'s own', () => {
+  // Renzo, 2026-09-17, after the two-clock labelling landed the same morning: *"It is
+  // best that the footer remains just these values (top to bottom): kg fed (fed for the
+  // batch/campaign and not lifetime), php/kg (not actual), loss. The other values
+  // currently on that footer can be viewed on hover anyway."* Pinned on BOTH grids,
+  // because the footer is reachable on either and the paramless URL serves v2.
+  const slices: readonly (readonly [string, string])[] = [
+    // THE SLICE IS THE RENDERED CELL, not the whole renderer: the v2 cell's `title`
+    // legitimately carries the lifetime figures — that is where they MOVED to — and a
+    // whole-file assertion would fail on the very hover card this change filled.
+    [
+      'v2 grid',
+      footerSlice(CODE, '<div className="flex flex-col gap-0 px-2 py-0.5 leading-tight">', 'const summaryRows'),
+    ],
+    [
+      'Classic matrix',
+      footerSlice(
+        MATRIX_SRC,
+        '<div className="flex cursor-default flex-col gap-0 px-2 py-0.5 leading-tight">',
+        '<TooltipContent',
+      ),
+    ],
+  ]
+  for (const [name, cell] of slices) {
+    // THE HEADLINE IS THE CAMPAIGN'S OWN DRAW, read from the payload, never re-added.
+    assert.ok(cell.includes('campaignFedKg'), `${name}: the footer must lead with campaignFedKg`)
     assert.ok(
-      declared >= floor,
-      `${key}: declared ${declared}px but the summary row's \`this camp <kg>\` line needs ` +
-        `${floor.toFixed(2)}px (label+value ${label.toFixed(2)} + ${SUMMARY_CELL_CHROME} of ` +
-        `cell chrome) — it would wrap to two lines`,
+      !/reduce\(|\+=/.test(cell),
+      `${name}: the footer is a LOOKUP — it must never fold the cells above it`,
     )
+    // AND THE LIFETIME FIGURES ARE GONE FROM IT. `totalOut` is the block's whole-life
+    // outflow; printing it under a column of this campaign's days is the misread that
+    // started all of this, and it now lives only on the hover card / the cell title.
+    assert.ok(
+      !cell.includes('totalOut'),
+      `${name}: the LIFETIME outflow must not be on the visible footer — it belongs on hover`,
+    )
+    assert.ok(
+      !cell.includes('all campaigns') && !cell.includes('>life</span>'),
+      `${name}: neither the \`all campaigns\` caption nor the \`life\` line may remain`,
+    )
+    // THE ₱ LINE IS THE DELIVERED PRICE, NOT THE ACTUAL — Renzo named both.
+    assert.ok(cell.includes('avgFedPrice'), `${name}: line 2 is the DELIVERED block price`)
   }
 })
 
-check('the summary row names its TWO CLOCKS and never prints a negative loss', () => {
-  // Renzo, 2026-09-17: `FED 69,013` on AUGUST 2026 · JAN-26-BLK15 read as the sum of a
-  // column that totals 54,941 kg, and the loss formula took the blame. Every figure in a
-  // block's summary cell except the first is the block's LIFETIME total; the fix is that
-  // the cell now SAYS so. Pinned on BOTH grids, because the misread is reachable on either.
-  const matrix = readFileSync(join(MODULE, 'rc-movement-matrix.tsx'), 'utf8')
-  for (const [name, src] of [['v2 grid', CODE], ['Classic matrix', stripComments(matrix)]] as const) {
-    assert.ok(src.includes('this camp'), `${name}: the summary must LEAD with THIS CAMPAIGN`)
-    assert.ok(src.includes('campaignFedKg'), `${name}: …and read it from the payload, not re-add cells`)
-    assert.ok(src.includes('all campaigns'), `${name}: the lifetime figures must be captioned`)
-    assert.ok(src.includes('>life</span>'), `${name}: the lifetime kg row must be labelled \`life\`, not \`fed\``)
-    assert.ok(!src.includes('>fed</span>'), `${name}: nothing here may still be labelled \`fed\` — that label IS the bug`)
-    // THE SIGN. `blockLoss` is `(out - in) / in`, so a real loss is NEGATIVE and the old
-    // `fmtSignedPct` printed `LOSS -0.86%` — "negative loss", the opposite of the truth.
+check('the ACTUAL ₱/kg line is on a SWITCH, and the switch has one definition', () => {
+  // Renzo: *"Being able to toggle on/off the ability to see the actual price of the block
+  // in the footer would be really cool."* Three surfaces show a block footer — this grid,
+  // the Classic matrix on `?grid=v1`, and `/operations`' RC FED modal, which HOSTS the
+  // Classic matrix — so the control is one component all three render.
+  const toggle = stripComments(readFileSync(join(MODULE, 'actual-price-toggle.tsx'), 'utf8'))
+  assert.match(toggle, /aria-pressed=\{value\}/, 'the switch is a real toggle, keyboard-operable')
+  assert.match(toggle, /export const ACTUAL_PARAM = 'actual'/)
+  assert.match(toggle, /return v === ACTUAL_ON/, 'OFF is the default and is spelled as ABSENCE')
+  // It must hold NO router hook: the Classic matrix is hosted inside `/operations`, and a
+  // `useSearchParams` in that tree would rewrite that page's own address.
+  for (const banned of ['useSearchParams', 'usePathname', 'useRouter']) {
+    assert.ok(!toggle.includes(banned), `the switch must not reach for \`${banned}\``)
+  }
+
+  // Both grids gate the fourth line on the switch AND on the server-resolved price flag,
+  // so a stale `?actual=on` opened by Production reveals nothing.
+  for (const [name, src] of [['v2 grid', CODE], ['Classic matrix', MATRIX_SRC]] as const) {
+    assert.match(
+      src,
+      /const showActualLine = showFedPrice && showActualPrice;/,
+      `${name}: the ACTUAL line is gated on the price flag as well as the switch`,
+    )
+    assert.ok(src.includes('showActualLine'), `${name}: …and the footer line reads it`)
+    assert.ok(
+      src.includes('ActualPriceToggle') || src.includes('onShowActualPriceChange'),
+      `${name}: …and the switch is the shared component, never a second button`,
+    )
+  }
+  // The Classic matrix takes it as an OPTIONAL prop defaulting to FALSE, so its existing
+  // hosts are unaffected by the addition.
+  assert.match(MATRIX_SRC, /showActualPrice = false,/, 'the Classic matrix defaults the prop to false')
+})
+
+check('a block loss never prints a leading minus', () => {
+  // THE SIGN. `blockLoss` is `(out - in) / in`, so a real loss is NEGATIVE and the old
+  // `fmtSignedPct` printed `LOSS -0.86%` — "negative loss", the opposite of the truth.
+  for (const [name, src] of [['v2 grid', CODE], ['Classic matrix', MATRIX_SRC]] as const) {
     assert.ok(
       !src.includes('fmtSignedPct'),
       `${name}: fmtSignedPct must be gone — it put a minus in front of every ordinary loss`,
@@ -301,11 +400,18 @@ check('the ₱ lines of the footer are gated on the SERVER-resolved flag', () =>
   // the two per-block ₱ lines are checked again here — belt and braces, one direction.
   assert.match(CODE, /const showFedPrice = canViewPrices;/)
   assert.match(cell, /if \(!showFedPrice\) return \{ className: PAD \};/)
+  // ONE `showFedPrice ?` since 2026-09-17, not two: the per-block ₱/kg line is gated
+  // directly, and the ACTUAL line is gated through `showActualLine`, which is
+  // `showFedPrice && showActualPrice` — so a stale `?actual=on` opened by a
+  // price-denied reader still reveals nothing. Both are asserted; the second one is
+  // asserted at its definition, where the AND actually lives.
   assert.equal(
     (cell.match(/showFedPrice \?/g) ?? []).length,
-    2,
-    'the per-block ₱/kg and ACTUAL lines are each gated',
+    1,
+    'the per-block ₱/kg line is gated directly on the price flag',
   )
+  assert.match(cell, /\{showActualLine \? \(/, 'the ACTUAL line is gated through showActualLine')
+  assert.match(CODE, /const showActualLine = showFedPrice && showActualPrice;/)
   // And this file never re-derives the role.
   assert.ok(!CODE.includes('hasPermission'), 'price visibility is never re-decided on the client')
 })

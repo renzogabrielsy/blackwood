@@ -733,3 +733,86 @@ status` carries no trace. Measured there:
   LIGHT and DARK both rendered; **price-denied**: strip = `RC Fed · Produced · Yield · Loss ·
   Waste Loss · Resiko Loss`, the blocks table nine columns, **no `₱` glyph anywhere in the
   document**, sidebar included — and no print button exists, because neither price column does.
+
+### 3.11 REFINEMENT PASS 6 (2026-09-17) — Renzo's four notes after *"looking cool"*
+
+Read on production with JULY + AUGUST + SEPTEMBER 2026, hours after the RC Movement block
+footer had been given its two labelled clocks. No data-layer change: every figure on every
+new surface is a field the payload already carried.
+
+1. **THE OUTPUT RATIOS GROUP IS ON A SWITCH.** *"Would be nice to have an option to toggle on
+   and off the visibility of the column group 'output ratios', since the more accurate stat
+   for loss and yield is the overall average when a batch closes. EOQ remains as is."* A
+   `Ratios` toggle beside the lens tabs, state in **`?ratios=off`** with ON spelled as
+   ABSENCE. `SpineCol.ratio` is the twin of `SpineCol.price`, so the two columns are **absent
+   from the coordinate space, not blanked** — the frozen `left` offsets, `minWidth`, both
+   footers and the expanded child rows all follow. **`NARROW_MQ` became
+   `narrowQuery(spineWidth)` = `round(spineWidth / 0.9) − 1`**: the spine now has FOUR widths
+   (922 / 820 / 770 / 668), the hardcoded 1023 was right for one of them, and the derived rule
+   reproduces it exactly and gives 910 / 855 / 741 for the rest. The EOQ strip is untouched.
+2. **THE BLOCK FOOTER IS THREE VALUES.** *"It is best that the footer remains just these
+   values (top to bottom): kg fed (fed for the batch/campaign and not lifetime), php/kg (not
+   actual), loss. The other values currently on that footer can be viewed on hover anyway."*
+   `FED` (`campaignFedKg`) · `₱/KG` (delivered) · `LOSS %`, on **both** RC Movement grids and
+   therefore inside `/operations`' RC FED modal, which hosts the Classic matrix. The `life`
+   line, the `all campaigns` caption and the always-on `actual` line moved onto the hover card
+   / the cell `title`, which were already printing them. `W_BLOCK` was **re-measured**, not
+   left alone: 124 → **116** on the Classic matrix (`ACTUAL 1,234.56` is 93.44px against a
+   `declared − 19` budget; 108 would have wrapped it), v2's 148 unchanged because it is set by
+   its HEADER floor; `TOTALS_H` 62 → **46**, still a floor.
+3. **THE `Actual ₱` SWITCH.** *"Being able to toggle on/off the ability to see the actual price
+   of the block in the footer would be really cool."* ONE component,
+   `rc-movement/actual-price-toggle.tsx`, rendered by three hosts because three surfaces show a
+   block footer. The route keeps the state in **`?actual=on`** (OFF spelled as absence); the
+   `/operations` modal keeps it in local state and passes the matrix the boolean **without a
+   callback**, so the matrix renders no control of its own — which is what keeps
+   `rc-movement-matrix.tsx` free of every router hook, the property that made it embeddable.
+   ABSENT (never disabled) for a price-denied reader, and the footer line is gated a second
+   time on `showActualLine = showFedPrice && showActualPrice`.
+4. **PRINT THE WHOLE PAGE, ONE SECTION PER SHEET.** *"Have a print button on the main page…
+   first the EOQ Roll Up in one page, then the 1st month in one page… Legibility is key, so
+   just the key data. Output ratios group should be off by default when printing since it is
+   redundant. Each month page should also have a little table giving the EOM rollup for that
+   month."* New **`ops-page-print.tsx`** on the platform `GroupPrintStage` / `GroupPrintPage` /
+   `printCard`, portalled to `<body>`. Page 1 = the EOQ rollup (only when there IS a group);
+   pages 2..N = one per campaign, its KPI strip — **which IS the month's EOM rollup**, so it is
+   printed once rather than twice — over the day ledger in KEY COLUMNS only. The eleven strip
+   columns come from **`opsKpiPrintTable()`**, exported by `ops-kpi-strip.tsx` off its own
+   `COLUMNS`, as plain data rather than as a render.
+
+**FOUR MEASUREMENTS THAT DECIDED SOMETHING.**
+
+- **The eight waste streams do not fit the printed ledger and were left out.** At 8pt a stream
+  column needs ~56px and a grade column ~58px; A4 landscape at 10mm is **~1047px** of printable
+  width and the nine spine columns are **600px** with two grades, so the streams (448px) put a
+  two-grade campaign at 1048 and a four-grade one 117px over. The day's WASTE kg / WASTE %
+  carry the total; the split is on screen under the Losses lens.
+- **No spacer column on paper** — the opposite of the screen ledger. Paper does not scroll, so
+  `width: 100%` + `table-fixed` makes the declared widths a RATIO and the columns fill the
+  sheet instead of leaving ~40% blank. At a 1047px sheet both tables lay out at 1031px with
+  `scrollWidth === clientWidth` and zero clipped headers.
+- **The `@page` rule is injected and removed.** `globals.css` already sets A4 landscape at
+  12mm and `@page` takes no class, so it governs every print in the app. The 10mm margin and
+  the `[data-ops-print]` break rules live in a `<style>` appended at print time and removed
+  when the stage unmounts (on `afterprint`). `app/globals.css` was NOT touched, and
+  `/analytics` prints are unaffected.
+- **A one-campaign selection prints ONE page.** With no GROUP row the EOQ page would be a
+  single row identical to the campaign page's own strip.
+
+**Verification (2026-09-17, round 6).** `npx tsc --noEmit` clean · `npx eslint
+"app/(app)/operations" "app/(app)/inventory/rc-movement" components/shared/print
+scripts/verify-rc-movement-grid.ts` 0 errors 0 warnings · `npm run build` passes ·
+`npx tsx scripts/verify-rc-movement-grid.ts` **14 assertions** (was 13; the two-clock check was
+rewritten to the three-value contract, the `Actual ₱` switch got its own, and the width check
+now pins BOTH grids' `W_BLOCK`). Driven in the Browser pane against a temporary three-campaign
+fixture (both changeover dates, a rest day, a day that produced without feeding, and a matrix
+payload with campaign-vs-lifetime figures and two blocks with no actual price) at
+`app/dev/table-playground/ops8/` — **deleted afterwards; `git status` carries no trace.**
+Measured there: the ratios toggle removes/restores the two columns with correct offsets
+(SHIFTS 780 → 628) and 21 cells on every row kind; the breakpoint moves (at 900px, OFF stays
+frozen and ON un-freezes); the block footer reads three lines on both grids and two when
+price-denied, with the hover card still printing `Fed (all camp.) 69,013 kg · In · MC · Ash ·
+Actual fed · Uplift · Lost · Opened`; the modal composition renders exactly ONE toggle; the
+print stage yields 4 pages / `page·page·page·auto` / one `window.print()` / 8pt cells / no
+`YIELD %`, and 1 page for a single campaign; price-denied prints carry no `₱` in text or
+markup. 1920 / 1366 / phone widths, light and dark.
