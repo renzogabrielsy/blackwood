@@ -552,6 +552,8 @@ cannot come back unnoticed. Full table in `.agents/plans/ops-ledger-plan.md` §2
 | `ops-fed-day-sheet.tsx` | **THE FED CELL'S SIDEBAR (2026-09-16)** — a right-hand `Sheet`, OPAQUE, titled `<date> · <campaign> · FED`: the day's seven PROJECTED lab stats from `day.fedBlend` with their coverage captions, the caveat line, and the `BATCH · BLOCK LOC · FED kg · MC · ASH · BD ASTM · BD JIS · GRIT · VM · FC` table from `day.blocksFed` with the blend as its footer. A batch cell opens `BlockingDetailPanel`. **NO ₱ ANYWHERE** — neither source view carries one. |
 | `ops-page-print.tsx` | **THE PRINTED PAGE (2026-09-17)** — `OpsPagePrintControl`, the toolbar `Print` button, and the pages it builds: **page 1 the EOQ ROLLUP** (only when there IS a group), then **one page per campaign** carrying that campaign's own KPI strip (which IS its EOM rollup) over its day ledger in KEY COLUMNS ONLY. Drives the same `GroupPrintStage` / `GroupPrintPage` / `printCard`, portalled to `<body>`, and injects its own `@page` block for the duration. Since round 9 (2026-09-17) it owns the **vertical budget** — `ledgerMetrics(dayCount)` derives the row height and body font from the measured page box, `OPS_PRINT_MAX_ROWS_PER_PAGE` is the promise (45) — and the print **colour**, and it exports `OpsPrintRollupPage` / `OpsPrintCampaignPage` / `OPS_PAGE_PRINT_RULES` so the sheet can be mounted statically and measured in a real print box. |
 | `ops-print-sheet.tsx` | **THE PRINTED PRICE SUMMARY (2026-09-16)** — `OpsPrintSheet` (one page: title · span · counts · rows · aligned footer · result, black on white) and `OpsPrintControl` (a Print BUTTON on a campaign modal, a small MENU on a group's: `Print all N separately` plus one entry per campaign). It drives the platform `GroupPrintStage` / `GroupPrintPage` / `printCard`, PORTALLED to `<body>` — see "THE STAGE IS PORTALLED" below. |
+| `ops-export.tsx` | **THE `Export` BUTTON (2026-09-18)** — `OpsExportControl`, beside `Print`, same height/border/typography (both are plain `<button>`s with one shared class string, so they read as one pair). It FETCHES `/operations/export?campaigns=…` rather than being an `<a download>`, because a link cannot see a failure: a 401 or a builder error would download a file containing an error message. The route answers in **plain text** and that body goes straight into `errorToast()` (persists until dismissed, carries Copy — the CLAUDE.md HARD RULE). The filename is read back off `Content-Disposition` (`filename*`), never rebuilt here. It exports exactly `selected`, so the file and the screen can never show different campaigns. |
+| `export/route.ts` | **THE DOWNLOAD (2026-09-18)** — `GET ?campaigns=…`, `runtime = 'nodejs'`, `force-dynamic`. Parses the address the SAME way `page.tsx` does (comma-separated, upper-cased, de-duplicated; absent = `latestQuarterKeys()`), calls the SAME `fetchOpsLedger()` (so it inherits the per-campaign row budget), resolves the group label through the SAME `quarterPresets()`, builds the workbook in memory and streams it. TWO server-side gates: a signed-in user (`supabase.auth.getUser()` — asked again although middleware already redirects, because a download route is exactly what later gets added to a `PUBLIC_PATHS` list by accident) and `canViewPrices()`, **ANDed with the adapter's own flag so the workbook can only ever be narrower — fail closed**. NO Storage bucket and no stored artifact: the file is a view of the live data, like the page, so unlike `sync_run_reports` there is no stored fact whose price-gating has to be recorded. `Content-Disposition` carries an RFC 5987 `filename*` — the name has an em dash, which a bare `filename=` cannot express. |
 | `ops-lens.ts` | The lens registry (`production` · `grades` · `losses` · `blocks`), `DEFAULT_LENS`, `parseLens`, **`RATIOS_PARAM` / `RATIOS_OFF` / `parseRatios` (2026-09-17 — `?ratios=off`; ON is the default and is spelled as ABSENCE, the same contract `?lens=` keeps)**, `quarterPresets()` and **`latestQuarterKeys()`** — **which since 2026-09-16 do NO date arithmetic: they group the options on the `quarter_key` `view_ops_ledger_campaign_span` computed from each campaign's MIDPOINT, an incomplete quarter is still a quarter, and a preset's campaigns come back chronological by `firstDate` with the quarter's own span beside them.** `latestQuarterKeys()` is what `page.tsx` defaults to. |
 | `ops-color.ts` | The semantic palette — `TONE` (one entry per meaning) and `CAMPAIGN_ACCENTS`. Opaque `head` for frozen surfaces, translucent `cell` for scrolling ones. Since 2026-09-17 also **`PRINT_TONE`** (+ `PRINT_NEUTRAL_FILL` / `PRINT_MUTED_TEXT` / `PRINT_WEEKEND_TEXT`) — the SAME six meanings in explicit LIGHT values with no `dark:` twin and no semantic token, so a printed sheet comes out identical whichever theme it was printed from. Every `value` colour clears 7:1 on white. |
 | `ops-format.ts` | `kg` · `tons` · `php` · `pctFromFraction` · **`pctNumFromFraction`** (the bare percent NUMBER, for a cell that states its unit on the left) · `pctFromPercent` · **`lab`** (a lab reading at a fixed precision — 2 dp, 3 dp for the two BDs; NULL blank, never `0.00`) · `hours` · `count` · `shortDate`. Renderers only. |
@@ -1262,6 +1264,106 @@ edit here): `FED` (this campaign's own draw) · `₱/KG` (delivered, not actual)
 fourth `ACTUAL` line under the switch and everything else on the hover card. See
 `app/(app)/inventory/rc-movement/CONTEXT.md` → "Frozen summary footer".
 
+**THE EXCEL EXPORT (2026-09-18).** Renzo: *"The idea is like printing but more Excel-report
+based for easy emails… the Excel should utilize formulas… EOQ Summary should be using formulas
+to grab data from the other month tabs… an RC Movement tab that features 3 separate RC Movement
+tables inside ONE tab."* The builder lives in **`lib/operations/excel/`** (seven files) and is
+driven by `export/route.ts`; the format is Renzo's own, taken from a mock-up he hand-edited
+twice (`.agents/plans/ops-ledger-excel-plan.md` §9–§10).
+
+- **SIX TABS:** `EOQ Summary` (one row per campaign + the GROUP row, **every cell a link**) ·
+  one tab per campaign (`JULY 2026` …: EOM rollup r3/r4, the band r7, headers r8, the day ledger
+  from r9, then `BLOCKS USED`) · `RC Movement` (the campaigns' day × block matrices **stacked in
+  one sheet**, because a sheet can freeze panes only once) · `Checks`. Tabs are created in
+  DISPLAY order and written in DEPENDENCY order — the matrices first, because the month tabs
+  link INTO them; `EOQ Summary` is filled LAST.
+- **VALUES IN, FORMULAS OUT.** The only numbers typed in are the ones SQL published: per day the
+  fed ₱/kg, grade kg, eight waste streams, shifts, downtime; per block the arrival kg, resiko kg
+  and two prices; per matrix cell the kg fed. **Everything else is an Excel formula**, so
+  correcting one waste cell moves the day total, the campaign total, the EOM rollup, the EOQ row
+  and the `Checks` tab together. The platform rule "never compute in TypeScript" is intact: the
+  ONE local aggregation (`weightedOverPriceSet`) is a CACHE of a formula this module itself
+  wrote, documented at its call site, and no app surface reads it.
+- **THE LEDGER AND THE MATRIX CANNOT DISAGREE.** A month tab's `TTL FED kg` is
+  `='RC Movement'!E<that date's row>` and each `BLOCKS USED` row's `FED WT kg` is that block's
+  COLUMN total on the same tab — 572 cross-tab links in the Q3 file. It is also why the matrices
+  are built from the **ops-ledger payload** and not from `fetchRcMovementMatrix()`: that one's
+  rows are the FED-ONLY span, so a rest day would have no row to link to.
+- **EVERY FORMULA CARRIES A CACHED RESULT** (the payload's own figure), so the file reads
+  correctly in a viewer that never recalculates — an email preview, a phone quick-look, a Google
+  Sheets import. `fullCalcOnLoad` is set, so Excel recomputes on open and the cache is only ever
+  the FIRST thing a reader sees. **The consequence for `Checks` is stated on that tab:** the
+  cached WORKBOOK column IS the DATABASE column, so it can only read OK until something
+  recalculates.
+- **`a1.ts` IS THE ONE OWNER OF ADDRESSING.** Every A1 reference, every range and every `'…'!`
+  prefix is built there; no sheet builder concatenates a column letter to a row number. That is
+  not tidiness — **a column letter is not a constant**: `TTL FED` is `D` for an Owner and `C`
+  for Production, so a hand-assembled formula would be right in one build and silently wrong in
+  the other, and a wrong reference in Excel is not a crash, it is a plausible number from the
+  wrong column. Builders declare a `Layout` of LOGICAL ids (`ttlFed`, `grade:3X50`,
+  `block:<batchId>`) and ask it for letters; asking for an absent id THROWS rather than
+  resolving to a neighbour. Sheet names are ALWAYS quoted (valid either way, so there is one
+  spelling rather than a predicate to get wrong).
+- **PRICE GATING BY ABSENCE, not by blanking.** For a `!canViewPrices()` caller the ₱ columns
+  are **not written at all** — not blanked, not hidden (a hidden column is one click from
+  visible), not zeroed. The Production workbook is a SMALLER file, not a censored one: 821
+  formulas against 1,075, four tabs' worth of ₱ headers gone, the `Checks` tab 24 rows instead
+  of 39. Proven from the outside: **zero cells contain a ₱** in the recalculated denied build,
+  across values, formulas, number formats and cell comments. Production IS allowed to export
+  (plan §8 decision 4).
+- **NO FORMULA MAY PRINT `#DIV/0!`.** Every ratio, price and per-kilo figure whose denominator
+  is itself derived goes through `divBlank()` → `IFERROR(num/den,"")`. Three different failures
+  reach those cells and only one is a zero denominator: a campaign with no fed kg, no produced
+  kg, no CLOSED block or no block in the price set divides by 0; a denominator CELL holding
+  another formula's `""` raises `#VALUE!` (in Excel **text compares GREATER than any number**,
+  so an `IF(den>0,…)` test waves the blank straight through — which is why `1-YIELD` and
+  `FED PRICE/YIELD` cannot be guarded by a comparison at all); and `SUMPRODUCT` over a range
+  holding one such `""` is `#VALUE!`, which is how ONE campaign missing a price would otherwise
+  poison the whole GROUP row. **Measured: without the guards a campaign that recorded nothing
+  publishes 27 `#DIV/0!` cells, including the EOQ Summary's headline yield, loss, waste % and PC
+  cost; with them, 27 blanks and zero errors.** The consequence is deliberate and is the same
+  refusal `fn_ops_ledger_group_kpis` makes in SQL — a group figure BLANKS rather than quietly
+  averaging a partial population. `safeDiv()` (`IF(den>0,…)`) survives only on the day rows,
+  where the denominator is a `SUM` over value cells and is therefore always numeric.
+- **THE GROUP ROW PUBLISHES NO RESIKO KG, and the refusal is STRUCTURAL** — there is no such
+  column on the tab, so there is no cell to blank. A block fed by two campaigns (78 of 523)
+  would have its whole-life shrinkage counted once per campaign. Only the fed-kg-weighted RATIO
+  is shown, and the cell carries a comment saying so. Same reason the group has no whole-block
+  actual price, only the campaign-attributed one. `TRUE PC COST` is blank until every campaign
+  is fully covered (`COUNTBLANK` over the campaign rows) — the SQL rule, said in Excel.
+- **DATES ARE EXCEL'S BUILT-IN SHORT DATE** (`numFmtId 14`), written as the pattern both
+  ExcelJS and openpyxl MAP onto that id — never a spelled-out pattern, which would freeze the
+  date into one locale instead of reading `6/30/2026` on Renzo's Mac. Proven by unzipping the
+  file and reading `styles.xml`.
+- **`exceljs` NEVER REACHES A CLIENT BUNDLE.** It is a root dependency imported only from
+  `lib/operations/excel/**`, whose only importers are the route handler and the verify script.
+  Checked after a production build: **0 of 123 client chunks** contain `exceljs` or its
+  internals; the one client chunk mentioning the feature carries the fetch URL and a fallback
+  filename.
+- **`scripts/verify-ops-excel.ts` (`npx tsx`) — 27 assertions, exit non-zero on any failure.**
+  It builds the Q3 workbook from a fixture decoded from the mock-up's own live JSON (33/29/19
+  days, 19/16/11 blocks, rest days, open blocks, a legitimately blank TRUE PC COST), RE-OPENS it
+  and asserts: every formula targets a sheet AND a cell that is actually written (**a dangling
+  link in Excel is not an error, it is a 0**); every cached result is the payload's figure; sheet
+  names fit 31 characters and are quoted wherever referenced; the price-denied build carries no
+  ₱ in any value, formula, number format or comment and no ₱ header survives (the label list is
+  DERIVED from the full build's own output, never hand-kept); the GROUP publishes no resiko kg;
+  the plan §10 coordinates and freeze panes; Short Date is the built-in id; a rest day is BLANK,
+  never a row of zeroes; every division is guarded; and a DEGENERATE campaign (no production, no
+  blocks, no price, `group: null`) still builds a four-tab file whose derived cells are blank.
+  **Two of its checks deliberately read the FILE rather than the re-opened object**, because
+  ExcelJS's reader drops a falsy cached result — a legitimate `<v>0</v>` and a deliberate
+  `<v></v>` both come back `undefined`, so asserting on the object would report ~40 phantom
+  failures and could never see a genuinely naked formula. `OPS_EXCEL_DUMP_DIR=<dir>` also writes
+  the price-denied and degenerate workbooks, for a recalculation pass.
+- **THE ONE READING TO KNOW ABOUT ON `Checks`.** `SUM` of nothing is 0 in Excel while the
+  database publishes NULL, so a campaign that recorded NO activity at all makes its three
+  `SUM`-backed kg rows (`RC fed kg`, `Produced kg`, `Waste kg`) read `workbook 0 · database
+  blank · CHECK`. Every derived ratio and price on that same campaign correctly reads
+  `OK (blank on purpose)`. It is self-explanatory with both columns side by side and it is the
+  plan's own "label rather than hide" category — not a bug to paper over, and not something to
+  "fix" by making a total lie about being empty.
+
 ---
 
 ## Dependencies
@@ -1269,6 +1371,15 @@ fourth `ACTUAL` line under the switch and everything else on the hover card. See
 **Data layer:** `lib/supabase/server`, `lib/auth` (`canViewPrices`), `lib/supabase/paginate`
 (`fetchAllRows`), `types/supabase`. Reads only `view_ops_ledger_*` and
 `view_rc_movement_campaign_options`.
+
+**The Excel export (2026-09-18):** `lib/operations/excel/{a1,styles,workbook,month-sheet,
+rc-movement-sheet,eoq-sheet,checks-sheet}.ts` + `export/route.ts` + `ops-export.tsx`. The only
+new package is **`exceljs`** (root dependency — the app root already had plain `xlsx`, which
+writes formulas but no styling; `exceljs` is what the sync worker's report generator already
+uses). It is imported ONLY from `lib/operations/excel/**`, whose only importers are the route
+handler and `scripts/verify-ops-excel.ts` — never a client component. The builder reads NOTHING
+from Supabase: it takes the adapter's payload, so it is as testable as a pure function and is
+verified with no database at all.
 
 **UI:** `lib/operations/{types,queries}`, `lib/utils` (`cn`),
 **`components/shared/unit-value`** (the platform unit-on-the-left cell, shared with
@@ -1295,6 +1406,12 @@ rows on the campaign clock, with the EOQ rollup*) and `ICTC_MODULES`, next to An
 ## See also
 
 - `.agents/plans/ops-ledger-plan.md` — §1 brief, §2 data layer, §3 UI
+- `.agents/plans/ops-ledger-excel-plan.md` — the Excel export: §2 values-in/formulas-out, §5
+  price gating, §6 the verification list, **§9–§10 Renzo's STANDING format** (round 2)
+- `.agents/plans/ops-ledger-excel-mockup/` — the format's executable spec: `build.py` (the
+  Python generator that reproduces Renzo's hand-edited `renzo-edited-round2.xlsx` with 0
+  differing cells), the four live Q3 JSON fixtures the verify script decodes, and
+  `generated-ts-v1.xlsx` — the TypeScript builder's own output, kept beside them for comparison
 - `app/dev/ops-ledger/CONTEXT.md` — the three layout drafts and the unification thesis
 - `app/(app)/inventory/rc-movement/CONTEXT.md` — the matrix this ledger shares a spine with
 - `app/(app)/production/daily/CONTEXT.md` — the shifts/runs/downtime/waste source (L-051/L-051b)

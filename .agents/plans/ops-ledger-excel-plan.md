@@ -1,11 +1,41 @@
-# Operations Excel Report — formulation (NOT built yet)
+# Operations Excel Report — formulation, and what shipped
 
-> Status: **PLAN ONLY** (2026-09-17). Renzo: *"The idea is like printing but more Excel-report
-> based for easy emails… the Excel should utilize formulas… EOQ Summary should be using
-> formulas to grab data from the other month tabs… an RC Movement tab that features 3 separate
-> RC Movement tables inside ONE tab. If it is a complicated process, then just formulate first."*
-> It is a moderately complicated process, so this document is the formulation. Nothing here is
-> implemented. Read `app/(app)/operations/CONTEXT.md` first; this plan reuses its payload.
+> Status: **BUILT AND VERIFIED (2026-09-18).** All four phases of §7 are done; the live
+> behaviour is documented in `app/(app)/operations/CONTEXT.md` → "THE EXCEL EXPORT", which is
+> the authority from here on. This document is kept as the FORMULATION plus **§9–§10, which are
+> Renzo's standing FORMAT and are still normative** — change a font, a fill, a width or a row
+> coordinate only because he asked, and re-run the fidelity diff.
+>
+> Renzo: *"The idea is like printing but more Excel-report based for easy emails… the Excel
+> should utilize formulas… EOQ Summary should be using formulas to grab data from the other
+> month tabs… an RC Movement tab that features 3 separate RC Movement tables inside ONE tab. If
+> it is a complicated process, then just formulate first."*
+>
+> **What shipped:** `lib/operations/excel/{a1,styles,workbook,month-sheet,rc-movement-sheet,
+> eoq-sheet,checks-sheet}.ts`, `app/(app)/operations/export/route.ts`,
+> `app/(app)/operations/ops-export.tsx` (the `Export` button beside `Print`), `exceljs` as a root
+> dependency, and `scripts/verify-ops-excel.ts` (**27 assertions**, no database, no browser).
+>
+> **Measured on the Q3 2026 payload:** six tabs · **1,075 formulas · 572 cross-tab links** ·
+> recalculated by LibreOffice with **ZERO error cells** · the `Checks` tab reads **"All 39 checks
+> agree with the database"** — the same proof the Python mock-up generator carries. The
+> price-denied build: **821 formulas, zero errors, 24 checks, and not one cell containing a ₱**.
+>
+> **Fidelity against `renzo-edited-round2.xlsx`: 43 differing cells out of six full tabs, and
+> every one is accounted for.** 42 are the `IFERROR(…,"")` division guards added on 2026-09-18
+> (see §11) and 1 is `'Checks'!F:F` where his file has `Checks!F:F` — `a1.ts` always quotes a
+> sheet name, which Excel accepts either way and normalises. **Zero** differences in values,
+> styles, fonts, fills, borders, number formats, column widths, merges, freeze splits or page
+> setup on any tab. (Method: `diff.py`'s comparison plus the §9–§10 save-noise normalisations,
+> validated by first reproducing the plan's own claim — the Python generator against his file is
+> 0 differing cells, 0 change groups.)
+>
+> **Decisions §8 resolved by Renzo:** per-day Yield %/Loss % OUT · all eight waste streams and
+> every grade column IN · day rows only · Production-role export ALLOWED with the ₱ columns
+> STRUCTURALLY ABSENT · `Blackwood Operations — <group label>.xlsx`, tabs `JULY 2026` etc. · the
+> RC Movement linked footer rows stay GREEN.
+>
+> Read `app/(app)/operations/CONTEXT.md` first; this plan reuses its payload.
 
 ## 1. What the file is
 
@@ -119,12 +149,12 @@ visible). The Production workbook is therefore a smaller file, not a censored on
 
 ## 7. Phases and effort
 
-| Phase | Scope | Size |
-|---|---|---|
-| X1 | builder skeleton, `a1.ts`, one month tab with ledger + EOM rollup formulas, route + Export button | one agent pass |
-| X2 | BLOCKS USED section + the four price/resiko formulas; `EOQ Summary` with cross-tab references and the weighted GROUP row | one agent pass |
-| X3 | `RC Movement` tab (stacked tables, defined names) and the TTL FED cross-tab link | one agent pass |
-| X4 | `Checks` tab, `verify-ops-excel.ts`, price-denied build, print setup polish | one agent pass |
+| Phase | Scope | Size | Status |
+|---|---|---|---|
+| X1 | builder skeleton, `a1.ts`, one month tab with ledger + EOM rollup formulas, route + Export button | one agent pass | **[x] done** |
+| X2 | BLOCKS USED section + the four price/resiko formulas; `EOQ Summary` with cross-tab references and the weighted GROUP row | one agent pass | **[x] done** |
+| X3 | `RC Movement` tab (stacked tables, defined names) and the TTL FED cross-tab link | one agent pass | **[x] done** — **no defined names were used.** `a1.ts` owns every reference and the month tab's link reads `='RC Movement'!E12`, which is already legible in the formula bar; a defined name would have been a SECOND addressing mechanism beside the one owner, for no gain. |
+| X4 | `Checks` tab, `verify-ops-excel.ts`, price-denied build, print setup polish | one agent pass | **[x] done** — `hyperformula` was NOT added: the division audit is a STATIC assertion over every formula string (stronger, and it needs no second evaluator to keep in step), and the real recalculation proof is LibreOffice, run by hand and recorded above. |
 
 No database change is needed: every input is already in the payload (`fetchOpsLedger`,
 `OpsCampaign.blocks`, `fetchRcMovementMatrix`).
@@ -206,3 +236,71 @@ reports hundreds of false changes. Detect the deleted row first (align on column
 the shift applied, and read a restructured tab row by row instead of by coordinate. And find the
 file he actually edited before diffing anything: this round it was the generator's output sitting
 beside the mock-up, identified by its `lastModifiedBy` and an Excel lock file, not by its name.
+
+## 11. THE ONE DELIBERATE DIVERGENCE FROM THE MOCK-UP — guarded divisions (2026-09-18)
+
+The generated workbook differs from `renzo-edited-round2.xlsx` in **42 cells**, all of the same
+shape: a division that was bare in the mock-up is now wrapped in `IFERROR(…,"")`. It is a **bug
+fix, not a format change**, and this section exists so nobody "restores fidelity" by undoing it.
+
+**What the mock-up could not know.** Its four JSON fixtures are Q3 2026 — three campaigns that
+all fed the plant, all produced, and all have closed, fully-priced blocks. On that data every
+denominator is positive, so `build.py` recalculates with 0 errors and the bare divisions look
+fine. The export, however, runs on **whatever campaigns Renzo selects**, and three ordinary
+states have no denominator at all:
+
+- a campaign that **produced nothing** (22 of the 32 filed no production shift) → `WASTE %` and
+  `YIELD` divide by 0;
+- a campaign with **no CLOSED block yet** (every campaign's opening weeks) → `RESIKO LOSS`
+  divides `SUMIF(...,"CLOSED",...)` by 0;
+- a campaign with **nothing in the price set** → `ACTUAL FED PRICE` and `RESIKO COST` divide
+  `SUMPRODUCT(inSet*fed)` by 0.
+
+**Measured cost of leaving it bare.** Built from a campaign that recorded nothing, the workbook
+publishes **27 `#DIV/0!` cells** — including the EOQ Summary's headline `YIELD`, `LOSS`,
+`WASTE %` and `PC COST`, i.e. the first four numbers in an emailed report. With the guards: **27
+blanks and zero error cells**, confirmed by a forced LibreOffice recalculation.
+
+**Why `IFERROR` and not `IF(den>0,…)`.** Only one of the three failures is a zero denominator.
+A denominator CELL holding another formula's `""` raises `#VALUE!`, and in Excel **text compares
+GREATER than any number**, so `IF(den>0,…)` waves the blank straight through into the division —
+which is why `=1-YIELD` and `=FED PRICE/YIELD` cannot be guarded by a comparison at all. A
+`SUMPRODUCT` over a range containing one such `""` is `#VALUE!` too, which is how ONE campaign
+missing a price would otherwise poison the whole GROUP row. `IFERROR` answers all three the same
+way, and the answer a blank rather than a 0 (NULL IS NEVER 0). The `IF(den>0,…)` form survives
+only on the day rows, where the denominator is a `SUM` over value cells and is therefore always
+numeric — those cells are byte-identical to his file.
+
+**The consequence, stated.** A weighted GROUP figure now goes **blank rather than averaging over
+a partial population** — the same refusal `fn_ops_ledger_group_kpis` makes in SQL. The guard is
+`divBlank()` / `iferrorBlank()` in `lib/operations/excel/a1.ts`, and
+`scripts/verify-ops-excel.ts` asserts STATICALLY that no formula in either build divides without
+one.
+
+**The 43rd differing cell** is not a guard: `'Checks'!F:F` where his file reads `Checks!F:F`.
+`a1.ts` quotes every sheet name because a quoted name is valid whether or not it needs quoting,
+which leaves one spelling instead of a predicate to get wrong. Excel accepts and normalises both.
+
+### Re-running the fidelity diff
+
+Not a repo dependency and nothing in Blackwood imports it — it needs `python3` + `openpyxl`, and
+LibreOffice only to force a recalculation:
+
+1. `npx tsx scripts/verify-ops-excel.ts` writes `generated-ts-v1.xlsx` beside the mock-up.
+2. Compare it with `renzo-edited-round2.xlsx` using `diff.py`'s comparison **plus** four
+   normalisations, or the whole file reads as changed: the `\₱`/`"₱"` currency-literal spelling,
+   `('general','bottom')` vs `(None,None)` on an untouched cell's alignment, `mm-dd-yy` vs
+   `m/d/yyyy` (the same built-in Short Date), and — the one that misleads — **compare the pane's
+   `xSplit`/`ySplit`, never `freeze_panes`**, which is the pane's `topLeftCell` and therefore
+   records the reader's SCROLL position (his file says `C41` where the generator wrote `C9`).
+   Validate the method by first diffing `generated-v3.xlsx` against his file: it must report
+   **0 differing cells and 0 change groups**.
+3. To prove formulas RECALCULATE, strip the cached values first — load and re-save with
+   `openpyxl`, which drops every `<v>` — and only then convert with LibreOffice.
+   **A plain `soffice --convert-to` on a cache-bearing file proves nothing:** LO's
+   "Recalculation on File Load" defaults to NEVER for xlsx, so it echoes the cached results back
+   and a broken formula looks fine. That trap cost a wrong "0 errors" reading on the first pass
+   here; the tell was that the recalculated values were the payload's ROUNDED KPI figures
+   (`0.795154`) instead of full precision (`0.795153564745006`).
+4. `OPS_EXCEL_DUMP_DIR=<dir> npx tsx scripts/verify-ops-excel.ts` also writes the price-denied
+   and degenerate workbooks, which are the two builds worth recalculating.
