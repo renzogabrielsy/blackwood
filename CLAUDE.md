@@ -651,6 +651,7 @@ Before exploring or modifying any module, agents **MUST** read its `CONTEXT.md` 
 - `components/digest/CONTEXT.md` — Home Digest bands (the `/` presentation components)
 - `components/jarvis/CONTEXT.md` — Jarvis chat UI (mounted via `app-shell.tsx`)
 - `components/shared/grid/CONTEXT.md` — Blackwood Table (universal cell selection, inline editing, keyboard nav, context menu — the agnostic grid primitive all data grids share)
+- `components/shared/print/CONTEXT.md` — Print kit (`print-card.ts`, `group-print.tsx`, `print-fit.ts`, `print-page-rules.ts` — the tenant-neutral one-page fit solver and `@page` rules the RC Movement print uses; `/operations` print may be re-pointed to it later)
 - `components/NAVBAR.md` — Navbar (page titles, breadcrumbs)
 - `components/providers/AUTH.md` — Auth Provider (permissions, dev override)
 - `components/NOTIFICATIONS.md` — Notifications (realtime bell)
