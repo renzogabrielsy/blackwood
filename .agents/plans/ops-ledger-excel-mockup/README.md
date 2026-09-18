@@ -12,9 +12,15 @@ Reference material for building the automated export described in
 | `renzo-edited-round1.xlsx` | Renzo's FIRST hand edit (style: all-black text, Short Date, column A 18.16, centred band; EOQ Arial 11 bold / zoom 130 / hidden checks row — that EOQ styling was NOT repeated in round 2). |
 | `renzo-edited-round2.xlsx` | Renzo's SECOND hand edit — the standing format (every explanatory prose line removed). |
 | `diff.py` | The cell-by-cell diff used to detect his edits. Point its two `load_workbook` paths at a fresh build and at his file. |
+| `generated-ts-v1.xlsx` | **The SHIPPED TypeScript builder's own output** (`lib/operations/excel/**`), rewritten by `npx tsx scripts/verify-ops-excel.ts` from these same JSON fixtures. Kept here so the port can be diffed against Renzo's file at any time: **43 differing cells, all accounted for** — 42 `IFERROR` division guards and one always-quoted sheet name (plan §11). Unlike the openpyxl outputs it carries cached results, so **strip them before recalculating** or LibreOffice will just echo them back. |
 
 Run: `python3 build.py` (needs `openpyxl`), then recalculate with LibreOffice before reading
 values (`openpyxl` writes formulas without cached results).
+
+**This directory is reference material, and the app is now the implementation.** The automated
+export shipped on 2026-09-18 — see `app/(app)/operations/CONTEXT.md` → "THE EXCEL EXPORT" for the
+live behaviour and plan §11 for how to re-run the fidelity diff (including the LibreOffice
+recalculation trap). `build.py` remains the executable statement of the FORMAT.
 
 Lessons from detecting his edits are in the plan, §9–§10: filter Excel's save noise, detect
 deleted rows before diffing by coordinate, and identify WHICH file he edited from

@@ -19,8 +19,10 @@ import {
   RATIOS_OFF,
   RATIOS_PARAM,
   lensSpec,
+  quarterPresets,
   type OpsLensId,
 } from './ops-lens';
+import { OpsExportControl } from './ops-export';
 import { OpsGroupPicker } from './ops-group-picker';
 import { OpsKpiStrip } from './ops-kpi-strip';
 import { OpsLedgerTable } from './ops-ledger-table';
@@ -166,6 +168,16 @@ export function OperationsView({
   const [rollupOpen, setRollupOpen] = React.useState(true);
   const spec = lensSpec(lens);
 
+  // The group's NAME for the Export button's tooltip — resolved exactly as the
+  // print sheet and the export route resolve it (the quarter preset whose key set
+  // is this group, else the campaign labels joined), so the three never disagree.
+  const exportGroupLabel = React.useMemo(() => {
+    const preset = quarterPresets(options).find(
+      (p) => p.keys.length === selected.length && p.keys.every((k) => selected.includes(k)),
+    );
+    return preset?.label ?? data.rollups.map((r) => r.label).join(' · ');
+  }, [options, selected, data.rollups]);
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* ── Controls ──────────────────────────────────────────────────────────── */}
@@ -195,6 +207,17 @@ export function OperationsView({
                 page default already read, so the sheet cannot name a quarter the
                 picker does not build. */}
             <OpsPagePrintControl data={data} options={options} />
+
+            {/* ── THE SAME GROUP, AS A WORKBOOK (2026-09-17) ───────────────────
+                Renzo: *"like printing but more Excel-report based for easy
+                emails… the Excel should utilize formulas."* It exports EXACTLY
+                `selected` — the keys the payload was actually resolved for — so
+                the file and the screen can never show different campaigns. The ₱
+                columns are structurally absent for a price-denied caller; the gate
+                is re-checked server-side in the route. */}
+            {data.rollups.length > 0 ? (
+              <OpsExportControl campaignKeys={selected} groupLabel={exportGroupLabel} />
+            ) : null}
 
             {/* ── THE OUTPUT RATIOS SWITCH (2026-09-17) ────────────────────────
                 Renzo: *"Would be nice to have an option to toggle on and off the
