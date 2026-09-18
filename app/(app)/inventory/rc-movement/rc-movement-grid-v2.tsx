@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { ACTUAL_ON, ACTUAL_PARAM, ActualPriceToggle, parseActualPrice } from './actual-price-toggle';
+import { RcMovementPrintControl } from './rc-movement-print';
 import { BlockingDetailPanel, type BlockingDetailNavTarget } from '../_shared/blocking-detail-panel';
 import { fetchBlockDataForBatch } from '../blocking/actions';
 import type { BlockData } from '../blocking/types';
@@ -1205,6 +1206,14 @@ export function RcMovementGridV2({ data, searchParams }: RcMovementGridV2Props) 
                 {showFedPrice ? (
                     <ActualPriceToggle value={showActualPrice} onChange={onToggleActualPrice} />
                 ) : null}
+
+                {/* ── PRINT (2026-09-17) — the SAME control the Classic matrix renders.
+                    It prints from the PAYLOAD, not from this grid, so `?grid=v1` and
+                    `?grid=v2` produce a byte-identical sheet and the two can never
+                    drift. The v2 grid is virtualised, so printing IT was never an
+                    option — the printed sheet is its own plain, non-virtualised table
+                    (`rc-movement-print.tsx`). Price gating rides on the payload. */}
+                <RcMovementPrintControl data={data} showActualPrice={showActualPrice} />
 
                 {/* Coverage — the counts come from SQL (`blocks_closed` / `blocks_fed`);
                     nothing is counted here. An inert pill in v2: the badge's

@@ -21,6 +21,9 @@ A cross-tab / pivot of feeding activity, mirroring how the user reasons about a 
 
 | `rc-movement-grid-v2.tsx` | ~1200 | **THE DEFAULT GRID since 2026-08-29** (built 2026-08-19). The same day×block matrix on the **Blackwood Table** (`lib/table/` + `components/shared/table/`). READ-ONLY, built BESIDE the Classic matrix, which is not edited by one character — nor is `rc-movement-route-view.tsx`. Owns its own campaign picker (writes `?campaign=`, preserving every other param) and a `useTransition` busy state. Its column widths are **measured, not eyeballed** (see "Header widths") and its campaign totals row is a **bottom-pinned summary row**. See "The flip". |
 
+| `rc-movement-print.tsx` | ~1230 | **THE PRINTED SHEET (2026-09-17)** — `RcMovementPrintControl` (the toolbar `Print` button, rendered by BOTH grids) and the page it builds: the whole campaign, in colour, on ONE A4 landscape sheet. A plain **non-virtualised** table of its own, because the v2 grid is virtualised and could never be printed. Owns the print palette (`RCM_PRINT_TONE` — the screen's six meanings in explicit LIGHT values, no `dark:` twin and no semantic token, so the sheet comes out identical whichever theme it was printed from), the geometry constants (`RCM_PRINT_MARGIN_MM` = 7, `RCM_MONO_ADVANCE_EM` = 0.62, the 9→5pt font ladder) and **`rcMovementPrintLayout()`**, the solver. Exports `RcMovementPrintSheet` / `RC_MOVEMENT_PRINT_RULES` so the sheet can be mounted statically and measured in a real print box. Drives the platform `GroupPrintStage` / `GroupPrintPage` / `printCard`, portalled to `<body>`, and injects its own `@page` block for the duration. See "The printed sheet" below. |
+| `../../../dev/table-playground/rcmprint/` | ~250 | **The measurement rig** (`page.tsx` gate + `rcmprint-fixture.tsx`). Not part of the route; listed here because it is the only thing that can re-measure the fit. Mounts the real sheet on a synthetic payload of any shape, re-measures the mono glyph advance live, and is what headless Chrome renders to a PDF whose page count is the assertion. No auth, no Supabase, dev-only behind two independent locks. |
+
 > The folder now HAS a `page.tsx` (Phase 2) — `/inventory/rc-movement` is a real standalone route. The matrix is reached there (no longer via a tab).
 
 ### Mobile (Archetype E phone-summary)
@@ -415,6 +418,92 @@ matrix. It exports `ActualPriceToggle`, `ACTUAL_PARAM` (`actual`), `ACTUAL_ON` (
   reveal and a greyed switch would claim otherwise. Every host guards on `canViewPrices`
   before rendering it, and the footer line is gated a second time on `showActualLine`.
 
+### The printed sheet — ONE A4 landscape page, in colour (2026-09-17)
+
+Renzo: *"a similar colored print functionality for rc movement page. Make sure an entire
+month can fit inside of landscape A4."* A `Print` button sits in the toolbar of BOTH grids
+(same convention and placement as `/operations`) and prints the campaign currently on
+screen, honouring the `Actual ₱` switch — so the sheet and the screen can never describe
+different things.
+
+**What is on it:** every day row of the campaign · the spine (`#` · DATE · DAY · ₱/KG ·
+FED KG) · the PRODUCED group (PROD KG + one column per grade the campaign ran) · EVERY
+block column · and the block footer as the LAST `<tbody>` rows — `TOTAL · YIELD % · LOSS %
+· ₱/KG · ACTUAL ₱`. Nothing else; paper carries no prose.
+
+**Both dimensions are SOLVED, never assumed** — `components/shared/print/print-fit.ts`:
+
+- **VERTICAL** — row height is `budget ÷ (day rows + footer rows)`, clamped, with the font
+  stepping down beside it. **The footer rows are IN THE DIVISOR**, because they are drawn
+  at the body font; pinning one at a constant instead is the circularity that made
+  `/operations`' first attempt miss by exactly one row.
+- **HORIZONTAL** — every column's width is `longest string it will ACTUALLY render × the
+  font's advance`, and the FONT is the thing solved for. The strings are measured off the
+  data being printed, so a column cannot clip.
+
+**THE MEASURED CEILING IS 26 BLOCK COLUMNS** beside the full spine, the PRODUCED total and
+TWO grade columns, at the 5pt floor. Verified against real PDFs: **26 blocks → 1 page, 27 →
+2.** Each extra grade column costs about one block column (27 / 26 / 25 at 1 / 2 / 3
+grades). Renzo's worst realistic case — 33 days × 25 blocks — fits with one column to
+spare. **The widest campaign the yard has ever fed is 32 block columns (MARCH 2026), so the
+pagination path is LIVE, not theoretical.**
+
+**Beyond the ceiling it paginates BY COLUMNS, never clips and never crushes.** Balanced
+chunks (`splitEvenly` — 32 columns is `16 + 16`, never `26 + 6`, because a near-empty
+continuation sheet reads as a mistake), the spine and the PRODUCED group repeated on every
+sheet, and the heading saying `blocks 17–32 of 32 · page 2/2`.
+
+**And the SPLIT is decided at one font while the TYPE is sized for another — deliberately.**
+The capacity that decides the chunking is the tightest font the WHOLE column set allows;
+once split, a sheet no longer carries every column, so the font is **re-solved against the
+widest page's own demands**. Measured: 33 × 32 was printing both sheets at the 5pt floor —
+16 columns of `150,000` sitting in gutters wide enough for 26 — and now prints at **7pt**,
+two ladder steps larger, for the same one-page-per-chunk promise. It cannot loop (the split
+is never re-taken) and **when everything fits on one page it is a no-op by construction**,
+so the single-sheet path is untouched.
+
+**Measured font sizes** (33-day campaign, 2 grades, prices + actual): 28×8 → 9pt · 31×19 →
+6pt · 33×25 → **5pt, the floor** · 33×27 → 8pt over 2 pages · 33×32 → 7pt over 2 pages. The
+floor is real, not a fallthrough: at 5pt a tabular digit is ~28 device pixels tall at
+300dpi.
+
+**Two rendering rules that are load-bearing, not polish:**
+
+- **The footer is `<tbody>` rows and NEVER a `<tfoot>`.** Chrome REPEATS a `<tfoot>` on
+  every printed page, so a total in one reads as a duplicated total. `<thead>` keeps
+  `table-header-group` — a header that repeats is a help, a total that repeats is a lie.
+- **`print-color-adjust: exact` on the whole sheet.** Without it a browser silently drops
+  every background fill unless the person printing happens to tick "Background graphics" —
+  i.e. the colour is in the markup and absent from the paper.
+
+**The block headers are ROTATED for a MEASURED reason.** A batch code is up to 16 characters
+(`MARCH-26-SUNDRY7`) while a block CELL holds at most 7 (`150,000`); horizontal, every block
+column would be 2.3× wider than its own data needs and 25 of them would not fit at any
+legible size. Rotated, the header costs HEIGHT once, as fixed chrome.
+
+**PRICE GATING — inherited, never re-decided.** The sheet renders the payload the page
+already received; `fetchRcMovementMatrix` nulls every ₱ field server-side for a
+`!canViewPrices()` caller and does not even QUERY the actual-price views. The same
+`data.canViewPrices` flag drops the ₱/KG COLUMN, the `₱/KG` footer row and the `ACTUAL ₱`
+footer row from the printed layout entirely. **Verified on a real PDF: a price-denied
+sheet carries TOTAL / YIELD % / LOSS % only.** It fetches nothing and computes nothing —
+every kilogram, price, yield and loss on the page is a field of the payload, formatted.
+
+**The stage is PORTALLED to `<body>`, and that is not a detail.** `printCard` flattens every
+ancestor with `transform: none`, and Tailwind v4 centres an overlay with the INDIVIDUAL
+`translate` property, which `transform: none` does not reset. This route's trigger is an
+ordinary toolbar button, but the Classic matrix is ALSO hosted inside `/operations`' RC FED
+modal, so the portal is what keeps the sheet out of a translated ancestor there.
+
+**How it was verified, and how to re-verify it.** `npx tsx scripts/verify-rc-movement-grid.ts`
+§4 pins the constants, the ceiling arithmetic (re-run through the platform solver, so it
+cannot drift from the sheet) and the gating. The arithmetic it cannot do is render a page,
+so the page count was measured with headless Chrome against
+`/dev/table-playground/rcmprint` — see that route's `page.tsx` for the exact command. The
+mono advance is **0.6120 em measured**, carried as **0.62 rounded UP**: a width derived from
+an under-estimate is a clipped number, which is exactly how the first PDF of this feature
+clipped `DAY` and the tail of `MARCH-26-SUNDRY7`.
+
 **`.frozen-edge-corner` (new in `globals.css`).** `box-shadow` is ONE property, so
 `.frozen-edge` + `.frozen-edge-top` on the same element is not two shadows — the later rule
 wins and the VERTICAL seam silently disappears. The one cell that owes both (the bottom-left
@@ -617,4 +706,5 @@ so the two can still be compared cell-for-cell on the same campaign.
 - [RC OUT](../rc-out/CONTEXT.md) — Source of `rc_out.weight_kg`, `rc_out.transaction_date`, and `rc_out.production_batch` which feed the matrix
 - [Blocking](../blocking/CONTEXT.md) — Sibling visualization showing physical warehouse occupancy. The shared `BlockingDetailPanel` the matrix reuses now lives in `../_shared/` (shell-agnostic), but Blocking still owns its data: `fetchBlockDataForBatch` (batch-accurate header summary for the panel) and `fetchBlockingDetail`/`updateBlockNotes` in `blocking/actions.ts`, plus `BlockData` & friends in `blocking/types.ts`.
 - [Inventory](../CONTEXT.md) — Parent module + route map. RC Movement is a **standalone route** (`/inventory/rc-movement`), not a tab; `page.tsx` → `rc-movement-route-view.tsx` mounts this matrix outside the logs tab shell.
+- [Shared Print](../../../../components/shared/print/CONTEXT.md) — the PLATFORM printing primitives the sheet is built on: `print-fit.ts` (the page-box / row-height / column-width solvers), `print-page-rules.ts` (the injected `@page` block), `group-print.tsx` + `print-card.ts` (the offstage stage and the `window.print()` mechanism). RC Movement is the first caller of the first two.
 - Reference frozen-pane implementation alongside the Cenapro production ledger (`app/(app)/cenapro/production/production-ledger-grid.tsx`)

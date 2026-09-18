@@ -28,6 +28,7 @@ import type {
     RcMovementOpenBlock,
 } from './actions';
 import { ActualPriceToggle } from './actual-price-toggle';
+import { RcMovementPrintControl } from './rc-movement-print';
 import { BlockingDetailPanel, type BlockingDetailNavTarget } from '../_shared/blocking-detail-panel';
 import { fetchBlockDataForBatch } from '../blocking/actions';
 import type { BlockData } from '../blocking/types';
@@ -343,6 +344,18 @@ export function RcMovementMatrix({
                         onChange={onShowActualPriceChange}
                     />
                 ) : null}
+
+                {/* ── PRINT (2026-09-17) ───────────────────────────────────────────
+                    Renzo: *"a similar colored print functionality for rc movement
+                    page. Make sure an entire month can fit inside of landscape A4."*
+
+                    It prints the campaign CURRENTLY ON SCREEN, honouring the `Actual ₱`
+                    switch above it — so the sheet and the screen can never describe
+                    different things. It FETCHES NOTHING: the payload it renders is the
+                    one this component already has, ₱ already nulled server-side for a
+                    price-denied reader, so the print path inherits the gate rather than
+                    re-deciding it. Same placement and look as `/operations`' Print. */}
+                <RcMovementPrintControl data={data} showActualPrice={showActualPrice} />
 
                 {/* ── ACTUAL FED ₱/kg coverage badge ──
                     The actual price only exists for a CLOSED, fully-priced block, so a

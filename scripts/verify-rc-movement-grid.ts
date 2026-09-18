@@ -13,6 +13,13 @@ import assert from 'node:assert'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+// The PLATFORM paper-geometry solver — pure arithmetic, zero imports of its own, which is
+// exactly why it can be imported here. §4 re-runs the printed sheet's OWN fit through it
+// rather than restating the answer, so the pinned ceiling cannot drift from the sheet.
+import {
+  a4LandscapeBox,
+  maxRepeatingColumns,
+} from '../components/shared/print/print-fit'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const MODULE = join(ROOT, 'app', '(app)', 'inventory', 'rc-movement')
@@ -456,6 +463,220 @@ check('the banner says what is ACTUALLY live', () => {
   )
   // …and the two that genuinely are not built stay named.
   assert.match(CODE, /open-blocks dialog/)
+})
+
+// ═══ 4 · THE PRINTED SHEET ════════════════════════════════════════════════════
+//
+// Renzo, 2026-09-17: *"a similar colored print functionality for rc movement page. Make
+// sure an entire month can fit inside of landscape A4."*
+//
+// The one-page promise is ARITHMETIC over a measured glyph width, so it can be pinned
+// here exactly the way the header budget above is: Node has no font engine, so the
+// advance can only be ENFORCED, never re-derived. Everything below was MEASURED with
+// headless Chrome against real PDFs rendered from `app/dev/table-playground/rcmprint`
+// (`pdfinfo` page counts, `pdftoppm` crops at 300dpi) — see the CONTEXT.md print section.
+
+const PRINT = join(MODULE, 'rc-movement-print.tsx')
+const PRINT_SRC = readFileSync(PRINT, 'utf8')
+const PRINT_CODE = stripComments(PRINT_SRC)
+
+/** Pull a numeric `const NAME = 1.23;` out of the print module's own source. */
+function printConst(name: string): number {
+  const m = PRINT_CODE.match(new RegExp(`\\b${name} = (-?[0-9.]+);`))
+  assert.ok(m, `${name} must be a plain numeric constant in rc-movement-print.tsx`)
+  return Number(m![1])
+}
+
+check('the sheet is sized by a MEASURED glyph advance, rounded UP', () => {
+  // Measured in headless Chrome over a 100-glyph run of tabular digits at 100px against
+  // the app's own `font-mono` stack: 0.6120 em (the fixture re-measures it live and
+  // publishes it as `data-fixture-advance`). The constant is carried ROUNDED UP, because
+  // a width derived from an UNDER-estimate is a clipped number — the first PDF of this
+  // feature clipped `DAY` and the tail of `MARCH-26-SUNDRY7` for exactly that reason.
+  const MEASURED_ADVANCE_EM = 0.612
+  const advance = printConst('RCM_MONO_ADVANCE_EM')
+  assert.ok(
+    advance >= MEASURED_ADVANCE_EM,
+    `RCM_MONO_ADVANCE_EM (${advance}) must never be below the measured ${MEASURED_ADVANCE_EM}`,
+  )
+  assert.ok(advance <= 0.65, 'and not so far above it that the sheet wastes a column')
+})
+
+check('the print margin is stated ONCE and the @page rule is derived from it', () => {
+  // `@page` cannot be scoped, so this report takes the app-wide 12mm away for the
+  // duration and gives it back on unmount. The number must reach BOTH the page-box
+  // arithmetic and the injected rule from the same constant, or the sheet is laid out
+  // against a box the printer does not use.
+  assert.equal(printConst('RCM_PRINT_MARGIN_MM'), 7)
+  assert.match(PRINT_CODE, /const PAGE = a4LandscapeBox\(RCM_PRINT_MARGIN_MM\)/)
+  assert.match(PRINT_CODE, /marginMm: RCM_PRINT_MARGIN_MM/)
+  assert.ok(
+    !/marginMm: \d/.test(PRINT_CODE),
+    'the margin must never be written as a literal beside the constant',
+  )
+})
+
+check('the MEASURED one-page ceiling is 26 block columns', () => {
+  // Recomputed HERE with the module's own constants through the SAME platform solver the
+  // sheet runs, so this can never drift from what the sheet does. Verified against real
+  // PDFs: 26 blocks → 1 page, 27 → 2. The widest campaign the yard has ever fed is 32
+  // block columns (MARCH 2026), so the column-pagination path is LIVE, not theoretical.
+  const advanceEm = printConst('RCM_MONO_ADVANCE_EM')
+  const padPx = printConst('PAD_PX')
+  const marginMm = printConst('RCM_PRINT_MARGIN_MM')
+  const fontFloor = 5 // the last rung of FONT_LADDER
+  assert.match(PRINT_CODE, /const FONT_LADDER = \[9, 8\.5, 8, 7\.5, 7, 6\.5, 6, 5\.5, 5\]/)
+
+  const page = a4LandscapeBox(marginMm)
+  /**
+   * The spine of a JULY-2026-shaped sheet. Every `chars` is the LONGEST STRING THAT
+   * COLUMN ACTUALLY RENDERS, measured off the real payload — which is what the solver
+   * itself does, so this is the same question asked the same way:
+   *   rownum `33` · date `2026-06-30` · day `Wed` · fedphp `45.34`
+   *   total `1,639,849` (the grand total, not a day) · produced `716,969` · grade `345,171`
+   * A width guessed from a typical value is how a sheet silently clips; a width guessed
+   * too WIDE here would under-report the ceiling and quietly weaken this assertion.
+   */
+  const spine = (grades: number) => [
+    { key: 'rownum', chars: 2 },
+    { key: 'date', chars: 10 },
+    { key: 'day', chars: 3 },
+    { key: 'fedphp', chars: 5 },
+    { key: 'total', chars: 9 },
+    { key: 'produced', chars: 7 },
+    ...Array.from({ length: grades }, (_, i) => ({ key: `grade${i}`, chars: 7 })),
+  ]
+  const ceilingAt = (grades: number) =>
+    maxRepeatingColumns({
+      fixed: spine(grades),
+      unit: { key: 'block', chars: 7 }, // `150,000`
+      availablePx: page.widthPx,
+      fontPt: fontFloor,
+      padPx,
+      advanceEm,
+    })
+
+  // TWO grades is the case Renzo's worst realistic month presents, and 26 is exactly
+  // where the real PDFs turn over: 26 blocks → 1 page, 27 → 2.
+  assert.equal(ceilingAt(2), 26, 'the one-page ceiling must stay at the measured 26 block columns')
+  // Each additional grade column costs about one block column. Stated so the ceiling is
+  // understood as a function of the data rather than as a single magic number.
+  assert.equal(ceilingAt(1), 27)
+  assert.equal(ceilingAt(3), 25)
+  // And the requirement itself: the worst realistic case Renzo named must fit on ONE sheet.
+  assert.ok(ceilingAt(2) >= 25, 'a 33-day × 25-block campaign must fit one A4 landscape sheet')
+})
+
+check('the split is taken at capacity and the TYPE is re-solved for the page', () => {
+  // Measured: 33 days x 32 blocks splits 16 + 16, and solving the font over the WHOLE
+  // column set pinned both sheets at the 5pt floor — 16 columns of `150,000` sitting in
+  // gutters wide enough for 26. Re-solved against the widest page's own demands they
+  // print at 7pt. Sizing type for columns a sheet does not carry is a legibility bug.
+  assert.match(PRINT_CODE, /const capacityFontPt = Math\.min\(rowFit\.fontPt, widthFit\.fontPt\)/)
+  assert.match(PRINT_CODE, /fontPt: capacityFontPt,/)
+  assert.match(PRINT_CODE, /const fontPt = Math\.min\(rowFit\.fontPt, pageWidthFit\.fontPt\)/)
+  // and the widths must be re-solved against the SAME demand set as the font
+  assert.match(PRINT_CODE, /columns: pageDemands,\s+availablePx: PAGE\.widthPx,\s+ladder: \[fontPt\]/)
+})
+
+check('the FOOTER ROWS are in the row divisor, and are never a <tfoot>', () => {
+  // Chrome REPEATS a `<tfoot>` on every printed page, so a totals row in one reads as a
+  // duplicated total. Measured on the real PDF: `tfoot` count 0, `tbody` row count 38 for
+  // a 33-day sheet — i.e. 33 days + the 5 footer lines, which is also what makes the
+  // vertical solve honest (pinning a footer row at a constant instead is the circularity
+  // that made `/operations`' first attempt miss by exactly one row).
+  assert.ok(!PRINT_CODE.includes('<tfoot'), 'the printed sheet must never use a <tfoot>')
+  assert.match(PRINT_CODE, /const rowCount = data\.rows\.length \+ footers\.length;/)
+  assert.match(PRINT_CODE, /budgetPx: rowBudget,\s+rowCount,/)
+})
+
+check('the print path FETCHES NOTHING and COMPUTES NOTHING', () => {
+  // It renders the payload the page already received. A weighted average recomputed here
+  // would be a second definition of a number SQL already owns.
+  for (const banned of ['fetchRcMovementMatrix', 'createClient', 'use server', 'await ']) {
+    assert.ok(!PRINT_CODE.includes(banned), `the print module must not contain \`${banned}\``)
+  }
+  // The module DOES fold — over COLUMN WIDTHS and over the words of a header label. That
+  // is paper geometry, and it is the whole job. What it must never fold is the DATA: every
+  // kilogram, price, yield and loss on the sheet is a field of the payload, formatted. So
+  // the ban is specific — no reduce/sum over `data.rows` or `data.columns` — rather than a
+  // blanket ban on `reduce(`, which would have been satisfied by renaming a loop.
+  for (const m of PRINT_CODE.matchAll(/(\w[\w.]*)\s*\.reduce\(/g)) {
+    assert.ok(
+      !m[1].startsWith('data.'),
+      `the sheet must not fold the payload — found \`${m[1]}.reduce(\``,
+    )
+  }
+  assert.ok(
+    !/data\.(rows|columns)\.reduce/.test(PRINT_CODE),
+    'totals come from the payload; they are never re-summed here',
+  )
+})
+
+check('the printed sheet inherits the price gate — it never re-decides it', () => {
+  // `fetchRcMovementMatrix` nulls every ₱ field server-side for a `!canViewPrices()`
+  // caller, so there is nothing here to leak; the same flag drops the ₱/kg COLUMN and
+  // both ₱ FOOTER ROWS from the layout entirely. Verified on a real PDF: the price-denied
+  // sheet carries TOTAL / YIELD % / LOSS % only — no ₱ column, no ₱ row.
+  assert.match(PRINT_CODE, /const showFedPrice = data\.canViewPrices;/)
+  assert.match(
+    PRINT_CODE,
+    /if \(showFedPrice\) out\.push\('php'\);\s*if \(showFedPrice && showActual\) out\.push\('actual'\);/,
+    'the ₱ footer rows follow the gate, and ACTUAL follows the gate AND the switch',
+  )
+  // the gate is never re-derived from a role on the client
+  for (const banned of ['hasPermission', 'canViewPrices()', 'getUserRole']) {
+    assert.ok(!PRINT_CODE.includes(banned), `price visibility is never re-decided here (${banned})`)
+  }
+})
+
+check('the toolbar Print button is wired on BOTH grids from the same control', () => {
+  // It prints from the PAYLOAD, not from either grid, so `?grid=v1` and `?grid=v2`
+  // produce a byte-identical sheet. The v2 grid is virtualised — printing IT was never
+  // an option, which is why the sheet is its own plain non-virtualised table.
+  for (const f of ['rc-movement-matrix.tsx', 'rc-movement-grid-v2.tsx']) {
+    const src = stripComments(readFileSync(join(MODULE, f), 'utf8'))
+    assert.match(src, /import \{ RcMovementPrintControl \} from '\.\/rc-movement-print'/, f)
+    assert.match(
+      src,
+      /<RcMovementPrintControl data=\{data\} showActualPrice=\{showActualPrice\} \/>/,
+      `${f} must pass the payload and the live Actual ₱ switch`,
+    )
+  }
+  // and the stage is PORTALLED to <body> — Tailwind v4 centres an overlay with the
+  // INDIVIDUAL `translate` property, which `transform: none` does not reset.
+  assert.match(PRINT_CODE, /createPortal\(/)
+  assert.match(PRINT_CODE, /document\.body,/)
+})
+
+// ═══ 5 · THE SHARED PRINT LAYER IS PLATFORM CODE ══════════════════════════════
+//
+// CLAUDE.md's layer rule: anything under `components/shared/` carries ZERO tenant
+// knowledge. These two modules were written for RC Movement and must not remember it —
+// `/operations` is expected to re-point at them later.
+check('components/shared/print carries no tenant knowledge', () => {
+  const TENANT = [
+    'charcoal', 'campaign', 'batch', 'block', 'supplier', 'delivery', 'flecon',
+    'blackwood', 'ictc', 'cenapro', 'rc_out', 'rcMovement', 'php', '₱', 'kg',
+  ]
+  for (const f of ['print-fit.ts', 'print-page-rules.ts']) {
+    const src = readFileSync(join(ROOT, 'components', 'shared', 'print', f), 'utf8')
+    // Comments may NAME their call sites (that is documentation, not coupling); the CODE
+    // may not. So the tenant sweep runs over the comment-stripped source.
+    const code = stripComments(src).toLowerCase()
+    for (const word of TENANT) {
+      assert.ok(
+        !code.includes(word.toLowerCase()),
+        `${f} must not mention \`${word}\` — components/shared is platform code`,
+      )
+    }
+    assert.ok(!code.includes('@/app/'), `${f} must not import from a tenant module`)
+  }
+  // `print-fit.ts` is PURE arithmetic — no React at all, which is what lets this script
+  // import it and re-run the sheet's own solver above.
+  const fit = readFileSync(join(ROOT, 'components', 'shared', 'print', 'print-fit.ts'), 'utf8')
+  assert.ok(!fit.includes('import'), 'print-fit.ts must have zero imports')
+  assert.ok(!fit.includes('use client'), 'print-fit.ts is not a client module — it is arithmetic')
 })
 
 console.log(`\n${passed} assertions passed.`)
