@@ -134,6 +134,130 @@ export interface BlockingSupplierMap {
   byBlock: Record<string, { supplierCount: number; shares: BlockSupplierShare[] }>;
 }
 
+// ─── Price lens ──────────────────────────────────────────────────────────────
+// "Show me the blocks above market." Two server actions in `actions.ts` over two SQL
+// functions (migration `20260919025729_blocking_price_lens`): one says what market
+// COSTS right now, the other CLASSIFIES the yard against a market price it is given.
+//
+// EVERYTHING BELOW IS PRICE-SENSITIVE, INCLUDING THE BAND INDEX. Knowing a block sits
+// in `[R, +∞)` pins its ₱/kg to within a peso, so there is no price-free half of this
+// payload: both actions refuse a `!canViewPrices()` caller BEFORE touching the
+// database and return `{ ok: false, reason: 'prices_hidden' }`. Never render this for
+// Production, and never try to salvage part of it.
+
+/** Which window "market" is measured over. `manual` is client-side — it needs no basis row. */
+export type BlockingMarketBasisKey = 'this_month' | 'last_month' | 'last_3_months' | 'trailing_days';
+
+/**
+ * One way of answering "what does market cost". `marketPhpKg` is the weighted average
+ * ₱/kg of MARKET-class PRICED deliveries over the window.
+ *
+ * `marketPhpKg` is **null, never 0**, when the window has no priced market kilos (the
+ * 1st of a month before anything arrives). A lens built on ₱0 would call every block
+ * "above market", so treat null as "cannot measure market this way yet" and offer
+ * another basis — do not coerce it.
+ */
+export interface BlockingMarketBasis {
+  basisKey: BlockingMarketBasisKey;
+  marketPhpKg: number | null;
+  /** Kilograms the price is weighted over. 0 is a real answer here (nothing priced). */
+  pricedKg: number;
+  /** MARKET deliveries in the window, priced or not — the price's coverage context. */
+  deliveryCount: number;
+  /** `yyyy-MM-dd`. The window ANCHORS; `trailing_days` has no upper bound in SQL, so a
+   *  future-dated delivery still counts even though `toDate` reads as today. */
+  fromDate: string;
+  toDate: string;
+}
+
+/**
+ * One band of the lens — a half-open ₱/kg interval `[lowerPhp, upperPhp)`.
+ *
+ * `lowerPhp` is null on the FIRST band (open below) and `upperPhp` is null on the LAST
+ * (open above). **Null means OPEN, never zero.** Every band is present even when it
+ * holds no blocks, so a legend can render the whole scale.
+ */
+export interface BlockingPriceBand {
+  /** 0-based, ascending by price. */
+  index: number;
+  lowerPhp: number | null;
+  upperPhp: number | null;
+  blockCount: number;
+  kg: number;
+  /** PERCENT 0–100 of the PRICED population's kilograms. Null when nothing is priced. */
+  kgSharePct: number | null;
+  /** PERCENT 0–100 of the PRICED population's blocks. Null when nothing is priced. */
+  blockSharePct: number | null;
+}
+
+/**
+ * The whole lens, for one market price.
+ *
+ * Checkable invariants the data layer guarantees (and `scripts/verify-blocking-price-lens.ts`
+ * proves against the live database):
+ *   Σ `bands[].blockCount` + `unpriced.blockCount` === `total.blockCount`
+ *   Σ `bands[].kg`         + `unpriced.kg`         === `total.kg`
+ *   Σ `kgSharePct` === 100  and  Σ `blockSharePct` === 100  (over the PRICED population)
+ */
+export interface BlockingPriceLens {
+  /** The market price the bands were built from — echoed back so a UI can label them. */
+  marketPhpKg: number;
+  /** R = floor(market) + 1. 40.23 → 41, 39.8568 → 40, and 40.00 → 41 as well, which is
+   *  what keeps the market price itself inside the "at market" band [R−1, R). */
+  roundedUpPhp: number;
+  /** The whole-peso offsets from R actually used, de-duplicated and ascending. */
+  edgeOffsets: number[];
+  bands: BlockingPriceBand[];
+  /**
+   * `block_loc` → band index. THE map the grid colours a cell from.
+   *
+   * A block is ABSENT from this map when it has no price at all (`avg_php_kg` null or
+   * 0 — the L-008 unpriced placeholder). That is deliberate and is not a gap to patch:
+   * an unpriced block belongs in NO band, so render it in its normal un-lensed style,
+   * never in the cheapest band. `unpriced` says how many there are.
+   */
+  bandByBlock: Record<string, number>;
+  /** Occupied positive-balance blocks with no price — in no band, out of both share
+   *  denominators. */
+  unpriced: { blockCount: number; kg: number };
+  /** Every occupied block with a positive balance — banded plus unpriced. */
+  total: { blockCount: number; kg: number };
+}
+
+/** Why a lens call came back empty. Each maps to a sentence written for a human. */
+export type BlockingPriceLensRefusalReason =
+  /** The caller may not see prices. Hide the whole feature; do not retry. */
+  | 'prices_hidden'
+  /** The chosen basis has no priced market kilos yet — offer another basis. */
+  | 'no_market_price'
+  | 'invalid_market_price'
+  | 'invalid_edge'
+  | 'no_edges'
+  | 'too_many_edges'
+  | 'rpc_error'
+  | 'exception';
+
+export type BlockingMarketBasesResult =
+  | { ok: true; bases: BlockingMarketBasis[]; trailingDays: number }
+  | {
+      ok: false;
+      reason: 'prices_hidden' | 'invalid_trailing_days' | 'rpc_error' | 'exception';
+      message: string;
+    };
+
+export type BlockingPriceLensResult =
+  | { ok: true; lens: BlockingPriceLens }
+  | { ok: false; reason: BlockingPriceLensRefusalReason; message: string };
+
+/** The cap the SQL function enforces on the DE-DUPLICATED edge list. */
+export const BLOCKING_PRICE_LENS_MAX_EDGES = 6;
+/** `p_edge_offsets`' own default — below market / at market / above market. */
+export const BLOCKING_PRICE_LENS_DEFAULT_EDGES: readonly number[] = [-1, 0];
+/** `trailing_days` bounds. SQL clamps to this range; the action refuses outside it. */
+export const BLOCKING_TRAILING_DAYS_MIN = 1;
+export const BLOCKING_TRAILING_DAYS_MAX = 400;
+export const BLOCKING_TRAILING_DAYS_DEFAULT = 30;
+
 // Blend Proposal types (`BlendProposal`, `BlendProposalBlock`) live in `actions.ts`
 // alongside the `buildBlendProposal` server action that produces them — import them
 // from there. They are co-located with the action because the action is their sole

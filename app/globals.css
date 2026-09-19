@@ -670,6 +670,99 @@ input[type=number] {
   box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.65), 0 0 16px rgba(249, 115, 22, 0.4);
 }
 
+/* ─── Blocking LENS bands (the price lens's ramp) ───────────────────────────────
+   A lens marks a cell by BAND, and a band's colour is decided by its POSITION on
+   this ramp — cheapest at stop 0, dearest at stop 6 — by
+   `lens/price-lens-settings.ts::bandRampStop`, so a three-band lens uses stops
+   0 · 3 · 6 and never the ramp's first three. The stops are green → yellow → red,
+   the conventional cost ramp, so "cheap" and "expensive" read without a legend.
+
+   THESE MUST SIT AFTER `.blocking-cell-occupied`, which is the same load-bearing
+   rule the supplier spotlights above carry: same specificity, so SOURCE ORDER
+   decides, and an occupied cell's own background + box-shadow would otherwise win.
+   `scripts/verify-blocking-lens-ui.ts` asserts the ordering.
+
+   TWO THINGS THE MARKING DELIBERATELY DOES:
+   • it TINTS rather than replaces. The hue rides at 22% (light) / 30% (dark) over
+     the cell's existing zinc gradient, so the text contrast the cell already has —
+     including a lab-highlight red on MC/ASH — stays essentially at its baseline.
+     The solid inset ring is what carries the identification.
+   • it is a TINT + RING, which is a different KIND of marking from every spotlight
+     above (a pure glow ring). The two vocabularies are mutually exclusive on screen,
+     but even side by side a lens band could not be mistaken for a status glow.
+
+   NO ANIMATION — these land on up to 238 cells at once, and cells are never
+   animated (Motion rules). Only `opacity`/`box-shadow` transition, exactly as the
+   other spotlights do. */
+
+.lens-band-0 { --lens-hue: 16 185 129; }   /* emerald — cheapest */
+.lens-band-1 { --lens-hue: 132 204 22; }   /* lime */
+.lens-band-2 { --lens-hue: 234 179 8; }    /* yellow */
+.lens-band-3 { --lens-hue: 245 158 11; }   /* amber */
+.lens-band-4 { --lens-hue: 249 115 22; }   /* orange */
+.lens-band-5 { --lens-hue: 239 68 68; }    /* red */
+.lens-band-6 { --lens-hue: 225 29 72; }    /* rose — dearest */
+
+.lens-band-0,
+.lens-band-1,
+.lens-band-2,
+.lens-band-3,
+.lens-band-4,
+.lens-band-5,
+.lens-band-6 {
+  background-image:
+    linear-gradient(
+      135deg,
+      rgb(var(--lens-hue) / 0.22) 0%,
+      rgb(var(--lens-hue) / 0.1) 50%,
+      rgb(var(--lens-hue) / 0.22) 100%
+    ),
+    linear-gradient(135deg, #f0f0f3 0%, #fafafa 50%, #f0f0f3 100%);
+  box-shadow:
+    inset 0 0 0 1px rgb(var(--lens-hue) / 0.85),
+    0 0 0 1px rgb(var(--lens-hue) / 0.35);
+  transition: opacity 150ms ease, box-shadow 150ms ease;
+}
+
+:is(.dark) .lens-band-0,
+:is(.dark) .lens-band-1,
+:is(.dark) .lens-band-2,
+:is(.dark) .lens-band-3,
+:is(.dark) .lens-band-4,
+:is(.dark) .lens-band-5,
+:is(.dark) .lens-band-6 {
+  background-image:
+    linear-gradient(
+      135deg,
+      rgb(var(--lens-hue) / 0.3) 0%,
+      rgb(var(--lens-hue) / 0.14) 50%,
+      rgb(var(--lens-hue) / 0.3) 100%
+    ),
+    linear-gradient(135deg, #27272a 0%, #3f3f46 50%, #27272a 100%);
+  box-shadow:
+    inset 0 0 0 1px rgb(var(--lens-hue) / 0.75),
+    0 0 0 1px rgb(var(--lens-hue) / 0.4);
+}
+
+/* A band the reader ISOLATED. Same hue, louder ring — never a different colour, so
+   "which band is this" and "is this band picked" stay two separate questions. */
+.lens-band-picked {
+  box-shadow:
+    inset 0 0 0 1px rgb(var(--lens-hue) / 0.95),
+    0 0 0 2px rgb(var(--lens-hue) / 0.85),
+    0 0 14px rgb(var(--lens-hue) / 0.45);
+  z-index: 20;
+}
+
+/* The LEGEND swatch and the ratio bar's segments: a solid fill, because a 12px chip
+   and a 12px-tall bar cannot carry a 22% wash. Declared last so it beats the tint
+   rule above on an element that wears both. */
+.lens-band-swatch {
+  background-image: none;
+  background-color: rgb(var(--lens-hue));
+  box-shadow: none;
+}
+
 /* ─── Frozen Panes (sticky rows/columns) ─────────────────────────────────────
    CANONICAL technique for tables that freeze left columns and/or the header row
    while the rest scrolls. A frozen surface sits ON TOP of scrolling content, so
