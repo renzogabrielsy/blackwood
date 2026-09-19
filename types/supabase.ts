@@ -5954,6 +5954,25 @@ export type Database = {
         Returns: Json
       }
       fn_blend_snapshot_hash: { Args: { p_snapshot: Json }; Returns: string }
+      fn_blocking_market_bases: {
+        Args: { p_trailing_days?: number }
+        Returns: {
+          basis_key: string
+          delivery_count: number
+          from_date: string
+          market_php_kg: number
+          priced_kg: number
+          to_date: string
+        }[]
+      }
+      fn_blocking_price_lens: {
+        Args: { p_edge_offsets?: number[]; p_market_php_kg: number }
+        Returns: Json
+      }
+      fn_blocking_price_lens_probe: {
+        Args: { p_trailing_days?: number }
+        Returns: Json
+      }
       fn_bulk_update_deliveries: { Args: { rows: Json }; Returns: undefined }
       fn_bulk_update_usage: { Args: { rows: Json }; Returns: undefined }
       fn_close_batch: { Args: { p_batch_id: string }; Returns: boolean }

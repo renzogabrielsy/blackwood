@@ -11,6 +11,19 @@ import type {
   BlendProposalSaveResult,
   BlendProposalWriteResult,
   BlendProposalVersionResult,
+  BlockingMarketBasis,
+  BlockingMarketBasisKey,
+  BlockingMarketBasesResult,
+  BlockingPriceBand,
+  BlockingPriceLens,
+  BlockingPriceLensResult,
+} from './types';
+import {
+  BLOCKING_PRICE_LENS_DEFAULT_EDGES,
+  BLOCKING_PRICE_LENS_MAX_EDGES,
+  BLOCKING_TRAILING_DAYS_DEFAULT,
+  BLOCKING_TRAILING_DAYS_MAX,
+  BLOCKING_TRAILING_DAYS_MIN,
 } from './types';
 import type { Json } from '@/types/supabase';
 
@@ -1047,5 +1060,322 @@ export async function fetchBlendProposalVersion(
   } catch (err: unknown) {
     console.error('[Blocking] fetchBlendProposalVersion failed:', err);
     return { ok: false, message: 'Could not load that version of the proposal.' };
+  }
+}
+
+// ─── Price lens — DATA LAYER ──────────────────────────────────────────────────
+//
+// Renzo, 2026-09-19: see the blocking grid "ratio'd in highlights based on price
+// filter" — if market is 40.23 then ₱41 and up is above market. Two actions over the
+// two SQL functions added by migration `20260919025729_blocking_price_lens`:
+//
+//   fetchBlockingMarketBases()  what market COSTS right now, four ways
+//   fetchBlockingPriceLens()    classify the yard against a market price you GIVE it
+//
+// Three rules govern this block.
+//
+//   1. THE GATE COMES FIRST, AND IT IS A REFUSAL — NOT A NULLING PASS.
+//      Everywhere else in this file a ₱ field is set to null before the payload
+//      leaves the server. That technique cannot work here: the lens's whole output
+//      IS price information, because band membership pins a block's ₱/kg to within a
+//      peso, and even `bands[].blockCount` describes the price distribution of the
+//      yard. So both actions call the canonical `canViewPrices()` FIRST and return
+//      `{ ok: false, reason: 'prices_hidden' }` WITHOUT TOUCHING THE DATABASE. There
+//      is nothing to null, and a Production user's request never reaches the RPC.
+//
+//   2. NOTHING IS COMPUTED HERE. Market is a weighted average and the bands are
+//      arithmetic over it, so all of it lives in SQL (CLAUDE.md: never compute a
+//      weighted average in TypeScript). These functions validate their inputs,
+//      camelCase the rows, and fold `blocks[]` into the `block_loc → band` lookup the
+//      grid needs per cell. That fold is a re-keying, not an aggregation.
+//
+//   3. A BUSINESS REFUSAL IS DATA, NEVER A THROW. The RPC returns
+//      `{ok:false, reason, message}` written for a human; these actions pass the
+//      message straight through so the UI can hand it to `errorToast()`.
+//
+// Read-only: no writes, no audit logs, no `revalidatePath()`.
+
+const PRICES_HIDDEN_MESSAGE =
+  'The price lens is not available for your role — it describes what each block cost.';
+const LENS_UNREACHABLE_MESSAGE =
+  'Could not reach the database to work out the price lens. Nothing changed — try again.';
+
+/** The `{ok, ...}` envelope `fn_blocking_price_lens` returns. */
+type PriceLensEnvelope = {
+  ok?: boolean;
+  reason?: string;
+  message?: string;
+  market_php_kg?: number | string | null;
+  rounded_up_php?: number | string | null;
+  edge_offsets?: number[] | null;
+  bands?: Array<Record<string, unknown>> | null;
+  blocks?: Array<Record<string, unknown>> | null;
+  unpriced?: { block_count?: number | null; kg?: number | string | null } | null;
+  total?: { block_count?: number | null; kg?: number | string | null } | null;
+} | null;
+
+const lensNum = (v: unknown): number => Number(v ?? 0);
+const lensNumOrNull = (v: unknown): number | null =>
+  v === null || v === undefined ? null : Number(v);
+
+/**
+ * NORMALIZE THE EDGE LIST THE WAY SQL DOES — finite whole numbers, de-duplicated,
+ * ascending — and refuse what it would refuse, so the two can never disagree.
+ *
+ * The one thing that MUST happen here rather than in SQL is the integrality check.
+ * `p_edge_offsets` is declared `int[]`, so Postgres has already rounded `1.5` to `2`
+ * by the time the function body runs and that refusal is structurally unreachable
+ * there. It IS decidable in TypeScript, so it lives here — and it reuses the SQL's
+ * own `invalid_edge` reason rather than inventing a second vocabulary.
+ *
+ * De-duplicating BEFORE the cap (rather than capping the raw length) is what keeps
+ * the two caps identical: `[-1,-1,0,0,1,1,2]` is seven raw offsets but four real
+ * edges, and SQL measures the cap on the collapsed list.
+ */
+function normalizeEdgeOffsets(
+  input: readonly number[] | null | undefined,
+):
+  | { ok: true; edges: number[] }
+  | { ok: false; reason: 'invalid_edge' | 'no_edges' | 'too_many_edges'; message: string } {
+  const raw = input === null || input === undefined ? [...BLOCKING_PRICE_LENS_DEFAULT_EDGES] : input;
+
+  if (!Array.isArray(raw)) {
+    return {
+      ok: false,
+      reason: 'invalid_edge',
+      message: 'Every band edge has to be a whole number of pesos away from market.',
+    };
+  }
+  for (const e of raw) {
+    if (typeof e !== 'number' || !Number.isFinite(e) || !Number.isInteger(e)) {
+      return {
+        ok: false,
+        reason: 'invalid_edge',
+        message: 'Every band edge has to be a whole number of pesos away from market.',
+      };
+    }
+  }
+
+  const edges = Array.from(new Set(raw)).sort((a, b) => a - b);
+
+  if (edges.length === 0) {
+    return {
+      ok: false,
+      reason: 'no_edges',
+      message:
+        'A price lens needs at least one band edge — with none, every block is in the same band and nothing is highlighted.',
+    };
+  }
+  if (edges.length > BLOCKING_PRICE_LENS_MAX_EDGES) {
+    return {
+      ok: false,
+      reason: 'too_many_edges',
+      message: `A price lens takes at most ${BLOCKING_PRICE_LENS_MAX_EDGES} band edges; this one has ${edges.length}.`,
+    };
+  }
+  return { ok: true, edges };
+}
+
+/**
+ * What "market" costs right now, four ways — `this_month` (the default basis),
+ * `last_month`, `last_3_months` and `trailing_days`.
+ *
+ * Market is the weighted average ₱/kg of MARKET-class PRICED deliveries, and the three
+ * calendar bases are SELECTed from `view_analytics_rcin_monthly` inside the RPC so this
+ * number can never disagree with the `/analytics` matrix. The fifth basis the UI offers,
+ * `manual`, is a ₱ the operator types: it needs nothing from this action, and it goes
+ * through the SAME classifier below.
+ *
+ * `bases[].marketPhpKg` is NULL — never 0 — when that window has no priced market
+ * kilos. Offer another basis; do not coerce it to a number.
+ *
+ * PRICE-GATED BY REFUSAL: a `!canViewPrices()` caller gets
+ * `{ ok: false, reason: 'prices_hidden' }` and the database is never queried.
+ */
+export async function fetchBlockingMarketBases(
+  trailingDays: number = BLOCKING_TRAILING_DAYS_DEFAULT,
+): Promise<BlockingMarketBasesResult> {
+  // (1) THE GATE, BEFORE ANYTHING ELSE. Fails closed on any error.
+  let canView = false;
+  try {
+    canView = await canViewPricesGate();
+  } catch {
+    canView = false;
+  }
+  if (!canView) return { ok: false, reason: 'prices_hidden', message: PRICES_HIDDEN_MESSAGE };
+
+  const days = Number(trailingDays);
+  if (
+    !Number.isFinite(days) ||
+    !Number.isInteger(days) ||
+    days < BLOCKING_TRAILING_DAYS_MIN ||
+    days > BLOCKING_TRAILING_DAYS_MAX
+  ) {
+    return {
+      ok: false,
+      reason: 'invalid_trailing_days',
+      message: `The trailing window has to be a whole number of days between ${BLOCKING_TRAILING_DAYS_MIN} and ${BLOCKING_TRAILING_DAYS_MAX}.`,
+    };
+  }
+
+  try {
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc('fn_blocking_market_bases', { p_trailing_days: days });
+
+    if (error) {
+      console.error('[Blocking] fn_blocking_market_bases error:', error);
+      return { ok: false, reason: 'rpc_error', message: error.message || LENS_UNREACHABLE_MESSAGE };
+    }
+
+    // One row per basis. Typed locally rather than leaning on the generated RPC row
+    // type, which declares `market_php_kg: number` and would hide the NULL the
+    // function deliberately returns when a window has no priced market kilos.
+    type BasisRow = {
+      basis_key: string;
+      market_php_kg: number | null;
+      priced_kg: number | null;
+      delivery_count: number | null;
+      from_date: string;
+      to_date: string;
+    };
+
+    const bases: BlockingMarketBasis[] = ((data ?? []) as BasisRow[]).map((r) => ({
+      basisKey: r.basis_key as BlockingMarketBasisKey,
+      // NULL is preserved on purpose — see the type doc. Never `?? 0`.
+      marketPhpKg: lensNumOrNull(r.market_php_kg),
+      pricedKg: lensNum(r.priced_kg),
+      deliveryCount: lensNum(r.delivery_count),
+      fromDate: String(r.from_date),
+      toDate: String(r.to_date),
+    }));
+
+    return { ok: true, bases, trailingDays: days };
+  } catch (err: unknown) {
+    console.error('[Blocking] fetchBlockingMarketBases failed:', err);
+    return { ok: false, reason: 'exception', message: LENS_UNREACHABLE_MESSAGE };
+  }
+}
+
+/**
+ * Classify every occupied block against a market ₱/kg — the lens itself.
+ *
+ * It takes the market price as an ARGUMENT, which is the point: whichever basis the
+ * operator picked (or typed, for `manual`), the banding and classification happen in
+ * ONE place, so "above market" can only ever mean one thing.
+ *
+ * `edgeOffsets` are whole-peso offsets from `R = floor(market) + 1`; the default
+ * `[-1, 0]` gives below market / at market / above market. They are de-duplicated and
+ * sorted here exactly as SQL does, and at most 6 survive.
+ *
+ * A block with NO price is ABSENT from `lens.bandByBlock` and counted in
+ * `lens.unpriced` — render it un-lensed, never in the cheapest band.
+ *
+ * PRICE-GATED BY REFUSAL: a `!canViewPrices()` caller gets
+ * `{ ok: false, reason: 'prices_hidden' }` and the database is never queried. Band
+ * membership alone is a price leak, so there is no partial payload to return.
+ */
+export async function fetchBlockingPriceLens(
+  marketPhpKg: number,
+  edgeOffsets: readonly number[] = BLOCKING_PRICE_LENS_DEFAULT_EDGES,
+): Promise<BlockingPriceLensResult> {
+  // (1) THE GATE, BEFORE ANYTHING ELSE. Fails closed on any error.
+  let canView = false;
+  try {
+    canView = await canViewPricesGate();
+  } catch {
+    canView = false;
+  }
+  if (!canView) return { ok: false, reason: 'prices_hidden', message: PRICES_HIDDEN_MESSAGE };
+
+  // (2) Inputs. The same refusals the RPC would give, in the same words.
+  const price = Number(marketPhpKg);
+  if (marketPhpKg === null || marketPhpKg === undefined || Number.isNaN(price)) {
+    return {
+      ok: false,
+      reason: 'no_market_price',
+      message:
+        'No market price to compare against yet. Pick a different market basis, or type one in.',
+    };
+  }
+  if (!Number.isFinite(price) || price <= 0) {
+    return {
+      ok: false,
+      reason: 'invalid_market_price',
+      message:
+        'The market price has to be a real amount above zero — a price of zero would put every block above market.',
+    };
+  }
+
+  const normalized = normalizeEdgeOffsets(edgeOffsets);
+  if (!normalized.ok) return { ok: false, reason: normalized.reason, message: normalized.message };
+
+  try {
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc('fn_blocking_price_lens', {
+      p_market_php_kg: price,
+      p_edge_offsets: normalized.edges,
+    });
+
+    if (error) {
+      console.error('[Blocking] fn_blocking_price_lens error:', error);
+      return { ok: false, reason: 'rpc_error', message: error.message || LENS_UNREACHABLE_MESSAGE };
+    }
+
+    const res = data as PriceLensEnvelope;
+    if (!res?.ok) {
+      const reason = res?.reason;
+      return {
+        ok: false,
+        // The RPC's own vocabulary, passed through; anything unrecognized is reported
+        // as an rpc_error rather than silently widening the union.
+        reason:
+          reason === 'no_market_price' ||
+          reason === 'invalid_market_price' ||
+          reason === 'invalid_edge' ||
+          reason === 'no_edges' ||
+          reason === 'too_many_edges'
+            ? reason
+            : 'rpc_error',
+        message: res?.message ?? 'The price lens could not be worked out.',
+      };
+    }
+
+    const bands: BlockingPriceBand[] = (res.bands ?? []).map((b) => ({
+      index: lensNum(b.index),
+      // null = OPEN. lensNumOrNull, never `?? 0` — a zero bound would be a real ₱0 edge.
+      lowerPhp: lensNumOrNull(b.lower_php),
+      upperPhp: lensNumOrNull(b.upper_php),
+      blockCount: lensNum(b.block_count),
+      kg: lensNum(b.kg),
+      kgSharePct: lensNumOrNull(b.kg_share_pct),
+      blockSharePct: lensNumOrNull(b.block_share_pct),
+    }));
+
+    // RE-KEY, not aggregate: the grid needs a per-cell lookup, and SQL already decided
+    // which band every block is in. Unpriced blocks are absent from `blocks[]` by
+    // construction, so they are absent here too — which is the contract.
+    const bandByBlock: Record<string, number> = {};
+    for (const b of res.blocks ?? []) {
+      const loc = b.block_loc;
+      if (typeof loc !== 'string' || loc.length === 0) continue;
+      bandByBlock[loc] = lensNum(b.band_index);
+    }
+
+    const lens: BlockingPriceLens = {
+      marketPhpKg: lensNum(res.market_php_kg),
+      roundedUpPhp: lensNum(res.rounded_up_php),
+      edgeOffsets: Array.isArray(res.edge_offsets)
+        ? res.edge_offsets.map((e) => Number(e))
+        : normalized.edges,
+      bands,
+      bandByBlock,
+      unpriced: { blockCount: lensNum(res.unpriced?.block_count), kg: lensNum(res.unpriced?.kg) },
+      total: { blockCount: lensNum(res.total?.block_count), kg: lensNum(res.total?.kg) },
+    };
+
+    return { ok: true, lens };
+  } catch (err: unknown) {
+    console.error('[Blocking] fetchBlockingPriceLens failed:', err);
+    return { ok: false, reason: 'exception', message: LENS_UNREACHABLE_MESSAGE };
   }
 }

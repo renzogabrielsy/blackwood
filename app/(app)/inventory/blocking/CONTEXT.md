@@ -12,9 +12,9 @@ Physical warehouse grid visualization — the digital equivalent of the Excel bl
 
 | File | Description |
 |---|---|
-| `types.ts` | Shared interfaces: **`BlockSupplierShare`** (`{ supplierKey; supplierDisplay; kg; sharePct; deliveryCount }` — one supplier's contribution to one block) and **`BlockingSupplierMap`** (`{ suppliers: Array<{ key; display; blockCount; totalKg }>; byBlock: Record<block_loc, { supplierCount; shares: BlockSupplierShare[] }> }` — the supplier-search payload; `supplierCount` is the VIEW's `supplier_count_in_block`, never `shares.length`, and the whole shape carries NO ₱). Plus `BlockData` (single cell data; `status` is the widened `BlockStatus` = the 4 styled statuses **or** any string, so the RC Movement panel can render a historical CLOSED/FEED batch), `BlockStatus`, `BlockingGridData` (full grid payload with aggregates), `BlockDataForBatch` (`{ blockData: BlockData \| null; canViewPrices }` — return of `fetchBlockDataForBatch`), `DeliveryHistoryRecord` (includes `id`, `mc`, `bd_astm`, `ash`, `cost_basis`), `UsageHistoryRecord`, `BlockingDetailData` (detail panel payload), `FullDeliveryRecord` (full delivery for edit dialog; **`cost_basis: number \| null`** — `null` when role-gated/withheld for non-price-viewers). **Stays in `blocking/`** (tenant domain types); the shell-agnostic detail panel in `_shared/` imports these via `../blocking/types`. |
+| `types.ts` | Shared interfaces: **`BlockSupplierShare`** (`{ supplierKey; supplierDisplay; kg; sharePct; deliveryCount }` — one supplier's contribution to one block) and **`BlockingSupplierMap`** (`{ suppliers: Array<{ key; display; blockCount; totalKg }>; byBlock: Record<block_loc, { supplierCount; shares: BlockSupplierShare[] }> }` — the supplier-search payload; `supplierCount` is the VIEW's `supplier_count_in_block`, never `shares.length`, and the whole shape carries NO ₱). Plus `BlockData` (single cell data; `status` is the widened `BlockStatus` = the 4 styled statuses **or** any string, so the RC Movement panel can render a historical CLOSED/FEED batch), `BlockStatus`, `BlockingGridData` (full grid payload with aggregates), `BlockDataForBatch` (`{ blockData: BlockData \| null; canViewPrices }` — return of `fetchBlockDataForBatch`), `DeliveryHistoryRecord` (includes `id`, `mc`, `bd_astm`, `ash`, `cost_basis`), `UsageHistoryRecord`, `BlockingDetailData` (detail panel payload), `FullDeliveryRecord` (full delivery for edit dialog; **`cost_basis: number \| null`** — `null` when role-gated/withheld for non-price-viewers). **Stays in `blocking/`** (tenant domain types); the shell-agnostic detail panel in `_shared/` imports these via `../blocking/types`. **Also owns the PRICE LENS contract (2026-09-19)**: `BlockingMarketBasisKey`, `BlockingMarketBasis`, `BlockingPriceBand`, `BlockingPriceLens`, `BlockingPriceLensRefusalReason`, `BlockingMarketBasesResult`, `BlockingPriceLensResult`, plus the shared constants `BLOCKING_PRICE_LENS_MAX_EDGES` (6), `BLOCKING_PRICE_LENS_DEFAULT_EDGES` (`[-1, 0]`) and `BLOCKING_TRAILING_DAYS_MIN`/`_MAX`/`_DEFAULT` (1 / 400 / 30) — the SAME numbers the SQL enforces, imported by `actions.ts` rather than re-typed, and pinned to the SQL by `scripts/verify-blocking-price-lens.ts`. **Every one of these shapes is price-sensitive, including a bare band index** — see **Data → Price lens**. |
 | `constants.ts` | `WarehouseConfig` interface (`cols`, `colStart`, `rows`), `WAREHOUSES` constant (A/B/C/D + PCA/PCB), and `STANDARD_WAREHOUSES` (`['A','B','C','D']` — the 220-slot baseline). `colStart` lets PCA/PCB render columns 15-17 with correct labels and `locKey` math |
-| `actions.ts` | Server actions (all price gating now via the canonical `roleCanViewPrices(role)` / `canViewPrices()` from `@/lib/auth` — DUP-2 replaced the former inline `role !== 'Production'` compares): `fetchBlockingGridData()` (queries `view_blocking_grid`, returns grid data with role-gated PHP/KG), **`fetchBlockingSupplierMap(): Promise<BlockingSupplierMap>`** (the supplier-search data layer — reads `view_blocking_block_suppliers` ONCE and folds it into `{ suppliers, byBlock }`; **does NO aggregation** — every kg, share and count comes out of SQL, and the ALL/SOME test is the view's `supplier_count_in_block`; **NOT price-gated on purpose** — the view carries no ₱ column and none derivable, so the payload is safe for Production; failures return an empty map and log, never throw), `fetchBlockingDetail(batchCode, batchId)` (fetches delivery + usage history with delivery IDs + lab results (mc/bd_astm/ash), batch notes, and avg_cost for a specific batch), **`fetchBlockDataForBatch(batchId)`** (batch-accurate `BlockData` header summary for ONE batch_id — queries `batches` + `deliveries` + `rc_out`, **no status/loc filter**, weighted-avg php+lab and `balance = total_in − total_out`, role-gated php; used by the **RC Movement matrix** so it can open the panel for a historical/closed batch that `view_blocking_grid` omits), `fetchSingleDelivery(deliveryId)` (fetches full delivery record for edit dialog and info dialog; **`cost_basis` is role-gated** — resolves the effective role via `getUserRole()` and only includes it for `roleCanViewPrices(role)`, else returns `cost_basis: null` so a Production user never receives the price through the panel's edit/info path; `FullDeliveryRecord.cost_basis` is therefore `number \| null`), `updateBlockNotes(batchId, notes)` (updates `batches.notes`, calls `revalidatePath('/inventory')`), **`buildBlendProposal(blockLocs: string[]): Promise<BlendProposal>`** (Blend Proposal mode — given selected block_locs, queries `view_blocking_grid` for the per-block passthrough rows + calls the `fn_blend_proposal` SQL RPC for the balance-weighted lab/price aggregation; TS does only the ×1.30 product-cost markup; **price-gated via `canViewPrices()`** — nulls `php_kg`/`raw_price_per_kg`/`product_cost_per_kg` and sets `can_view_prices: false` for Production BEFORE returning). **Exports the `BlendProposal` + `BlendProposalBlock` interfaces** (co-located with the action — consumer seam is `import { BlendProposal } from '.../blocking/actions'`). **2026-09-02 — the ×1.30 markup no longer lives here**: `buildBlendProposal` reads `production_loss_pct` from the SQL `fn_blend_production_loss_pct()` RPC (same `Promise.all`, no added latency) so the live what-if and a SAVED snapshot can never disagree about it; output is byte-identical (`raw * (1 + 30/100) === raw * 1.3` verified in IEEE-754). **Also adds the seven BLEND PROPOSAL HISTORY actions** — `saveBlendProposal`, `updateBlendProposalHeader`, `archiveBlendProposal`, `restoreBlendProposal`, `fetchBlendProposalList`, `fetchBlendProposalVersions`, `fetchBlendProposalVersion` — see **Data → Blend Proposal HISTORY** below. **All seven are WIRED as of 2026-09-03**: the reads by `blocking-route-view.tsx` (the saved version) and `blocking-grid.tsx` (the list), the writes by the grid. |
+| `actions.ts` | Server actions (all price gating now via the canonical `roleCanViewPrices(role)` / `canViewPrices()` from `@/lib/auth` — DUP-2 replaced the former inline `role !== 'Production'` compares): `fetchBlockingGridData()` (queries `view_blocking_grid`, returns grid data with role-gated PHP/KG), **`fetchBlockingSupplierMap(): Promise<BlockingSupplierMap>`** (the supplier-search data layer — reads `view_blocking_block_suppliers` ONCE and folds it into `{ suppliers, byBlock }`; **does NO aggregation** — every kg, share and count comes out of SQL, and the ALL/SOME test is the view's `supplier_count_in_block`; **NOT price-gated on purpose** — the view carries no ₱ column and none derivable, so the payload is safe for Production; failures return an empty map and log, never throw), `fetchBlockingDetail(batchCode, batchId)` (fetches delivery + usage history with delivery IDs + lab results (mc/bd_astm/ash), batch notes, and avg_cost for a specific batch), **`fetchBlockDataForBatch(batchId)`** (batch-accurate `BlockData` header summary for ONE batch_id — queries `batches` + `deliveries` + `rc_out`, **no status/loc filter**, weighted-avg php+lab and `balance = total_in − total_out`, role-gated php; used by the **RC Movement matrix** so it can open the panel for a historical/closed batch that `view_blocking_grid` omits), `fetchSingleDelivery(deliveryId)` (fetches full delivery record for edit dialog and info dialog; **`cost_basis` is role-gated** — resolves the effective role via `getUserRole()` and only includes it for `roleCanViewPrices(role)`, else returns `cost_basis: null` so a Production user never receives the price through the panel's edit/info path; `FullDeliveryRecord.cost_basis` is therefore `number \| null`), `updateBlockNotes(batchId, notes)` (updates `batches.notes`, calls `revalidatePath('/inventory')`), **`buildBlendProposal(blockLocs: string[]): Promise<BlendProposal>`** (Blend Proposal mode — given selected block_locs, queries `view_blocking_grid` for the per-block passthrough rows + calls the `fn_blend_proposal` SQL RPC for the balance-weighted lab/price aggregation; TS does only the ×1.30 product-cost markup; **price-gated via `canViewPrices()`** — nulls `php_kg`/`raw_price_per_kg`/`product_cost_per_kg` and sets `can_view_prices: false` for Production BEFORE returning). **Exports the `BlendProposal` + `BlendProposalBlock` interfaces** (co-located with the action — consumer seam is `import { BlendProposal } from '.../blocking/actions'`). **2026-09-02 — the ×1.30 markup no longer lives here**: `buildBlendProposal` reads `production_loss_pct` from the SQL `fn_blend_production_loss_pct()` RPC (same `Promise.all`, no added latency) so the live what-if and a SAVED snapshot can never disagree about it; output is byte-identical (`raw * (1 + 30/100) === raw * 1.3` verified in IEEE-754). **Also adds the seven BLEND PROPOSAL HISTORY actions** — `saveBlendProposal`, `updateBlendProposalHeader`, `archiveBlendProposal`, `restoreBlendProposal`, `fetchBlendProposalList`, `fetchBlendProposalVersions`, `fetchBlendProposalVersion` — see **Data → Blend Proposal HISTORY** below. **All seven are WIRED as of 2026-09-03**: the reads by `blocking-route-view.tsx` (the saved version) and `blocking-grid.tsx` (the list), the writes by the grid. **2026-09-19 — adds the TWO PRICE LENS actions**, `fetchBlockingMarketBases(trailingDays?)` (the four market bases) and `fetchBlockingPriceLens(marketPhpKg, edgeOffsets?)` (band-classify the yard), plus the local `normalizeEdgeOffsets()` helper. **These two are gated DIFFERENTLY from everything else in the file**: they call `canViewPrices()` FIRST and return `{ok:false, reason:'prices_hidden'}` *without querying the database*, because band membership is itself price information and there is nothing to null — see **Data → Price lens** for the full contract. Backend only; no UI consumes them yet. |
 | `page.tsx` | **Standalone route entry (`/inventory/blocking`).** Server component — renders `<BlockingRouteView>` inside a `<Suspense>` (the route view uses `useSearchParams`). Replaced the old "Coming soon" stub. |
 | `blocking-route-view.tsx` | **NEW. Standalone-route host.** Client component owning the grid fetch / loading / error / Retry (repurposed from the deleted `blocking-lazy-tab`) — which now runs `fetchBlockingGridData()` and **`fetchBlockingSupplierMap()` in ONE `Promise.all`** (independent reads of two views; serializing would add the supplier round-trip to time-to-paint, and a failed supplier read returns an empty map by contract so it is never fatal) — the `?block=` URL selection (read via `useSearchParams`, toggled via `router.replace`), and the `onNavigateToBatch` wiring (`router.push('/inventory?tab=deliveries\|usage&search=…&editBatch=…&editView=deliveries\|usage')` — **`editView` discriminates which always-mounted table consumes `editBatch`**, see the editView deep-link contract under Key Behaviors). SHELL-AGNOSTIC — does NOT use `useInventoryTab`. Renders `<BlockingGrid>` controlled. **2026-09-03 — it also owns `?proposal=<id>&v=<n>` AND resolves it**: the two params are written TOGETHER by one `handleProposalLinkChange` (so switching proposals can never leave a stale version number behind, which would ask the server for a version that does not exist on this proposal), a junk `?v=` is treated as ABSENT rather than as version 0, and an effect turns the pair into `savedProposal` / `savedVersions` / `savedLoading` via `fetchBlendProposalVersions` → `fetchBlendProposalVersion`. **The route resolves it because the route owns the params** — the same division `?block=` and the supplier map already follow — which keeps the grid a component that RENDERS a saved proposal rather than one that goes and finds it. The writer is held in a `useRef` so the effect does not refetch every time an unrelated search param moves. |
 | `supplier-search.tsx` | **NEW. The supplier search bar** (`BlockingSupplierSearch` + the `ActiveSupplierSummary` interface it takes). A **cmdk combobox** (shadcn `Command`/`CommandInput`/`CommandList`/`CommandItem`) whose suggestion list is an **absolutely-positioned panel, NOT a `Popover`** — the input stays the focus target, so nothing fights the sticky header for focus and no trap is created. Keyboard-first: typing filters, ↑/↓ moves, **Enter picks the highlighted suggestion**, and **Escape steps BACK one rung at a time** (clear the query → close the list → return to the chip); the Escape handler `stopPropagation`s so stepping back through the search never also closes the detail panel (which listens on the document). Filtering is a **case-insensitive SUBSTRING** match via a custom `filter` prop — deliberately not cmdk's fuzzy scorer — over a value that carries BOTH the canonical key and the display spelling, with a prefix hit outranking a mid-string one. Each suggestion reads `<display>` + a muted `N blocks · X t`. With a supplier active the bar renders an **emerald chip** — `Ornales · 9 blocks (all 5 · some 4)` — whose label re-opens the search and whose `×` clears the filter. Presentational only: it owns no filter state (the grid/route do) and does no aggregation. |
@@ -32,6 +32,13 @@ Physical warehouse grid visualization — the digital equivalent of the Excel bl
 > **Why the two can't collide:** with `loading` and `error` both `undefined` the optimistic branch is unreachable AND the fade class is never computed (`isOptimisticHost = loading !== undefined || error !== undefined`, derived purely from props — deliberately not state, which would mean a setState inside an effect on every open). A `locKey` with no `blockData` and no opt-in still renders the same empty closed shell it always did. The optimistic branch also emits the SAME two children in the SAME positions as the other two render branches (backdrop div, panel div), so React reconciles them as one DOM node and the slide runs straight through the swap. The Blocking grid keeps passing `data={data}` (unchanged); the RC Movement matrix passes `blockData={…}` from `fetchBlockDataForBatch` and omits `data`. **Navigation on "Edit All" — host owns it when provided:** when `onNavigateToBatch` IS supplied (both current routes pass it), the panel calls it and **returns immediately — it does NOT also `router.push`**. (Previously the panel always pushed a `tab=`-less `/inventory?editBatch=…` URL AFTER the host's push; that second push won and clobbered the host's `tab=`/`editView=`, landing "Edit All Usage" on the Deliveries tab.) The panel's own `router.push` + the `blackwood:inventory-navigate` window CustomEvent (exported as `INVENTORY_NAVIGATE_EVENT` + `emitInventoryNavigate()`) now run ONLY on the fallback path (no host hook) — a forward-looking seam for a future in-shell host that renders the panel itself; today nothing exercises it. The on-demand detail fetch keys on `blockData?.batch_id` (not `locKey`). `parseLocKey` is defensive — a non-loc display key (FEED batch code) returns `null` and the "WHSE/Col/Row" subline is hidden. Fetches detail via `fetchBlockingDetail()`. Delivery-card style layout (iPad Mini 6 portrait ~1080px, no scroll to reach delivery history): compact header, 3-col metrics grid (Balance/PHP/KG/Est.Value, role-gated), 7-cell lab row, inline notes, scrollable delivery + usage history. EditDeliveryDialog + DeliveryHistoryDialog (from RC IN) integration. Escape/backdrop to close. **True-weight popover on delivery-history rows:** a tagged delivery (`true_weight_kg != null`) shows a small `Σ` marker beside its weight value (left of the number) that opens the shared `_shared/true-weight-popover.tsx` — display-only true weight / recorded / deduction note, plus a `canViewPrices`-gated effective-₱/kg line. The marker `stopPropagation`s so opening it never fires the row's info-dialog `onClick`. Untagged rows render unchanged. **Print button** (Printer icon, header action group next to Close) calls `handlePrint()`, which builds a **fully self-contained print document** (its own `<html>` + minimal print CSS) from the data the panel already holds (`buildPrintDocument()`) and prints it in a **hidden same-origin iframe** (`printViaIframe()`, now imported from the shared `./print-utils`) — it does NOT toggle or print the live DOM. This keeps the output immune to dark mode, Tailwind, portals, overlays, transforms, and the slide-over's fixed positioning (the previous `@media print` visibility-toggle leaked all of those and printed like a screenshot). The document = title (Block loc — batch), subtitle (WHSE/Col/Row + status), Summary + Quality definition rows, optional Notes, and bordered Delivery + Usage tables, all clean black-on-white with right-aligned numerics. **User-provided text (batch code, supplier, destination, production_batch, notes) is HTML-escaped** via `escapeHtml()` (shared from `./print-utils`) before string interpolation. **All ₱ fields reuse the SAME `canViewPrices && blockData.php !== null` flag the on-screen panel uses** — passed into `buildPrintDocument()`, no role lookup — so a Production user's printout omits PHP/KG, Est. Value, the delivery PHP/KG column, and the usage Avg Price column. The iframe is removed on `afterprint` (with a 60s fallback). Failure to create the iframe surfaces an `errorToast()` (persistent + Copy). |
 | `edit-delivery-dialog.tsx` | **MOVED to `app/(app)/inventory/_shared/edit-delivery-dialog.tsx`** (private dependency of the panel). Edit delivery dialog — opened from delivery row pencil icon. Fetches full delivery via `fetchSingleDelivery()`, form with all delivery fields + collapsible lab results section. Saves via `bulkUpdateDeliveries()` from RC IN actions for audit trail. PHP/KG input is role-gated behind `canViewPrices` (hidden client-side for non-price-viewers); `deliveryToForm` defaults a `null` `cost_basis` (withheld by `fetchSingleDelivery` for Production) to `''` so the form neither crashes nor shows a stale/zero price. Glass effect DialogContent with `animate-modal-enter`. Imports `../blocking/types` + `../blocking/actions`. |
 | `../_shared/blend-proposals-dialog.tsx` | **NEW (2026-09-03). The Proposals LIST dialog** — the history half of the blend feature. A dense `table-fixed` list of every saved proposal, newest-touched first: **Title · Remark (truncated, full text on a shadcn `Tooltip`) · Status pill · v# (`v3 /3`) · Blocks · Balance (tonnes, ACCOUNTING layout — `t` pinned left, number pinned right) · MC · ASH · BD ASTM · Updated · By · Restore**. Explicit pixel widths in a `COLS` const summing to **1098px**, an `overflow-x-auto` wrapper and `max-w-6xl` on the dialog so all 12 columns fit on a desktop and SCROLL rather than crush below it ("never crush, always scroll" — there is deliberately no slack-absorbing `w-auto` column). Client-side search (plain case-insensitive SUBSTRING over title + remark, never a fuzzy scorer) and a **"Show archived" `Switch`**; archived rows render at `opacity-55` with a **Restore** action that `stopPropagation`s past the row click. **Archived rows are filtered CLIENT-SIDE, not refetched** — the list is small, the header badge has to count the live ones anyway, and a row you just archived should not vanish behind a round-trip. Empty state is prose, and it differs by cause (nothing saved yet / no search match / nothing un-archived). **PESO-FREE by construction** (`view_blend_proposal_list` carries no ₱ and none is derivable), so it needs no `canViewPrices()` gate and is safe for Production. Re-exports nothing; imports `BlendStatusPill` from the viewer dialog. |
+| `lens/types.ts` | **NEW (2026-09-19). THE LENS FRAME CONTRACT — pure, no React, no fetch.** `BlockingLensDefinition` (`id`, `label`, `icon`, `blurb`, `canShow`, `Panel`), `BlockingLensPanelProps`, `BlockingLensCapabilities` (`{ canViewPrices }` — the grid's EFFECTIVE flag), and **`BlockingLensClassifier = (block_loc) => { className?, dimmed? } \| null`**, which is the ONE seam between a lens and the grid. It is a FUNCTION rather than a `Record<block_loc, string>` because a lens knows things the grid must not have to learn — that an UNPRICED block belongs in NO band (`null` = *leave the cell exactly as it looks with no lens open*, a third answer distinct from "marked" and "dimmed"), that an empty slot dims only once bands are isolated. Also exports the pure `resolveLensCellClass(classifier, locKey)`, which reuses the shared `.spotlight-dimmed` rather than cloning it, and in which **`dimmed` beats `className`** (a glow ring on a 30%-opacity cell reads as neither). |
+| `lens/registry.ts` | **NEW. The whole lens list, in one array** — `BLOCKING_LENSES` (today exactly `[PRICE_LENS]`), `visibleLenses(caps)` and `resolveLens(id, caps)`. **`resolveLens` returns `null` for an unknown id AND for a lens this reader may not be offered — never the first lens**, so a shared `?lens=price` link hands a Production user the page rather than a substitute lens they did not ask for. See **REGISTERING A SECOND LENS** below. |
+| `lens/lens-panel.tsx` | **NEW. `BlockingLensPanel` — the docked frame every lens renders inside.** DOCKED, NOT MODAL: at `lg`+ a `sticky` 300px column BESIDE the warehouse sections (`shrink-0`, `top-[92px]`, `max-h-[calc(100dvh-108px)]`, own `overflow-y-auto`); below `lg` a bottom **sheet** (`fixed inset-x-2 bottom-2 z-40 max-h-[65dvh]`) using the canonical floating-bar glass. It never covers the grid it exists to light up. Owns the header (lens icon + label + blurb + **Clear** + close), the **tab strip — which renders ONLY when `lenses.length > 1`**, so with one lens registered there is no dead/disabled tab, and the body keyed `key={active.id}` so switching lens UNMOUNTS one and MOUNTS the next (a hook on the definition object would change hook order on a switch — a rules-of-hooks violation, which is why a lens is a component and not a controller hook). **Escape steps back one rung at a time**: the handler bails while `escapeSuppressed` (the grid passes `!!selectedLocKey`, so the detail drawer closes first and the lens on the next press — `supplier-search.tsx`'s idiom) and bails when the event came from a `[data-radix-popper-content-wrapper]`/`[role=dialog]`/`[role=listbox]`, whose own dismiss owns that key press. |
+| `lens/price-lens-panel.tsx` | **NEW. The PRICE lens body + its `PRICE_LENS` registration.** Top to bottom: the **"Market is"** `Select` (This month's / Last month's / Last 3 months / Last N days / **Set a price**), the N box or the typed-₱ box, the market figure in mono (2dp on screen, the full weighted average on `title`) + "rounds up to ₱40" + a quiet coverage line (`566,870 kg priced · 37 deliveries · 2026-09-01 → 2026-09-30`) that makes an early-month thin basis visible; the **stacked ratio bar** with a **kg \| blocks** switch that moves the bar AND the row percentages together; one **toggle row per band** (`aria-pressed`, swatch + label + share + `N blocks · X kg`); a separate muted **unpriced** row; and the **Customize bands** `Collapsible` (cut-line chips with removers, an add box, the cap stated inline rather than a dead button, per-band rename inputs, Reset). **IT COMPUTES NO STATISTIC** — every kg, count, share and band membership is the payload's, the ratio-bar widths ARE the published shares, and there is no `reduce`, no `+=` and no `Math.floor` in the file (R is SQL's). Fetches are **debounced 250 ms and race-safe via a request token**; a refusal KEEPS the previous tint. Exports **`PriceLensAdapter`**, the two-method port onto `fetchBlockingMarketBases`/`fetchBlockingPriceLens`, defaulted to the live actions and injectable only so the gated dev fixture can drive the real component with a static payload. |
+| `lens/price-lens-settings.ts` | **NEW. Pure settings arithmetic** — `PriceLensSettings` (`basis`, `trailingDays`, `manualPrice`, `edgeOffsets`, `bandNames`, `unit`), `DEFAULT_PRICE_LENS_SETTINGS`, `parsePriceLensSettings` (**untrusted, FIELD BY FIELD, falling back per field** — never "one bad key, everything to defaults"), `serializePriceLensSettings` (**defaults OMITTED**, so Reset is a removal), `normalizeEdgeOffsets` / `addEdgeOffset` / `removeEdgeOffset` (±50, max 6, **at least one edge must survive** — and BOTH default edges are removable), `parseManualPriceInput` (positive, finite, ≤2dp — **`0` is refused**, a ₱0 market would put every block above market), `bandEdgeKey` / `bandOffsets`, `priceBandLabel` and `bandRampStop` / `bandRampClass`. **A band name is keyed on the band's two OFFSETS from R, not its index** — keying on the index would silently re-point every name the moment a cut line was added below it. |
+| `lens/use-lens-settings.ts` | **NEW. Per-user lens settings, one document per lens.** localStorage (`bw.blocking_lens_<id>.v1`, written synchronously) + `user_table_settings` under **`module = 'blocking_lens_<id>'`** on a 500 ms debounce, through the shape-agnostic `getUserModuleSettings`/`saveUserModuleSettings` pair. **NO MIGRATION, no new table, no new action.** Four disciplines inherited from `app/(app)/analytics/use-analytics-prefs.ts`: read in an EFFECT (never a lazy initialiser — hydration), every storage touch wrapped, the stored value untrusted (the caller's `parse` runs on BOTH copies), and a failed remote save logged and dropped. **Why not `useTableSettings()`**: that provider is mounted once globally with `tableId='rc_in'` and its document is typed `RcInTableSettings` with a setter per field and no arbitrary-key door — storing a Blocking preference through it would mean filing it in the RC IN row AND widening the RC IN type. Same jsonb column, right door. |
+| `../../../dev/table-playground/pricelens/` | **NEW, KEPT (not deleted).** `page.tsx` + `pricelens-fixture.tsx` — the lens's LOOK RIG, gated exactly like the `rcmprint` sibling (`notFound()` unless `TABLE_PLAYGROUND`, plus `middleware.ts`'s `PUBLIC_PATHS` prefix). It mounts the REAL `BlockingLensPanel` + `PriceLensPanel` (through the adapter port) and the REAL cell classes over a static contract-shaped payload, so the questions Node cannot answer — does the ramp read cheap→expensive, is a lab-highlighted MC still legible on band 3's amber, does the docked column still let the grid scroll at 375px — can be looked at in both themes with no login. `?bands=2|3|4|5|7` seeds the edge offsets **through the same localStorage key a real reader's settings use**; `?unpriced=1` adds unpriced blocks. Holds no data access of any kind. |
 | `CONTEXT.md` | This file |
 
 ## Data
@@ -280,6 +287,324 @@ PDF and its comparison. The proposals LIST and the version RAIL carry no ₱ at 
 so Save / Modify / Edit / Archive are hidden and a one-line note explains it, rather than being
 silently absent or offered and then refused. View, compare, print and PDF all work.
 
+### Price lens — DATA LAYER (2026-09-19, migration `20260919025729_blocking_price_lens`)
+
+> **BACKEND ONLY so far.** The two SQL functions, the two server actions and the types are LIVE
+> and verified; the UI is the next pass. **This section IS the contract** — a UI can be built from
+> it without reading any SQL. Proofs: `npx tsx scripts/verify-blocking-price-lens.ts`
+> (**49 assertions, all passing 2026-09-19**).
+
+**What the owner asked for.** Renzo, 2026-09-19: see the blocking grid *"ratio'd in highlights
+based on price filter"* — e.g. choose "above market": if market (what deliveries currently cost)
+is 40.23, then **₱41 and up is above market**.
+
+**TWO FUNCTIONS, AND THE SPLIT IS THE DESIGN.** One says what market COSTS right now; the other
+TAKES a market price and classifies the yard. The classifier takes the price as an **argument**
+so the `manual` basis (a ₱ the operator types — no server call needed) and all four computed
+bases go through **ONE** band-and-classify implementation. A second classifier for the typed case
+is how "above market" would eventually come to mean two different things.
+
+#### THE PRICE GATE IS A REFUSAL, NOT A NULLING PASS — read this first
+
+Everywhere else on this page a ₱ field is set to `null` before the payload leaves the server.
+**That technique cannot work here.** Band membership alone pins a block's ₱/kg to within a peso,
+and even `bands[].blockCount` describes the price distribution of the yard — so there is no
+price-free half of this payload to hand to Production. Both actions therefore call the canonical
+`canViewPrices()` **FIRST** and return `{ ok: false, reason: 'prices_hidden' }` **without touching
+the database**. The verify script asserts the ORDER inside each action body (gate before
+`createClient()`, gate before `.rpc()`), not merely that the gate appears.
+
+**UI consequence:** on `prices_hidden`, hide the whole lens control — do not retry, do not render
+an empty legend, and do not try to salvage the counts.
+
+#### Action 1 — `fetchBlockingMarketBases(trailingDays = 30)`
+
+```ts
+type BlockingMarketBasisKey = 'this_month' | 'last_month' | 'last_3_months' | 'trailing_days';
+
+interface BlockingMarketBasis {
+  basisKey: BlockingMarketBasisKey;
+  marketPhpKg: number | null;   // NULL, NEVER 0, when the window has no priced market kilos
+  pricedKg: number;             // kilograms the price is weighted over (0 is a real answer)
+  deliveryCount: number;        // MARKET deliveries in the window, priced or not
+  fromDate: string;             // 'yyyy-MM-dd' — window ANCHOR
+  toDate: string;               // 'yyyy-MM-dd' — window ANCHOR
+}
+
+type BlockingMarketBasesResult =
+  | { ok: true; bases: BlockingMarketBasis[]; trailingDays: number }
+  | { ok: false; reason: 'prices_hidden' | 'invalid_trailing_days' | 'rpc_error' | 'exception';
+      message: string };
+```
+
+Returns **exactly four rows**, in this order: `this_month` (**the DEFAULT basis**), `last_month`,
+`last_3_months`, `trailing_days`. `trailingDays` must be a whole number **1..400** (default 30);
+outside that the action refuses `invalid_trailing_days` and the SQL additionally clamps, so a
+stale client can never produce a junk window.
+
+**`marketPhpKg` is NULL — never 0 — when that window has no priced market kilos** (the 1st of a
+month before anything arrives). Treat NULL as *"cannot measure market this way yet"*, offer another
+basis, and **never coerce it**: a lens built on ₱0 would call every block "above market".
+
+#### Action 2 — `fetchBlockingPriceLens(marketPhpKg, edgeOffsets = [-1, 0])`
+
+```ts
+interface BlockingPriceBand {
+  index: number;                 // 0-based, ascending by price
+  lowerPhp: number | null;       // null on the FIRST band = open below.  NULL MEANS OPEN, NOT 0
+  upperPhp: number | null;       // null on the LAST band  = open above
+  blockCount: number;
+  kg: number;
+  kgSharePct: number | null;     // PERCENT 0-100 of the PRICED population; null if nothing priced
+  blockSharePct: number | null;  // PERCENT 0-100 of the PRICED population; null if nothing priced
+}
+
+interface BlockingPriceLens {
+  marketPhpKg: number;           // echoed back, so a legend can label itself
+  roundedUpPhp: number;          // R
+  edgeOffsets: number[];         // the offsets ACTUALLY used, de-duplicated + ascending
+  bands: BlockingPriceBand[];
+  bandByBlock: Record<string, number>;   // block_loc -> band index. THE map a cell colours from
+  unpriced: { blockCount: number; kg: number };
+  total:    { blockCount: number; kg: number };
+}
+
+type BlockingPriceLensResult =
+  | { ok: true; lens: BlockingPriceLens }
+  | { ok: false;
+      reason: 'prices_hidden' | 'no_market_price' | 'invalid_market_price' | 'invalid_edge'
+            | 'no_edges' | 'too_many_edges' | 'rpc_error' | 'exception';
+      message: string };
+```
+
+**THE R RULE.** `R = floor(market) + 1`. Measured on the live functions: **40.23 → 41**,
+**39.8568 → 40**, and **40.00 → 41 as well**. That last case is deliberate and is not an
+off-by-one: rounding up even on a whole number keeps the market price **itself** inside the
+"at market" band `[R−1, R)` rather than promoting it to "above market", because a block priced at
+exactly market is not dearer than market. **R is defined once, in SQL** — the verify script
+asserts no `floor`/`Math.floor` exists in the TypeScript.
+
+**THE BAND MODEL.** `edgeOffsets` are whole-peso offsets from R. They are de-duplicated and sorted
+(in the action **and** in SQL, by the same rule, so the two cannot disagree), **capped at 6**, and
+`k` edges give `k + 1` half-open bands `[lower, upper)` — first open below, last open above, each
+band's `upperPhp` exactly equal to the next band's `lowerPhp` so no price can fall between two
+bands or land in both.
+
+| `edgeOffsets` | bands | meaning |
+|---|---|---|
+| `[-1, 0]` (default) | 3 | `(−∞, R−1)` below market · `[R−1, R)` **at market** · `[R, +∞)` above market |
+| `[-10, -1, 0, 5]` | 5 | `(−∞,R−10)` · `[R−10,R−1)` · `[R−1,R)` · `[R,R+5)` · `[R+5,+∞)` |
+
+**Every band is returned even when it holds no blocks**, so a legend can render the whole scale
+without inventing rows.
+
+**THE UNPRICED RULE — NULL IS NEVER ₱0 (L-008).** The per-block price is
+`view_blocking_grid.avg_php_kg`, the SAME column the cell already displays — the lens invents no
+second block price. That column is `COALESCE(…, 0)`, so a block whose deliveries carry no price
+reads 0, which is the **L-008 unpriced placeholder, not free charcoal**. Such a block is
+**ABSENT from `bandByBlock`**, counted in `lens.unpriced`, and **excluded from both share
+denominators**. **UI rule: render it in its normal un-lensed style — never in the cheapest band.**
+Putting it in "below market" is the ₱11.01-vs-₱39.99 `avg_cost` bug in a new costume.
+
+**Invariants you can rely on** (each proven against the live database every run):
+`Σ bands[].blockCount + unpriced.blockCount === total.blockCount` · the same for `kg` with **gap
+exactly 0** · `Σ kgSharePct === 100` and `Σ blockSharePct === 100` (±1e-9, over the PRICED
+population) · the banded population IS the grid's priced positive-balance blocks · `Object.keys(bandByBlock).length + unpriced.blockCount === total.blockCount`.
+Scope is **occupied blocks with a POSITIVE balance** — a negative balance is misattribution
+(CLAUDE.md records 77 batches carrying −3.22M kg) and has no price story.
+
+**REFUSALS are data, never throws** — pass `message` straight to `errorToast()`:
+
+| `reason` | when | what the UI should do |
+|---|---|---|
+| `prices_hidden` | `!canViewPrices()` | hide the whole feature; never retry |
+| `no_market_price` | the chosen basis has no priced market kilos (its `marketPhpKg` is null) | offer another basis / the manual box |
+| `invalid_market_price` | ≤ 0, NaN or Infinity | fix the typed value |
+| `invalid_edge` | a non-integer or NULL offset | reject the edge input |
+| `no_edges` | empty edge list | keep at least one edge |
+| `too_many_edges` | more than 6 **distinct** offsets | drop one |
+| `rpc_error` / `exception` | database unreachable | `errorToast()` + retry |
+
+> **One deliberate asymmetry, stated because a reader will notice it.** `p_edge_offsets` is
+> declared `int[]`, so Postgres has already rounded `1.5` to `2` before the function body runs and
+> the *non-integer* refusal is structurally unreachable in SQL. It is therefore enforced in the
+> **server action**, which is where it IS decidable, under the SQL's own `invalid_edge` reason
+> rather than a second vocabulary. SQL still refuses a NULL element (same reason), so a direct RPC
+> caller is not unguarded.
+
+**LIVE NUMBERS, measured 2026-09-19** (the market prices are the only ₱ this layer's proofs print):
+
+| basis | market ₱/kg | priced kg | deliveries | window |
+|---|---|---|---|---|
+| `this_month` | 39.8568 | 566,870 | 37 | 2026-09-01 → 2026-09-30 |
+| `last_month` | 39.9698 | 824,027 | 50 | 2026-08-01 → 2026-08-31 |
+| `last_3_months` | 39.1187 | 2,292,401 | 138 | 2026-07-01 → 2026-09-30 |
+| `trailing_days` (30) | 39.9680 | 834,743 | 52 | 2026-08-21 → 2026-09-19 |
+
+On `this_month`, **R = 40**, default edges: below `(−∞,39)` **61 blocks / 3,999,138 kg / 38.1965%
+kg / 36.3095% blocks** · at market `[39,40)` **7 / 446,572 / 4.2653% / 4.1667%** · above `[40,∞)`
+**100 / 6,024,189 / 57.5382% / 59.5238%**. Total **168 blocks / 10,469,899 kg**, **unpriced 0 / 0**
+(so today the unpriced branch is exercised only by the invariants, not by live data — do not read
+that as "it cannot happen").
+
+**Where the numbers come from — nothing with a home is re-derived.** "Market" is the weighted
+average ₱/kg of MARKET-class PRICED deliveries (`fn_delivery_class(...) = 'market'` **and**
+`cost_basis > 0`, `SUM(cost_basis × weight_kg) / SUM(weight_kg)`), and that statistic already lives
+in **`view_analytics_rcin_monthly.market_avg_price`** — so `this_month` and `last_month` **SELECT
+it verbatim** and `last_3_months` divides `Σ market_php_total` by `Σ market_priced_kg` (never the
+mean of three monthly averages). The verify script proves all three against a direct read of that
+view **in the same call**, so the lens and the `/analytics` matrix cannot drift apart. Only
+`trailing_days` reads `deliveries` directly, with the identical predicate and expression, on the
+Asia/Manila calendar date and with **no upper bound** so a future-dated delivery is never invisible
+(hence `toDate` reads as today but is an ANCHOR, not a filter).
+
+**Posture.** Both functions are `STABLE`, `SECURITY INVOKER`, `SET search_path = public`, EXECUTE
+revoked from `PUBLIC` + `anon`, granted to **`authenticated` only** — and **NOT `service_role`**
+(no sync worker calls them, so `verify-worker-view-grants` stays at 4 views / 0 findings, confirmed
+after this migration). Proven by really calling them as `anon` and as `service_role` and requiring
+both to be refused (L-043: prove a permission by assuming the victim's role).
+
+**Cost, measured before any proof was written** (the 2026-09-14 rule — `set local
+statement_timeout='5s'` then `EXPLAIN (ANALYZE, BUFFERS)`): `fn_blocking_price_lens` **13.5 ms**
+warm (85.4 ms / 1,939 buffers before the `MATERIALIZED` CTE hints, 4.8 ms / 454 after — the grid is
+now scanned exactly once); `fn_blocking_market_bases(30)` **105.9 ms** (330.7 ms / 1,291 buffers
+before reading the analytics view once, 133.4 ms / 176 after); the 400-day trailing ceiling 21.9 ms
+/ 97 buffers on its own. **The `MATERIALIZED` hints are load-bearing, not decoration** — `blk` is
+read by four downstream CTEs and `months` by three, and an inlined CTE is re-executed per
+reference. Both populations are bounded BY CONSTRUCTION (one row per occupied block, 238 slots
+maximum; the delivery window clamped to 400 days), so neither can grow into a whole-history scan.
+
+**The verify script reaches the functions through a probe, and why.** Both are
+`authenticated`-only by design and no verify script holds a user JWT, so
+**`fn_blocking_price_lens_probe(int)`** (SECURITY DEFINER, `service_role` **only**, never
+`authenticated`, never `anon`) is the access bridge — the same idiom as
+`fn_ops_ledger_verify_campaign`. **It asserts nothing**: it calls the two functions a fixed number
+of times, reads the same statistics independently, and hands everything back so every assertion
+lives in readable TypeScript. It is deliberately NOT a whole-database verifier (the 2026-09-14
+`fn_ops_ledger_verify()` incident took the live site down).
+
+**Per-user lens CONFIG is the FRONTEND's job and needs NO migration.** The chosen basis, the
+trailing-day N, a manual ₱, the edge offsets and any band names/colours belong in the existing
+**`user_table_settings`** JSONB under the blocking module via `useTableSettings()` — that column is
+a free-form `settings` jsonb with no per-key schema and no CHECK constraint, so an extra key needs
+no schema change. **No table was added for it.** (Shipped 2026-09-19 through
+`getUserModuleSettings`/`saveUserModuleSettings` under `module = 'blocking_lens_price'` rather than
+through `useTableSettings()` itself — same column, and the reason for the difference is recorded in
+`lens/use-lens-settings.ts`'s header and in the Files table above.)
+
+### Price lens — UI (2026-09-19)
+
+> **SHIPPED.** The data layer above is consumed by a **reusable LENS FRAME**: a docked panel with a
+> registry, of which **Price is the first and today the only** lens. Supplier and Age are the two
+> the owner named next and are NOT built — see **REGISTERING A SECOND LENS** at the end.
+> Proofs: `npx tsx scripts/verify-blocking-lens-ui.ts` (static + pure-function) beside
+> `npx tsx scripts/verify-blocking-price-lens.ts` (the live data layer, 49).
+
+**Entry point.** A **Highlight** button (Highlighter icon + an ON/OFF pill, styled exactly like the
+Prices and Blend Proposal toggles beside it) in the sticky header. It opens a **DOCKED PANEL, not a
+modal** — a modal would cover the grid the lens exists to light up.
+
+**Docking.** At `lg`+ the warehouse sections and the panel are a flex ROW: the grid column is
+`min-w-0 flex-1`, the panel a `shrink-0` 300px `sticky` column. **`min-w-0` is load-bearing** — it
+is what makes the grid column GIVE when the panel takes its width, and because each warehouse
+section already carries its own `overflow-x-auto` and `.blocking-grid-cols` already floors every
+track at 104px, it gives by SCROLLING, never by crushing a cell ("never crush, always scroll" is
+preserved, not dodged). Below `lg` the panel becomes a bottom sheet and the page is a single column
+again.
+
+**Grid behaviour.**
+
+| State | Every cell |
+|---|---|
+| Lens open, **no band picked** | Every PRICED occupied block wears its band's tint + ring. This IS the "ratio'd" view. Unpriced blocks and empty slots are left exactly as they look with no lens open — nothing is dimmed, because the picture is a distribution and not a filter. |
+| Lens open, **≥1 band picked** | The picked bands keep their tint and gain `.lens-band-picked` (a louder ring, same hue). **Everything else — occupied, empty, and unpriced — takes the shared `.spotlight-dimmed`.** |
+| Clear / close / Escape | All lens styling goes. |
+
+**THE UNPRICED RULE IS THE ONE THAT MATTERS.** A block with no price is ABSENT from
+`lens.bandByBlock`; the classifier returns `null` for it, which the grid renders as *un-lensed*.
+Painting it as the cheapest band would be the ₱11.01-vs-₱39.99 `avg_cost` bug in a new costume. It
+is reported on its own muted row (`No price yet — N blocks, X kg`), never inside a band and never
+as ₱0.
+
+**Panel body, top to bottom.** (1) the **Market is** select + the figure + "rounds up to ₱R" + a
+quiet coverage line (priced kg / delivery count / window) so an early-month thin basis is visible;
+a basis with a NULL market says so plainly and points at the other bases and the typed box.
+(2) one **toggle row per band** — swatch, auto label (`Below market, under ₱39` / `At market,
+₱39.00 to ₱39.99` / `Above market, ₱40 and up`, with `₱45 and up`-style labels for extra bands
+unless the reader named them), share %, and `N blocks · X kg` on a second quiet line. (3) a
+**stacked ratio bar** with a **kg | blocks** switch that changes the bar AND the row percentages
+together. (4) the unpriced row. (5) **Customize bands**.
+
+**NOTHING IS SUMMED IN TYPESCRIPT.** Every kilogram, count, share and membership is the server
+payload's, rendered verbatim; the ratio-bar segment widths ARE the published shares (which SQL
+guarantees sum to 100). There is no `reduce`, no `+=` and no `Math.floor` in any lens file —
+`verify-blocking-lens-ui.ts` asserts the absence, because a re-derivation would type-check
+perfectly and let the picture disagree with the bands it describes.
+
+**Customize bands.** A disclosure: add a cut line (an integer −50…+50 ₱ from the rounded market),
+remove one (**including the default −1 and 0** — at least one edge must survive, because with none
+there is a single band holding the whole yard, which is the same picture as no lens), rename a band,
+and Reset. The **6-edge cap is stated inline** rather than shown as a disabled button with no
+explanation. **A band name is keyed on the band's two OFFSETS from R, not its index**, so a name
+follows its own interval instead of jumping to a different slice of the yard when a cut line is
+added below it. Band colours are assigned by POSITION across the ramp and are not user-picked in v1.
+
+**MUTUAL EXCLUSIVITY — the lens JOINS the existing rule.** Opening a lens resets `statusFilter` to
+`ALL` and clears the supplier search; clicking any status/lab chip or choosing a supplier closes the
+lens. Only ONE marking vocabulary is ever on screen, so a band tint can never be read as a status
+glow or a supplier ring. On a cell the precedence is **lens → supplier → status** (belt-and-braces;
+the exclusivity means the later two are already inactive). **Blend Proposal is unaffected** — a
+blend-selected cell keeps its `ring-2 ring-primary` and its checkmark badge over a lens tint exactly
+as it does over the supplier ring.
+
+**PRICE GATING.** The button renders only when at least one lens `canShow`s, and `PRICE_LENS.canShow`
+is `caps.canViewPrices` where `caps` is built from the grid's **EFFECTIVE** flag
+(`serverCanViewPrices && showPrices`). So a Production user never sees the button while Price is the
+only lens; once a peso-free lens exists the button stays for every role and only the Price tab is
+absent. Flipping the page's **Prices toggle OFF while the lens is open closes it and clears every
+tint on the same interaction** — and that is implemented against the REGISTRY (`lensId && !activeLens`),
+not against the price flag, so a future lens with a different `canShow` gets the behaviour for free.
+A `prices_hidden` refusal from either action closes the panel **quietly** — no toast, no retry, no
+empty legend: it is a fact about the reader, not an error they can act on. The panel additionally
+returns `null` if it is ever rendered without the flag. The security boundary remains the SERVER:
+both actions refuse before touching the database.
+
+**Deep link.** `?lens=price`, driven by `blocking-route-view.tsx` exactly as `?block=` /
+`?supplier=` / `?proposal=` are (optimistic + `useTransition`, because the route is dynamic). **Band
+selection is deliberately NOT in the URL** — it is a moment of looking, not a statement worth
+sharing, and it resets when the cut lines move.
+
+**Errors.** A `{ok:false}` refusal renders as an INLINE banner with a **Copy** button and a Retry
+(the project's error HARD RULE, satisfied by a banner because a refusal about this panel's own
+settings would be homeless as a toast the moment the panel closed) — and the **previous tint stays**,
+because a refusal about new settings is not a reason to blank the picture on screen. A thrown error
+goes to `errorToast()`. No lens file calls sonner's `toast.error` directly.
+
+**Keyboard / a11y.** Band rows are real `<button>`s with `aria-pressed`; the kg|blocks pair is a
+`role="group"` of `aria-pressed` buttons; the ratio bar is `role="img"` with an `aria-label` naming
+every band and its share (its accessible text alternative); the tab strip is a real
+`role="tablist"`. **Escape closes the lens and nothing else**: the handler defers while the detail
+drawer is open (so Escape closes the drawer first and the lens on the next press — the
+`supplier-search.tsx` step-back idiom) and defers to any Radix popper/dialog/listbox the key press
+belongs to.
+
+#### REGISTERING A SECOND LENS
+
+Three steps, and **nothing in `blocking-grid.tsx`, `blocking-route-view.tsx` or `globals.css` moves**:
+
+1. Write `lens/<id>-lens-panel.tsx` exporting a component that takes `BlockingLensPanelProps` and
+   publishes a `BlockingLensClassifier` through `onClassifierChange` (return `null` from the
+   classifier for any cell that should stay un-lensed).
+2. Export a `BlockingLensDefinition` beside it — `id`, `label`, `icon`, `blurb`, `canShow`, `Panel`.
+   A peso-free lens reads `canShow: () => true`.
+3. Add it to `BLOCKING_LENSES` in `lens/registry.ts`.
+
+It then gets, for free: a tab in the strip (which appears the moment there is more than one lens),
+the docking and the bottom-sheet behaviour, per-user settings under `blocking_lens_<id>` via
+`useLensSettings`, the Escape handling, the `?lens=<id>` deep link, the mutual exclusivity with the
+status and supplier spotlights, and the Clear/close lifecycle. A lens with its own colours adds its
+own CSS classes; the `.lens-band-*` ramp belongs to the price lens and is not shared.
+
 ## State Management
 
 | State | Type | Default | Purpose |
@@ -296,6 +621,8 @@ silently absent or offered and then refused. View, compare, print and PDF all wo
 | `editing` | `BlendEditingContext \| null` | `null` | The Modify session: `proposalId`, `title`, `notes`, **`expectedVersionNo`** (the compare-and-set token captured when Modify started), `fromVersionNo` (what the pill shows) and the `BlendResolution` behind the "no longer hold the proposed batch" notice. Cleared when blend mode toggles off, on the pill's ×, and after a successful v(N+1) |
 | `headerBusy` / `saving` / `listBusyId` | `boolean` / `boolean` / `string \| null` | `false` / `false` / `null` | In-flight flags for the header patch + archive, for a save, and for a per-row Restore |
 | `proposalId` / `savedProposal` / `savedVersions` / `savedLoading` | props | `null` / `null` / `[]` / `false` | NOT grid state — driven from **`?proposal=<id>&v=<n>`** by `blocking-route-view.tsx`, which also RESOLVES them into a version (same division as `?block=` and the supplier map) |
+| `lensId` | prop (`string \| null`) | `null` | **Which HIGHLIGHT LENS panel is open.** NOT grid state — driven from **`?lens=<id>`** by `blocking-route-view.tsx`, the same optimistic `useOptimistic`-inside-`useTransition` shape as `?block=` / `?supplier=` / `?proposal=`. Resolved through the registry (`resolveLens`), so an unknown id — or one this reader may not be offered — opens nothing rather than a substitute. Band selection inside a lens is deliberately NOT a param |
+| `lensClassifier` | `{ fn: BlockingLensClassifier \| null }` | `{ fn: null }` | The open lens's published classifier — the ONE thing the grid knows about a lens. Wrapped in a one-key object because a bare `useState<fn>` would treat the classifier as a state UPDATER and call it with the previous value. Cleared by `closeLens()` AND by the panel's own unmount effect, so no tint can outlive the panel |
 | `showPrices` | `boolean` | `true` | **Price-visibility display preference** (the "Prices" Eye/EyeOff toggle). Persisted to `localStorage` key **`blocking_show_prices`** (`'false'` = hidden; anything else = shown). Hydrated from storage in a post-mount `useEffect` (state starts `true` to avoid SSR/CSR hydration mismatch). HIDE-ONLY — the effective price flag is `serverCanViewPrices && showPrices`, so it can never reveal beyond the server gate |
 
 ## Key Behaviors
@@ -306,7 +633,8 @@ silently absent or offered and then refused. View, compare, print and PDF all wo
 - **Clickable status badges** — Stored (blue), In-Use (amber), Sundrying (orange), Sundried (violet), Empty (muted) buttons in global header and warehouse headers. Click toggles spotlight filter, click again deselects to ALL
 - **Lab quality filters** — Wet (blue, MC exceeds limit) and Ashy (amber, ASH exceeds limit) buttons in global header after status badges, separated by a divider. Use lab highlight settings from `useTableSettings()` to determine which cells match. When filter is active on empty cells, they are always dimmed
 - **Supplier search + supplier spotlight** — Type a supplier, hit Enter, and every block that supplier filled lights up: **GREEN (`.spotlight-supplier-all`) when the block is ENTIRELY theirs, ORANGE (`.spotlight-supplier-some`) when they share it**, everything else — occupied or empty — takes the existing `.spotlight-dimmed`. **The ALL/SOME test is `byBlock[loc].supplierCount === 1`, i.e. the view's own `supplier_count_in_block`; never `shares.length`.** Data comes from `fetchBlockingSupplierMap()` (see Data); the grid does no aggregation, only a count of map entries for the chip's "all N · some M". Every occupied cell also carries a native `title` with its supplier mix (`ORNALES 62% · PAQUIBOT 38%`) whether or not a search is active — cheap, and it answers "who is in this block" on hover.
-- **The two spotlights are MUTUALLY EXCLUSIVE** — picking a supplier resets `statusFilter` to `ALL`; clicking any status/lab chip (global header or warehouse header) clears the supplier. Only one spotlight vocabulary is ever on screen, so a green ring can never be mistaken for a status color. **Blend Proposal is unaffected**: a blend-selected cell keeps its checkmark badge over the supplier ring (verified). Note the supplier ring is unlayered CSS and therefore beats Tailwind's layered `ring-2` on the same cell — the checkmark is what marks the selection there, exactly as the pre-existing status spotlight already behaved.
+- **Highlight lens (the docked panel)** — a **Highlight** button in the sticky header opens a DOCKED panel (a 300px sticky column beside the grid at `lg`+, a bottom sheet below it), never a modal. **Price** is the only lens registered today; the frame handles N and renders no tab strip until there is more than one. With nothing picked every PRICED occupied block wears its band's tint+ring (the "ratio'd" view) and unpriced/empty cells are left alone; picking band rows isolates them and dims everything else with the shared `.spotlight-dimmed`. **An UNPRICED block is never painted as the cheapest band** — it is absent from `bandByBlock`, the classifier returns `null`, and it is reported on its own muted row. All band totals, shares and membership come from SQL; no lens file sums a kilogram. Settings (basis, N, typed ₱, cut lines, band names, kg/blocks) persist per user under `user_table_settings` `module = 'blocking_lens_price'` and are treated as UNTRUSTED on read. Deep link `?lens=price`. Full section: **Price lens — UI** above.
+- **The THREE markings are MUTUALLY EXCLUSIVE** — opening a lens resets `statusFilter` to `ALL` and clears the supplier; clicking any status/lab chip or choosing a supplier CLOSES the lens; picking a supplier resets `statusFilter` to `ALL`; clicking any status/lab chip (global header or warehouse header) clears the supplier. Only one spotlight vocabulary is ever on screen, so a green ring can never be mistaken for a status color. **Blend Proposal is unaffected**: a blend-selected cell keeps its checkmark badge over the supplier ring (verified). Note the supplier ring is unlayered CSS and therefore beats Tailwind's layered `ring-2` on the same cell — the checkmark is what marks the selection there, exactly as the pre-existing status spotlight already behaved.
 - **Search bar placement** — **Desktop (sm+): the leftmost cluster INSIDE the sticky header's chip row** (it is a text entry, so it reads as the start of the filter row). **Phone (below sm): its own full-width row ABOVE the sticky header** — it cannot live inside the header there, because the mobile header is a `flex-nowrap overflow-x-auto` strip and `overflow-x: auto` computes overflow-y to auto too, which would clip the suggestion panel inside a scrolling box. The component is therefore rendered TWICE (one `max-sm:hidden`, one `sm:hidden`), which is deliberate: filter state lives in the URL, so the two instances cannot disagree — but a DOM query for the input matches two nodes, so tests must qualify with `:visible`.
 - **Spotlight effect** — When status/lab filter active: non-matching cells get `opacity: 0.3; pointer-events: none` (`.spotlight-dimmed`), matching cells get colored glow ring (`.spotlight-stored`, `.spotlight-in-use`, `.spotlight-empty`, `.spotlight-wet`, `.spotlight-ashy`). All transitions 150ms
 - **Sticky global header** — `sticky top-0 z-30` with glass effect `bg-card/95 backdrop-blur-sm`. Has a **condensed variant on short viewports** — see the phone-landscape bullet below
@@ -370,12 +698,19 @@ The blocking system is defined at the bottom of `app/globals.css`:
 - `.spotlight-supplier-all` — **emerald** glow ring: the block is ENTIRELY the searched supplier (`supplierCount === 1`), `.dark` variant stronger
 - `.spotlight-supplier-some` — **orange** glow ring: the block holds the searched supplier alongside others, `.dark` variant stronger
   > Both sit AFTER `.blocking-cell-occupied` in `globals.css`, which is load-bearing: same specificity, so source order decides, and an occupied cell's own `box-shadow` would otherwise win. (That is exactly why the pre-existing `.spotlight-stored`/`-in-use`/… — declared BEFORE it — show their glow only on EMPTY cells.) Both are plain `box-shadow`, no animation: cells are never animated.
+- **`.lens-band-0` … `.lens-band-6`** — the PRICE LENS's colour ramp, cheapest (emerald) → dearest (rose) through lime/yellow/amber/orange/red. Each stop declares only a `--lens-hue` triple; ONE shared rule then paints the marking, so the ramp is data and the look lives in one place. A band's stop is chosen by POSITION (`lens/price-lens-settings.ts::bandRampStop`), so a three-band lens uses stops **0 · 3 · 6** and never the ramp's first three.
+  - **It TINTS rather than replaces**: the hue rides at 22% (light) / 30% (dark) alpha over the cell's existing zinc gradient, so the text contrast the cell already has — including a lab-highlight red on MC/ASH — stays essentially at its baseline. The solid inset ring carries the identification.
+  - It is a **tint + ring**, a different KIND of marking from every `.spotlight-*` above (a pure glow ring), so even side by side a band could not be read as a status glow. Both themes; plain `background-image`/`box-shadow`; **no animation** (these land on up to 238 cells at once), only the same `opacity`/`box-shadow` transition every spotlight uses.
+  - **`.lens-band-picked`** — a band the reader isolated: same hue, louder ring. **`.lens-band-swatch`** — a solid fill for the legend chips and the ratio-bar segments, which cannot carry a 22% wash.
+  > **All nine rules sit AFTER `.blocking-cell-occupied`**, for exactly the reason the supplier spotlights do, and `.lens-band-picked` / `.lens-band-swatch` sit after the seven stops because they override them. `scripts/verify-blocking-lens-ui.ts` asserts the whole ordering — moved above, the tints silently lose to the cell's own background and the lens paints nothing, with no runtime symptom at all.
 
 > **Print is NOT in `globals.css`.** The Blocking detail printout is fully self-contained in `blocking-detail-panel.tsx` (`buildPrintDocument()` ships its own inline print CSS inside the generated iframe document). No print rules live in `globals.css` — the earlier `@media print` / `.print-only` / `#blocking-print-root` approach was removed because toggling the live DOM leaked dark-mode/Tailwind/transforms and printed like a screenshot.
 
 ## Prop Chain (Spotlight)
 
-`BlockingGrid` (owns `statusFilter`, reads `labHighlights` from `useTableSettings()`, receives `supplierFilter`/`supplierMap` as props) -> `WarehouseSection` (gets `statusFilter`, `onToggleStatus`, `labHighlights`, `supplierKey`, `supplierByBlock`) -> `WarehouseRow` (gets `statusFilter`, `labHighlights`, `supplierKey`, `supplierByBlock`) -> `OccupiedCell` (gets the final `spotlightClass` — the supplier class when a supplier is active, else the status one — plus `supplierMix` for the title and `labHighlights` for MC/ASH text colors) / `EmptyCell` (gets the same resolved `spotlightClass`)
+`BlockingGrid` (owns `statusFilter` + `lensClassifier`, reads `labHighlights` from `useTableSettings()`, receives `supplierFilter`/`supplierMap`/`lensId` as props) -> `WarehouseSection` (gets `statusFilter`, `onToggleStatus`, `labHighlights`, `supplierKey`, `supplierByBlock`, **`lensClassifier`**) -> `WarehouseRow` (gets `statusFilter`, `labHighlights`, `supplierKey`, `supplierByBlock`, **`lensClassifier`**) -> `OccupiedCell` (gets the final `spotlightClass` — **`lensClass ?? supplierClass ?? statusClass`**, in that precedence — plus `supplierMix` for the title and `labHighlights` for MC/ASH text colors) / `EmptyCell` (gets the same resolved `spotlightClass`)
+
+**The lens half of that chain, sideways:** the open lens's PANEL owns its own settings and its own fetches and publishes one function upward — `onClassifierChange(classifier)` -> `BlockingLensPanel` passes it straight through -> `BlockingGrid` holds it in `lensClassifier` -> `WarehouseRow` calls `resolveLensCellClass(lensClassifier, locKey)` per cell. The grid therefore knows no band, no price and no basis, which is what makes a second lens a registration rather than another branch in `blocking-grid.tsx`.
 
 ## Dependencies
 
@@ -394,7 +729,10 @@ The blocking system is defined at the bottom of `app/globals.css`:
 - `date-fns` (`format`) — `yyMMdd` filename date + `yyyy-MM-dd` subtitle in the blend PDF
 - `../_shared/print-utils` — shared `escapeHtml`/`peso`/`printViaIframe`/`PRINT_CSS` used by BOTH the detail-panel printout and the blend-proposal printout
 - `@/components/shared/detail-drawer-skeleton` — platform-layer `Skeleton` primitive + `DetailDrawerSkeletonBody` / `DetailDrawerSkeleton` (the drawer skeleton the panel renders in its opt-in `loading` state, and the shell a lazily-imported host uses as its Suspense fallback). Zero tenant knowledge — the geometry/easing/z-index of `DetailDrawerSkeleton`'s shell is kept byte-identical to the panel's own so a chunk-resolve swap is a content swap, not a jump
-- `@/lib/toast` — `errorToast()` for the Build Proposal failure path (persistent + Copy)
+- `@/lib/toast` — `errorToast()` for the Build Proposal failure path (persistent + Copy), and for a THROWN error in the price lens (a `{ok:false}` refusal uses the lens panel's inline Copy banner instead)
+- `@/lib/actions/table-settings` — **`getUserModuleSettings` / `saveUserModuleSettings`**, the shape-agnostic per-(user, module) jsonb pair, used by `lens/use-lens-settings.ts` under `module = 'blocking_lens_<id>'`. NO migration, no new table, no new action
+- `@/components/ui/select`, `@/components/ui/collapsible` — the price lens's "Market is" basis picker and its "Customize bands" disclosure
+- `lucide-react` (lens) — `Highlighter` (the header button), `Coins` (the Price lens's icon), `Sliders`, `Plus`, `RotateCcw`, `Copy`, `Loader2`, `X`
 - `@/components/ui/dialog` — Shadcn Dialog for edit delivery dialog
 - `@/components/ui/tooltip` — Tooltip for Edit All button and metric hover (in detail panel)
 - `@/components/ui/button`, `@/components/ui/input`, `@/components/ui/label` — form components in edit dialog

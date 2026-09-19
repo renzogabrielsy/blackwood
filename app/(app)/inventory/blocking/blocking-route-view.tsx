@@ -122,6 +122,29 @@ export function BlockingRouteView() {
         [router, pathname, searchParams, setOptimisticSupplier],
     );
 
+    // ── URL-driven HIGHLIGHT LENS (`?lens=<id>`) ──
+    // Same shape as `?supplier=` above, for the same reason. `/inventory/blocking?lens=price`
+    // is a shareable link that opens the panel; an id the reader may not be offered
+    // (Production on `?lens=price`) resolves to nothing in the registry, and the grid
+    // closes it rather than substituting a lens nobody asked for. Band SELECTION is
+    // deliberately NOT a param — it is a moment of looking, not a statement.
+    const urlLens = searchParams.get('lens');
+    const [selectedLens, setOptimisticLens] = useOptimistic(urlLens);
+
+    const handleLensChange = useCallback(
+        (lens: string | null) => {
+            const params = new URLSearchParams(searchParams.toString());
+            if (lens) params.set('lens', lens);
+            else params.delete('lens');
+            const qs = params.toString();
+            startTransition(() => {
+                setOptimisticLens(lens);
+                router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+            });
+        },
+        [router, pathname, searchParams, setOptimisticLens],
+    );
+
     // ── URL-driven SAVED blend proposal (`?proposal=<id>&v=<n>`) ──
     // Same shape again, with one difference: `proposal` and `v` are written TOGETHER, so
     // switching proposals can never leave a version number from the previous one behind
@@ -261,6 +284,8 @@ export function BlockingRouteView() {
                 supplierMap={supplierMap}
                 supplierFilter={selectedSupplier}
                 onSupplierFilterChange={handleSupplierChange}
+                lensId={selectedLens}
+                onLensChange={handleLensChange}
                 proposalId={selectedProposal}
                 savedProposal={savedProposal}
                 savedVersions={savedVersions}

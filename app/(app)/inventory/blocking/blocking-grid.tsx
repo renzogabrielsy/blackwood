@@ -1,7 +1,19 @@
 'use client';
 
 import { useState, useMemo, useCallback, useEffect, useRef, type CSSProperties } from 'react';
-import { Calculator, Check, Layers, X, Eye, EyeOff, History, Save, Loader2, Pencil } from 'lucide-react';
+import {
+  Calculator,
+  Check,
+  Layers,
+  X,
+  Eye,
+  EyeOff,
+  Highlighter,
+  History,
+  Save,
+  Loader2,
+  Pencil,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { errorToast } from '@/lib/toast';
@@ -40,6 +52,9 @@ import {
 import { useTableSettings } from '@/components/providers/table-settings';
 import { getLabHighlightText } from '@/types/table-settings';
 import type { LabMetric, LabHighlightSpec } from '@/types/table-settings';
+import { BlockingLensPanel } from './lens/lens-panel';
+import { resolveLens, visibleLenses } from './lens/registry';
+import { resolveLensCellClass, type BlockingLensClassifier, type BlockingLensId } from './lens/types';
 
 /** All warehouses in render order */
 const ALL_WAREHOUSE_KEYS = Object.keys(WAREHOUSES);
@@ -384,6 +399,15 @@ interface BlockingGridProps {
   savedLoading?: boolean;
   /** Write both params at once (pass `null` to close the saved viewer). */
   onProposalLinkChange?: (proposalId: string | null, versionNo?: number | null) => void;
+  /**
+   * Which LENS panel is open, driven from `?lens=<id>` by the standalone route —
+   * the same pattern as `?block=`, `?supplier=` and `?proposal=`. `null` = closed.
+   * Band SELECTION inside a lens is deliberately NOT in the URL: it is a moment of
+   * looking, not a statement worth sharing, and it resets when the bands move.
+   */
+  lensId?: BlockingLensId | null;
+  /** Open a lens by id, or `null` to close the panel. The route writes the param. */
+  onLensChange?: (id: BlockingLensId | null) => void;
 }
 
 /** Stable empty map so an unwired host doesn't churn identity every render. */
@@ -511,6 +535,8 @@ export function BlockingGrid({
   savedVersions = EMPTY_VERSIONS,
   savedLoading = false,
   onProposalLinkChange,
+  lensId = null,
+  onLensChange,
 }: BlockingGridProps) {
   const isControlled = controlledLocKey !== undefined && onSelectBlock !== undefined;
   const [internalLocKey, setInternalLocKey] = useState<string | null>(null);
@@ -570,6 +596,71 @@ export function BlockingGrid({
   // the ONLY value passed downstream for price render/export decisions — the toggle can
   // hide but never reveal, because the server flag is ANDed first.
   const canViewPrices = serverCanViewPrices && showPrices;
+
+  // ── Highlight LENSES (the docked panel) ──
+  //
+  // A lens decides how EVERY cell is marked. The grid holds two things and nothing
+  // else: which lens is open (a URL param, resolved through the registry) and the
+  // CLASSIFIER the open lens published. It knows no band, no price and no basis —
+  // that is the whole point of the frame, and it is what makes a second lens a
+  // registration rather than another branch in here.
+  const lensCaps = useMemo(() => ({ canViewPrices }), [canViewPrices]);
+  /** The lenses this reader may be offered at all. Drives the Highlight button. */
+  const lensOptions = useMemo(() => visibleLenses(lensCaps), [lensCaps]);
+  /** The open lens, or null. An unknown or not-permitted id resolves to null. */
+  const activeLens = useMemo(() => resolveLens(lensId, lensCaps), [lensId, lensCaps]);
+
+  // Stored in a one-key wrapper because a bare `useState<fn>` would treat the
+  // classifier as a state UPDATER and call it with the previous value.
+  const [lensClassifier, setLensClassifier] = useState<{ fn: BlockingLensClassifier | null }>({
+    fn: null,
+  });
+  const handleClassifierChange = useCallback(
+    (fn: BlockingLensClassifier | null) => setLensClassifier({ fn }),
+    [],
+  );
+
+  const lensWriterRef = useRef(onLensChange);
+  useEffect(() => {
+    lensWriterRef.current = onLensChange;
+  }, [onLensChange]);
+
+  const closeLens = useCallback(() => {
+    // The panel's own unmount clears the classifier; clearing it here too means the
+    // grid is never left tinted for a frame by a lens that is already gone.
+    setLensClassifier({ fn: null });
+    lensWriterRef.current?.(null);
+  }, []);
+
+  // ── The lens JOINS the existing mutual-exclusivity rule ──
+  // Only ONE marking vocabulary is ever on screen, so opening a lens resets the
+  // status/lab spotlight and clears the supplier search, and picking either of those
+  // closes the lens. (See `handleToggleStatus` / `handleSupplierSelect` below.)
+  const openLens = useCallback(
+    (id: BlockingLensId) => {
+      setStatusFilter('ALL');
+      onSupplierFilterChange?.(null);
+      lensWriterRef.current?.(id);
+    },
+    [onSupplierFilterChange],
+  );
+
+  /**
+   * A lens the reader may no longer be offered is CLOSED, immediately.
+   *
+   * This is what makes flipping the page's "Prices" toggle OFF while the Price lens
+   * is open clear every tint on the same interaction: `canViewPrices` drops, the
+   * lens stops resolving through the registry, and both the panel and the
+   * classifier go. It is deliberately written against the REGISTRY rather than
+   * against the price flag, so a future lens with a different `canShow` gets the
+   * same behaviour with no new code.
+   */
+  useEffect(() => {
+    if (lensId && !activeLens) {
+      setLensClassifier({ fn: null });
+      lensWriterRef.current?.(null);
+    }
+  }, [lensId, activeLens]);
 
   // ── Blend Proposal mode ──
   // OFF by default. When ON, cell clicks multi-SELECT occupied blocks (the detail panel
@@ -1066,20 +1157,26 @@ export function BlockingGrid({
     setActiveWarehouses(makeDefaultActive());
   };
 
-  // ── The two spotlights are MUTUALLY EXCLUSIVE (kept simple + predictable) ──
+  // ── The THREE markings are MUTUALLY EXCLUSIVE (kept simple + predictable) ──
   // Picking a supplier resets the status filter to ALL; clicking any status/lab chip
-  // clears the supplier. Only one spotlight vocabulary is ever on screen at a time.
+  // clears the supplier; and EITHER closes the open lens. Only one marking
+  // vocabulary is ever on screen at a time, so a band tint can never be read as a
+  // status glow or a supplier ring.
   const handleToggleStatus = (filter: StatusFilter) => {
     if (supplierKey) onSupplierFilterChange?.(null);
+    if (lensId) closeLens();
     setStatusFilter((prev) => (prev === filter ? 'ALL' : filter));
   };
 
   const handleSupplierSelect = useCallback(
     (key: string | null) => {
       onSupplierFilterChange?.(key);
-      if (key) setStatusFilter('ALL');
+      if (key) {
+        setStatusFilter('ALL');
+        if (lensId) closeLens();
+      }
     },
-    [onSupplierFilterChange],
+    [onSupplierFilterChange, lensId, closeLens],
   );
 
   return (
@@ -1347,6 +1444,45 @@ export function BlockingGrid({
           </button>
         )}
 
+        {/* ── Highlight (the docked LENS panel) ── */}
+        {/* Rendered only when at least one lens `canShow`s for this reader. With
+            Price the only lens registered, that means a Production user — whose
+            effective price flag is false — never sees this button at all. Once a
+            peso-free lens (Supplier, Age) is registered the button stays for every
+            role and only the Price tab is absent; that difference lives in each
+            lens's own `canShow`, not here. */}
+        {lensOptions.length > 0 && (
+          <button
+            onClick={() => (lensId ? closeLens() : openLens(lensOptions[0].id))}
+            aria-pressed={!!lensId}
+            data-blocking-lens-button
+            className={cn(
+              'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold max-sm:shrink-0',
+              'border transition-all duration-150 cursor-pointer',
+              lensId
+                ? 'bg-primary text-primary-foreground border-primary'
+                : 'bg-muted text-muted-foreground border-border hover:bg-accent hover:text-foreground',
+            )}
+            title={
+              lensId
+                ? 'Close the highlight panel and clear the grid'
+                : 'Light up the grid by price, against market'
+            }
+          >
+            <Highlighter className="w-3.5 h-3.5" />
+            <span className={SHORT.tallOnly}>Highlight</span>
+            <span className={SHORT.shortOnly}>Lens</span>
+            <span
+              className={cn(
+                'ml-0.5 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full text-[9px] font-bold',
+                lensId ? 'bg-primary-foreground/20 text-primary-foreground' : 'bg-border text-muted-foreground',
+              )}
+            >
+              {lensId ? 'ON' : 'OFF'}
+            </span>
+          </button>
+        )}
+
         {/* ── Saved proposals (history) ── */}
         {/* PESO-FREE: the list view carries no ₱ column and none is derivable, so this
             is safe for every role including Production. Prices live only inside a
@@ -1403,24 +1539,53 @@ export function BlockingGrid({
         </button>
       </div>
 
-      {/* ── Warehouse Grids ── */}
-      {visibleWarehouses.map((whseKey) => (
-        <WarehouseSection
-          key={whseKey}
-          whseKey={whseKey}
-          selectedLocKey={selectedLocKey}
-          onCellClick={handleCellClick}
-          statusFilter={statusFilter}
-          onToggleStatus={handleToggleStatus}
-          data={data}
-          canViewPrices={canViewPrices}
-          labHighlights={labHighlights}
-          blendMode={blendMode}
-          blendSelection={blendSelection}
-          supplierKey={supplierKey}
-          supplierByBlock={supplierMap.byBlock}
-        />
-      ))}
+      {/* ── Warehouse Grids + the docked lens panel ──
+          A row, not an overlay: the lens exists to make the GRID light up, so it
+          must never cover it. `min-w-0` on the grid column is load-bearing — it is
+          what makes the column GIVE when the panel takes its 300px, and each
+          warehouse section's own `overflow-x-auto` + the 104px track floor in
+          `.blocking-grid-cols` then scroll rather than crush ("never crush, always
+          scroll"). Below `lg` the panel is a bottom sheet and this is a plain
+          single-column stack again. */}
+      <div className="flex items-start gap-3">
+        <div className="flex min-w-0 flex-1 flex-col gap-3">
+          {visibleWarehouses.map((whseKey) => (
+            <WarehouseSection
+              key={whseKey}
+              whseKey={whseKey}
+              selectedLocKey={selectedLocKey}
+              onCellClick={handleCellClick}
+              statusFilter={statusFilter}
+              onToggleStatus={handleToggleStatus}
+              data={data}
+              canViewPrices={canViewPrices}
+              labHighlights={labHighlights}
+              blendMode={blendMode}
+              blendSelection={blendSelection}
+              supplierKey={supplierKey}
+              supplierByBlock={supplierMap.byBlock}
+              lensClassifier={lensClassifier.fn}
+            />
+          ))}
+        </div>
+
+        {activeLens && (
+          <BlockingLensPanel
+            lenses={lensOptions}
+            activeId={activeLens.id}
+            onSelectLens={openLens}
+            onClose={closeLens}
+            onClear={() => setLensClassifier({ fn: null })}
+            hasClassification={!!lensClassifier.fn}
+            data={data}
+            caps={lensCaps}
+            onClassifierChange={handleClassifierChange}
+            // Escape steps back one rung: while the detail drawer is open it owns
+            // the key, and the lens closes on the next press.
+            escapeSuppressed={!!selectedLocKey}
+          />
+        )}
+      </div>
 
       {/* ── Detail Panel ── */}
       <BlockingDetailPanel
@@ -1565,9 +1730,11 @@ interface WarehouseSectionProps {
   /** Active supplier key, or null. When set it OVERRIDES the status spotlight. */
   supplierKey: string | null;
   supplierByBlock: BlockingSupplierMap['byBlock'];
+  /** The open lens's classifier, or null. When set it OVERRIDES both spotlights. */
+  lensClassifier: BlockingLensClassifier | null;
 }
 
-function WarehouseSection({ whseKey, selectedLocKey, onCellClick, statusFilter, onToggleStatus, data, canViewPrices, labHighlights, blendMode, blendSelection, supplierKey, supplierByBlock }: WarehouseSectionProps) {
+function WarehouseSection({ whseKey, selectedLocKey, onCellClick, statusFilter, onToggleStatus, data, canViewPrices, labHighlights, blendMode, blendSelection, supplierKey, supplierByBlock, lensClassifier }: WarehouseSectionProps) {
   const whse = WAREHOUSES[whseKey];
   const stats = getWarehouseStats(whseKey, data);
   const utilPct = parseFloat(stats.utilization);
@@ -1747,6 +1914,7 @@ function WarehouseSection({ whseKey, selectedLocKey, onCellClick, statusFilter, 
               blendSelection={blendSelection}
               supplierKey={supplierKey}
               supplierByBlock={supplierByBlock}
+              lensClassifier={lensClassifier}
             />
           ))}
         </div>
@@ -1789,9 +1957,10 @@ interface WarehouseRowProps {
   blendSelection: Set<string>;
   supplierKey: string | null;
   supplierByBlock: BlockingSupplierMap['byBlock'];
+  lensClassifier: BlockingLensClassifier | null;
 }
 
-function WarehouseRow({ whseKey, row, cols, colStart, selectedLocKey, onCellClick, statusFilter, data, canViewPrices, labHighlights, blendMode, blendSelection, supplierKey, supplierByBlock }: WarehouseRowProps) {
+function WarehouseRow({ whseKey, row, cols, colStart, selectedLocKey, onCellClick, statusFilter, data, canViewPrices, labHighlights, blendMode, blendSelection, supplierKey, supplierByBlock, lensClassifier }: WarehouseRowProps) {
   return (
     <>
       {/* Row label — frozen-left on mobile so the row letter stays pinned while
@@ -1811,6 +1980,11 @@ function WarehouseRow({ whseKey, row, cols, colStart, selectedLocKey, onCellClic
         // A supplier search takes over the spotlight entirely (the two are mutually
         // exclusive, so `statusFilter` is already ALL — this is belt-and-braces).
         const supplierClass = getSupplierSpotlightClass(supplierKey, supplierByBlock, locKey);
+        // An open LENS takes over from BOTH — same belt-and-braces: opening a lens
+        // already reset the status filter and cleared the supplier. `null` from the
+        // classifier means "leave this cell un-lensed", which is a third answer and
+        // is exactly what an UNPRICED block gets (never the cheapest band).
+        const lensClass = resolveLensCellClass(lensClassifier, locKey);
 
         if (blockData) {
           // view_blocking_grid only emits STORED/IN-USE/SUNDRYING/SUNDRIED batches, so the
@@ -1818,7 +1992,8 @@ function WarehouseRow({ whseKey, row, cols, colStart, selectedLocKey, onCellClic
           // Movement panel) narrows safely to CellStatus here.
           const cellStatus = blockData.status as CellStatus;
           const spotlight = computeSpotlight(statusFilter, cellStatus, blockData, labHighlights);
-          const spotlightClass = supplierClass ?? getSpotlightClass(spotlight, statusFilter);
+          const spotlightClass =
+            lensClass ?? supplierClass ?? getSpotlightClass(spotlight, statusFilter);
 
           return (
             <OccupiedCell
@@ -1839,8 +2014,11 @@ function WarehouseRow({ whseKey, row, cols, colStart, selectedLocKey, onCellClic
 
         const spotlight = computeSpotlight(statusFilter, 'EMPTY', undefined, labHighlights);
         // An empty slot can never hold the searched supplier — it dims like any other
-        // non-match while a supplier is active.
-        const spotlightClass = supplierClass ?? getSpotlightClass(spotlight, statusFilter);
+        // non-match while a supplier is active. A lens dims it only once bands are
+        // isolated; with nothing picked the lens leaves empty slots alone, so the
+        // "ratio'd" view reads as a distribution rather than as a filter.
+        const spotlightClass =
+          lensClass ?? supplierClass ?? getSpotlightClass(spotlight, statusFilter);
 
         return (
           <EmptyCell
