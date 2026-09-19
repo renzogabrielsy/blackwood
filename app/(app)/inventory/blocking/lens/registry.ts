@@ -18,17 +18,27 @@
 // ── `canShow` IS A UI DECISION, NEVER THE SECURITY BOUNDARY ──────────────────
 // The Price lens reads `caps.canViewPrices`, so a Production user is never offered
 // it — but the two server actions behind it refuse a `!canViewPrices()` caller
-// outright, before touching the database, and THAT is the boundary. A lens with no
-// ₱ (Supplier, Age) will read `() => true`, at which point the Highlight button
-// stays visible for every role and only the Price tab is absent. That is why the
-// predicate lives per lens and not as one flag on the frame.
+// outright, before touching the database, and THAT is the boundary. The AGE lens
+// reads `() => true`, because nothing in its payload is money and none of it is
+// derivable into money — so the Highlight button now stays on the page for every
+// role, Production included, and only the Price TAB is absent. That is exactly why
+// the predicate lives per lens and not as one flag on the frame.
+//
+// ── ORDER IS TAB ORDER, AND PRICE IS FIRST ──────────────────────────────────
+// A price-viewer's default lens (the one the Highlight button opens) is the first
+// entry this reader may see, so Price stays first for them and Age is the first —
+// and only — entry for Production. `resolveLens` refuses an id a reader may not be
+// offered, and the grid then falls back to the first one they CAN see, which is what
+// makes a shared `?lens=price` link land a Production user on Age quietly rather
+// than on a closed panel.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { AGE_LENS } from './age-lens-panel';
 import { PRICE_LENS } from './price-lens-panel';
 import type { BlockingLensCapabilities, BlockingLensDefinition, BlockingLensId } from './types';
 
 /** Every lens the Blocking page knows about, in tab order. */
-export const BLOCKING_LENSES: readonly BlockingLensDefinition[] = [PRICE_LENS];
+export const BLOCKING_LENSES: readonly BlockingLensDefinition[] = [PRICE_LENS, AGE_LENS];
 
 /** The lenses this reader may be offered. Order is preserved. */
 export function visibleLenses(caps: BlockingLensCapabilities): BlockingLensDefinition[] {

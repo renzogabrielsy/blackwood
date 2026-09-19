@@ -40,14 +40,20 @@
 // act on. Every other refusal is shown inline with a Copy button (the project's
 // error rule, satisfied by a banner rather than a toast); a thrown error goes to
 // `errorToast()`.
+//
+// ── THE ROWS, THE BAR AND THE DISCLOSURE ARE SHARED WITH THE AGE LENS ───────
+// The legend, the stacked ratio bar, the kg|blocks switch, the muted "in no band"
+// row, the inline refusal banner and the Customize scaffolding live in `lens/` and
+// are used by BOTH lenses. What stays here is what is actually about PRICE: the
+// market basis, R, the ₱ labels, the price gate and the two reads. A second lens
+// that forked those pieces is how one of them quietly loses its Copy button or
+// prints a share in a different unit from its bar.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as React from 'react';
-import { Coins, Copy, Loader2, Plus, RotateCcw, Sliders, X } from 'lucide-react';
+import { Coins, Loader2 } from 'lucide-react';
 
-import { cn } from '@/lib/utils';
 import { errorToast } from '@/lib/toast';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
   Select,
@@ -56,11 +62,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible';
 
 import { fetchBlockingMarketBases, fetchBlockingPriceLens } from '../actions';
 import {
@@ -79,6 +80,16 @@ import type {
   BlockingLensPanelProps,
 } from './types';
 import { useLensSettings } from './use-lens-settings';
+import { LensBandRows, LensExcludedRow, LensUnitSwitch } from './lens-band-rows';
+import { LensCustomize, type LensBandNameField, type LensCutLineChip } from './lens-customize';
+import { LensRatioBar } from './lens-ratio-bar';
+import { RefusalBanner } from './lens-refusal-banner';
+import {
+  formatLensKg,
+  formatLensSharePct,
+  LENS_DEBOUNCE_MS,
+  LENS_EMDASH,
+} from './lens-shared';
 import {
   addEdgeOffset,
   bandEdgeKey,
@@ -93,6 +104,7 @@ import {
   PRICE_LENS_EDGE_MAX,
   PRICE_LENS_EDGE_MIN,
   PRICE_LENS_ID,
+  PRICE_LENS_RAMP,
   priceBandLabel,
   removeEdgeOffset,
   serializePriceLensSettings,
@@ -100,19 +112,14 @@ import {
 } from './price-lens-settings';
 
 const PESO = '₱';
-const EMDASH = '—';
-/** How long a settings change waits before it costs a round-trip. */
-const LENS_DEBOUNCE_MS = 250;
+const EMDASH = LENS_EMDASH;
 
 // ── Small presentational helpers ────────────────────────────────────────────
-
-function kg(n: number): string {
-  return `${Math.round(n).toLocaleString()} kg`;
-}
-
-function pct(v: number | null): string {
-  return v === null ? EMDASH : `${v.toFixed(1)}%`;
-}
+// The kilogram and share formatters, the inline refusal banner, the legend rows, the
+// ratio bar and the Customize disclosure are all SHARED with the age lens — two
+// lenses on one page must not format a kilogram two ways or offer Copy on only one
+// of their errors. What is left here is the ₱ formatter, which is the one piece the
+// other lens has no use for.
 
 function peso(v: number, decimals = 2): string {
   return `${PESO}${v.toLocaleString(undefined, {
@@ -121,48 +128,9 @@ function peso(v: number, decimals = 2): string {
   })}`;
 }
 
-/**
- * An inline, PERSISTENT error with a Copy button.
- *
- * The project's HARD RULE is that an error never auto-dismisses and always offers
- * Copy; CLAUDE.md allows a banner in place of a toast for an error that belongs to
- * one panel, which is exactly this — a refusal about the lens's own settings would
- * be homeless as a toast the moment the panel closed.
- */
-function RefusalBanner({ message, onRetry }: { message: string; onRetry?: () => void }) {
-  const copy = React.useCallback(() => {
-    void navigator.clipboard.writeText(message);
-  }, [message]);
-  return (
-    <div className="rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-2 text-[11px] leading-snug text-foreground">
-      <p>{message}</p>
-      <div className="mt-1.5 flex items-center gap-1.5">
-        <button
-          type="button"
-          onClick={copy}
-          className="inline-flex items-center gap-1 rounded-sm border border-border bg-background/60 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground transition-colors duration-150 hover:text-foreground cursor-pointer"
-        >
-          <Copy className="h-2.5 w-2.5" />
-          Copy
-        </button>
-        {onRetry && (
-          <button
-            type="button"
-            onClick={onRetry}
-            className="inline-flex items-center gap-1 rounded-sm border border-border bg-background/60 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground transition-colors duration-150 hover:text-foreground cursor-pointer"
-          >
-            <RotateCcw className="h-2.5 w-2.5" />
-            Retry
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
 /** "566,870 kg priced · 37 deliveries · 2026-09-01 → 2026-09-30" */
 function basisCoverage(basis: BlockingMarketBasis): string {
-  return `${kg(basis.pricedKg)} priced · ${basis.deliveryCount} deliver${
+  return `${formatLensKg(basis.pricedKg)} priced · ${basis.deliveryCount} deliver${
     basis.deliveryCount === 1 ? 'y' : 'ies'
   } · ${basis.fromDate} → ${basis.toDate}`;
 }
@@ -459,6 +427,49 @@ export function PriceLensPanel({
     [settings.unit],
   );
 
+  // ── View models for the SHARED pieces (labels and strings only) ───────────
+  // Nothing below adds anything up: every figure is the payload's own, formatted.
+
+  const bandRows = React.useMemo(() => {
+    if (!lens) return [];
+    const roundedUpPhp = lens.roundedUpPhp;
+    return lens.bands.map((b) => ({
+      index: b.index,
+      label: priceBandLabel(b, roundedUpPhp, settings.bandNames),
+      sharePct: share(b),
+      detail: `${b.blockCount} block${b.blockCount === 1 ? '' : 's'} · ${formatLensKg(b.kg)}`,
+    }));
+  }, [lens, settings.bandNames, share]);
+
+  const edgeChips: LensCutLineChip[] = React.useMemo(
+    () =>
+      settings.edgeOffsets.map((e) => {
+        const signed = e >= 0 ? `+${e}` : String(e);
+        return {
+          value: e,
+          text: signed,
+          removeLabel: `Remove the cut line ${signed} from market`,
+        };
+      }),
+    [settings.edgeOffsets],
+  );
+
+  // Keyed on the band's OFFSETS from R, so a name follows its own interval instead
+  // of jumping to a different slice of the yard when a cut line is added below it.
+  const nameFields: LensBandNameField[] | undefined = React.useMemo(() => {
+    if (!lens) return undefined;
+    return lens.bands.map((b) => {
+      const { lowerOffset, upperOffset } = bandOffsets(b, lens.roundedUpPhp);
+      const key = bandEdgeKey(lowerOffset, upperOffset);
+      return {
+        key,
+        value: settings.bandNames[key] ?? '',
+        placeholder: priceBandLabel(b, lens.roundedUpPhp),
+        ariaLabel: `Name for the band ${priceBandLabel(b, lens.roundedUpPhp)}`,
+      };
+    });
+  }, [lens, settings.bandNames]);
+
   const atEdgeCap = settings.edgeOffsets.length >= BLOCKING_PRICE_LENS_MAX_EDGES;
   const customised = !isDefaultPriceLensSettings(settings);
 
@@ -609,7 +620,11 @@ export function PriceLensPanel({
         )}
       </section>
 
-      {/* ── (2)+(3) Bands, ratio bar, unit switch ───────────────────────── */}
+      {/* ── (2)+(3) Bands, ratio bar, unit switch ─────────────────────────
+             All three are the SHARED pieces (`lens-band-rows.tsx`,
+             `lens-ratio-bar.tsx`), so the age lens's legend cannot drift from this
+             one. What is price-specific is what is passed IN: the ₱ labels, and the
+             ramp id that keeps this lens on the cost scale. */}
       {lens && (
         <section className="flex flex-col gap-2">
           <div className="flex items-center justify-between gap-2">
@@ -620,119 +635,41 @@ export function PriceLensPanel({
               {lensPending && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
               {/* kg | blocks — changes the bar AND the row percentages together,
                   so a segment and the number beside it are never in different units. */}
-              <div
-                role="group"
-                aria-label="Measure bands by"
-                className="inline-flex overflow-hidden rounded-md border border-border"
-              >
-                {(['kg', 'blocks'] as const).map((u) => (
-                  <button
-                    key={u}
-                    type="button"
-                    onClick={() => setUnit(u)}
-                    aria-pressed={settings.unit === u}
-                    className={cn(
-                      'px-1.5 py-0.5 text-[10px] font-semibold transition-colors duration-150 cursor-pointer',
-                      settings.unit === u
-                        ? 'bg-primary text-primary-foreground'
-                        : 'bg-muted text-muted-foreground hover:bg-accent hover:text-foreground',
-                    )}
-                  >
-                    {u}
-                  </button>
-                ))}
-              </div>
+              <LensUnitSwitch unit={settings.unit} onChange={setUnit} />
             </div>
           </div>
 
           {/* The stacked ratio bar. Widths ARE the published shares — see header. */}
-          <div
-            className="flex h-3 w-full overflow-hidden rounded-full border border-border bg-muted"
-            role="img"
-            aria-label={lens.bands
+          <LensRatioBar
+            ramp={PRICE_LENS_RAMP}
+            segments={lens.bands.map((b) => ({ key: b.index, sharePct: share(b) }))}
+            ariaLabel={lens.bands
               .map(
                 (b) =>
-                  `${priceBandLabel(b, lens.roundedUpPhp, settings.bandNames)}: ${pct(share(b))} by ${
-                    settings.unit
-                  }`,
+                  `${priceBandLabel(b, lens.roundedUpPhp, settings.bandNames)}: ${formatLensSharePct(
+                    share(b),
+                  )} by ${settings.unit}`,
               )
               .join('; ')}
-          >
-            {lens.bands.map((b, i) => {
-              const s = share(b);
-              if (s === null || s <= 0) return null;
-              return (
-                <div
-                  key={b.index}
-                  className={cn('h-full', bandRampClass(i, lens.bands.length), 'lens-band-swatch')}
-                  style={{ width: `${s}%` }}
-                />
-              );
-            })}
-          </div>
+          />
 
           {/* One toggle row per band. Every band is present even when empty, so the
               whole scale is legible without inventing rows. */}
-          <ul className="flex flex-col gap-1">
-            {lens.bands.map((b, i) => {
-              const isPicked = picked.has(b.index);
-              const label = priceBandLabel(b, lens.roundedUpPhp, settings.bandNames);
-              return (
-                <li key={b.index}>
-                  <button
-                    type="button"
-                    onClick={() => togglePicked(b.index)}
-                    aria-pressed={isPicked}
-                    className={cn(
-                      'flex w-full items-start gap-2 rounded-md border px-2 py-1.5 text-left transition-colors duration-150 cursor-pointer',
-                      isPicked
-                        ? 'border-primary bg-primary/10'
-                        : 'border-border bg-card hover:bg-accent/50',
-                    )}
-                  >
-                    <span
-                      aria-hidden
-                      className={cn(
-                        'mt-[3px] h-3 w-3 shrink-0 rounded-sm border border-border/60',
-                        bandRampClass(i, lens.bands.length),
-                        'lens-band-swatch',
-                      )}
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-baseline justify-between gap-2">
-                        <span className="truncate text-[11px] font-semibold text-foreground">
-                          {label}
-                        </span>
-                        <span className="shrink-0 font-mono text-[11px] font-bold text-foreground">
-                          {pct(share(b))}
-                        </span>
-                      </span>
-                      <span className="mt-0.5 block text-[10px] text-muted-foreground">
-                        {b.blockCount} block{b.blockCount === 1 ? '' : 's'} · {kg(b.kg)}
-                      </span>
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          <LensBandRows rows={bandRows} ramp={PRICE_LENS_RAMP} picked={picked} onToggle={togglePicked} />
 
-          {/* Unpriced — its OWN row, never a band and never {PESO}0. */}
+          {/* Unpriced — its OWN row, never a band and never a ₱0. */}
           {lens.unpriced.blockCount > 0 && (
-            <div className="rounded-md border border-dashed border-border bg-muted/30 px-2 py-1.5">
-              <p className="text-[11px] font-semibold text-muted-foreground">
-                No price yet {EMDASH} {lens.unpriced.blockCount} block
-                {lens.unpriced.blockCount === 1 ? '' : 's'}, {kg(lens.unpriced.kg)}
-              </p>
-              <p className="mt-0.5 text-[10px] leading-snug text-muted-foreground">
-                In no band, and out of both percentages. Those cells keep their normal look.
-              </p>
-            </div>
+            <LensExcludedRow
+              title={`No price yet ${EMDASH} ${lens.unpriced.blockCount} block${
+                lens.unpriced.blockCount === 1 ? '' : 's'
+              }, ${formatLensKg(lens.unpriced.kg)}`}
+              note="In no band, and out of both percentages. Those cells keep their normal look."
+            />
           )}
 
           <p className="text-[10px] text-muted-foreground">
             {lens.total.blockCount} occupied block
-            {lens.total.blockCount === 1 ? '' : 's'} · {kg(lens.total.kg)}
+            {lens.total.blockCount === 1 ? '' : 's'} · {formatLensKg(lens.total.kg)}
             {picked.size > 0 && (
               <>
                 {' '}
@@ -761,149 +698,52 @@ export function PriceLensPanel({
         </p>
       )}
 
-      {/* ── Customize bands ────────────────────────────────────────────── */}
-      <Collapsible open={customizeOpen} onOpenChange={setCustomizeOpen}>
-        <CollapsibleTrigger asChild>
-          <button
-            type="button"
-            className="flex w-full items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2 py-1 text-[11px] font-semibold text-muted-foreground transition-colors duration-150 hover:text-foreground cursor-pointer"
-          >
-            <Sliders className="h-3 w-3" />
-            Customize bands
-            <span className="ml-auto font-mono text-[10px]">
-              {settings.edgeOffsets.length}/{BLOCKING_PRICE_LENS_MAX_EDGES} cut lines
-            </span>
-          </button>
-        </CollapsibleTrigger>
-        <CollapsibleContent className="pt-2">
-          <div className="flex flex-col gap-2 rounded-md border border-border bg-muted/20 p-2">
-            <p className="text-[10px] leading-snug text-muted-foreground">
-              A cut line is a whole number of pesos above or below the rounded market price
-              {lens ? ` (${peso(lens.roundedUpPhp, 0)})` : ''}. {settings.edgeOffsets.length} line
-              {settings.edgeOffsets.length === 1 ? '' : 's'} give{' '}
-              {settings.edgeOffsets.length + 1} bands.
-            </p>
-
-            <div className="flex flex-wrap gap-1">
-              {settings.edgeOffsets.map((e) => (
-                <span
-                  key={e}
-                  className="inline-flex items-center gap-1 rounded-full border border-border bg-card px-1.5 py-0.5 font-mono text-[10px]"
-                >
-                  {e >= 0 ? `+${e}` : e}
-                  <button
-                    type="button"
-                    onClick={() => dropEdge(e)}
-                    aria-label={`Remove the cut line ${e >= 0 ? `+${e}` : e} from market`}
-                    className="rounded-sm text-muted-foreground transition-colors duration-150 hover:text-foreground cursor-pointer"
-                  >
-                    <X className="h-2.5 w-2.5" />
-                  </button>
-                </span>
-              ))}
-            </div>
-
-            <div className="flex items-center gap-1.5">
-              <Input
-                inputMode="numeric"
-                value={edgeDraft}
-                placeholder="+5"
-                aria-label="New cut line, pesos from market"
-                onChange={(e) => {
-                  setEdgeDraft(e.target.value);
-                  setEdgeError(null);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    addEdge();
-                  }
-                }}
-                className="h-7 w-20 font-mono text-xs"
-              />
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="h-7 text-[11px]"
-                onClick={addEdge}
-              >
-                <Plus className="h-3 w-3" />
-                Add
-              </Button>
-              {/* The cap is stated, not enforced by a dead button with no reason. */}
-              {atEdgeCap && (
-                <span className="text-[10px] leading-tight text-muted-foreground">
-                  {BLOCKING_PRICE_LENS_MAX_EDGES} is the most a lens takes — remove one to add
-                  another.
-                </span>
-              )}
-            </div>
-
-            {edgeError && <p className="text-[11px] text-destructive">{edgeError}</p>}
-
-            {/* Renaming. Keyed on the band's OFFSETS, so a name follows its own
-                interval instead of jumping when a cut line is added below it. */}
-            {lens && (
-              <div className="flex flex-col gap-1">
-                <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Names
-                </span>
-                {lens.bands.map((b) => {
-                  const { lowerOffset, upperOffset } = bandOffsets(b, lens.roundedUpPhp);
-                  const key = bandEdgeKey(lowerOffset, upperOffset);
-                  return (
-                    <Input
-                      key={key}
-                      defaultValue={settings.bandNames[key] ?? ''}
-                      placeholder={priceBandLabel(b, lens.roundedUpPhp)}
-                      aria-label={`Name for the band ${priceBandLabel(b, lens.roundedUpPhp)}`}
-                      maxLength={40}
-                      onBlur={(e) => renameBand(key, e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          renameBand(key, (e.target as HTMLInputElement).value);
-                          (e.target as HTMLInputElement).blur();
-                        }
-                      }}
-                      className="h-7 text-[11px]"
-                    />
-                  );
-                })}
-              </div>
-            )}
-
-            <div className="flex items-center justify-between gap-2 pt-0.5">
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                className="h-7 text-[11px]"
-                onClick={resetBands}
-              >
-                <RotateCcw className="h-3 w-3" />
-                Reset to default
-              </Button>
-              {customised && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    reset();
-                    setManualDraft('');
-                    setEdgeDraft('');
-                    setEdgeError(null);
-                    setManualError(null);
-                  }}
-                  className="text-[10px] font-semibold text-muted-foreground underline decoration-dotted transition-colors duration-150 hover:text-foreground cursor-pointer"
-                >
-                  Reset everything
-                </button>
-              )}
-            </div>
-          </div>
-        </CollapsibleContent>
-      </Collapsible>
+      {/* ── Customize bands ──────────────────────────────────────────────
+             The SHARED disclosure (`lens-customize.tsx`): it owns the shape — the
+             chip row, the add box, the cap sentence, the rename inputs and the two
+             resets — and every word below is this lens's own dimension, pesos from
+             the rounded market price. */}
+      <LensCustomize
+        open={customizeOpen}
+        onOpenChange={setCustomizeOpen}
+        edgeCount={settings.edgeOffsets.length}
+        maxEdges={BLOCKING_PRICE_LENS_MAX_EDGES}
+        intro={
+          <>
+            A cut line is a whole number of pesos above or below the rounded market price
+            {lens ? ` (${peso(lens.roundedUpPhp, 0)})` : ''}. {settings.edgeOffsets.length} line
+            {settings.edgeOffsets.length === 1 ? '' : 's'} give {settings.edgeOffsets.length + 1}{' '}
+            bands.
+          </>
+        }
+        chips={edgeChips}
+        onRemoveChip={dropEdge}
+        draft={edgeDraft}
+        onDraftChange={(v) => {
+          setEdgeDraft(v);
+          setEdgeError(null);
+        }}
+        onAdd={addEdge}
+        addPlaceholder="+5"
+        addAriaLabel="New cut line, pesos from market"
+        atCap={atEdgeCap}
+        capNote={`${BLOCKING_PRICE_LENS_MAX_EDGES} is the most a lens takes — remove one to add another.`}
+        error={edgeError}
+        names={nameFields}
+        onRename={renameBand}
+        onResetBands={resetBands}
+        onResetAll={
+          customised
+            ? () => {
+                reset();
+                setManualDraft('');
+                setEdgeDraft('');
+                setEdgeError(null);
+                setManualError(null);
+              }
+            : undefined
+        }
+      />
     </div>
   );
 }
@@ -924,6 +764,7 @@ export const PRICE_LENS: BlockingLensDefinition = {
   label: 'Price',
   icon: Coins,
   blurb: 'Light up the yard by what each block cost against market.',
+  ramp: PRICE_LENS_RAMP,
   canShow: (caps) => caps.canViewPrices,
   Panel: PriceLensPanel,
 };

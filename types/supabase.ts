@@ -3597,6 +3597,112 @@ export type Database = {
         }
         Relationships: []
       }
+      view_batch_age_days: {
+        Row: {
+          age_days: number | null
+          as_of_date: string | null
+          batch_code: string | null
+          delivered_kg: number | null
+          delivery_count: number | null
+          first_delivery_date: string | null
+          last_delivery_date: string | null
+          mean_daynum: number | null
+          mean_delivery_date: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "batches"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_analytics_aging_watchlist"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_blocking_block_suppliers"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_blocking_grid"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_digest_rcout_batch_daily"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_ops_ledger_campaign_block"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_ops_ledger_day_block"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_ops_ledger_day_blocks_used"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_batch_price"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_block_actual_price"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_campaign_cells"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_campaign_open_blocks"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_out_closed_blocks"
+            referencedColumns: ["batch_code"]
+          },
+        ]
+      }
       view_blend_proposal_list: {
         Row: {
           archived_at: string | null
@@ -5954,6 +6060,8 @@ export type Database = {
         Returns: Json
       }
       fn_blend_snapshot_hash: { Args: { p_snapshot: Json }; Returns: string }
+      fn_blocking_age_lens: { Args: { p_edge_days?: number[] }; Returns: Json }
+      fn_blocking_age_lens_probe: { Args: never; Returns: Json }
       fn_blocking_market_bases: {
         Args: { p_trailing_days?: number }
         Returns: {

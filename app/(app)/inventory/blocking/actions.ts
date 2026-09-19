@@ -17,6 +17,9 @@ import type {
   BlockingPriceBand,
   BlockingPriceLens,
   BlockingPriceLensResult,
+  BlockingAgeBand,
+  BlockingAgeLens,
+  BlockingAgeLensResult,
 } from './types';
 import {
   BLOCKING_PRICE_LENS_DEFAULT_EDGES,
@@ -24,6 +27,10 @@ import {
   BLOCKING_TRAILING_DAYS_DEFAULT,
   BLOCKING_TRAILING_DAYS_MAX,
   BLOCKING_TRAILING_DAYS_MIN,
+  BLOCKING_AGE_LENS_DEFAULT_EDGES,
+  BLOCKING_AGE_LENS_MAX_EDGES,
+  BLOCKING_AGE_EDGE_MIN_DAYS,
+  BLOCKING_AGE_EDGE_MAX_DAYS,
 } from './types';
 import type { Json } from '@/types/supabase';
 
@@ -1377,5 +1384,246 @@ export async function fetchBlockingPriceLens(
   } catch (err: unknown) {
     console.error('[Blocking] fetchBlockingPriceLens failed:', err);
     return { ok: false, reason: 'exception', message: LENS_UNREACHABLE_MESSAGE };
+  }
+}
+
+// ─── Age lens — DATA LAYER ────────────────────────────────────────────────────
+//
+// "Show me the charcoal that has been sitting." The SECOND lens on the frame the price
+// lens built, over `fn_blocking_age_lens` (migration `20260919133042_blocking_age_lens`).
+// It is the price lens's sibling in shape and its OPPOSITE in exactly one respect:
+//
+//   ***  THERE IS NO PRICE GATE HERE, AND THAT IS DELIBERATE. DO NOT ADD ONE.  ***
+//
+//      Nothing in this payload is money and nothing in it is derivable back into
+//      money: `fn_blocking_age_lens` publishes days, kilograms, counts and
+//      percentages, and `view_batch_age_days` has no cost/price/value column at all.
+//      So the Age lens is visible to EVERY role INCLUDING Production — the same
+//      posture as `view_blocking_block_suppliers` and the whole analytics production
+//      matrix. The price lens must REFUSE a `!canViewPrices()` caller because band
+//      membership pins a block's ₱/kg to within a peso; that argument has no analogue
+//      here, and copying the gate across would hide an age figure from the one role
+//      that walks the yard. `scripts/verify-blocking-age-lens.ts` asserts that this
+//      function contains NO `canViewPrices` call, so the asymmetry cannot be
+//      "tidied up" by accident.
+//
+// What it DOES require is a signed-in user, the same way `fetchBlockDataForBatch` and
+// the other non-price reads in this file do.
+//
+// Three rules it shares with its sibling.
+//
+//   1. NOTHING IS COMPUTED HERE. Age is a weighted mean and the bands are arithmetic
+//      over it, so all of it lives in SQL (CLAUDE.md: never compute a weighted average
+//      in TypeScript). This function validates its inputs, camelCases the rows, and
+//      folds `blocks[]` into the two per-cell lookups the grid needs. That fold is a
+//      re-keying, not an aggregation.
+//
+//   2. A BUSINESS REFUSAL IS DATA, NEVER A THROW. The RPC returns
+//      `{ok:false, reason, message}` written for a human; this action passes the
+//      message straight through so the UI can hand it to `errorToast()`.
+//
+//   3. NULL IS PRESERVED. An empty band's `kgWeightedAgeDays`, and the totals when
+//      nothing is dated, are null — never coerced to 0. "No charcoal of this age" and
+//      "charcoal that is 0 days old" are different answers.
+//
+// Read-only: no writes, no audit logs, no `revalidatePath()`.
+
+const AGE_LENS_UNREACHABLE_MESSAGE =
+  'Could not reach the database to work out the age lens. Nothing changed — try again.';
+const AGE_LENS_EDGE_MESSAGE = `Every cut line has to be a whole number of days between ${BLOCKING_AGE_EDGE_MIN_DAYS} and ${BLOCKING_AGE_EDGE_MAX_DAYS.toLocaleString('en-US')}.`;
+
+/** The `{ok, ...}` envelope `fn_blocking_age_lens` returns. */
+type AgeLensEnvelope = {
+  ok?: boolean;
+  reason?: string;
+  message?: string;
+  as_of?: string | null;
+  edge_days?: number[] | null;
+  bands?: Array<Record<string, unknown>> | null;
+  blocks?: Array<Record<string, unknown>> | null;
+  undated?: { block_count?: number | null; kg?: number | string | null } | null;
+  total?: {
+    block_count?: number | null;
+    kg?: number | string | null;
+    kg_weighted_age_days?: number | string | null;
+    oldest_age_days?: number | string | null;
+    oldest_block_loc?: string | null;
+  } | null;
+} | null;
+
+/**
+ * NORMALIZE THE CUT LINES THE WAY SQL DOES — finite whole numbers of days, all in
+ * 1..5000, de-duplicated, ascending — and refuse what it would refuse, so the two can
+ * never disagree.
+ *
+ * The one check that MUST happen here rather than in SQL is INTEGRALITY. `p_edge_days`
+ * is declared `int[]`, so Postgres has already rounded `59.5` to `60` by the time the
+ * function body runs and that refusal is structurally unreachable there. It IS
+ * decidable in TypeScript, so it lives here — reusing the SQL's own `invalid_edge`
+ * reason rather than inventing a second vocabulary.
+ *
+ * De-duplicating BEFORE the cap (rather than capping the raw length) is what keeps the
+ * two caps identical: `[60,60,120,120,365,365,730]` is seven raw cut lines but four
+ * real ones, and SQL measures the cap on the collapsed list.
+ *
+ * NOT EXPORTED, and not because it wouldn't be useful: this file carries `'use server'`,
+ * so every export must be an async server function — a synchronous helper cannot leave
+ * it. The UI's own pure twin belongs in `lens/age-lens-settings.ts`, exactly as the
+ * price lens keeps `normalizeEdgeOffsets` both here (local) and there (pure).
+ */
+function normalizeEdgeDays(
+  input: readonly number[] | null | undefined,
+):
+  | { ok: true; edges: number[] }
+  | { ok: false; reason: 'invalid_edge' | 'no_edges' | 'too_many_edges'; message: string } {
+  const raw = input === null || input === undefined ? [...BLOCKING_AGE_LENS_DEFAULT_EDGES] : input;
+
+  if (!Array.isArray(raw)) {
+    return { ok: false, reason: 'invalid_edge', message: AGE_LENS_EDGE_MESSAGE };
+  }
+  for (const e of raw) {
+    if (
+      typeof e !== 'number' ||
+      !Number.isFinite(e) ||
+      !Number.isInteger(e) ||
+      e < BLOCKING_AGE_EDGE_MIN_DAYS ||
+      e > BLOCKING_AGE_EDGE_MAX_DAYS
+    ) {
+      return { ok: false, reason: 'invalid_edge', message: AGE_LENS_EDGE_MESSAGE };
+    }
+  }
+
+  const edges = Array.from(new Set(raw)).sort((a, b) => a - b);
+
+  if (edges.length === 0) {
+    return {
+      ok: false,
+      reason: 'no_edges',
+      message:
+        'An age lens needs at least one cut line — with none, every block is in the same band and nothing is highlighted.',
+    };
+  }
+  if (edges.length > BLOCKING_AGE_LENS_MAX_EDGES) {
+    return {
+      ok: false,
+      reason: 'too_many_edges',
+      message: `An age lens takes at most ${BLOCKING_AGE_LENS_MAX_EDGES} cut lines; this one has ${edges.length}.`,
+    };
+  }
+  return { ok: true, edges };
+}
+
+/**
+ * Classify every occupied block by HOW OLD its charcoal is — the age lens itself.
+ *
+ * `edgeDays` are cut lines in DAYS; the default `[60, 120, 365]` gives up to 60 days /
+ * 60–120 / 120–365 / over a year. They are de-duplicated and sorted here exactly as SQL
+ * does, and at most 6 survive.
+ *
+ * AGE IS NOT DEFINED HERE. It is the batch's kg-weighted MEAN DELIVERY DATE carried by
+ * its remaining balance, read from `view_batch_age_days` inside the RPC — the same
+ * statistic `view_analytics_aging_watchlist` publishes, proven equal every run. There
+ * is no FIFO and none is possible.
+ *
+ * A block whose batch has NO dated delivery is ABSENT from `lens.bandByBlock` and
+ * counted in `lens.undated` — render it un-lensed, never in the freshest band.
+ *
+ * NOT price-gated, on purpose — see the block comment above. Every role, Production
+ * included, may read this.
+ */
+export async function fetchBlockingAgeLens(
+  edgeDays: readonly number[] = BLOCKING_AGE_LENS_DEFAULT_EDGES,
+): Promise<BlockingAgeLensResult> {
+  // (1) Inputs first — a refusal that needs no database costs no round trip. Same
+  // refusals the RPC would give, in the same words, under the same reasons.
+  const normalized = normalizeEdgeDays(edgeDays);
+  if (!normalized.ok) return { ok: false, reason: normalized.reason, message: normalized.message };
+
+  try {
+    const supabase = await createClient();
+
+    // (2) A signed-in user, the way the other non-price reads in this file require one.
+    // NOTE this is NOT a price gate and must not become one.
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError || !user) {
+      return {
+        ok: false,
+        reason: 'not_signed_in',
+        message: 'Your session has expired — reload the page and sign in again.',
+      };
+    }
+
+    const { data, error } = await supabase.rpc('fn_blocking_age_lens', {
+      p_edge_days: normalized.edges,
+    });
+
+    if (error) {
+      console.error('[Blocking] fn_blocking_age_lens error:', error);
+      return { ok: false, reason: 'rpc_error', message: error.message || AGE_LENS_UNREACHABLE_MESSAGE };
+    }
+
+    const res = data as AgeLensEnvelope;
+    if (!res?.ok) {
+      const reason = res?.reason;
+      return {
+        ok: false,
+        // The RPC's own vocabulary, passed through; anything unrecognized is reported as
+        // an rpc_error rather than silently widening the union.
+        reason:
+          reason === 'invalid_edge' || reason === 'no_edges' || reason === 'too_many_edges'
+            ? reason
+            : 'rpc_error',
+        message: res?.message ?? 'The age lens could not be worked out.',
+      };
+    }
+
+    const bands: BlockingAgeBand[] = (res.bands ?? []).map((b) => ({
+      index: lensNum(b.index),
+      // lowerDays is 0 on the first band and never null — age has a floor.
+      lowerDays: lensNum(b.lower_days),
+      // null = OPEN ABOVE. lensNumOrNull, never `?? 0` — a 0 here would read as
+      // "this band ends at day zero".
+      upperDays: lensNumOrNull(b.upper_days),
+      blockCount: lensNum(b.block_count),
+      kg: lensNum(b.kg),
+      kgSharePct: lensNumOrNull(b.kg_share_pct),
+      blockSharePct: lensNumOrNull(b.block_share_pct),
+      // Null on an empty band. "No charcoal of this age" is not "0 days old".
+      kgWeightedAgeDays: lensNumOrNull(b.kg_weighted_age_days),
+    }));
+
+    // RE-KEY, not aggregate: the grid needs per-cell lookups, and SQL already decided
+    // which band every block is in and how old it is. Undated blocks are absent from
+    // `blocks[]` by construction, so they are absent from both maps — the contract.
+    const bandByBlock: Record<string, number> = {};
+    const ageByBlock: Record<string, number> = {};
+    for (const b of res.blocks ?? []) {
+      const loc = b.block_loc;
+      if (typeof loc !== 'string' || loc.length === 0) continue;
+      bandByBlock[loc] = lensNum(b.band_index);
+      ageByBlock[loc] = lensNum(b.age_days);
+    }
+
+    const lens: BlockingAgeLens = {
+      asOf: String(res.as_of ?? ''),
+      edgeDays: Array.isArray(res.edge_days) ? res.edge_days.map((e) => Number(e)) : normalized.edges,
+      bands,
+      bandByBlock,
+      ageByBlock,
+      undated: { blockCount: lensNum(res.undated?.block_count), kg: lensNum(res.undated?.kg) },
+      total: {
+        blockCount: lensNum(res.total?.block_count),
+        kg: lensNum(res.total?.kg),
+        // All three stay NULL-preserving: an all-undated yard has no age at all.
+        kgWeightedAgeDays: lensNumOrNull(res.total?.kg_weighted_age_days),
+        oldestAgeDays: lensNumOrNull(res.total?.oldest_age_days),
+        oldestBlockLoc: res.total?.oldest_block_loc ?? null,
+      },
+    };
+
+    return { ok: true, lens };
+  } catch (err: unknown) {
+    console.error('[Blocking] fetchBlockingAgeLens failed:', err);
+    return { ok: false, reason: 'exception', message: AGE_LENS_UNREACHABLE_MESSAGE };
   }
 }

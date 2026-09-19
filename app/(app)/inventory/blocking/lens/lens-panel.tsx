@@ -56,6 +56,12 @@ export interface BlockingLensPanelFrameProps {
   caps: BlockingLensCapabilities;
   onClassifierChange: (classifier: BlockingLensClassifier | null) => void;
   /**
+   * Select a block on the grid, exactly as clicking its cell does. Passed straight
+   * through to the active lens, which uses it for a figure that NAMES a block (the
+   * age lens's "oldest 1,176 days at B-7B").
+   */
+  onFocusBlock?: (blockLoc: string) => void;
+  /**
    * Suppress the document Escape handler — passed `true` while the detail panel is
    * open so Escape closes the drawer first. See the header note.
    */
@@ -79,6 +85,7 @@ export function BlockingLensPanel({
   data,
   caps,
   onClassifierChange,
+  onFocusBlock,
   escapeSuppressed = false,
 }: BlockingLensPanelFrameProps) {
   const active = lenses.find((l) => l.id === activeId) ?? lenses[0];
@@ -154,8 +161,10 @@ export function BlockingLensPanel({
       </div>
 
       {/* ── Tab strip — only once there is a choice to make. ──
-          With ONE lens registered there is nothing to switch between, so no strip is
-          rendered; the header already names the lens. The frame handles N. */}
+          Two lenses are registered (Price, Age), so a price-viewer gets a strip. A
+          reader who may be offered only ONE of them — Production, or anyone with the
+          page's Prices toggle off — gets no strip at all rather than a lone tab or a
+          disabled placeholder; the header already names the lens. The frame handles N. */}
       {lenses.length > 1 && (
         <div
           role="tablist"
@@ -197,6 +206,7 @@ export function BlockingLensPanel({
           caps={caps}
           onClassifierChange={onClassifierChange}
           onRequestClose={onClose}
+          onFocusBlock={onFocusBlock}
         />
       </div>
     </aside>
