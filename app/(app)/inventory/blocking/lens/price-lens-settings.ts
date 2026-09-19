@@ -26,8 +26,16 @@
 // stops — that would paint "above market" in the ramp's yellow and say nothing.
 // `bandRampStop` maps (band index, band count) onto the ramp so the ends are always
 // the ends: 3 bands → stops 0 · 3 · 6, 2 bands → 0 · 6, 7 bands → all seven.
+//
+// That mapping is now SHARED (`lens/lens-ramp.ts`), because the age lens needs the
+// same arithmetic over a different colour scale — age is not cost, and tinting an old
+// block red would read as "expensive". The three exports below stay here, as the
+// price lens's own names for the COST ramp, so nothing that already imports them has
+// to learn a second module; they delegate rather than restate.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { LENS_RAMP_STOPS, rampClass, rampStop, type LensRampId } from './lens-ramp';
+import type { LensUnit } from './lens-shared';
 import {
   BLOCKING_PRICE_LENS_DEFAULT_EDGES,
   BLOCKING_PRICE_LENS_MAX_EDGES,
@@ -52,13 +60,16 @@ export const PRICE_LENS_EDGE_MIN = -50;
 export const PRICE_LENS_EDGE_MAX = 50;
 
 /** How many colour stops `globals.css` declares (`.lens-band-0` … `-6`). */
-export const PRICE_LENS_RAMP_STOPS = 7;
+export const PRICE_LENS_RAMP_STOPS = LENS_RAMP_STOPS;
+
+/** This lens paints on the COST ramp — emerald (cheapest) → rose (dearest). */
+export const PRICE_LENS_RAMP: LensRampId = 'cost';
 
 /** Which window (or typed figure) "market" is measured over. */
 export type PriceLensBasis = BlockingMarketBasisKey | 'manual';
 
-/** What the band rows and the ratio bar are measured in. */
-export type PriceLensUnit = 'kg' | 'blocks';
+/** What the band rows and the ratio bar are measured in. Shared with every lens. */
+export type PriceLensUnit = LensUnit;
 
 const BASIS_KEYS: readonly PriceLensBasis[] = [
   'this_month',
@@ -280,15 +291,18 @@ export function priceBandLabel(
  * hottest, whatever the band count. See the header note.
  */
 export function bandRampStop(index: number, bandCount: number): number {
-  const last = PRICE_LENS_RAMP_STOPS - 1;
-  if (bandCount <= 1) return 0;
-  const stop = Math.round((index * last) / (bandCount - 1));
-  return Math.max(0, Math.min(last, stop));
+  return rampStop(index, bandCount);
 }
 
-/** The class name for that stop. Kept here so nothing builds it by concatenation. */
+/**
+ * The class name for that stop on the COST ramp.
+ *
+ * It delegates to `lens-ramp.ts`, which is the one place either ramp's class prefix
+ * is spelled — so nothing here, and nothing in a shared row, builds a class name by
+ * concatenation.
+ */
 export function bandRampClass(index: number, bandCount: number): string {
-  return `lens-band-${bandRampStop(index, bandCount)}`;
+  return rampClass(PRICE_LENS_RAMP, index, bandCount);
 }
 
 // ── Persistence ─────────────────────────────────────────────────────────────

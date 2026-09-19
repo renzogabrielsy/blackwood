@@ -54,7 +54,12 @@ import { getLabHighlightText } from '@/types/table-settings';
 import type { LabMetric, LabHighlightSpec } from '@/types/table-settings';
 import { BlockingLensPanel } from './lens/lens-panel';
 import { resolveLens, visibleLenses } from './lens/registry';
-import { resolveLensCellClass, type BlockingLensClassifier, type BlockingLensId } from './lens/types';
+import {
+  resolveLensCellClass,
+  resolveLensCellTitle,
+  type BlockingLensClassifier,
+  type BlockingLensId,
+} from './lens/types';
 
 /** All warehouses in render order */
 const ALL_WAREHOUSE_KEYS = Object.keys(WAREHOUSES);
@@ -646,21 +651,26 @@ export function BlockingGrid({
   );
 
   /**
-   * A lens the reader may no longer be offered is CLOSED, immediately.
+   * A lens the reader may no longer be offered FALLS BACK to one they can see, and
+   * is closed only when there is nothing left to fall back to.
    *
-   * This is what makes flipping the page's "Prices" toggle OFF while the Price lens
-   * is open clear every tint on the same interaction: `canViewPrices` drops, the
-   * lens stops resolving through the registry, and both the panel and the
-   * classifier go. It is deliberately written against the REGISTRY rather than
-   * against the price flag, so a future lens with a different `canShow` gets the
-   * same behaviour with no new code.
+   * Two situations reach here and both want the same answer. Flipping the page's
+   * "Prices" toggle OFF while the Price lens is open: `canViewPrices` drops, Price
+   * stops resolving, and rather than closing the panel outright the frame switches to
+   * the Age lens — the reader asked to look at the grid through something, and one of
+   * the two lenses is still available to them. And a shared `?lens=price` link opened
+   * by a Production user, which lands on Age QUIETLY: no toast, because being unable
+   * to see prices is a fact about the reader and not an error they can act on.
+   *
+   * The classifier is dropped either way, so the previous lens's tint can never
+   * outlive it by a frame. Written against the REGISTRY rather than against the price
+   * flag, so a third lens with a different `canShow` gets all of this for free.
    */
   useEffect(() => {
-    if (lensId && !activeLens) {
-      setLensClassifier({ fn: null });
-      lensWriterRef.current?.(null);
-    }
-  }, [lensId, activeLens]);
+    if (!lensId || activeLens) return;
+    setLensClassifier({ fn: null });
+    lensWriterRef.current?.(lensOptions.length > 0 ? lensOptions[0].id : null);
+  }, [lensId, activeLens, lensOptions]);
 
   // ── Blend Proposal mode ──
   // OFF by default. When ON, cell clicks multi-SELECT occupied blocks (the detail panel
@@ -1445,12 +1455,12 @@ export function BlockingGrid({
         )}
 
         {/* ── Highlight (the docked LENS panel) ── */}
-        {/* Rendered only when at least one lens `canShow`s for this reader. With
-            Price the only lens registered, that means a Production user — whose
-            effective price flag is false — never sees this button at all. Once a
-            peso-free lens (Supplier, Age) is registered the button stays for every
-            role and only the Price tab is absent; that difference lives in each
-            lens's own `canShow`, not here. */}
+        {/* Rendered only when at least one lens `canShow`s for this reader — and since
+            the AGE lens carries no ₱ and reads `canShow: () => true`, that is now
+            EVERY role including Production, and with the page's Prices toggle off.
+            Only the Price TAB is absent for them; that difference lives in each lens's
+            own `canShow`, never here. The button opens the first lens this reader may
+            see, so a price-viewer gets Price and Production gets Age. */}
         {lensOptions.length > 0 && (
           <button
             onClick={() => (lensId ? closeLens() : openLens(lensOptions[0].id))}
@@ -1466,7 +1476,9 @@ export function BlockingGrid({
             title={
               lensId
                 ? 'Close the highlight panel and clear the grid'
-                : 'Light up the grid by price, against market'
+                : // Named from the REGISTRY, so the wording can never claim a lens
+                  // this reader cannot be offered (Production reads "by age").
+                  `Light up the grid by ${lensOptions.map((l) => l.label.toLowerCase()).join(' or ')}`
             }
           >
             <Highlighter className="w-3.5 h-3.5" />
@@ -1580,6 +1592,10 @@ export function BlockingGrid({
             data={data}
             caps={lensCaps}
             onClassifierChange={handleClassifierChange}
+            // A lens that NAMES a block (the age lens's oldest pile) can open it,
+            // and it opens it exactly the way clicking the cell does — one handler,
+            // so blend mode and the URL writer behave identically from both doors.
+            onFocusBlock={handleCellClick}
             // Escape steps back one rung: while the detail drawer is open it owns
             // the key, and the lens closes on the next press.
             escapeSuppressed={!!selectedLocKey}
@@ -1985,6 +2001,11 @@ function WarehouseRow({ whseKey, row, cols, colStart, selectedLocKey, onCellClic
         // classifier means "leave this cell un-lensed", which is a third answer and
         // is exactly what an UNPRICED block gets (never the cheapest band).
         const lensClass = resolveLensCellClass(lensClassifier, locKey);
+        // The active lens may have one extra line for the cell's EXISTING native
+        // title (the age lens says how old the block is). It EXTENDS that title
+        // rather than replacing it, and it is `null` for a cell the lens cannot
+        // place — no new hover mechanism is introduced on 220 cells.
+        const lensTitle = resolveLensCellTitle(lensClassifier, locKey);
 
         if (blockData) {
           // view_blocking_grid only emits STORED/IN-USE/SUNDRYING/SUNDRIED batches, so the
@@ -2004,6 +2025,7 @@ function WarehouseRow({ whseKey, row, cols, colStart, selectedLocKey, onCellClic
               onClick={() => onCellClick(locKey)}
               spotlightClass={spotlightClass}
               supplierMix={formatSupplierMix(supplierByBlock, locKey)}
+              lensTitle={lensTitle}
               canViewPrices={canViewPrices}
               labHighlights={labHighlights}
               blendMode={blendMode}
@@ -2048,9 +2070,15 @@ interface OccupiedCellProps {
   blendSelected: boolean;
   /** "ORNALES 62% · PAQUIBOT 38%" — native-title supplier mix, undefined when unknown. */
   supplierMix?: string;
+  /**
+   * One extra native-title line from the active lens ("224.1 days old (average of
+   * what's in the block)"). Null when no lens is open, or when the lens cannot place
+   * this block — an undated pile must not be told it is 0 days old.
+   */
+  lensTitle?: string | null;
 }
 
-function OccupiedCell({ locKey, data, isSelected, onClick, spotlightClass, canViewPrices, labHighlights, blendMode, blendSelected, supplierMix }: OccupiedCellProps) {
+function OccupiedCell({ locKey, data, isSelected, onClick, spotlightClass, canViewPrices, labHighlights, blendMode, blendSelected, supplierMix, lensTitle }: OccupiedCellProps) {
   const balanceTextClass = getBalanceTextClass(data.balance, data.total_in);
   const balancePct = data.total_in > 0 ? (data.balance / data.total_in) * 100 : 0;
   const isCritical = balancePct < 10;
@@ -2059,6 +2087,11 @@ function OccupiedCell({ locKey, data, isSelected, onClick, spotlightClass, canVi
   const parts = data.batch_code.split('-');
   const batchLine1 = `${parts[0]} ${parts[1]}`;
   const batchLine2 = parts.slice(2).join('-');
+
+  // The cell's existing native title, plus whatever the open lens has to add. Both
+  // halves are optional, so an empty result stays `undefined` and the cell carries no
+  // `title` attribute at all — exactly as before either existed.
+  const title = [lensTitle, supplierMix].filter(Boolean).join(' · ') || undefined;
 
   return (
     <div
@@ -2071,7 +2104,7 @@ function OccupiedCell({ locKey, data, isSelected, onClick, spotlightClass, canVi
         spotlightClass,
       )}
       onClick={onClick}
-      title={supplierMix}
+      title={title}
       role={blendMode ? 'checkbox' : undefined}
       aria-checked={blendMode ? blendSelected : undefined}
     >

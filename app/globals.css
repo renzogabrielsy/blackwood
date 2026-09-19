@@ -670,12 +670,14 @@ input[type=number] {
   box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.65), 0 0 16px rgba(249, 115, 22, 0.4);
 }
 
-/* ─── Blocking LENS bands (the price lens's ramp) ───────────────────────────────
-   A lens marks a cell by BAND, and a band's colour is decided by its POSITION on
-   this ramp — cheapest at stop 0, dearest at stop 6 — by
-   `lens/price-lens-settings.ts::bandRampStop`, so a three-band lens uses stops
-   0 · 3 · 6 and never the ramp's first three. The stops are green → yellow → red,
-   the conventional cost ramp, so "cheap" and "expensive" read without a legend.
+/* ─── Blocking LENS bands (TWO ramps: cost, and age) ───────────────────────────
+   A lens marks a cell by BAND, and a band's colour is decided by its POSITION on the
+   ramp ITS OWN registration names — `ramp: 'cost'` → `.lens-band-*`, `ramp: 'age'` →
+   `.lens-age-*` — by `lens/lens-ramp.ts::rampStop`, so a three-band lens uses stops
+   0 · 3 · 6 and never the ramp's first three. The COST stops are green → yellow →
+   red, the conventional cost ramp, so "cheap" and "expensive" read without a legend;
+   the AGE stops are sky → indigo → fuchsia, deliberately sharing no hue with them
+   (see the note beside them below).
 
    THESE MUST SIT AFTER `.blocking-cell-occupied`, which is the same load-bearing
    rule the supplier spotlights above carry: same specificity, so SOURCE ORDER
@@ -703,13 +705,45 @@ input[type=number] {
 .lens-band-5 { --lens-hue: 239 68 68; }    /* red */
 .lens-band-6 { --lens-hue: 225 29 72; }    /* rose — dearest */
 
+/* ─── The AGE ramp ───────────────────────────────────────────────────────────
+   A SECOND ramp, and it deliberately shares NO hue family with the cost one above.
+   On this page green→amber→red already means cheap→dear, so tinting a 900-day-old
+   block red would be read as "expensive" — a fact about a different column. Age runs
+   sky → blue → indigo → violet → purple → fuchsia: monotone in "deepening", and no
+   green and no amber anywhere in it, so the two vocabularies cannot be confused even
+   when a reader switches tabs between them.
+
+   The 4-band default (60 / 120 / 365 days) takes stops 0 · 2 · 4 · 6 — sky, indigo,
+   purple, fuchsia — which is the widest separation the scale can give it.
+
+   It joins the SAME tint rules below rather than declaring its own, so it inherits
+   the measured alpha (22% light / 30% dark) and the inset-ring technique verbatim.
+   That is what keeps a lab-highlight red on MC/ASH at the contrast it was measured
+   at: a second copy of those rules is how one ramp quietly ends up darker than the
+   other. `.lens-band-picked` and `.lens-band-swatch` are hue-agnostic (they read
+   `--lens-hue`), so both ramps get the picked ring and the legend swatch for free. */
+.lens-age-0 { --lens-hue: 56 189 248; }    /* sky — freshest */
+.lens-age-1 { --lens-hue: 37 99 235; }     /* blue */
+.lens-age-2 { --lens-hue: 79 70 229; }     /* indigo */
+.lens-age-3 { --lens-hue: 124 58 237; }    /* violet */
+.lens-age-4 { --lens-hue: 147 51 234; }    /* purple */
+.lens-age-5 { --lens-hue: 192 38 211; }    /* fuchsia */
+.lens-age-6 { --lens-hue: 162 28 175; }    /* deep fuchsia — oldest */
+
 .lens-band-0,
 .lens-band-1,
 .lens-band-2,
 .lens-band-3,
 .lens-band-4,
 .lens-band-5,
-.lens-band-6 {
+.lens-band-6,
+.lens-age-0,
+.lens-age-1,
+.lens-age-2,
+.lens-age-3,
+.lens-age-4,
+.lens-age-5,
+.lens-age-6 {
   background-image:
     linear-gradient(
       135deg,
@@ -730,7 +764,14 @@ input[type=number] {
 :is(.dark) .lens-band-3,
 :is(.dark) .lens-band-4,
 :is(.dark) .lens-band-5,
-:is(.dark) .lens-band-6 {
+:is(.dark) .lens-band-6,
+:is(.dark) .lens-age-0,
+:is(.dark) .lens-age-1,
+:is(.dark) .lens-age-2,
+:is(.dark) .lens-age-3,
+:is(.dark) .lens-age-4,
+:is(.dark) .lens-age-5,
+:is(.dark) .lens-age-6 {
   background-image:
     linear-gradient(
       135deg,

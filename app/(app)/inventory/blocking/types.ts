@@ -258,6 +258,124 @@ export const BLOCKING_TRAILING_DAYS_MIN = 1;
 export const BLOCKING_TRAILING_DAYS_MAX = 400;
 export const BLOCKING_TRAILING_DAYS_DEFAULT = 30;
 
+// ─── Age lens ────────────────────────────────────────────────────────────────
+// "Show me the charcoal that has been sitting." The SECOND lens on the frame the price
+// lens built, over `fn_blocking_age_lens` (migration `20260919133042_blocking_age_lens`).
+//
+// TWO THINGS THAT MAKE IT DIFFERENT FROM ITS PRICE SIBLING, both deliberate:
+//
+//   1. NOTHING HERE IS PRICE-SENSITIVE. No cost/price/value figure exists in the
+//      payload and none is derivable from it — age, kilograms, counts and percentages
+//      only. So `fetchBlockingAgeLens` has NO `canViewPrices()` call and this lens is
+//      shown to EVERY role INCLUDING Production. Do not "fix" that asymmetry by
+//      copying the price gate across; `scripts/verify-blocking-age-lens.ts` asserts the
+//      gate's ABSENCE precisely so nobody does.
+//
+//   2. AGE IS NOT DEFINED HERE, OR IN SQL WRITTEN FOR THIS LENS. It is the batch's
+//      kg-weighted MEAN DELIVERY DATE carried by its remaining balance, published by
+//      `view_batch_age_days` and byte-identical to `view_analytics_aging_watchlist.age_days`
+//      (proven every run, gap exactly 0). There is NO FIFO and none is possible, since
+//      `rc_out` records which BATCH kilos left and never which delivery within it.
+
+/**
+ * One band of the lens — a half-open interval of DAYS, `[lowerDays, upperDays)`.
+ *
+ * `lowerDays` is **0 on the first band and never null** — age has a floor where money
+ * did not, so there is nothing to leave open below. It is a LABEL, not the membership
+ * test: a block whose age is NEGATIVE (a future-dated delivery) still lands in band 0.
+ * `upperDays` is null on the LAST band and **null means OPEN ABOVE, never 0 days**.
+ *
+ * Every band is present even when it holds no blocks, so a legend can render the whole
+ * scale without inventing rows.
+ */
+export interface BlockingAgeBand {
+  /** 0-based, ascending by age. */
+  index: number;
+  lowerDays: number;
+  upperDays: number | null;
+  blockCount: number;
+  kg: number;
+  /** PERCENT 0–100 of the DATED population's kilograms. Null when nothing is dated. */
+  kgSharePct: number | null;
+  /** PERCENT 0–100 of the DATED population's blocks. Null when nothing is dated. */
+  blockSharePct: number | null;
+  /** The band's kg-weighted mean age. **Null, never 0, on an empty band** — no
+   *  charcoal there means no age there. Full precision; round it for display. */
+  kgWeightedAgeDays: number | null;
+}
+
+/**
+ * The whole lens, for one set of cut lines.
+ *
+ * Checkable invariants the data layer guarantees (and `scripts/verify-blocking-age-lens.ts`
+ * proves against the live database):
+ *   Σ `bands[].blockCount` + `undated.blockCount` === `total.blockCount`
+ *   Σ `bands[].kg`         + `undated.kg`         === `total.kg`   (gap exactly 0)
+ *   Σ `kgSharePct` === 100  and  Σ `blockSharePct` === 100  (over the DATED population)
+ *   `Object.keys(bandByBlock).length + undated.blockCount === total.blockCount`
+ *   `bandByBlock` and `ageByBlock` have IDENTICAL key sets.
+ */
+export interface BlockingAgeLens {
+  /** The Asia/Manila calendar date the ages were measured against. `yyyy-MM-dd`. */
+  asOf: string;
+  /** The cut lines in DAYS actually used, de-duplicated and ascending. */
+  edgeDays: number[];
+  bands: BlockingAgeBand[];
+  /**
+   * `block_loc` → band index. THE map the grid colours a cell from.
+   *
+   * A block is ABSENT from this map when its batch has NO dated delivery, so it has no
+   * age at all. That is deliberate and is not a gap to patch: render it in its normal
+   * un-lensed style, never in the freshest band. `undated` says how many there are.
+   */
+  bandByBlock: Record<string, number>;
+  /**
+   * `block_loc` → that block's age in days, **rounded to 1 decimal** for display.
+   * Same key set as `bandByBlock`.
+   *
+   * The band was decided on the EXACT fractional age, so a block at 59.97 days reads
+   * `60.0` here while sitting in band 0. That is correct, not an off-by-one — never
+   * re-derive a band from this rounded number.
+   */
+  ageByBlock: Record<string, number>;
+  /** Occupied positive-balance blocks whose batch has no dated delivery — in no band,
+   *  out of both share denominators and out of every weighted age. NOT 0 days old. */
+  undated: { blockCount: number; kg: number };
+  /** Every occupied block with a positive balance — banded plus undated. */
+  total: {
+    blockCount: number;
+    kg: number;
+    /** Weighted over the DATED kilos only, while `kg` above counts undated blocks too
+     *  (the folds have to add up to the yard). Null when nothing is dated. */
+    kgWeightedAgeDays: number | null;
+    oldestAgeDays: number | null;
+    oldestBlockLoc: string | null;
+  };
+}
+
+/** Why an age-lens call came back empty. Each maps to a sentence written for a human. */
+export type BlockingAgeLensRefusalReason =
+  /** No signed-in user. The page itself is behind auth, so this is a session problem. */
+  | 'not_signed_in'
+  /** A cut line that is not a whole number, is ≤ 0, or is above 5,000 days. */
+  | 'invalid_edge'
+  | 'no_edges'
+  | 'too_many_edges'
+  | 'rpc_error'
+  | 'exception';
+
+export type BlockingAgeLensResult =
+  | { ok: true; lens: BlockingAgeLens }
+  | { ok: false; reason: BlockingAgeLensRefusalReason; message: string };
+
+/** The cap the SQL function enforces on the DE-DUPLICATED cut-line list. */
+export const BLOCKING_AGE_LENS_MAX_EDGES = 6;
+/** `p_edge_days`' own default — up to 60 days / 60–120 / 120–365 / over a year. */
+export const BLOCKING_AGE_LENS_DEFAULT_EDGES: readonly number[] = [60, 120, 365];
+/** Cut-line bounds in DAYS. Both ends are refused by SQL *and* by the action. */
+export const BLOCKING_AGE_EDGE_MIN_DAYS = 1;
+export const BLOCKING_AGE_EDGE_MAX_DAYS = 5000;
+
 // Blend Proposal types (`BlendProposal`, `BlendProposalBlock`) live in `actions.ts`
 // alongside the `buildBlendProposal` server action that produces them — import them
 // from there. They are co-located with the action because the action is their sole

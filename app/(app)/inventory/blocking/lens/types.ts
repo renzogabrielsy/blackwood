@@ -34,6 +34,7 @@
 import type { ComponentType } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import type { BlockData } from '../types';
+import type { LensRampId } from './lens-ramp';
 
 /** A lens's stable identity — also its `?lens=` value and its settings key. */
 export type BlockingLensId = string;
@@ -50,6 +51,19 @@ export type BlockingLensId = string;
 export interface BlockingLensClassification {
   className?: string;
   dimmed?: boolean;
+  /**
+   * One extra line for the cell's NATIVE `title`, e.g. the age lens's
+   * "224.1 days old (average of what's in the block)".
+   *
+   * It rides on the classification rather than arriving as a second map because the
+   * lens already answers "what do you know about this cell?" exactly once per cell,
+   * and because a cell the lens cannot place (unpriced, undated) must say nothing —
+   * which is what `undefined` here means. It EXTENDS the title the cell already
+   * carries (the supplier mix); it never replaces the hover mechanism, because
+   * adding a real tooltip to 220 cells is a different and much more expensive
+   * decision.
+   */
+  title?: string;
 }
 
 /** `block_loc` → how it is marked. `null` = leave the cell un-lensed. */
@@ -85,6 +99,14 @@ export interface BlockingLensPanelProps {
    * because that is a fact about the reader and not an error they can act on.
    */
   onRequestClose: () => void;
+  /**
+   * Select a block on the grid, exactly as clicking its cell does.
+   *
+   * Optional because the dev fixture has no grid to select on. A lens uses it for a
+   * figure that NAMES a block — the age lens's "oldest 1,176 days at B-7B" — so the
+   * name is a way to go and look at it rather than a string to hunt for by eye.
+   */
+  onFocusBlock?: (blockLoc: string) => void;
 }
 
 /**
@@ -103,6 +125,15 @@ export interface BlockingLensDefinition {
   icon: LucideIcon;
   /** One short line under the title — what this lens answers. */
   blurb: string;
+  /**
+   * Which COLOUR SCALE this lens paints with (`lens/lens-ramp.ts`).
+   *
+   * It is a property of the LENS, not of the frame: the price lens's emerald→rose
+   * cost ramp would say "expensive" about an old block, so the age lens declares its
+   * own. Every shared presentational piece derives its swatch class from this id, so
+   * no component and no panel ever spells a `.lens-band-*` class itself.
+   */
+  ramp: LensRampId;
   /** May this lens be offered to this reader at all? */
   canShow: (caps: BlockingLensCapabilities) => boolean;
   Panel: ComponentType<BlockingLensPanelProps>;
@@ -126,4 +157,21 @@ export function resolveLensCellClass(
   if (!marked) return null;
   if (marked.dimmed) return 'spotlight-dimmed';
   return marked.className ?? null;
+}
+
+/**
+ * The extra native-`title` line the active lens has for this cell, or `null`.
+ *
+ * Separate from `resolveLensCellClass` on purpose: the class decides how the cell
+ * LOOKS and is needed on every render of every cell, while this decides what it
+ * SAYS on hover and is merged with the title the cell already carries. Keeping them
+ * as two one-line resolvers means neither grows a second responsibility, and a lens
+ * that has nothing to add simply omits `title` and every caller keeps working.
+ */
+export function resolveLensCellTitle(
+  classifier: BlockingLensClassifier | null,
+  locKey: string,
+): string | null {
+  if (!classifier) return null;
+  return classifier(locKey)?.title ?? null;
 }
