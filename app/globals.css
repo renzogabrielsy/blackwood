@@ -586,27 +586,48 @@ input[type=number] {
    differently each time.
 
    It is now a CSS GRID with FOUR EXPLICIT TRACKS, in this order and no other:
-     1  supplier search + warehouse filter
-     2  status + lab chips
-     3  the five totals
-     4  the mode toggles
+     1  supplier search + warehouse filter   (ELASTIC — wraps inside itself)
+     2  status + lab chips                    (ELASTIC — wraps inside itself)
+     3  the five totals                       (RIGID — one line, never wraps)
+     4  the mode toggles                      (RIGID — 4 or 2 columns, never wraps)
    plus a 1px divider track between each pair. A section owns its slot: it may wrap
    only INSIDE itself, it can never reorder, and it can never spill into a
    neighbour, because a grid item cannot leave its track.
 
-   `minmax(<min>, max-content)` is the whole mechanism. Roomy → every section takes
-   its natural width and nothing wraps. Tight → tracks fall back to the MINIMUMS
-   listed below and each section wraps within its own slot. Narrower than the sum of
-   the minimums → the wrapper's `overflow-x-auto` engages and the strip SCROLLS —
-   "never crush, always scroll", the grid form of the rule.
+   ── THE 2026-09-21 (second pass) CORRECTION: A `flex-wrap` ROW'S MAX-CONTENT IS
+      ITS ONE-LINE WIDTH. ───────────────────────────────────────────────────────
+   The first pass gave every section `minmax(<min>, max-content)` and section 1 a
+   `flex-wrap` row holding the supplier search AND the seven warehouse chips. A
+   wrapping flex container's max-content is the width of ALL its items on ONE line,
+   so section 1 ASKED FOR 620px (measured) while it always renders as search-over-
+   chips in 444. The four max-contents therefore summed to 2,174px against 1,766px
+   of real room at a 1800px viewport, the grid shrank EVERY track toward its
+   minimum, and the two sections that cannot wrap tidily — the totals and the modes
+   — wrapped 4 + 1 and 3 + 1 while 214px of slack sat stranded inside section 1.
+   The lesson, which generalises: **a section that always renders stacked must be
+   BUILT stacked, or it starves its neighbours.**
 
-   The minimums are each section's smallest sensible width and are asserted by
-   `scripts/verify-blocking-lens-ui.ts`, so a later edit cannot quietly let a
-   section crush:
-     S1 232px (the supplier search's own width — chips wrap under it)
+   So section 1 is now an explicit TWO-ROW grid (search on row 1, chips on row 2)
+   and its max-content is the WIDER of the two rows — 384px measured, not 620 — and
+   the two rigid sections are sized `max-content` outright so a squeeze can never
+   wrap them.
+
+   `minmax(<min>, max-content)` on the two ELASTIC tracks is the give in the system.
+   Roomy → every section takes its natural width, nothing wraps, and
+   `justify-content: space-between` spreads the slack EVENLY BETWEEN the sections
+   rather than stranding it inside one. Tight → tracks 1 and 2 fall back to the
+   MINIMUMS below and wrap within their own slots. Narrower than the sum → the
+   wrapper's `overflow-x-auto` engages and the strip SCROLLS — "never crush, always
+   scroll", the grid form of the rule.
+
+   The two stated minimums are asserted by `scripts/verify-blocking-lens-ui.ts`, so
+   a later edit cannot quietly let a section crush:
+     S1 232px (the supplier search's own 230px width — the chips wrap under it)
      S2 236px (two rows of status/lab pills)
-     S3 180px (the totals, two per row)
-     S4 200px (two mode buttons per row)
+   Tracks 3 and 4 have NO stated minimum on purpose: their content is a single
+   nowrap line and a fixed-column grid, so it cannot shrink and a number would be
+   fiction. Their measured widths (a price-viewer, 2-column modes) are ~452 and
+   ~296, which puts the strip's own scroll threshold at ~1,270px of wrapper width.
 
    WHY A MODE TOGGLE NO LONGER MOVES ANYTHING: each toggle reserves the width of its
    ON/OFF pill and each count reserves its badge, so a section's own max-content does
@@ -617,11 +638,71 @@ input[type=number] {
 .blocking-controls-strip {
   display: grid;
   align-items: center;
+  /* Spare width becomes even space BETWEEN the sections. Never stranded inside one
+     — that is exactly the bug this pass fixed, and a `1fr` track anywhere here
+     would bring it straight back. */
+  justify-content: space-between;
   grid-template-columns:
     minmax(232px, max-content) 1px
     minmax(236px, max-content) 1px
-    minmax(180px, max-content) 1px
-    minmax(200px, max-content);
+    max-content 1px
+    max-content;
+}
+/* The strip's scrolling wrapper is also the CONTAINER the mode grid queries, so
+   "does the strip have room for four buttons in a row?" is answered by the strip's
+   own width and not by the viewport's — the page's padding, and any future sibling
+   of the grid, cannot put that answer out by a few pixels. */
+.blocking-strip-scroller {
+  container-type: inline-size;
+  container-name: blockingstrip;
+}
+/* SECTION 1 — an explicit TWO-ROW block: the supplier search, then the warehouse
+   chips. Building it stacked is what keeps its max-content at the wider of the two
+   rows instead of their sum (see the correction above). The chip row itself stays
+   `flex-wrap`: measured, this section's track legitimately falls to 315px at a
+   1512px viewport and to its 232px floor under real pressure, and a nowrap chip row
+   would then SPILL OUT of its track — the one thing the four-track grid exists to
+   make impossible. */
+.blocking-strip-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: start;
+}
+/* SECTION 4 — the mode toggles, as a grid of `max-content` columns so they can
+   never wrap into a ragged 3 + 1. TWO columns by default (a clean 2 × 2 for a
+   price-viewer's four buttons, 2 + 1 for a price-denied reader's three), ONE ROW
+   once the strip is measurably wide enough to hold them all. `justify-items: start`
+   keeps each button at its own natural width inside its column. */
+.blocking-strip-modes {
+  display: grid;
+  grid-template-columns: repeat(2, max-content);
+  align-items: center;
+  justify-items: start;
+}
+/* THREE buttons in TWO columns: the third takes the whole second row. Without this
+   the widest of the three lands in column 1 and stretches it, leaving a measured
+   32px hole between the two buttons above — `max-content` columns are as wide as
+   their widest member, and a row of one has no business setting that width. */
+.blocking-strip-modes[data-mode-count='3'] > *:last-child {
+  grid-column: 1 / -1;
+}
+/* The thresholds are MEASURED, not guessed: they are the wrapper widths at which
+   the sum of the four tracks plus the dividers and gaps still fits with one row of
+   modes. Three buttons need less, so they straighten out sooner — measured, a
+   price-denied reader is one row of three from a 1766px strip and 2 + 1 at 1478. */
+@container blockingstrip (min-width: 1540px) {
+  .blocking-strip-modes[data-mode-count='3'] {
+    grid-template-columns: repeat(3, max-content);
+  }
+  /* One row again, so the third button is an ordinary cell. */
+  .blocking-strip-modes[data-mode-count='3'] > *:last-child {
+    grid-column: auto;
+  }
+}
+@container blockingstrip (min-width: 1910px) {
+  .blocking-strip-modes[data-mode-count='4'] {
+    grid-template-columns: repeat(4, max-content);
+  }
 }
 /* Phone: the four sections STACK, in the same order, one per row. A 900px-wide
    strip inside a 375px screen would be all scroll and no overview, and the

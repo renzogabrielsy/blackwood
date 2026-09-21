@@ -54,3 +54,11 @@ path, not from reproducing the stall; fixtures used injected adapters.
 ## 6. Git state
 `main` = `origin/main` after the merge. Branch kept. Merged worktrees under `.claude/worktrees/`
 can be removed. Fly worker unchanged (**v31**).
+
+## 7. ADDENDUM (same day) — the strip still wrapped on the live page
+Renzo's follow-up screenshot: totals 4+1, toggles 3+1, a hole beside the search. Cause: a `flex-wrap`
+row's max-content is its ONE-LINE width, so section 1 over-claimed 620px and starved its neighbours.
+Fixed on `fix/blocking-strip-wrap`: section 1 built stacked, totals `nowrap` on a `max-content` track,
+modes a 4-or-2 grid, spare width between sections. **Lesson: a section that always renders stacked
+must be BUILT stacked.** Cost: the strip scrolls sideways below ~1300px. Still unverified on the real
+signed-in page; Renzo has not yet confirmed whether the lens now tints or the blend columns show.

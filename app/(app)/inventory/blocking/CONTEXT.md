@@ -48,7 +48,7 @@ Physical warehouse grid visualization — the digital equivalent of the Excel bl
 | `lens/lens-customize.tsx` | **NEW, EXTRACTED. `LensCustomize`** — the Customize-bands disclosure both lenses put their cut lines behind: the `Collapsible` + its `N/6 cut lines` trigger, the chip row with per-chip removers, an optional **quick-add** row (the age lens's common cuts; Price passes none, so its markup is unchanged), the add box + Add button, the **cap stated as a sentence** rather than a dead button, the per-band rename inputs and the two resets. It owns the SHAPE; every word, number and dimension is passed in by the lens. |
 | `lens/lens-refusal-banner.tsx` | **NEW, EXTRACTED. `RefusalBanner`** — the inline, PERSISTENT, copyable refusal (the project's error HARD RULE, satisfied by a banner because a refusal about a panel's own settings would be homeless as a toast the moment the panel closed). Shared so neither lens can quietly lose its Copy button. |
 | `../../../dev/table-playground/agelens/` | **NEW, KEPT (not deleted).** `page.tsx` + `agelens-fixture.tsx` — the AGE lens's look rig **and the TWO-LENS rig for the frame**, gated exactly like the `pricelens` sibling (`notFound()` unless `TABLE_PLAYGROUND`, plus `middleware.ts`'s `PUBLIC_PATHS` prefix). It mounts the REAL frame with the REAL `AgeLensPanel` **and** `PriceLensPanel` (each through its adapter port) over static contract-shaped payloads, so the questions Node cannot answer can be looked at with no login: does the age ramp read fresh→old, is a lab-highlighted MC still legible on band 4's purple, do the two tabs feel like one tool, does the docked column still let the grid scroll at 375px. `?bands=2\|3\|4\|5\|7` seeds the cut lines **through the same localStorage key a real reader's settings use**; `?undated=1` adds undated blocks; **`?prices=0` simulates a PRICE-DENIED reader** (the lens list is filtered by each definition's own `canShow`, so the tab strip correctly disappears and Age stands alone). Holds no data access of any kind. |
-| `../../../dev/table-playground/blockinghead/` | **NEW (2026-09-21), KEPT.** `page.tsx` + `blockinghead-fixture.tsx` — the CONTROL STRIP's and the BLEND TABLE's look rig, gated exactly like the `pricelens` / `agelens` siblings (`notFound()` unless `TABLE_PLAYGROUND`, plus `middleware.ts`'s `PUBLIC_PATHS` prefix). It mounts the REAL `BlockingGrid` over a static `BlockingGridData` and the REAL `BlendProposalDialog` over a static facts record, because Node can assert that the strip is a four-track grid with the documented minimums but cannot tell you whether a SECTION MOVES when a mode is switched on, whether the strip scrolls rather than crushes at 1024px, or whether a supplier pill is legible in dark mode. `?prices=0` gives a price-denied reader; `?blend=1` opens the modal with a GREEN, an ORANGE and an em-dash row. Holds no data access of any kind. |
+| `../../../dev/table-playground/blockinghead/` | **NEW (2026-09-21), KEPT.** `page.tsx` + `blockinghead-fixture.tsx` — the CONTROL STRIP's and the BLEND TABLE's look rig, gated exactly like the `pricelens` / `agelens` siblings (`notFound()` unless `TABLE_PLAYGROUND`, plus `middleware.ts`'s `PUBLIC_PATHS` prefix). It mounts the REAL `BlockingGrid` over a static `BlockingGridData` and the REAL `BlendProposalDialog` over a static facts record, because Node can assert that the strip is a four-track grid with the documented minimums but cannot tell you whether a SECTION MOVES when a mode is switched on, whether the strip scrolls rather than crushes at 1024px, or whether a supplier pill is legible in dark mode. `?prices=0` gives a price-denied reader; `?blend=1` opens the modal with a GREEN, an ORANGE and an em-dash row. Holds no data access of any kind. **ITS FIGURES ARE THE LIVE PAGE'S OWN SHAPE (2026-09-21), because the strip is MEASURED by them** — it occupies **170 of the real 220 slots** (so `77.3%` falls out of the count rather than being typed) and its last block absorbs the rounding residual on both weight and price so the totals land exactly on `10,543.09 t · 170 / 220 · 77.3% · ₱ 389,587,962 · ₱ 36.95`; a rig printing `1,234.00 t` would answer a narrower question than the one being asked, since a 5-digit tonnage and a 9-digit peso total are what set section 3's width. The Proposals badge reads the real `fetchBlendProposalList`, which degrades to an empty list with no session, so it shows `0` rather than a count — its width is reserved (`w-[26px] tabular-nums`), so a single digit either way is the same measurement. |
 | `../../../dev/table-playground/pricelens/` | **NEW, KEPT (not deleted).** `page.tsx` + `pricelens-fixture.tsx` — the lens's LOOK RIG, gated exactly like the `rcmprint` sibling (`notFound()` unless `TABLE_PLAYGROUND`, plus `middleware.ts`'s `PUBLIC_PATHS` prefix). It mounts the REAL `BlockingLensPanel` + `PriceLensPanel` (through the adapter port) and the REAL cell classes over a static contract-shaped payload, so the questions Node cannot answer — does the ramp read cheap→expensive, is a lab-highlighted MC still legible on band 3's amber, does the docked column still let the grid scroll at 375px — can be looked at in both themes with no login. `?bands=2|3|4|5|7` seeds the edge offsets **through the same localStorage key a real reader's settings use**; `?unpriced=1` adds unpriced blocks. Holds no data access of any kind. |
 | `CONTEXT.md` | This file |
 
@@ -1145,9 +1145,11 @@ ring.
 
 ### The CONTROL STRIP, the LEGEND BAR and the blend table's supplier columns (2026-09-21)
 
-> **SHIPPED.** Four changes from the owner's review of the LIVE page. Proofs:
-> `npx tsx scripts/verify-blocking-lens-ui.ts` (**139 assertions**, up from 114 — five
-> of the originals were RESTATED, each for a stated reason and each listed below).
+> **SHIPPED.** Four changes from the owner's review of the LIVE page, plus a SECOND
+> PASS on the strip's own layout (see "A `flex-wrap` ROW'S MAX-CONTENT" below). Proofs:
+> `npx tsx scripts/verify-blocking-lens-ui.ts` (**144 assertions**, up from 114 — five
+> of the originals were RESTATED in the first pass and TWO MORE in the second, each for
+> a stated reason and each listed below).
 > Look rigs: `/dev/table-playground/blockinghead` (the strip, the blend table),
 > `/dev/table-playground/pricelens` + `/agelens` (the bar and the popover).
 
@@ -1227,6 +1229,61 @@ Prices toggle cannot resize section 3 either. A reader who may never see prices 
 slot to reserve and simply gets a narrower section; there is no toggle for them to move
 it with. **Measured in a real browser, section boxes `[x,y,w,h]` before and after
 toggling all four modes, at 1512 / 1280 / 1024 px: byte-identical every time.**
+
+#### ⚠️ SECOND PASS — A `flex-wrap` ROW'S MAX-CONTENT IS ITS ONE-LINE WIDTH
+
+The four-track grid was right and it still starved three of its own sections. The
+owner's next screenshot, the LIVE page at 1790px with prices on: `Total Balance ·
+Occupied · Utilization · Total Value` on line one and **`Wtd Avg PHP/KG` alone on
+line two**; `Prices · Highlight · Proposals` then **`Blend Proposal` alone**; and a
+wide empty hole to the right of the supplier search. *"It's still a bit weird
+looking."*
+
+**MEASURED, in a browser, before touching anything.** A section's track is
+`minmax(<min>, max-content)`, and **section 1 was a `flex-wrap` row holding the
+search AND the seven warehouse chips — so its max-content was the width of all of
+them on ONE line, 620px, although it has always RENDERED as search-over-chips in
+444.** The four max-contents summed to **2,174px against 1,766px of real room**, so
+the grid shrank every track toward its minimum by its share of the freedom: the
+totals and the modes, which cannot wrap tidily, wrapped — and **214px of slack sat
+stranded inside section 1**, which is the hole in the screenshot. The deficit and
+the hole were the same 200-odd pixels seen from both ends.
+
+**The lesson generalises past this strip: a section that always renders stacked must
+be BUILT stacked, or it starves its neighbours.**
+
+Three changes, and each one is a track:
+
+| Section | Was | Is | max-content |
+|---|---|---|---|
+| 1 filters | one `flex-wrap` row | **`.blocking-strip-filters`** — a single-column grid: search, then chips | 620 → **384** |
+| 3 totals | `flex-wrap`, `minmax(180px, …)` | `sm:flex-nowrap` on a **`max-content`** track — one line, always | 516 → 468, **1 row** |
+| 4 modes | `flex-wrap`, `minmax(200px, …)` | **`.blocking-strip-modes`** — a grid of `max-content` columns, 4 across or **2 × 2**, never 3 + 1 | 543 → **295** (2 col) |
+
+The one-row rule for the modes is a **container query on the strip's own scroller**
+(`container-type: inline-size; container-name: blockingstrip`), because "is there
+room" is a question about the strip and not about the viewport, and `data-mode-count`
+tells it whether this reader has three buttons or four — CSS cannot count children.
+Spare width now goes to `justify-content: space-between`, i.e. into the spaces
+BETWEEN the sections; a `1fr` track anywhere here would put it back inside one.
+
+**The totals were tidied in the same pass.** Each cell is `flex flex-col items-end`,
+so the label and the value each shrink to their own content and the five figures
+share one right edge; the gaps came down from 16px to 10px; and the two ₱ cells give
+their VALUE its own stated width (92px / 52px). That last one is the thing the owner
+singled out: `Peso` is a `justify-between` accounting layout, which is right inside a
+box sized for the number and wrong when the box is as wide as the words **`Wtd Avg
+PHP/KG`** above it — 84px of label over a 40px figure left the ₱ glyph hanging ~40px
+off to the left of its own number.
+
+**Measured after, same harness, at 2400 / 1950 / 1800 / 1512 / 1366 / 1280 / 1024 /
+375 px, light and dark, price-visible and price-denied.** At the owner's width:
+section 1's stranded slack **214px → 0**, the totals **2 rows → 1**, the modes
+**2 rows → a 2 × 2**, status one row, no page scroll, and all four mode toggles still
+move **nothing**. One row of four modes arrives at ~1910px of strip width (2400 and
+1950 measured four across). Below ~1300px of viewport the strip's own scroller
+engages instead of anything crushing — the stated cost of the totals never wrapping,
+and the documented behaviour of this grid.
 
 #### THE LEGEND BAR AND THE SETTINGS POPOVER — the grid got its width back
 
@@ -1331,7 +1388,8 @@ columns.
 
 ## Key Behaviors
 
-- **THE CONTROL STRIP — four fixed sections, and a mode toggle never moves one (2026-09-21)** — `.blocking-controls-strip` is a CSS grid with four explicit tracks (filters · status/lab · totals · modes) and three 1px divider tracks, in that order. A section may wrap only INSIDE its own track, can never reorder and can never spill; narrower than the sum of the four minimums (232 / 236 / 180 / 200) and the wrapper SCROLLS rather than crushing; below `sm` the four sections stack in the same order. Every ON/OFF pill and the Proposals badge is fixed-width (`w-[26px] tabular-nums`) and the two price totals keep RESERVED (`invisible`) slots for anyone who may see prices, so switching a mode changes a colour and never a width — measured before/after all four toggles at 1512/1280/1024px, byte-identical section boxes
+- **THE CONTROL STRIP — four fixed sections, and a mode toggle never moves one (2026-09-21)** — `.blocking-controls-strip` is a CSS grid with four explicit tracks (filters · status/lab · totals · modes) and three 1px divider tracks, in that order. A section may wrap only INSIDE its own track, can never reorder and can never spill; below `sm` the four sections stack in the same order. **Two tracks are ELASTIC** (`minmax(232px, max-content)` / `minmax(236px, max-content)`) and are where the give is; **two are RIGID** (`max-content`) because their content cannot shrink — the totals are one nowrap line and the modes a fixed-column grid. Spare width becomes even space BETWEEN the sections (`justify-content: space-between`), never slack inside one; narrower than the sum and the wrapper SCROLLS rather than crushing (measured: the strip's own scroller engages below ~1300px of viewport). Every ON/OFF pill and the Proposals badge is fixed-width (`w-[26px] tabular-nums`) and the two price totals keep RESERVED (`invisible`) slots for anyone who may see prices, so switching a mode changes a colour and never a width — measured before/after all four toggles at 2400/1950/1800/1512/1366/1280/1024/375px, light and dark, price-visible and price-denied: byte-identical section boxes every time
+- **A `flex-wrap` ROW'S MAX-CONTENT IS ITS ONE-LINE WIDTH — a section that always renders stacked must be BUILT stacked, or it starves its neighbours (2026-09-21, second pass)** — the lesson from the owner's 1790px screenshot, in which the totals wrapped 4 + 1 and the modes 3 + 1 while a 214px hole sat beside the supplier search. Section 1 was ONE `flex-wrap` row holding the search AND the seven warehouse chips, so its max-content was **620px measured** although it always rendered as search-over-chips in 444; the four tracks therefore asked for 2,174px against 1,766px of real room and the grid shrank every one of them. **Section 1 is now an explicit two-row block** (`.blocking-strip-filters`, a single-column grid: search, then chips) and asks for **384px**; the totals row is `sm:flex-nowrap` on a `max-content` track so the fifth stat can never drop to a line of its own; and the modes are `.blocking-strip-modes`, a grid of `max-content` columns — **4 across or a clean 2 × 2, never a ragged 3 + 1** — switched by a CONTAINER query on the strip's own scroller (`container-name: blockingstrip`), with `data-mode-count` telling the CSS whether this reader has three buttons or four, since CSS cannot count children. Measured at the owner's width: filters slack **214px → 0**, totals **2 rows → 1**, modes **2 rows → 2 × 2**, and one row of four from ~1910px of strip width up
 - **THE LENS LEGEND BAR replaced the docked sidebar (2026-09-21)** — the lens is now the strip's second sticky row: lens switch · headline · one CHIP per band (the isolate toggles) · a thin ratio bar · the unpriced/undated chip · a Problem chip on a refusal or stall · kg\|blocks · **Settings** (gear) · Clear · close, on ONE line that scrolls rather than wraps. The detail — market basis, the band rows with their counts and averages, Customize, the refusal banner — lives in the Settings POPOVER, which floats over the grid only while open. **The grid is full width again**
 - **The blend modal's SUPPLIER · OPENED · LAST PILED columns (2026-09-21)** — after BATCH: a GREEN pill when `isSingleSupplier === true`, ORANGE with the dominant supplier + share when `false`, a plain em dash when `null`; then the two ages as `38 d`, dates on the `title`, NULL never 0. Keyed by `batch_id` (a block address is reused), and a SAVED version asks about the Asia/Manila date of its own version and says so. No ₱ — every role sees them. The print is A4 LANDSCAPE and keeps the pill colours
 - **Warehouse filter chips** — ALL/WHSE A/B/C/D toggle buttons in global header. Individual chips toggle on/off. If all deselected, auto-reverts to ALL. Global stats recalculate for visible warehouses only
@@ -1409,7 +1467,10 @@ The blocking system is defined at the bottom of `app/globals.css`:
 - `.spotlight-supplier-all` — **emerald** glow ring: the block is ENTIRELY the searched supplier (`supplierCount === 1`), `.dark` variant stronger
 - `.spotlight-supplier-some` — **orange** glow ring: the block holds the searched supplier alongside others, `.dark` variant stronger
   > Both sit AFTER `.blocking-cell-occupied` in `globals.css`, which is load-bearing: same specificity, so source order decides, and an occupied cell's own `box-shadow` would otherwise win. (That is exactly why the pre-existing `.spotlight-stored`/`-in-use`/… — declared BEFORE it — show their glow only on EMPTY cells.) Both are plain `box-shadow`, no animation: cells are never animated.
-- **`.blocking-controls-strip`** — the four-section CONTROL STRIP (2026-09-21). A CSS grid whose tracks are `minmax(232px, max-content) 1px minmax(236px, max-content) 1px minmax(180px, max-content) 1px minmax(200px, max-content)`, so each section owns a slot it cannot leave, wraps only inside itself, falls back to a stated MINIMUM when the viewport is tight, and lets the wrapper's `overflow-x-auto` scroll rather than crush below the sum. A `@media (max-width: 639px)` block collapses it to `minmax(0, 1fr)` (the four sections stack in the same order) and hides `.blocking-strip-divider`. The minimums are asserted in `scripts/verify-blocking-lens-ui.ts` so a later edit cannot quietly let a section crush
+- **`.blocking-controls-strip`** — the four-section CONTROL STRIP (2026-09-21). A CSS grid whose tracks are `minmax(232px, max-content) 1px minmax(236px, max-content) 1px max-content 1px max-content`, so each section owns a slot it cannot leave and wraps only inside itself. The first two are **ELASTIC** and fall back to a stated MINIMUM when the viewport is tight (S1 232px — the supplier search's own width, chips wrapping under it; S2 236px — two rows of status/lab pills); the last two are **RIGID `max-content`** and have no stated minimum on purpose, since a nowrap line and a fixed-column grid cannot shrink and a number for them would never apply. `justify-content: space-between` gives the spare width to the spaces BETWEEN sections — a `1fr` track anywhere here would strand it inside one, which is the bug the second pass fixed — and the wrapper's `overflow-x-auto` scrolls rather than crushing below the sum (measured: below ~1300px of viewport). A `@media (max-width: 639px)` block collapses it to `minmax(0, 1fr)` (the four sections stack in the same order) and hides `.blocking-strip-divider`. The two minimums, the two rigid tracks, the absence of a `fr` and the `space-between` are all asserted in `scripts/verify-blocking-lens-ui.ts` so a later edit cannot quietly let a section crush or hoard
+- **`.blocking-strip-scroller`** — the strip's `overflow-x-auto` wrapper, and also the QUERY CONTAINER (`container-type: inline-size; container-name: blockingstrip`). "Does the strip have room for one row of mode buttons?" is a question about the strip's own width, so it is asked of the strip and not of the viewport — the page's padding, and any future sibling, cannot put the answer out by a few pixels
+- **`.blocking-strip-filters`** — section 1 as an explicit TWO-ROW block: a single-column grid holding the supplier search then the warehouse chips. **This is the second pass's whole fix**: as one `flex-wrap` row its max-content was the width of everything on ONE line (620px measured) although it always rendered stacked in 444, so it asked for 176px it never used and every neighbour shrank. Built stacked it asks for 384px — the wider of its two rows. The chip row itself stays `flex-wrap`, because this track legitimately falls to 318px at 1512 and to its 232px floor below that, and a nowrap chip row would then spill out of its own track
+- **`.blocking-strip-modes`** — section 4 as a grid of `max-content` columns, `justify-items: start` so each button keeps its own width. **TWO columns by default** — a clean 2 × 2 for a price-viewer's four buttons, 2 + 1 for a price-denied reader's three — and ONE ROW above a measured `@container blockingstrip (min-width: …)` threshold, 1540px for three buttons and 1910px for four. `data-mode-count` on the section is what lets three straighten out sooner than four, since CSS cannot count children. A wrapping flex row is what packed them 3 + 1, which is what the owner photographed
 - **`.lens-band-0` … `.lens-band-6`** — the PRICE LENS's colour ramp, cheapest (emerald) → dearest (rose) through lime/yellow/amber/orange/red. Each stop declares only a `--lens-hue` triple; ONE shared rule then paints the marking, so the ramp is data and the look lives in one place. A band's stop is chosen by POSITION (`lens/price-lens-settings.ts::bandRampStop`), so a three-band lens uses stops **0 · 3 · 6** and never the ramp's first three.
   - **It TINTS rather than replaces**: the hue rides at 22% (light) / 30% (dark) alpha over the cell's existing zinc gradient, so the text contrast the cell already has — including a lab-highlight red on MC/ASH — stays essentially at its baseline. The solid inset ring carries the identification.
   - It is a **tint + ring**, a different KIND of marking from every `.spotlight-*` above (a pure glow ring), so even side by side a band could not be read as a status glow. Both themes; plain `background-image`/`box-shadow`; **no animation** (these land on up to 238 cells at once), only the same `opacity`/`box-shadow` transition every spotlight uses.

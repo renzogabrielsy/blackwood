@@ -1237,24 +1237,32 @@ export function BlockingGrid({
           crush, always scroll. Below `sm` the four sections stack in the same
           order. Short viewports (phone landscape) keep the condensed SHORT map. */}
       <div className="sticky top-0 z-30 flex flex-col gap-2">
-      <div className="overflow-x-auto rounded-lg border border-border bg-card/95 backdrop-blur-sm">
+      <div className="blocking-strip-scroller overflow-x-auto rounded-lg border border-border bg-card/95 backdrop-blur-sm">
       <div
         className={cn(
           'blocking-controls-strip gap-x-2 gap-y-1.5 px-3 py-2',
           SHORT.header,
         )}
       >
-        {/* ══ SECTION 1 — supplier search + warehouse filter ══ */}
+        {/* ══ SECTION 1 — supplier search + warehouse filter ══
+            A TWO-ROW block, deliberately (`.blocking-strip-filters`): the search on
+            row 1, the warehouse chips on row 2. It was one `flex-wrap` row, whose
+            max-content is everything on ONE line — 620px measured — although it has
+            always RENDERED as search-over-chips in 444. That phantom 176px was the
+            whole bug: the four tracks asked for more than the strip had, the grid
+            shrank all of them, and the totals and modes wrapped while the slack sat
+            stranded here. Built stacked, this section asks for 384px, which is the
+            wider of its two rows and nothing more. */}
         <section
           data-blocking-strip-section="filters"
           aria-label="Supplier and warehouse filters"
-          className={cn('flex min-w-0 flex-wrap items-center gap-1.5', SHORT.clusterGap)}
+          className={cn('blocking-strip-filters min-w-0 gap-y-1.5', SHORT.clusterGap)}
         >
         {/* ── Supplier search — DESKTOP placement (sm+) ──
-            Leftmost control of section 1: it is a text entry, so it reads as the
-            start of the filter row rather than an afterthought after the stats.
-            Its width is FIXED, so the emerald chip it shows while a supplier is
-            active cannot resize the section. */}
+            Row 1 of section 1: it is a text entry, so it reads as the start of the
+            filter block rather than an afterthought after the stats. Its width is
+            FIXED, so the emerald chip it shows while a supplier is active cannot
+            resize the section. */}
         <BlockingSupplierSearch
           suppliers={supplierMap.suppliers}
           active={activeSupplier}
@@ -1262,7 +1270,10 @@ export function BlockingGrid({
           className="max-sm:hidden w-[230px] shrink-0 [@media(max-height:500px)]:w-[170px]"
         />
 
-        {/* Warehouse filter chips */}
+        {/* Warehouse filter chips — row 2. Still `flex-wrap`, on purpose: this
+            section's track legitimately falls below the chip line's 384px under real
+            pressure (315px at 1512, its 232px floor below that), and a nowrap row
+            would then spill out of its own track. */}
         <div className={cn('flex flex-wrap items-center gap-1.5', SHORT.clusterGap)}>
           <button
             onClick={handleSelectAllWarehouses}
@@ -1410,15 +1421,32 @@ export function BlockingGrid({
 
         <div aria-hidden className="blocking-strip-divider h-8 w-px self-center bg-border" />
 
-        {/* ══ SECTION 3 — THE FIVE TOTALS, TOGETHER ══
-            Stacked label-over-value normally; one inline "LABEL value" line on
-            short viewports (phone landscape). The two PRICE totals keep RESERVED
-            slots for a reader who may see prices, so the page's Prices toggle
-            cannot resize this section and nothing after it moves. */}
+        {/* ══ SECTION 3 — THE FIVE TOTALS, TOGETHER, ON ONE LINE ══
+            `sm:flex-nowrap` and a `max-content` track: the totals are a reading of
+            the whole yard and splitting `Wtd Avg PHP/KG` onto a second line under
+            the other four (which is what the owner photographed) reads as a
+            different, lesser figure. Because the track cannot shrink, the give in
+            the strip is sections 1 and 2; when even that is not enough the WRAPPER
+            scrolls. Below `sm` the strip stacks and this row may wrap — a 452px line
+            in a 375px screen has nowhere else to go.
+
+            Each cell is right-aligned label OVER right-aligned value (`items-end`),
+            so the five figures share one edge; on short viewports (phone landscape)
+            the pair collapses to one inline "LABEL value" line. The ₱ cells give
+            their VALUE its own stated width so the accounting treatment (₱ pinned
+            left, number pinned right) happens inside a sensible box instead of being
+            stretched across a cell as wide as the words "Wtd Avg PHP/KG".
+
+            The two PRICE totals keep RESERVED slots for a reader who may see prices,
+            so the page's Prices toggle cannot resize this section and nothing after
+            it moves. */}
         <section
           data-blocking-strip-section="totals"
           aria-label="Yard totals"
-          className={cn('flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 text-xs', SHORT.statsGap)}
+          className={cn(
+            'flex min-w-0 flex-wrap sm:flex-nowrap items-center gap-x-2.5 gap-y-1 text-xs',
+            SHORT.statsGap,
+          )}
         >
           <GlobalStat
             label="Total Balance"
@@ -1452,6 +1480,9 @@ export function BlockingGrid({
                 label="Total Value"
                 shortLabel="VAL"
                 minWidthClass="min-w-[92px]"
+                /* Nine digits plus separators and the glyph — the yard's whole value
+                   is a ₱389,587,962-shaped number, so the box is sized for one. */
+                valueWidthClass="w-[92px]"
                 reserved={!(canViewPrices && global.totalValue > 0)}
                 value={<Peso>{Math.round(global.totalValue).toLocaleString()}</Peso>}
               />
@@ -1462,6 +1493,10 @@ export function BlockingGrid({
                 label="Wtd Avg PHP/KG"
                 shortLabel="&#8369;/KG"
                 minWidthClass="min-w-[72px]"
+                /* The label is the wide part of this cell, not the figure. Without a
+                   stated value width the ₱ glyph hung 40px off to the left of
+                   `36.95` — the thing the owner singled out. */
+                valueWidthClass="w-[52px]"
                 reserved={!(canViewPrices && global.totalValue > 0 && global.wtdAvgPhpKg !== null)}
                 value={<Peso>{(global.wtdAvgPhpKg ?? 0).toFixed(2)}</Peso>}
               />
@@ -1475,11 +1510,21 @@ export function BlockingGrid({
             Prices · Highlight · Proposals · Blend Proposal, in that order. Every one
             reserves the width of its ON/OFF pill (or its count badge), so switching a
             mode changes a colour and never a width — which is what stops section 3's
-            totals sliding sideways every time the operator turns something on. */}
+            totals sliding sideways every time the operator turns something on.
+
+            It is a GRID of `max-content` columns (`.blocking-strip-modes`), not a
+            wrapping flex row, because a wrapping row of four buttons of four
+            different widths packs itself 3 + 1 — which is what the owner
+            photographed. Two columns by default, so a price-viewer's four buttons
+            read as a clean 2 × 2 and a price-denied reader's three as 2 + 1; ONE ROW
+            once the strip's own container query says there is measurably room.
+            `data-mode-count` is what lets three buttons straighten out sooner than
+            four — the CSS cannot count children. */}
         <section
           data-blocking-strip-section="modes"
+          data-mode-count={serverCanViewPrices ? 4 : 3}
           aria-label="Modes"
-          className={cn('flex min-w-0 flex-wrap items-center gap-1.5', SHORT.clusterGap)}
+          className={cn('blocking-strip-modes min-w-0 gap-1.5', SHORT.clusterGap)}
         >
 
         {/* ── Prices visibility toggle (presenter/privacy) ── */}
@@ -2342,6 +2387,7 @@ function GlobalStat({
   value,
   valueClass,
   minWidthClass,
+  valueWidthClass,
   reserved = false,
 }: {
   label: string;
@@ -2355,6 +2401,15 @@ function GlobalStat({
    * Prices toggle) cannot re-flow the section it sits in.
    */
   minWidthClass?: string;
+  /**
+   * The VALUE box's own stated width, independent of the cell's. It exists for the
+   * two ₱ figures: `Peso` is a `justify-between` accounting layout, which is right
+   * inside a box sized for the number and wrong when it is stretched to the width of
+   * a long LABEL — `Wtd Avg PHP/KG` is 84px of words above a 40px figure, and
+   * without this the glyph hung off to the left of its own number. Omitted, the box
+   * is its content's width, as every non-₱ figure wants.
+   */
+  valueWidthClass?: string;
   /** Lay the slot out but do not show it. See `StatDivider`. */
   reserved?: boolean;
 }) {
@@ -2362,18 +2417,23 @@ function GlobalStat({
     <div
       aria-hidden={reserved || undefined}
       className={cn(
-        'text-right tabular-nums [@media(max-height:500px)]:flex [@media(max-height:500px)]:items-baseline [@media(max-height:500px)]:gap-1',
+        // `items-end` is what gives the five totals ONE right edge: the label and the
+        // value each shrink to their own content and both align to it, instead of a
+        // `text-right` block in which a `flex` value filled the whole cell.
+        'flex flex-col items-end tabular-nums',
+        '[@media(max-height:500px)]:flex-row [@media(max-height:500px)]:items-baseline [@media(max-height:500px)]:gap-1',
         minWidthClass,
         reserved && 'invisible',
       )}
     >
-      <div className="text-muted-foreground font-medium [@media(max-height:500px)]:text-[9px] [@media(max-height:500px)]:leading-none [@media(max-height:500px)]:uppercase [@media(max-height:500px)]:tracking-wide">
+      <div className="text-right text-muted-foreground font-medium [@media(max-height:500px)]:text-[9px] [@media(max-height:500px)]:leading-none [@media(max-height:500px)]:uppercase [@media(max-height:500px)]:tracking-wide">
         <span className={SHORT.tallOnly}>{label}</span>
         <span className={SHORT.shortOnly}>{shortLabel}</span>
       </div>
       <div
         className={cn(
-          'font-semibold font-mono',
+          'text-right font-semibold font-mono',
+          valueWidthClass,
           valueClass ?? 'text-foreground',
           '[@media(max-height:500px)]:text-[10px] [@media(max-height:500px)]:leading-none',
         )}
