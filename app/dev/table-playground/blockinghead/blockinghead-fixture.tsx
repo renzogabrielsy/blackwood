@@ -31,36 +31,79 @@ import type {
 import type { BlendProposal } from '@/app/(app)/inventory/blocking/actions';
 
 // ── The yard ────────────────────────────────────────────────────────────────
+//
+// THE FIGURES ARE THE LIVE PAGE'S OWN SHAPE, because the strip is measured by them:
+// a 5-digit tonnage, a 9-digit peso total and a 2-decimal ₱/kg are what set section
+// 3's width, and a rig that printed `1,234.00 t` would answer a narrower question
+// than the one being asked. It occupies **170 of the real 220 slots** (→ `77.3%`
+// utilization, which falls out of the count rather than being typed), and the LAST
+// occupied block absorbs the rounding residual on both the weight and the price so
+// the totals land exactly on the owner's own screenshot:
+//
+//     10,543.09 t · 170 / 220 · 77.3% · ₱ 389,587,962 · ₱ 36.95
+//
+// Note the Proposals badge reads the real `fetchBlendProposalList`, which degrades
+// to an empty list with no session here, so it shows `0` rather than a count. Its
+// width is reserved (`w-[26px] tabular-nums`), so a single digit either way is the
+// same measurement.
 
-const ROWS = ['A', 'B', 'C'] as const;
+/** The real warehouse shape — A 20×3, B 20×2, C 20×2, D 20×4 = 220 slots. */
+const YARD = [
+  { whse: 'A', rows: ['A', 'B', 'C'] },
+  { whse: 'B', rows: ['A', 'B'] },
+  { whse: 'C', rows: ['A', 'B'] },
+  { whse: 'D', rows: ['A', 'B', 'C', 'D'] },
+] as const;
+
+const TARGET_BALANCE_KG = 10_543_090;
+const TARGET_VALUE_PHP = 389_587_962;
 
 function makeBlocks(withPrices: boolean): Record<string, BlockData> {
-  const out: Record<string, BlockData> = {};
-  let n = 0;
-  for (const whse of ['A', 'B', 'C', 'D'] as const) {
-    for (const row of ROWS) {
-      for (let col = 1; col <= 14; col += 1) {
-        n += 1;
-        if (n % 3 === 0) continue; // leave a third of the yard empty
-        const loc = `${whse}-${col}${row}`;
-        out[loc] = {
-          batch_code: `SEPT-26-BLK${n}`,
-          batch_id: `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`,
-          status: n % 7 === 0 ? 'IN-USE' : 'STORED',
-          balance: 130_000 - (n % 23) * 5_000,
-          total_in: 180_000,
-          php: withPrices ? 26 + (n % 20) * 1.05 : null,
-          bd_astm: 0.402,
-          bd_jis: 0.388,
-          ash: n % 5 === 0 ? 4.6 : 3.1,
-          mc: n % 4 === 0 ? 15.2 : 11.4,
-          grit: 1.2,
-          vm: 14.8,
-          fc: 80.1,
-        };
+  // Every slot, in grid order, with 5 of every 22 left EMPTY → exactly 50 of 220.
+  const locs: string[] = [];
+  let slot = 0;
+  for (const { whse, rows } of YARD) {
+    for (const row of rows) {
+      for (let col = 1; col <= 20; col += 1) {
+        const skip = slot % 22 >= 17;
+        slot += 1;
+        if (skip) continue;
+        locs.push(`${whse}-${col}${row}`);
       }
     }
   }
+
+  const out: Record<string, BlockData> = {};
+  const balances = locs.map((_, i) => 25_000 + ((i * 7) % 37) * 2_050);
+  const prices = locs.map((_, i) => 31 + ((i * 5) % 21) * 0.6);
+
+  // The last block carries the residual so the two headline totals are exact.
+  const headBalance = balances.slice(0, -1).reduce((a, b) => a + b, 0);
+  balances[balances.length - 1] = TARGET_BALANCE_KG - headBalance;
+  const headValue = balances
+    .slice(0, -1)
+    .reduce((a, b, i) => a + b * prices[i], 0);
+  prices[prices.length - 1] =
+    (TARGET_VALUE_PHP - headValue) / balances[balances.length - 1];
+
+  locs.forEach((loc, i) => {
+    const n = i + 1;
+    out[loc] = {
+      batch_code: `SEPT-26-BLK${n}`,
+      batch_id: `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`,
+      status: n % 7 === 0 ? 'IN-USE' : 'STORED',
+      balance: balances[i],
+      total_in: balances[i] + 40_000,
+      php: withPrices ? prices[i] : null,
+      bd_astm: 0.402,
+      bd_jis: 0.388,
+      ash: n % 5 === 0 ? 4.6 : 3.1,
+      mc: n % 4 === 0 ? 15.2 : 11.4,
+      grit: 1.2,
+      vm: 14.8,
+      fc: 80.1,
+    };
+  });
   return out;
 }
 

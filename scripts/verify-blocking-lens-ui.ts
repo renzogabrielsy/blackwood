@@ -1313,28 +1313,79 @@ console.log('\n7. THE CONTROL STRIP — FOUR FIXED SECTIONS (2026-09-21, job B)'
 // every cluster after it. These assertions pin the replacement: a CSS grid with four
 // explicit tracks, sections that can only wrap INSIDE themselves, reserved widths for
 // everything a toggle changes, and a scrolling wrapper instead of a crush.
+//
+// ── SECOND PASS (2026-09-21): A `flex-wrap` ROW'S MAX-CONTENT IS ITS ONE-LINE WIDTH ──
+// The first pass made all four tracks `minmax(<min>, max-content)` and left section 1 a
+// single `flex-wrap` row holding the search AND the seven warehouse chips. Measured in a
+// browser, that section's max-content was 620px although it always RENDERS as
+// search-over-chips in 444 — so the four tracks asked for 2,174px against 1,766px of
+// real room at a 1800px viewport, the grid shrank EVERY track toward its minimum, and
+// the two sections that cannot wrap tidily wrapped 4 + 1 (totals) and 3 + 1 (modes)
+// while 214px of slack sat stranded inside section 1. Five assertions below were
+// RESTATED for that, each noted at its own `check`.
 
 {
   const css = read(GLOBALS);
   const grid = code(GRID);
 
-  check('the strip is a CSS GRID with four tracks and three divider tracks, in order', () => {
+  // RESTATED (was: "four tracks, minimums [232, 236, 180, 200]"). Two tracks are now
+  // sized `max-content` outright rather than `minmax(<min>, max-content)`, because the
+  // totals are a nowrap line and the modes a fixed-column grid: neither CAN shrink, so
+  // a stated minimum for them would be a number that never applies. The two ELASTIC
+  // sections keep their minimums, unchanged, and they are still where the give is.
+  check('the strip is a CSS GRID: two elastic tracks, two rigid, three dividers, in order', () => {
     const at = css.indexOf('.blocking-controls-strip {');
     assert.ok(at > 0, '.blocking-controls-strip is gone — the strip is a flex row again');
     const rule = css.slice(at, css.indexOf('}', at));
     assert.ok(/display:\s*grid/.test(rule), 'the strip is not a grid — a flex row can reorder under pressure');
-    const tracks = rule.match(/minmax\((\d+)px, max-content\)/g) ?? [];
-    assert.strictEqual(tracks.length, 4, 'the strip does not have exactly four section tracks');
+    const cols = /grid-template-columns:([^;]+);/.exec(rule)?.[1] ?? '';
+    const tracks = cols.match(/minmax\((\d+)px, max-content\)/g) ?? [];
+    assert.strictEqual(tracks.length, 2, 'the two ELASTIC tracks (filters, status) are not both minmax()');
+    assert.deepStrictEqual(
+      tracks.map((t) => Number(/(\d+)/.exec(t)![1])),
+      [232, 236],
+      'an elastic minimum moved — S1 232 (the search) · S2 236 (two rows of pills)',
+    );
+    // The two rigid tracks are bare `max-content` — NOT `minmax(0, …)`, which would let
+    // them crush, and not `1fr`, which would hand them the slack section 1 used to hoard.
+    const rigid = cols.match(/(^|\s)max-content(\s|$)/g) ?? [];
+    assert.strictEqual(rigid.length, 2, 'the totals and modes tracks are not both bare `max-content`');
+    assert.ok(!/\bfr\b/.test(cols), 'a `fr` track is back — it would strand the slack inside one section again');
     assert.strictEqual(
-      (rule.match(/\b1px\b/g) ?? []).length,
+      (cols.match(/\b1px\b/g) ?? []).length,
       3,
       'the three 1px divider tracks are gone — sections would touch',
     );
-    // The MINIMUMS are load-bearing: below them the wrapper scrolls instead of crushing.
-    assert.deepStrictEqual(
-      tracks.map((t) => Number(/(\d+)/.exec(t)![1])),
-      [232, 236, 180, 200],
-      'a section minimum moved — S1 232 (the search) · S2 236 · S3 180 · S4 200',
+  });
+
+  // NEW. Spare width belongs BETWEEN the sections. A `1fr` track or a `justify-content`
+  // of `start` puts it inside one of them, which is the bug this pass fixed.
+  check('SPARE WIDTH GOES BETWEEN THE SECTIONS, never inside one', () => {
+    const at = css.indexOf('.blocking-controls-strip {');
+    const rule = css.slice(at, css.indexOf('}', at));
+    assert.ok(
+      /justify-content:\s*space-between/.test(rule),
+      'the strip does not distribute its slack between the sections',
+    );
+  });
+
+  // NEW — the lesson of this pass, pinned. Section 1 always renders as two rows, so it
+  // must be BUILT as two rows: a `flex-wrap` row's max-content is everything on ONE
+  // line, and asking for 620px when 384 is used starves every neighbour.
+  check('SECTION 1 IS A TWO-ROW BLOCK, not a wrapping row that asks for one line', () => {
+    const at = css.indexOf('.blocking-strip-filters {');
+    assert.ok(at > 0, '.blocking-strip-filters is gone — section 1 is a single flex row again');
+    const rule = css.slice(at, css.indexOf('}', at));
+    assert.ok(/display:\s*grid/.test(rule), 'section 1 is not a grid — it would lay the search beside the chips');
+    assert.ok(
+      /grid-template-columns:\s*minmax\(0, 1fr\)/.test(rule),
+      'section 1 is not a SINGLE column — two columns would put the search back on the chips line',
+    );
+    const at2 = grid.indexOf('data-blocking-strip-section="filters"');
+    assert.ok(at2 > 0, 'section 1 is missing');
+    assert.ok(
+      grid.slice(at2, at2 + 300).includes('blocking-strip-filters'),
+      'section 1 does not use the two-row block class',
     );
   });
 
@@ -1348,19 +1399,97 @@ console.log('\n7. THE CONTROL STRIP — FOUR FIXED SECTIONS (2026-09-21, job B)'
     );
   });
 
-  check('the four sections exist, in the owner\'s order, each wrapping only inside itself', () => {
+  // RESTATED (was: every section is a `flex-wrap` box). Two of the four deliberately
+  // are NOT any more — section 1 is a two-row grid and section 4 a fixed-column grid,
+  // because "wrap freely" is exactly what produced the ragged 3 + 1 and the 620px
+  // phantom. What every section still owes is `min-w-0` (so its track governs it) and
+  // its place in the owner's order; what each owes BEYOND that is now per section.
+  check('the four sections exist, in the owner\'s order, each contained by its own track', () => {
     const order = ['filters', 'status', 'totals', 'modes'];
     let cursor = 0;
     for (const name of order) {
       const at = grid.indexOf(`data-blocking-strip-section="${name}"`, cursor);
       assert.ok(at > cursor, `section "${name}" is missing or out of order`);
-      // A section is a flex box that WRAPS — inside its own grid track, which it
-      // cannot leave. That is what makes "no section spills into another" structural.
-      const body = grid.slice(at, at + 260);
-      assert.ok(body.includes('flex-wrap'), `section "${name}" cannot wrap inside itself`);
+      const body = grid.slice(at, at + 400);
       assert.ok(body.includes('min-w-0'), `section "${name}" cannot give — its track would overflow`);
       cursor = at;
     }
+    // The two ELASTIC sections are the give in the system, so they must still wrap
+    // inside their own tracks.
+    for (const name of ['filters', 'status']) {
+      const at = grid.indexOf(`data-blocking-strip-section="${name}"`);
+      assert.ok(
+        grid.slice(at, at + 700).includes('flex-wrap'),
+        `elastic section "${name}" can no longer wrap inside itself`,
+      );
+    }
+  });
+
+  // NEW. `Wtd Avg PHP/KG` was wrapping onto a line of its own under the other four —
+  // which reads as a lesser, separate figure. The track cannot shrink and the row
+  // cannot wrap, so the give is sections 1 and 2 and then the wrapper's own scroller.
+  check('THE TOTALS ARE ONE LINE at sm and up — never 4 + 1', () => {
+    const at = grid.indexOf('data-blocking-strip-section="totals"');
+    assert.ok(at > 0, 'the totals section is missing');
+    const body = grid.slice(at, at + 400);
+    assert.ok(
+      body.includes('sm:flex-nowrap'),
+      'the totals may wrap at sm and up again — the fifth stat drops to a second line',
+    );
+    // Below `sm` the strip stacks into one column and a 468px line has nowhere to go,
+    // so wrapping there is correct and must stay possible.
+    assert.ok(body.includes('flex-wrap'), 'the totals cannot wrap below sm, where they must');
+  });
+
+  // NEW. Four buttons of four different widths in a wrapping row pack themselves
+  // 3 + 1, which is what the owner photographed. A grid of `max-content` columns
+  // cannot: it is four across, or a clean 2 × 2.
+  check('THE MODES ARE A 4-OR-2 COLUMN GRID — never a ragged 3 + 1', () => {
+    const at = css.indexOf('.blocking-strip-modes {');
+    assert.ok(at > 0, '.blocking-strip-modes is gone — the modes are a wrapping flex row again');
+    const rule = css.slice(at, css.indexOf('}', at));
+    assert.ok(/display:\s*grid/.test(rule), 'the modes are not a grid');
+    assert.ok(
+      /grid-template-columns:\s*repeat\(2, max-content\)/.test(rule),
+      'the modes do not default to TWO columns — 2 × 2 is the tight answer, and 2 + 1 for three buttons',
+    );
+    assert.ok(
+      /justify-items:\s*start/.test(rule),
+      'the buttons would stretch to their column width instead of keeping their own',
+    );
+    // The one-row rule is a CONTAINER query on the strip's own scroller, so "is there
+    // room" is answered by the strip's width and not by the viewport's.
+    assert.ok(
+      /container-type:\s*inline-size/.test(css) && /container-name:\s*blockingstrip/.test(css),
+      'the strip is not a query container — the mode grid would have to guess from the viewport',
+    );
+    const wide = [...css.matchAll(/@container blockingstrip \(min-width: (\d+)px\)/g)].map((m) => Number(m[1]));
+    assert.strictEqual(wide.length, 2, 'there are not exactly two one-row thresholds (three buttons, and four)');
+    assert.ok(wide[0] < wide[1], 'three buttons must straighten out at a NARROWER width than four');
+    for (const [n, count] of [[3, '3'], [4, '4']] as const) {
+      const reached = [...css.matchAll(new RegExp(`\\[data-mode-count='${count}'\\]`, 'g'))].some((m) =>
+        new RegExp(`^[\\s\\S]{0,140}repeat\\(${n}, max-content\\)`).test(css.slice(m.index!)),
+      );
+      assert.ok(reached, `${n} buttons never reach one row of ${n}`);
+    }
+    // A row of ONE must not set a `max-content` column's width: with three buttons in
+    // two columns the widest lands in column 1 and stretches it, measured 32px of hole
+    // between the two above it. The third spans the row instead.
+    assert.ok(
+      /\[data-mode-count='3'\] > \*:last-child \{\s*grid-column: 1 \/ -1/.test(css),
+      "the tight 2 + 1 case lets its third button stretch column 1",
+    );
+    assert.ok(
+      /@container blockingstrip[\s\S]{0,400}\[data-mode-count='3'\] > \*:last-child \{\s*grid-column: auto/.test(css),
+      'the row-span is not undone once the three buttons are on ONE row',
+    );
+    const at2 = grid.indexOf('data-blocking-strip-section="modes"');
+    const body = grid.slice(at2, at2 + 400);
+    assert.ok(body.includes('blocking-strip-modes'), 'the modes section does not use the grid class');
+    assert.ok(
+      /data-mode-count=\{serverCanViewPrices \? 4 : 3\}/.test(body),
+      'the count is not published — the CSS cannot count children, so it could not tell 3 from 4',
+    );
   });
 
   check('below sm the four sections STACK in the same order, one per row', () => {
@@ -1402,6 +1531,26 @@ console.log('\n7. THE CONTROL STRIP — FOUR FIXED SECTIONS (2026-09-21, job B)'
       'a reserved slot is hidden with `hidden`, not `invisible` — it must still be laid out',
     );
     assert.ok(grid.includes('minWidthClass'), 'the totals do not reserve their own widths');
+  });
+
+  // NEW. `Peso` is a `justify-between` accounting layout — right inside a box sized for
+  // the number, wrong when the box is as wide as the LABEL above it. `Wtd Avg PHP/KG` is
+  // 84px of words over a 40px figure, so the glyph hung ~40px off to the left of its own
+  // number, which is the thing the owner singled out. Both ₱ cells now state their
+  // value box's width; the three non-₱ figures state none and shrink to content.
+  check('THE ₱ FIGURES SIT IN A BOX OF THEIR OWN WIDTH, not stretched across the label', () => {
+    assert.ok(grid.includes('valueWidthClass'), 'GlobalStat cannot bound its value box');
+    assert.ok(
+      /items-end/.test(grid),
+      'the totals no longer share one right edge — a `flex` value would fill the whole cell again',
+    );
+    const totalsAt = grid.indexOf('data-blocking-strip-section="totals"');
+    const body = grid.slice(totalsAt, grid.indexOf('</section>', totalsAt));
+    const stated = body.match(/valueWidthClass="w-\[\d+px\]"/g) ?? [];
+    assert.strictEqual(stated.length, 2, 'exactly the two ₱ figures must state a value width');
+    // Every `<Peso>` in the totals must be inside a stat that stated one.
+    const pesos = (body.match(/<Peso>/g) ?? []).length;
+    assert.strictEqual(pesos, stated.length, 'a ₱ figure has no stated box — its glyph would hang off to the left');
   });
 }
 
