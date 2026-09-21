@@ -578,6 +578,63 @@ input[type=number] {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 0 12px rgba(0, 0, 0, 0.25);
 }
 
+/* ─── Blocking CONTROL STRIP — four fixed sections, one row ───────────────────
+   2026-09-21. The owner's verdict on the live header: the controls *"just move
+   around and overflow/wrap into weird locations"* when a mode is switched on. They
+   were one `flex-wrap justify-between` row, so every toggle that grew or shrank by
+   a pixel re-flowed every cluster after it — and a wrapped row packed itself
+   differently each time.
+
+   It is now a CSS GRID with FOUR EXPLICIT TRACKS, in this order and no other:
+     1  supplier search + warehouse filter
+     2  status + lab chips
+     3  the five totals
+     4  the mode toggles
+   plus a 1px divider track between each pair. A section owns its slot: it may wrap
+   only INSIDE itself, it can never reorder, and it can never spill into a
+   neighbour, because a grid item cannot leave its track.
+
+   `minmax(<min>, max-content)` is the whole mechanism. Roomy → every section takes
+   its natural width and nothing wraps. Tight → tracks fall back to the MINIMUMS
+   listed below and each section wraps within its own slot. Narrower than the sum of
+   the minimums → the wrapper's `overflow-x-auto` engages and the strip SCROLLS —
+   "never crush, always scroll", the grid form of the rule.
+
+   The minimums are each section's smallest sensible width and are asserted by
+   `scripts/verify-blocking-lens-ui.ts`, so a later edit cannot quietly let a
+   section crush:
+     S1 232px (the supplier search's own width — chips wrap under it)
+     S2 236px (two rows of status/lab pills)
+     S3 180px (the totals, two per row)
+     S4 200px (two mode buttons per row)
+
+   WHY A MODE TOGGLE NO LONGER MOVES ANYTHING: each toggle reserves the width of its
+   ON/OFF pill and each count reserves its badge, so a section's own max-content does
+   not change when a mode flips; and the two price totals keep RESERVED (invisible)
+   slots for a reader who may see prices, so the page's Prices toggle cannot resize
+   section 3 either. A reader who may never see prices has no reserved slots and
+   simply gets a narrower section — there is no toggle for them to move it with. */
+.blocking-controls-strip {
+  display: grid;
+  align-items: center;
+  grid-template-columns:
+    minmax(232px, max-content) 1px
+    minmax(236px, max-content) 1px
+    minmax(180px, max-content) 1px
+    minmax(200px, max-content);
+}
+/* Phone: the four sections STACK, in the same order, one per row. A 900px-wide
+   strip inside a 375px screen would be all scroll and no overview, and the
+   dividers become meaningless once the sections are rows. */
+@media (max-width: 639px) {
+  .blocking-controls-strip {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .blocking-controls-strip > .blocking-strip-divider {
+    display: none;
+  }
+}
+
 /* ─── Blocking grid columns (mobile horizontal-scroll gate) ───────────────────
    Desktop (sm+, ≥640px): fractional tracks fit the whole 20-col grid to the
    container width — the original, unchanged layout. Below sm: fixed ≥44px cell

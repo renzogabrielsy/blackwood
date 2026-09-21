@@ -22,6 +22,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { format } from 'date-fns';
 import type { BlendProposal } from '../blocking/actions';
+import type { BlendBlockFacts } from '../blocking/types';
 // PERF-4: the pure filename helpers live in a jspdf-free module so callers can import
 // them WITHOUT pulling jsPDF into the bundle. Re-exported here for back-compat + the
 // node/test path.
@@ -68,11 +69,27 @@ const LAB_KEYS: { key: keyof BlendProposal['weighted']; label: string }[] = [
  * with the server `can_view_prices` gate — hide-only, defaults to `true`. When false, the
  * PDF carries NO ₱ anywhere (per-block PHP/KG column, raw price, product cost, formula).
  */
+/**
+ * The supplier/age picture for the block table — the SAME record the modal renders.
+ *
+ * Passed in, never fetched: the PDF is a pure function of what was on screen, so the
+ * two cannot disagree. Absent → the three columns print `-`, exactly as the screen
+ * prints an em dash. It carries NO money and is therefore never price-gated.
+ */
+export interface BlendPdfFacts {
+  facts: Record<string, BlendBlockFacts>;
+  /** `block_loc` → batch id, for a live what-if whose blocks carry none. */
+  batchIdByLoc?: Record<string, string | null>;
+  /** The day the picture describes, printed under the table when it is not today. */
+  asOf?: string | null;
+}
+
 export function buildBlendPdf(
   proposal: BlendProposal,
   showPricesPref = true,
   date: Date = new Date(),
   meta?: BlendDocMeta | null,
+  blockFacts?: BlendPdfFacts | null,
 ): jsPDF {
   const showPrices = proposal.can_view_prices && showPricesPref && proposal.raw_price_per_kg !== null;
 
@@ -201,13 +218,42 @@ export function buildBlendPdf(
   doc.text('Selected Blocks', marginX, y);
   y += 6;
 
-  const head = ['Block', 'Batch', 'Balance (kg)', ...LAB_KEYS.map((l) => l.label)];
+  // Block · Batch · SUPPLIER · OPENED · LAST PILED · Balance · 7 labs · [PHP/KG].
+  // The three added columns carry no money and are NOT price-gated.
+  const factsOf = (b: (typeof proposal.blocks)[number]): BlendBlockFacts | null => {
+    if (!blockFacts) return null;
+    const id = b.batch_id ?? blockFacts.batchIdByLoc?.[b.block_loc] ?? null;
+    return (id && blockFacts.facts[id]) || null;
+  };
+  /** `Llanto 71%` / `Ornales` / `-`. `isSingleSupplier` IS the rule — never a length. */
+  const supplierText = (f: BlendBlockFacts | null): string => {
+    if (!f || f.isSingleSupplier === null || f.dominantSupplierDisplay === null) return '-';
+    if (f.isSingleSupplier) return f.dominantSupplierDisplay;
+    const share = f.dominantSharePct === null ? '' : ` ${Math.round(f.dominantSharePct)}%`;
+    return `${f.dominantSupplierDisplay}${share}`;
+  };
+  const dayText = (v: number | null | undefined): string =>
+    v === null || v === undefined ? '-' : `${Math.round(v)} d`;
+
+  const head = [
+    'Block',
+    'Batch',
+    'Supplier',
+    'Opened',
+    'Last piled',
+    'Balance (kg)',
+    ...LAB_KEYS.map((l) => l.label),
+  ];
   if (showPrices) head.push('PHP/KG');
 
   const body = proposal.blocks.map((b) => {
+    const f = factsOf(b);
     const row: string[] = [
       b.block_loc,
       b.batch_code,
+      supplierText(f),
+      dayText(f?.daysSinceOpened),
+      dayText(f?.daysSinceLastPiled),
       fmtKg(b.balance),
       ...LAB_KEYS.map((l) => fmtLab(l.key, b[l.key])),
     ];
@@ -215,14 +261,23 @@ export function buildBlendPdf(
     return row;
   });
 
-  // Footer total row: "Total" under Batch, then balance, then blanks for labs/price.
-  const footRow: string[] = ['', 'Total', `${fmtKg(proposal.total_balance)} kg`, ...LAB_KEYS.map(() => '')];
+  // Footer total row: "Total" under Batch, blanks under the three added columns,
+  // then balance, then blanks for labs/price.
+  const footRow: string[] = [
+    '',
+    'Total',
+    '',
+    '',
+    '',
+    `${fmtKg(proposal.total_balance)} kg`,
+    ...LAB_KEYS.map(() => ''),
+  ];
   if (showPrices) footRow.push('');
 
-  // Right-align all numeric columns (Balance, the 7 labs, and PHP/KG when present).
-  const numericFrom = 2; // index of "Balance (kg)"
+  // Right-align the numeric columns: Opened, Last piled, Balance, the 7 labs and
+  // PHP/KG when present. Supplier stays LEFT — it is a name.
   const columnStyles: Record<number, { halign: 'right' }> = {};
-  for (let i = numericFrom; i < head.length; i++) columnStyles[i] = { halign: 'right' };
+  for (let i = 3; i < head.length; i++) columnStyles[i] = { halign: 'right' };
 
   autoTable(doc, {
     startY: y,
@@ -237,6 +292,16 @@ export function buildBlendPdf(
     body,
     foot: [footRow],
   });
+
+  if (blockFacts?.asOf) {
+    // @ts-expect-error lastAutoTable runtime field.
+    const afterTable = doc.lastAutoTable.finalY + 12;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(90, 90, 90);
+    doc.text(`Supplier and age as of ${blockFacts.asOf}.`, marginX, afterTable);
+    doc.setTextColor(20, 20, 20);
+  }
 
   // ── Document footer ──
   // @ts-expect-error lastAutoTable runtime field.
@@ -266,11 +331,12 @@ export function downloadBlendPdf(
   label: string,
   showPricesPref = true,
   meta?: BlendDocMeta | null,
+  blockFacts?: BlendPdfFacts | null,
 ): void {
   const filename = composeBlendPdfFilename(label);
   if (!filename) {
     throw new Error('A label is required to name the PDF.');
   }
-  const doc = buildBlendPdf(proposal, showPricesPref, new Date(), meta);
+  const doc = buildBlendPdf(proposal, showPricesPref, new Date(), meta, blockFacts);
   doc.save(filename);
 }

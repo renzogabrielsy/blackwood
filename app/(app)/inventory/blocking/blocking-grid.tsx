@@ -641,14 +641,16 @@ export function BlockingGrid({
   // Only ONE marking vocabulary is ever on screen, so opening a lens resets the
   // status/lab spotlight and clears the supplier search, and picking either of those
   // closes the lens. (See `handleToggleStatus` / `handleSupplierSelect` below.)
-  const openLens = useCallback(
-    (id: BlockingLensId) => {
-      setStatusFilter('ALL');
-      onSupplierFilterChange?.(null);
-      lensWriterRef.current?.(id);
-    },
-    [onSupplierFilterChange],
-  );
+  const openLens = useCallback((id: BlockingLensId) => {
+    setStatusFilter('ALL');
+    // The supplier is NOT cleared with a second `onSupplierFilterChange?.(null)` call
+    // any more. That made TWO `router.replace` navigations in one tick from the SAME
+    // stale `searchParams` — one URL with `lens`, one without — and the flip-flop as
+    // they settled remounted the lens panel and killed its first read (2026-09-21).
+    // `blocking-route-view.tsx`'s `handleLensChange` drops `supplier` in the same
+    // `URLSearchParams`, so this is one interaction and one navigation.
+    lensWriterRef.current?.(id);
+  }, []);
 
   /**
    * A lens the reader may no longer be offered FALLS BACK to one they can see, and
@@ -724,6 +726,18 @@ export function BlockingGrid({
   useEffect(() => {
     void loadProposals();
   }, [loadProposals]);
+
+  /**
+   * `block_loc` → the batch occupying it, straight off the grid payload.
+   *
+   * The blend modal's supplier/age columns are keyed by BATCH; this is how the LIVE
+   * what-if supplies them (a saved version carries its own ids in its snapshot).
+   */
+  const batchIdByLoc = useMemo(() => {
+    const out: Record<string, string | null> = {};
+    for (const [loc, block] of Object.entries(data)) out[loc] = block.batch_id ?? null;
+    return out;
+  }, [data]);
 
   /** Non-archived proposals — what the header badge counts. */
   const liveProposalCount = useMemo(() => proposals.filter((p) => !p.isArchived).length, [proposals]);
@@ -1180,13 +1194,15 @@ export function BlockingGrid({
 
   const handleSupplierSelect = useCallback(
     (key: string | null) => {
+      // ONE navigation: the route's `handleSupplierChange` drops `lens` in the same
+      // `URLSearchParams`, so `closeLens()` (which would write a SECOND URL) is not
+      // called here. The grid still drops the tint on this frame, so a lens's marking
+      // can never outlive the interaction that replaced it.
+      if (key && lensId) setLensClassifier({ fn: null });
       onSupplierFilterChange?.(key);
-      if (key) {
-        setStatusFilter('ALL');
-        if (lensId) closeLens();
-      }
+      if (key) setStatusFilter('ALL');
     },
-    [onSupplierFilterChange, lensId, closeLens],
+    [onSupplierFilterChange, lensId],
   );
 
   return (
@@ -1206,33 +1222,48 @@ export function BlockingGrid({
         />
       </div>
 
-      {/* ── Global Summary Header (sticky) ──
-          Desktop (sm+, tall): the original wrapping, space-between cluster row.
-          Below sm: a single horizontal-scroll strip (no wrap) so the many filter/
-          stat clusters stay on one compact, swipeable line instead of ballooning
-          to a dozen rows; the orphan-prone top-level dividers are hidden there.
-          Short viewports (phone landscape, max-height:500px): same wrapping row,
-          but packed left and condensed — see the SHORT map above. The clusters
-          still WRAP (never horizontal-scroll) so the stat figures stay on screen
-          while the grid scrolls, which is the whole point of the sticky header. */}
+      {/* ═══ THE CONTROL STRIP + THE LENS LEGEND BAR — ONE sticky unit ════════
+          They stick TOGETHER: the legend bar is the strip's second row, so a lens
+          cannot scroll away from the grid it is describing, and the two cannot
+          overlap each other at `top: 0`.
+
+          The strip itself is FOUR FIXED SECTIONS in a CSS grid
+          (`.blocking-controls-strip` in globals.css) — filters · status/lab ·
+          totals · modes. The owner's complaint was that the old single
+          `flex-wrap justify-between` row let every toggle re-flow every cluster
+          after it; a grid item cannot leave its track, so a section can now wrap
+          only inside itself and can never reorder or spill. When the viewport is
+          narrower than the sum of the four minimums the WRAPPER scrolls — never
+          crush, always scroll. Below `sm` the four sections stack in the same
+          order. Short viewports (phone landscape) keep the condensed SHORT map. */}
+      <div className="sticky top-0 z-30 flex flex-col gap-2">
+      <div className="overflow-x-auto rounded-lg border border-border bg-card/95 backdrop-blur-sm">
       <div
         className={cn(
-          'sticky top-0 z-30 bg-card/95 backdrop-blur-sm border border-border rounded-lg px-4 py-2.5 flex items-center justify-between flex-wrap gap-3 max-sm:flex-nowrap max-sm:justify-start max-sm:overflow-x-auto',
+          'blocking-controls-strip gap-x-2 gap-y-1.5 px-3 py-2',
           SHORT.header,
         )}
       >
+        {/* ══ SECTION 1 — supplier search + warehouse filter ══ */}
+        <section
+          data-blocking-strip-section="filters"
+          aria-label="Supplier and warehouse filters"
+          className={cn('flex min-w-0 flex-wrap items-center gap-1.5', SHORT.clusterGap)}
+        >
         {/* ── Supplier search — DESKTOP placement (sm+) ──
-            Leftmost cluster of the chip row: it is a text entry, so it reads as the
-            start of the filter row rather than an afterthought after the stats. */}
+            Leftmost control of section 1: it is a text entry, so it reads as the
+            start of the filter row rather than an afterthought after the stats.
+            Its width is FIXED, so the emerald chip it shows while a supplier is
+            active cannot resize the section. */}
         <BlockingSupplierSearch
           suppliers={supplierMap.suppliers}
           active={activeSupplier}
           onSelect={handleSupplierSelect}
-          className="max-sm:hidden w-[230px] [@media(max-height:500px)]:w-[170px]"
+          className="max-sm:hidden w-[230px] shrink-0 [@media(max-height:500px)]:w-[170px]"
         />
 
         {/* Warehouse filter chips */}
-        <div className={cn('flex items-center gap-1.5 max-sm:shrink-0', SHORT.clusterGap)}>
+        <div className={cn('flex flex-wrap items-center gap-1.5', SHORT.clusterGap)}>
           <button
             onClick={handleSelectAllWarehouses}
             className={cn(
@@ -1276,12 +1307,16 @@ export function BlockingGrid({
             </button>
           ))}
         </div>
+        </section>
 
-        {/* Divider */}
-        <div className={cn('h-5 w-px bg-border max-sm:hidden', SHORT.topDivider)} />
+        <div aria-hidden className="blocking-strip-divider h-8 w-px self-center bg-border" />
 
-        {/* Status filter toggles */}
-        <div className={cn('flex items-center gap-1.5 text-xs max-sm:shrink-0', SHORT.clusterGap)}>
+        {/* ══ SECTION 2 — status + lab chips ══ */}
+        <section
+          data-blocking-strip-section="status"
+          aria-label="Status and lab quality filters"
+          className={cn('flex min-w-0 flex-wrap items-center gap-1.5 text-xs', SHORT.clusterGap)}
+        >
           <button
             onClick={() => handleToggleStatus('STORED')}
             className={cn(
@@ -1371,56 +1406,81 @@ export function BlockingGrid({
             <span className="w-[5px] h-[5px] rounded-full bg-amber-500 inline-block" />
             Ashy
           </button>
-        </div>
+        </section>
 
-        {/* Divider */}
-        <div className={cn('h-5 w-px bg-border max-sm:hidden', SHORT.topDivider)} />
+        <div aria-hidden className="blocking-strip-divider h-8 w-px self-center bg-border" />
 
-        {/* Global stats — stacked label-over-value normally; collapse to a single
-            inline "LABEL value" line on short viewports (phone landscape). */}
-        <div className={cn('flex items-center gap-4 text-xs max-sm:shrink-0', SHORT.statsGap)}>
+        {/* ══ SECTION 3 — THE FIVE TOTALS, TOGETHER ══
+            Stacked label-over-value normally; one inline "LABEL value" line on
+            short viewports (phone landscape). The two PRICE totals keep RESERVED
+            slots for a reader who may see prices, so the page's Prices toggle
+            cannot resize this section and nothing after it moves. */}
+        <section
+          data-blocking-strip-section="totals"
+          aria-label="Yard totals"
+          className={cn('flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 text-xs', SHORT.statsGap)}
+        >
           <GlobalStat
             label="Total Balance"
             shortLabel="BAL"
+            minWidthClass="min-w-[72px]"
             value={`${(global.totalBalance / 1000).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} t`}
           />
           <StatDivider />
           <GlobalStat
             label="Occupied"
             shortLabel="OCC"
+            minWidthClass="min-w-[60px]"
             value={`${global.totalOccupied} / ${global.totalSlots}`}
           />
           <StatDivider />
           <GlobalStat
             label="Utilization"
             shortLabel="UTIL"
+            minWidthClass="min-w-[52px]"
             valueClass={getUtilizationColor(parseFloat(global.utilization))}
             value={`${global.utilization}%`}
           />
-          {canViewPrices && global.totalValue > 0 && (
+          {/* RESERVED, not conditional. A reader who MAY see prices keeps both slots
+              whatever the Prices toggle says, so flipping it cannot resize this
+              section and cannot move the modes beside it. A reader who may never see
+              prices has no slot to reserve and simply gets a narrower section. */}
+          {serverCanViewPrices && (
             <>
-              <StatDivider />
+              <StatDivider reserved={!(canViewPrices && global.totalValue > 0)} />
               <GlobalStat
                 label="Total Value"
                 shortLabel="VAL"
+                minWidthClass="min-w-[92px]"
+                reserved={!(canViewPrices && global.totalValue > 0)}
                 value={<Peso>{Math.round(global.totalValue).toLocaleString()}</Peso>}
               />
-              {global.wtdAvgPhpKg !== null && (
-                <>
-                  <StatDivider />
-                  <GlobalStat
-                    label="Wtd Avg PHP/KG"
-                    shortLabel="&#8369;/KG"
-                    value={<Peso>{global.wtdAvgPhpKg.toFixed(2)}</Peso>}
-                  />
-                </>
-              )}
+              <StatDivider
+                reserved={!(canViewPrices && global.totalValue > 0 && global.wtdAvgPhpKg !== null)}
+              />
+              <GlobalStat
+                label="Wtd Avg PHP/KG"
+                shortLabel="&#8369;/KG"
+                minWidthClass="min-w-[72px]"
+                reserved={!(canViewPrices && global.totalValue > 0 && global.wtdAvgPhpKg !== null)}
+                value={<Peso>{(global.wtdAvgPhpKg ?? 0).toFixed(2)}</Peso>}
+              />
             </>
           )}
-        </div>
+        </section>
 
-        {/* Divider */}
-        <div className={cn('h-5 w-px bg-border max-sm:hidden', SHORT.topDivider)} />
+        <div aria-hidden className="blocking-strip-divider h-8 w-px self-center bg-border" />
+
+        {/* ══ SECTION 4 — THE MODE TOGGLES ══
+            Prices · Highlight · Proposals · Blend Proposal, in that order. Every one
+            reserves the width of its ON/OFF pill (or its count badge), so switching a
+            mode changes a colour and never a width — which is what stops section 3's
+            totals sliding sideways every time the operator turns something on. */}
+        <section
+          data-blocking-strip-section="modes"
+          aria-label="Modes"
+          className={cn('flex min-w-0 flex-wrap items-center gap-1.5', SHORT.clusterGap)}
+        >
 
         {/* ── Prices visibility toggle (presenter/privacy) ── */}
         {/* Shown ONLY when the server allows prices. For a server-gated no-price user the
@@ -1445,7 +1505,7 @@ export function BlockingGrid({
                 "prices", so the word is dropped to buy wrap-width. Hit area unchanged. */}
             <span
               className={cn(
-                'ml-0.5 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full text-[9px] font-bold',
+                'ml-0.5 inline-flex items-center justify-center w-[26px] h-4 px-1 rounded-full text-[9px] font-bold tabular-nums',
                 showPrices ? 'bg-border text-muted-foreground' : 'bg-primary-foreground/20 text-primary-foreground',
               )}
             >
@@ -1486,7 +1546,7 @@ export function BlockingGrid({
             <span className={SHORT.shortOnly}>Lens</span>
             <span
               className={cn(
-                'ml-0.5 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full text-[9px] font-bold',
+                'ml-0.5 inline-flex items-center justify-center w-[26px] h-4 px-1 rounded-full text-[9px] font-bold tabular-nums',
                 lensId ? 'bg-primary-foreground/20 text-primary-foreground' : 'bg-border text-muted-foreground',
               )}
             >
@@ -1514,7 +1574,7 @@ export function BlockingGrid({
           <span className={SHORT.shortOnly}>Saved</span>
           <span
             className={cn(
-              'ml-0.5 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full text-[9px] font-bold',
+              'ml-0.5 inline-flex items-center justify-center w-[26px] h-4 px-1 rounded-full text-[9px] font-bold tabular-nums',
               'bg-border text-muted-foreground',
             )}
           >
@@ -1542,65 +1602,68 @@ export function BlockingGrid({
           <span className={SHORT.shortOnly}>Blend</span>
           <span
             className={cn(
-              'ml-0.5 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full text-[9px] font-bold',
+              'ml-0.5 inline-flex items-center justify-center w-[26px] h-4 px-1 rounded-full text-[9px] font-bold tabular-nums',
               blendMode ? 'bg-primary-foreground/20 text-primary-foreground' : 'bg-border text-muted-foreground',
             )}
           >
             {blendMode ? 'ON' : 'OFF'}
           </span>
         </button>
+        </section>
+      </div>
       </div>
 
-      {/* ── Warehouse Grids + the docked lens panel ──
-          A row, not an overlay: the lens exists to make the GRID light up, so it
-          must never cover it. `min-w-0` on the grid column is load-bearing — it is
-          what makes the column GIVE when the panel takes its 300px, and each
-          warehouse section's own `overflow-x-auto` + the 104px track floor in
-          `.blocking-grid-cols` then scroll rather than crush ("never crush, always
-          scroll"). Below `lg` the panel is a bottom sheet and this is a plain
-          single-column stack again. */}
-      <div className="flex items-start gap-3">
-        <div className="flex min-w-0 flex-1 flex-col gap-3">
-          {visibleWarehouses.map((whseKey) => (
-            <WarehouseSection
-              key={whseKey}
-              whseKey={whseKey}
-              selectedLocKey={selectedLocKey}
-              onCellClick={handleCellClick}
-              statusFilter={statusFilter}
-              onToggleStatus={handleToggleStatus}
-              data={data}
-              canViewPrices={canViewPrices}
-              labHighlights={labHighlights}
-              blendMode={blendMode}
-              blendSelection={blendSelection}
-              supplierKey={supplierKey}
-              supplierByBlock={supplierMap.byBlock}
-              lensClassifier={lensClassifier.fn}
-            />
-          ))}
-        </div>
+      {/* ── THE LENS LEGEND BAR — the strip's second row ──
+          It REPLACED a docked 300px sidebar (2026-09-21). The owner: the sidebar was
+          *"completely static and not minimizable … taking up precious space; we want
+          to see the entire blocking as much as possible."* So the lens is one slim
+          full-width line here, everything it used to hold behind a gear, and THE GRID
+          BELOW IS FULL WIDTH AGAIN — there is no flex row and no `min-w-0` column
+          left. Each warehouse section keeps its own `overflow-x-auto` and
+          `.blocking-grid-cols` still floors every track at 104px, so "never crush,
+          always scroll" holds for exactly the reason it always did. */}
+      {activeLens && (
+        <BlockingLensPanel
+          lenses={lensOptions}
+          activeId={activeLens.id}
+          onSelectLens={openLens}
+          onClose={closeLens}
+          onClear={() => setLensClassifier({ fn: null })}
+          hasClassification={!!lensClassifier.fn}
+          data={data}
+          caps={lensCaps}
+          onClassifierChange={handleClassifierChange}
+          // A lens that NAMES a block (the age lens's oldest pile) can open it,
+          // and it opens it exactly the way clicking the cell does — one handler,
+          // so blend mode and the URL writer behave identically from both doors.
+          onFocusBlock={handleCellClick}
+          // Escape steps back one rung: while the detail drawer is open it owns
+          // the key, and the lens closes on the next press.
+          escapeSuppressed={!!selectedLocKey}
+        />
+      )}
+      </div>
 
-        {activeLens && (
-          <BlockingLensPanel
-            lenses={lensOptions}
-            activeId={activeLens.id}
-            onSelectLens={openLens}
-            onClose={closeLens}
-            onClear={() => setLensClassifier({ fn: null })}
-            hasClassification={!!lensClassifier.fn}
+      {/* ── Warehouse Grids — FULL WIDTH ── */}
+      <div className="flex flex-col gap-3">
+        {visibleWarehouses.map((whseKey) => (
+          <WarehouseSection
+            key={whseKey}
+            whseKey={whseKey}
+            selectedLocKey={selectedLocKey}
+            onCellClick={handleCellClick}
+            statusFilter={statusFilter}
+            onToggleStatus={handleToggleStatus}
             data={data}
-            caps={lensCaps}
-            onClassifierChange={handleClassifierChange}
-            // A lens that NAMES a block (the age lens's oldest pile) can open it,
-            // and it opens it exactly the way clicking the cell does — one handler,
-            // so blend mode and the URL writer behave identically from both doors.
-            onFocusBlock={handleCellClick}
-            // Escape steps back one rung: while the detail drawer is open it owns
-            // the key, and the lens closes on the next press.
-            escapeSuppressed={!!selectedLocKey}
+            canViewPrices={canViewPrices}
+            labHighlights={labHighlights}
+            blendMode={blendMode}
+            blendSelection={blendSelection}
+            supplierKey={supplierKey}
+            supplierByBlock={supplierMap.byBlock}
+            lensClassifier={lensClassifier.fn}
           />
-        )}
+        ))}
       </div>
 
       {/* ── Detail Panel ── */}
@@ -1710,6 +1773,11 @@ export function BlockingGrid({
         loading={dialogLoading}
         onRemoveBlock={handleRemoveBlendBlock}
         showPrices={showPrices}
+        // WHICH BATCH is in each block RIGHT NOW. The live what-if's blocks carry no
+        // `batch_id` (only a saved snapshot records one) and the supplier/age read is
+        // keyed by batch — a block address is reused when a pile empties, so resolving
+        // by address would describe different charcoal under the same name.
+        batchIdByLoc={batchIdByLoc}
         saved={savedContext}
         onSaveNew={handleSaveNewProposal}
         saving={saving}
@@ -2244,9 +2312,20 @@ function Peso({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** Vertical rule between global stats — full height normally, stubby when condensed. */
-function StatDivider() {
-  return <div className="h-8 w-px bg-border [@media(max-height:500px)]:h-3" />;
+/**
+ * Vertical rule between global stats — full height normally, stubby when condensed.
+ *
+ * `reserved` keeps the rule's WIDTH while hiding it, so a total that the Prices toggle
+ * has hidden leaves its slot behind and section 3 of the control strip cannot change
+ * width. `invisible`, not `hidden`: the box is still laid out.
+ */
+function StatDivider({ reserved = false }: { reserved?: boolean }) {
+  return (
+    <div
+      aria-hidden
+      className={cn('h-8 w-px bg-border [@media(max-height:500px)]:h-3', reserved && 'invisible')}
+    />
+  );
 }
 
 /**
@@ -2262,15 +2341,32 @@ function GlobalStat({
   shortLabel,
   value,
   valueClass,
+  minWidthClass,
+  reserved = false,
 }: {
   label: string;
   /** Abbreviated label rendered instead of `label` on short viewports. */
   shortLabel: string;
   value: React.ReactNode;
   valueClass?: string;
+  /**
+   * The slot's reserved width — `tabular-nums` keeps the digits from moving and this
+   * keeps the SLOT from moving, so a figure that grows a digit (or is hidden by the
+   * Prices toggle) cannot re-flow the section it sits in.
+   */
+  minWidthClass?: string;
+  /** Lay the slot out but do not show it. See `StatDivider`. */
+  reserved?: boolean;
 }) {
   return (
-    <div className="text-right [@media(max-height:500px)]:flex [@media(max-height:500px)]:items-baseline [@media(max-height:500px)]:gap-1">
+    <div
+      aria-hidden={reserved || undefined}
+      className={cn(
+        'text-right tabular-nums [@media(max-height:500px)]:flex [@media(max-height:500px)]:items-baseline [@media(max-height:500px)]:gap-1',
+        minWidthClass,
+        reserved && 'invisible',
+      )}
+    >
       <div className="text-muted-foreground font-medium [@media(max-height:500px)]:text-[9px] [@media(max-height:500px)]:leading-none [@media(max-height:500px)]:uppercase [@media(max-height:500px)]:tracking-wide">
         <span className={SHORT.tallOnly}>{label}</span>
         <span className={SHORT.shortOnly}>{shortLabel}</span>

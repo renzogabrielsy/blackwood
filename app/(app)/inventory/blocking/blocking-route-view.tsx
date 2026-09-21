@@ -108,18 +108,35 @@ export function BlockingRouteView() {
     const urlSupplier = searchParams.get('supplier');
     const [selectedSupplier, setOptimisticSupplier] = useOptimistic(urlSupplier);
 
+    const urlLens = searchParams.get('lens');
+    const [selectedLens, setOptimisticLens] = useOptimistic(urlLens);
+
+    // ── ONE INTERACTION, ONE NAVIGATION (2026-09-21) ──
+    // The mutual-exclusivity rule (a supplier and a lens are never both on screen) used
+    // to be applied by the GRID calling two writers in the same tick — which produced
+    // TWO `router.replace` calls, each built from the SAME stale `searchParams`, so the
+    // two URLs disagreed about whether `lens` was present. Whichever navigation settled
+    // last decided, the `useOptimistic` mirrors flipped as they settled, and the lens
+    // panel was unmounted and remounted mid-flight. That is what killed the lens's
+    // debounced first read (see `lens/price-lens-panel.tsx`).
+    // The rule now lives HERE, where it costs one write: picking a supplier drops
+    // `lens` in the same `URLSearchParams`, and opening a lens drops `supplier`.
     const handleSupplierChange = useCallback(
         (supplier: string | null) => {
             const params = new URLSearchParams(searchParams.toString());
-            if (supplier) params.set('supplier', supplier);
-            else params.delete('supplier');
+            if (supplier) {
+                params.set('supplier', supplier);
+                // A supplier spotlight and a lens are mutually exclusive — one write.
+                params.delete('lens');
+            } else params.delete('supplier');
             const qs = params.toString();
             startTransition(() => {
                 setOptimisticSupplier(supplier);
+                if (supplier) setOptimisticLens(null);
                 router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
             });
         },
-        [router, pathname, searchParams, setOptimisticSupplier],
+        [router, pathname, searchParams, setOptimisticSupplier, setOptimisticLens],
     );
 
     // ── URL-driven HIGHLIGHT LENS (`?lens=<id>`) ──
@@ -128,21 +145,23 @@ export function BlockingRouteView() {
     // (Production on `?lens=price`) resolves to nothing in the registry, and the grid
     // closes it rather than substituting a lens nobody asked for. Band SELECTION is
     // deliberately NOT a param — it is a moment of looking, not a statement.
-    const urlLens = searchParams.get('lens');
-    const [selectedLens, setOptimisticLens] = useOptimistic(urlLens);
-
     const handleLensChange = useCallback(
         (lens: string | null) => {
             const params = new URLSearchParams(searchParams.toString());
-            if (lens) params.set('lens', lens);
-            else params.delete('lens');
+            if (lens) {
+                params.set('lens', lens);
+                // Opening a lens clears the supplier spotlight — the mutual-exclusivity
+                // rule, in ONE navigation. See the note on `handleSupplierChange`.
+                params.delete('supplier');
+            } else params.delete('lens');
             const qs = params.toString();
             startTransition(() => {
                 setOptimisticLens(lens);
+                if (lens) setOptimisticSupplier(null);
                 router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
             });
         },
-        [router, pathname, searchParams, setOptimisticLens],
+        [router, pathname, searchParams, setOptimisticLens, setOptimisticSupplier],
     );
 
     // ── URL-driven SAVED blend proposal (`?proposal=<id>&v=<n>`) ──

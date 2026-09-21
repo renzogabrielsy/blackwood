@@ -247,8 +247,25 @@ export function PriceLensFixture() {
       </p>
 
       {/* The same row layout the real page uses: grid gives, panel keeps 300px. */}
-      <div className="flex items-start gap-3">
-        <div className="min-w-0 flex-1">
+      {/* The REAL frame is now a BAR (2026-09-21): full width, above the grid,
+          which keeps ALL of its own width. */}
+      <div className="flex flex-col gap-3">
+        {/* The REAL frame + the REAL panel, driven through the adapter port. */}
+        {seeded && (
+          <BlockingLensPanel
+            key={offsets.join(',')}
+            lenses={lenses}
+            activeId={PRICE_LENS.id}
+            onSelectLens={() => undefined}
+            onClose={() => undefined}
+            onClear={() => setClassifier({ fn: null })}
+            hasClassification={!!classifier.fn}
+            data={{}}
+            caps={{ canViewPrices: true }}
+            onClassifierChange={handleClassifier}
+          />
+        )}
+        <div className="min-w-0">
           <div className="rounded-lg border border-border bg-card p-2 overflow-x-auto">
             <div
               className="grid blocking-grid-cols"
@@ -377,21 +394,6 @@ export function PriceLensFixture() {
           </div>
         </div>
 
-        {/* The REAL frame + the REAL panel, driven through the adapter port. */}
-        {seeded && (
-          <BlockingLensPanel
-            key={offsets.join(',')}
-            lenses={lenses}
-            activeId={PRICE_LENS.id}
-            onSelectLens={() => undefined}
-            onClose={() => undefined}
-            onClear={() => setClassifier({ fn: null })}
-            hasClassification={!!classifier.fn}
-            data={{}}
-            caps={{ canViewPrices: true }}
-            onClassifierChange={handleClassifier}
-          />
-        )}
       </div>
     </div>
   );

@@ -375,8 +375,26 @@ export function AgeLensFixture() {
       </p>
 
       {/* The same row layout the real page uses: grid gives, panel keeps 300px. */}
-      <div className="flex items-start gap-3">
-        <div className="min-w-0 flex-1">
+      {/* The REAL frame is now a BAR (2026-09-21): full width, above the grid,
+          which keeps ALL of its own width. */}
+      <div className="flex flex-col gap-3">
+        {/* The REAL frame + the REAL panels, driven through their adapter ports. */}
+        {seeded && lenses.length > 0 && (
+          <BlockingLensPanel
+            key={edges.join(',')}
+            lenses={lenses}
+            activeId={activeId}
+            onSelectLens={setActiveId}
+            onClose={() => undefined}
+            onClear={() => setClassifier({ fn: null })}
+            hasClassification={!!classifier.fn}
+            data={{}}
+            caps={caps}
+            onClassifierChange={handleClassifier}
+            onFocusBlock={setFocused}
+          />
+        )}
+        <div className="min-w-0">
           <div className="rounded-lg border border-border bg-card p-2 overflow-x-auto">
             <div
               className="grid blocking-grid-cols"
@@ -504,22 +522,6 @@ export function AgeLensFixture() {
           </div>
         </div>
 
-        {/* The REAL frame + the REAL panels, driven through their adapter ports. */}
-        {seeded && lenses.length > 0 && (
-          <BlockingLensPanel
-            key={edges.join(',')}
-            lenses={lenses}
-            activeId={activeId}
-            onSelectLens={setActiveId}
-            onClose={() => undefined}
-            onClear={() => setClassifier({ fn: null })}
-            hasClassification={!!classifier.fn}
-            data={{}}
-            caps={caps}
-            onClassifierChange={handleClassifier}
-            onFocusBlock={setFocused}
-          />
-        )}
       </div>
     </div>
   );

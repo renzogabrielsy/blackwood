@@ -134,6 +134,86 @@ export function LensBandRows({ rows, ramp, picked, onToggle }: LensBandRowsProps
   );
 }
 
+// ── The COMPACT variant: the same rows, as one scrollable line of chips ─────
+//
+// Added 2026-09-21 with the LEGEND BAR (the owner: the docked sidebar was "taking up
+// precious space; we want to see the entire blocking as much as possible"). It is a
+// VARIANT of `LensBandRows`, not a fork: same `LensBandRow[]`, same `aria-pressed`
+// isolate semantics, same swatch from the same `rampClass`, same preformatted figures.
+// What changes is only the shape — one horizontal line instead of a stack — so a band
+// legend can sit under the header strip and leave the grid its full width.
+//
+// It NEVER wraps: chips overflow by horizontal scroll inside the bar, because a legend
+// that grows a second line pushes the grid down every time a cut line is added.
+
+export interface LensBandChipsProps extends LensBandRowsProps {
+  /** Show each band's label, or swatch + share only (a per-user preference). */
+  showLabels?: boolean;
+}
+
+export function LensBandChips({
+  rows,
+  ramp,
+  picked,
+  onToggle,
+  showLabels = true,
+}: LensBandChipsProps) {
+  return (
+    <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
+      {rows.map((row, i) => {
+        const isPicked = picked.has(row.index);
+        return (
+          <button
+            key={row.index}
+            type="button"
+            onClick={() => onToggle(row.index)}
+            aria-pressed={isPicked}
+            // `title` carries the quiet second line the stacked row shows outright —
+            // the figures are the same strings, so the bar and the popover agree.
+            title={`${row.label} · ${formatLensSharePct(row.sharePct)} · ${row.detail}`}
+            className={cn(
+              'inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5',
+              'text-[10px] font-semibold transition-colors duration-150 cursor-pointer',
+              isPicked
+                ? 'border-primary bg-primary/15 text-foreground'
+                : 'border-border bg-card text-muted-foreground hover:bg-accent hover:text-foreground',
+            )}
+          >
+            <span
+              aria-hidden
+              className={cn(
+                'h-2.5 w-2.5 shrink-0 rounded-sm border border-border/60',
+                rampClass(ramp, i, rows.length),
+                'lens-band-swatch',
+              )}
+            />
+            {/* The label is dropped below `sm` — on a phone the bar is a scrolling
+                line and a swatch + share is the readable unit; the full label is
+                still on the chip's `title` and in the Settings popover's rows. */}
+            {showLabels && <span className="max-w-[140px] truncate max-sm:hidden">{row.label}</span>}
+            <span className="font-mono tabular-nums">{formatLensSharePct(row.sharePct)}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * The compact twin of `LensExcludedRow` — the population in NO band, as a muted chip.
+ * Dashed, no swatch, not a button: it is not a band and must never read as the first one.
+ */
+export function LensExcludedChip({ title, note }: LensExcludedRowProps) {
+  return (
+    <span
+      title={note}
+      className="inline-flex shrink-0 items-center rounded-md border border-dashed border-border bg-muted/30 px-1.5 py-0.5 text-[10px] text-muted-foreground"
+    >
+      {title}
+    </span>
+  );
+}
+
 // ── The population that is in NO band ───────────────────────────────────────
 
 export interface LensExcludedRowProps {

@@ -77,6 +77,14 @@ function check(label: string, fn: () => void): void {
 }
 
 const MIGRATION = 'supabase/migrations/20260919025729_blocking_price_lens.sql';
+/**
+ * 2026-09-21 — A TYPED PRICE IS THE LINE ITSELF. `fn_blocking_price_lens` gained an
+ * optional `p_rounded_up_php`, which is a SIGNATURE change, so it was DROP + CREATEd and
+ * its grants + COMMENT re-applied in this second file. The original migration above is
+ * untouched and its assertions still read it, so a regression there still fails here.
+ */
+const OVERRIDE_MIGRATION =
+  'supabase/migrations/20260921034512_blend_block_facts_and_price_lens_rounded_up.sql';
 const ACTIONS = 'app/(app)/inventory/blocking/actions.ts';
 const TYPES = 'app/(app)/inventory/blocking/types.ts';
 
@@ -241,12 +249,113 @@ function staticChecks(): void {
   });
 
   check('the R rule is written down exactly once, in SQL', () => {
+    // NOTE the MEASURED rule now lives in the 2026-09-21 migration, because the signature
+    // change forced a DROP + CREATE. The original file's copy is the one that was
+    // replaced, so BOTH are checked: the old one so a revert is visible, the new one
+    // because it is what runs.
     assert.ok(sql.includes('v_r := floor(p_market_php_kg) + 1;'), 'the R expression moved or changed');
+    assert.ok(
+      read(OVERRIDE_MIGRATION).includes('v_r := floor(p_market_php_kg) + 1;'),
+      'the live function no longer computes the measured R',
+    );
     // No TypeScript copy of it — a second copy is a second definition, and this is
     // checked against COMMENT-STRIPPED source so quoting the rule in a doc comment
     // (which `fetchBlockingPriceLens` deliberately does) is not mistaken for one.
     assert.ok(!/floor\s*\(/i.test(actionsCode), 'R is re-derived in TypeScript');
     assert.ok(!/Math\.floor|Math\.ceil|Math\.round/.test(actionsCode), 'R is re-derived in TypeScript');
+  });
+
+  // ─── THE TYPED CUT LINE (p_rounded_up_php, 2026-09-21) ─────────────────────
+  //
+  // `R = floor(market) + 1` is right for a MEASURED market and WRONG for a typed one: the
+  // operator who types ₱41 means ₱41 and up is above market, and got a lens cut at 42.
+  // The parameter that fixes it is a SIGNATURE change, so the checks below are about the
+  // two things a signature change silently breaks — the GRANTS and the COMMENT that
+  // `DROP FUNCTION` throws away — plus the compatibility claim itself.
+
+  const ovr = read(OVERRIDE_MIGRATION);
+
+  check('the override migration DROPs and re-CREATEs, in ONE file, with no overload left', () => {
+    assert.ok(
+      ovr.includes('DROP FUNCTION IF EXISTS public.fn_blocking_price_lens(numeric, int[]);'),
+      'the old signature is not dropped — an OVERLOAD would be a second home for the band logic',
+    );
+    assert.ok(
+      ovr.includes('CREATE FUNCTION public.fn_blocking_price_lens('),
+      'the new signature is not created (a CREATE OR REPLACE cannot change an argument list)',
+    );
+    assert.ok(ovr.includes('p_rounded_up_php int   DEFAULT NULL'), 'the new parameter is not optional');
+    // The DROP and the CREATE are in that order in the same file, so no window exists in
+    // which the function is missing after the migration.
+    assert.ok(
+      ovr.indexOf('DROP FUNCTION IF EXISTS public.fn_blocking_price_lens') <
+        ovr.indexOf('CREATE FUNCTION public.fn_blocking_price_lens('),
+      'the CREATE is before the DROP',
+    );
+  });
+
+  check('the GRANTS and the COMMENT a DROP discards are re-applied in the same file', () => {
+    const sig = 'fn_blocking_price_lens(numeric, int[], int)';
+    assert.ok(ovr.includes(`REVOKE EXECUTE ON FUNCTION public.${sig} FROM PUBLIC;`), 'PUBLIC not re-revoked');
+    assert.ok(ovr.includes(`REVOKE EXECUTE ON FUNCTION public.${sig} FROM anon;`), 'anon not re-revoked');
+    assert.ok(ovr.includes(`GRANT  EXECUTE ON FUNCTION public.${sig} TO authenticated;`), 'authenticated not re-granted');
+    assert.ok(ovr.includes(`COMMENT ON FUNCTION public.${sig} IS`), 'the COMMENT was not re-applied');
+    // ...and still nothing gives it to service_role.
+    assert.ok(
+      !/GRANT[^;]*fn_blocking_price_lens\(numeric, int\[\], int\)[^;]*service_role/.test(ovr),
+      'the lens was granted to service_role',
+    );
+    // The COMMENT must still name the price gate AND now the typed-price rule.
+    const at = ovr.indexOf(`COMMENT ON FUNCTION public.${sig} IS`);
+    const body = ovr.slice(at, at + 4000);
+    assert.ok(/canViewPrices/.test(body), 'the COMMENT no longer names the price gate');
+    assert.ok(/ceil\(typed price\)/.test(body), 'the COMMENT does not state the UI rule for the manual basis');
+  });
+
+  check('the probe moved WITH the signature — it names the function by argument types', () => {
+    // `has_function_privilege(role, 'public.fn_blocking_price_lens(numeric, int[])', ...)`
+    // RESOLVES the signature, so leaving the probe behind would have made every probe
+    // call fail outright. This is why the probe is in the same migration.
+    assert.ok(
+      ovr.includes("'public.fn_blocking_price_lens(numeric, int[], int)', 'EXECUTE'"),
+      'the probe still asks about the OLD signature',
+    );
+    assert.ok(ovr.includes('lens_overload_count'), 'the probe does not count the overloads');
+  });
+
+  check('SQL refuses a non-positive typed cut line, and NULL is NOT a refusal', () => {
+    assert.ok(
+      ovr.includes('IF p_rounded_up_php IS NOT NULL AND p_rounded_up_php < 1 THEN'),
+      'the typed-cut-line guard moved — note it must test IS NOT NULL first, since NULL means "no override"',
+    );
+    assert.ok(ovr.includes("'reason', 'invalid_rounded_up'"), 'the invalid_rounded_up refusal is gone');
+    assert.ok(ovr.includes('IF p_rounded_up_php IS NOT NULL THEN'), 'the override no longer sets R');
+  });
+
+  check('the override is enforced in the ACTION too, where integrality is decidable', () => {
+    // `p_rounded_up_php` is declared `int`, so Postgres has already rounded 40.5 to 41 by
+    // the time the body runs — exactly the asymmetry `p_edge_offsets` already records.
+    const start = actions.indexOf('export async function fetchBlockingPriceLens(');
+    const nextExport = actions.indexOf('\nexport async function ', start + 1);
+    const body = actions.slice(start, nextExport === -1 ? undefined : nextExport);
+    assert.ok(/roundedUpPhp\?: number \| null/.test(body), 'the action does not accept the optional override');
+    assert.ok(/invalid_rounded_up/.test(body), 'the action does not reuse the SQL invalid_rounded_up reason');
+    assert.ok(/Number\.isInteger\(r\)/.test(body), 'the action does not check integrality');
+    assert.ok(/p_rounded_up_php: overrideR/.test(body), 'the override is not passed to the RPC');
+    // The ceil() the manual basis needs is the UI's job, NOT the action's — the action
+    // must stay free of arithmetic (and `actionsCode` above already forbids Math.ceil).
+    assert.ok(
+      types.includes('BLOCKING_ROUNDED_UP_MIN_PHP = 1'),
+      'the minimum is not one shared definition',
+    );
+    assert.ok(
+      /Math\.ceil\(typedPrice\)/.test(types),
+      'the types do not state the UI rule (pass ceil(typed price) for the manual basis)',
+    );
+    assert.ok(
+      types.includes("| 'invalid_rounded_up'"),
+      'the refusal union does not carry invalid_rounded_up',
+    );
   });
 }
 
@@ -365,6 +474,12 @@ async function liveChecks(env: { url: string; service: string; anon: string }): 
     assert.equal(n(posture, 'stable_count'), 3);
     assert.equal(n(posture, 'search_path_pinned'), 3);
     assert.equal(n(posture, 'commented_count'), 2);
+  });
+  check('catalog posture: EXACTLY ONE fn_blocking_price_lens exists — no overload', () => {
+    // The 2026-09-21 signature change was a DROP + CREATE precisely so the band logic
+    // keeps one home. Two functions of this name would be two places for "above market"
+    // to mean something.
+    assert.equal(n(posture, 'lens_overload_count'), 1);
   });
 
   // --- (b) THE FOUR BASES, and the REUSE proof ---
@@ -644,6 +759,76 @@ async function liveChecks(env: { url: string; service: string; anon: string }): 
       // band list a caller might render.
       assert.equal(r.bands, undefined, `${key} leaked a band list into a refusal`);
       assert.equal(r.blocks, undefined, `${key} leaked a block list into a refusal`);
+    });
+  }
+
+  // --- (i) THE TYPED CUT LINE (p_rounded_up_php, 2026-09-21) ---
+  const overrideNull = obj(probe, 'override_null');
+  const override41 = obj(probe, 'override_41_market_41');
+  const measured41 = obj(probe, 'r_41_no_override');
+
+  check('OVERRIDE = NULL is BYTE-IDENTICAL to no override at all — the whole compatibility claim', () => {
+    // `lens_live` is fn_blocking_price_lens(price); `override_null` is
+    // fn_blocking_price_lens(price, ARRAY[-1,0], NULL). Every existing caller, the four
+    // computed bases and the whole stored UI configuration take the second path now, so
+    // the two payloads must be the same jsonb — not merely the same R.
+    assert.deepEqual(overrideNull, lens, 'passing an explicit NULL override changed the payload');
+  });
+
+  check('A TYPED PRICE IS THE LINE ITSELF: market 41 with override 41 gives R = 41, cut at 40 / 41', () => {
+    assert.equal(override41.ok, true, 'the override call refused');
+    assert.equal(n(override41, 'rounded_up_php'), 41, 'the given cut line was not used as R');
+    const b = arr(override41, 'bands');
+    assert.equal(b.length, 3, `expected 3 bands, got ${b.length}`);
+    assert.equal(b[0].lower_php, null, 'band 0 is not open below');
+    assert.equal(Number(b[0].upper_php), 40, 'band 0 does not end at R-1 = 40');
+    assert.equal(Number(b[1].lower_php), 40, 'the at-market band does not start at 40');
+    assert.equal(Number(b[1].upper_php), 41, 'the at-market band does not end at 41');
+    assert.equal(Number(b[2].lower_php), 41, 'above market does not start at 41');
+    assert.equal(b[2].upper_php, null, 'the last band is not open above');
+    // AND the point of the whole change: ₱41 is now ABOVE market, not at market.
+    assert.ok(Number(b[2].lower_php) <= 41, '₱41 does not fall in the above-market band');
+  });
+
+  check('...while the MEASURED rule on the same number still reads R = 42, unchanged', () => {
+    // This is the bug the owner reported, preserved as the correct behaviour for a
+    // measured market: the two sit side by side so the one-peso difference is visible.
+    assert.equal(n(measured41, 'rounded_up_php'), 42, 'the measured rule changed');
+    assert.equal(Number(arr(measured41, 'bands')[1].lower_php), 41, 'the at-market band moved');
+  });
+
+  check('the same yard, either way — an override changes the LEGEND, never the blocks', () => {
+    for (const [label, l] of [['override 41', override41], ['measured 41', measured41]] as const) {
+      const bands = arr(l, 'bands');
+      const totals = obj(l, 'total');
+      const unp = obj(l, 'unpriced');
+      assert.equal(
+        bands.reduce((s, b) => s + Number(b.block_count), 0) + n(unp, 'block_count'),
+        n(totals, 'block_count'),
+        `${label}: blocks went missing`,
+      );
+      assert.equal(Number(totals.kg), Number(lensTotal.kg), `${label}: describes a different yard`);
+    }
+  });
+
+  console.log(
+    `    typed vs measured on ₱41: R=${n(override41, 'rounded_up_php')} ` +
+      `(${arr(override41, 'bands').map((b) => b.block_count).join('/')}) ` +
+      `vs R=${n(measured41, 'rounded_up_php')} ` +
+      `(${arr(measured41, 'bands').map((b) => b.block_count).join('/')})  [below/at/above]`,
+  );
+
+  for (const [key, label] of [
+    ['refusal_override_zero', 'a typed cut line of 0'],
+    ['refusal_override_negative', 'a negative typed cut line'],
+  ] as const) {
+    check(`refusal: ${label} -> ok:false, reason 'invalid_rounded_up', with a human message`, () => {
+      const r = obj(probe, key);
+      assert.equal(r.ok, false, `${key} did not refuse`);
+      assert.equal(r.reason, 'invalid_rounded_up', `${key} gave reason ${r.reason}`);
+      assert.ok(typeof r.message === 'string' && r.message.length > 20, `${key} has no human message`);
+      assert.equal(r.bands, undefined, `${key} leaked a band list into a refusal`);
+      assert.equal(r.rounded_up_php, undefined, `${key} leaked an R into a refusal`);
     });
   }
 

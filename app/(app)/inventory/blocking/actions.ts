@@ -20,6 +20,9 @@ import type {
   BlockingAgeBand,
   BlockingAgeLens,
   BlockingAgeLensResult,
+  BlendBlockFacts,
+  BlendBlockFactsResult,
+  BlendBlockSupplierShare,
 } from './types';
 import {
   BLOCKING_PRICE_LENS_DEFAULT_EDGES,
@@ -27,10 +30,13 @@ import {
   BLOCKING_TRAILING_DAYS_DEFAULT,
   BLOCKING_TRAILING_DAYS_MAX,
   BLOCKING_TRAILING_DAYS_MIN,
+  BLOCKING_ROUNDED_UP_MIN_PHP,
+  BLOCKING_ROUNDED_UP_MAX_PHP,
   BLOCKING_AGE_LENS_DEFAULT_EDGES,
   BLOCKING_AGE_LENS_MAX_EDGES,
   BLOCKING_AGE_EDGE_MIN_DAYS,
   BLOCKING_AGE_EDGE_MAX_DAYS,
+  BLEND_BLOCK_FACTS_MAX_BATCH_IDS,
 } from './types';
 import type { Json } from '@/types/supabase';
 
@@ -1274,6 +1280,13 @@ export async function fetchBlockingMarketBases(
  * `[-1, 0]` gives below market / at market / above market. They are de-duplicated and
  * sorted here exactly as SQL does, and at most 6 survive.
  *
+ * `roundedUpPhp` (2026-09-21) SETS R instead, because **a typed price is the line
+ * itself**. The measured rule rounds up — right for a market of 40.23, wrong for an
+ * operator who typed ₱41 and got a lens cut at 42. **THE UI RULE: for the `manual` basis
+ * pass `Math.ceil(typedPrice)`; for every MEASURED basis pass nothing.** Omitted, the
+ * payload is byte-identical to what it was before the parameter existed, so no existing
+ * caller and no stored lens configuration changes.
+ *
  * A block with NO price is ABSENT from `lens.bandByBlock` and counted in
  * `lens.unpriced` — render it un-lensed, never in the cheapest band.
  *
@@ -1284,6 +1297,7 @@ export async function fetchBlockingMarketBases(
 export async function fetchBlockingPriceLens(
   marketPhpKg: number,
   edgeOffsets: readonly number[] = BLOCKING_PRICE_LENS_DEFAULT_EDGES,
+  roundedUpPhp?: number | null,
 ): Promise<BlockingPriceLensResult> {
   // (1) THE GATE, BEFORE ANYTHING ELSE. Fails closed on any error.
   let canView = false;
@@ -1316,11 +1330,37 @@ export async function fetchBlockingPriceLens(
   const normalized = normalizeEdgeOffsets(edgeOffsets);
   if (!normalized.ok) return { ok: false, reason: normalized.reason, message: normalized.message };
 
+  // (3) The OPTIONAL typed cut line. `null`/`undefined` is not a refusal — it is the
+  // "compute R from the market price" signal, and it is what every MEASURED basis sends.
+  // Integrality is checked HERE because it cannot be checked in SQL: `p_rounded_up_php`
+  // is declared `int`, so Postgres has already rounded 40.5 to 41 by the time the
+  // function body runs. The upper bound is int4's ceiling, not a business rule.
+  let overrideR: number | null = null;
+  if (roundedUpPhp !== null && roundedUpPhp !== undefined) {
+    const r = Number(roundedUpPhp);
+    if (
+      !Number.isFinite(r) ||
+      !Number.isInteger(r) ||
+      r < BLOCKING_ROUNDED_UP_MIN_PHP ||
+      r > BLOCKING_ROUNDED_UP_MAX_PHP
+    ) {
+      return {
+        ok: false,
+        reason: 'invalid_rounded_up',
+        message: `The price you type has to be a whole number of pesos, at least ₱${BLOCKING_ROUNDED_UP_MIN_PHP}.`,
+      };
+    }
+    overrideR = r;
+  }
+
   try {
     const supabase = await createClient();
     const { data, error } = await supabase.rpc('fn_blocking_price_lens', {
       p_market_php_kg: price,
       p_edge_offsets: normalized.edges,
+      // Sent as an explicit null when absent, which is exactly the SQL default — so the
+      // no-override path stays the one the pre-override function took.
+      p_rounded_up_php: overrideR,
     });
 
     if (error) {
@@ -1338,6 +1378,7 @@ export async function fetchBlockingPriceLens(
         reason:
           reason === 'no_market_price' ||
           reason === 'invalid_market_price' ||
+          reason === 'invalid_rounded_up' ||
           reason === 'invalid_edge' ||
           reason === 'no_edges' ||
           reason === 'too_many_edges'
@@ -1625,5 +1666,230 @@ export async function fetchBlockingAgeLens(
   } catch (err: unknown) {
     console.error('[Blocking] fetchBlockingAgeLens failed:', err);
     return { ok: false, reason: 'exception', message: AGE_LENS_UNREACHABLE_MESSAGE };
+  }
+}
+
+// ─── Blend BLOCK FACTS — DATA LAYER ───────────────────────────────────────────
+//
+// The supplier picture and the two ages for the blend modal's "Selected blocks" table,
+// over `fn_blend_block_facts` (migration
+// `20260921034512_blend_block_facts_and_price_lens_rounded_up`). One action, two callers:
+// the LIVE what-if (no `asOf`) and a SAVED version's viewer (the version's own Manila
+// date), so "the whole block is one supplier" can only ever mean one thing.
+//
+// Five rules, four shared with the lenses above.
+//
+//   1. NOTHING IS COMPUTED HERE. Kilograms, shares, the dominant supplier, the green/
+//      orange flag and both day counts all come out of SQL (CLAUDE.md: never aggregate in
+//      TypeScript). This function validates its inputs, camelCases the rows and KEYS them
+//      by `batchId`. That last step is a re-keying, not an aggregation.
+//
+//   2. KEYED BY `batch_id`, NEVER BY `block_loc` — a block address is reused when a pile
+//      empties, so a saved version resolved by block name would describe different
+//      charcoal under the same address and nothing on screen would look wrong.
+//
+//   3. NO PRICE GATE, AND THAT IS THE POINT. Nothing in this payload is money and none is
+//      derivable from it, so every role INCLUDING Production may read it — the same
+//      posture as `fetchBlockingSupplierMap` and `fetchBlockingAgeLens`, and the OPPOSITE
+//      of the price lens, whose band membership alone pins a block's ₱/kg to within a
+//      peso. `scripts/verify-blend-block-facts.ts` asserts the gate's ABSENCE, so the
+//      asymmetry cannot be "tidied up" by accident. What it DOES require is a signed-in
+//      user, like the other non-price reads in this file.
+//
+//   4. A BUSINESS REFUSAL IS DATA, NEVER A THROW — `{ok:false, reason, message}`, and the
+//      message goes straight to `errorToast()`.
+//
+//   5. NULL IS PRESERVED. An undated block's dominant fields, dates and day counts are
+//      null, never 0; `isSingleSupplier` is null, never false. "Nobody has delivered into
+//      this pile yet" and "this pile is one supplier, 0 days old" are different answers.
+//
+// Read-only: no writes, no audit logs, no `revalidatePath()`.
+
+const BLEND_FACTS_UNREACHABLE_MESSAGE =
+  'Could not reach the database to work out the block details. Nothing changed — try again.';
+
+/** A plain uuid shape check. A malformed id is a caller bug, not a missing batch. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** One row of `fn_blend_block_facts`, as PostgREST hands it over. */
+type BlendBlockFactsRow = {
+  batch_id: string | null;
+  batch_code: string | null;
+  as_of: string | null;
+  supplier_count: number | null;
+  dominant_supplier_key: string | null;
+  dominant_supplier_display: string | null;
+  dominant_share_pct: number | string | null;
+  is_single_supplier: boolean | null;
+  suppliers: unknown;
+  first_delivery_date: string | null;
+  last_delivery_date: string | null;
+  days_since_opened: number | null;
+  days_since_last_piled: number | null;
+  delivery_count: number | null;
+};
+
+/**
+ * WHO filled each of these blocks and HOW LONG AGO — as of today, or as of the day a
+ * saved proposal version was written.
+ *
+ * `batchIds` are `batches.id` values: on the live path the grid's occupant of each ticked
+ * block, and on a saved path `snapshot.blocks[].batch_id`, which
+ * `fn_blend_proposal_snapshot` records for exactly this kind of resolution. Up to 250,
+ * de-duplicated here. **An id that is not a batch is ABSENT from `facts`** — never
+ * zero-filled.
+ *
+ * `asOf` omitted or null = TODAY in Asia/Manila (the live modal). A saved version passes
+ * the Asia/Manila calendar date of its own `created_at` — read
+ * `BlendProposalVersionSummary.createdAt` (or the snapshot's `computed_at`, which the
+ * version read model also exposes as `computedAt`) and take its Manila date. Only
+ * deliveries dated on or before it are considered, which is what makes the saved viewer's
+ * answer a statement about the yard ON THAT DAY rather than about the yard now.
+ *
+ * NOT price-gated, on purpose — see the block comment above. Every role may read this.
+ */
+export async function fetchBlendBlockFacts(
+  batchIds: readonly string[],
+  asOf?: string | null,
+): Promise<BlendBlockFactsResult> {
+  // (1) Inputs first — a refusal that needs no database costs no round trip.
+  if (!Array.isArray(batchIds)) {
+    return {
+      ok: false,
+      reason: 'invalid_batch_id',
+      message: 'Expected a list of batch ids.',
+    };
+  }
+  for (const id of batchIds) {
+    if (typeof id !== 'string' || !UUID_RE.test(id)) {
+      return {
+        ok: false,
+        reason: 'invalid_batch_id',
+        message: 'One of the blocks does not carry a usable batch id — reload the page and try again.',
+      };
+    }
+  }
+
+  const ids = Array.from(new Set(batchIds));
+  if (ids.length === 0) {
+    return {
+      ok: false,
+      reason: 'no_batch_ids',
+      message: 'Pick at least one block first.',
+    };
+  }
+  if (ids.length > BLEND_BLOCK_FACTS_MAX_BATCH_IDS) {
+    return {
+      ok: false,
+      reason: 'too_many_batch_ids',
+      message: `That is ${ids.length} blocks; this can describe at most ${BLEND_BLOCK_FACTS_MAX_BATCH_IDS} at a time.`,
+    };
+  }
+
+  let requestedAsOf: string | null = null;
+  if (asOf !== null && asOf !== undefined && asOf !== '') {
+    const raw = String(asOf);
+    // A real calendar date, not just four-two-two digits: `2026-02-31` round-trips to
+    // 2026-03-03 through Date, and that mismatch is what catches it.
+    const parsed = new Date(`${raw}T00:00:00Z`);
+    const roundTrip = Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString().slice(0, 10);
+    if (!ISO_DATE_RE.test(raw) || roundTrip !== raw) {
+      return {
+        ok: false,
+        reason: 'invalid_as_of',
+        message: 'The as-of date has to be a real calendar date written as yyyy-mm-dd.',
+      };
+    }
+    // THE FUTURE CHECK IS MEASURED IN ASIA/MANILA, NOT UTC — PH is UTC+8, so between
+    // 16:00 and midnight UTC the Manila calendar date is already tomorrow by UTC's
+    // reckoning and a UTC-based test would refuse a perfectly ordinary "today". Same
+    // reasoning, same technique (`Intl`, `en-CA` so the format IS `yyyy-MM-dd`) as
+    // `lib/operations/excel/workbook.ts::manilaDate`; not imported from there because
+    // that module pulls in the Excel writer. `yyyy-MM-dd` compares correctly as a string.
+    const manilaToday = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Manila',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
+    if (raw > manilaToday) {
+      return {
+        ok: false,
+        reason: 'invalid_as_of',
+        message: `A blend describes charcoal that has already arrived, so it cannot be dated after today (${manilaToday}).`,
+      };
+    }
+    requestedAsOf = raw;
+  }
+
+  try {
+    const supabase = await createClient();
+
+    // (2) A signed-in user, the way the other non-price reads in this file require one.
+    // NOTE this is NOT a price gate and must not become one.
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError || !user) {
+      return {
+        ok: false,
+        reason: 'not_signed_in',
+        message: 'Your session has expired — reload the page and sign in again.',
+      };
+    }
+
+    const { data, error } = await supabase.rpc('fn_blend_block_facts', {
+      p_batch_ids: ids,
+      // An explicit null is the SQL default: "today, in Asia/Manila".
+      p_as_of: requestedAsOf,
+    });
+
+    if (error) {
+      console.error('[Blocking] fn_blend_block_facts error:', error);
+      return { ok: false, reason: 'rpc_error', message: error.message || BLEND_FACTS_UNREACHABLE_MESSAGE };
+    }
+
+    const rows = (data ?? []) as unknown as BlendBlockFactsRow[];
+
+    // RE-KEY, not aggregate. SQL already decided every number on every row.
+    const facts: Record<string, BlendBlockFacts> = {};
+    let asOfUsed: string | null = requestedAsOf;
+
+    for (const row of rows) {
+      const id = row.batch_id;
+      if (typeof id !== 'string' || id.length === 0) continue;
+      if (asOfUsed === null && typeof row.as_of === 'string') asOfUsed = row.as_of;
+
+      const suppliers: BlendBlockSupplierShare[] = Array.isArray(row.suppliers)
+        ? (row.suppliers as Array<Record<string, unknown>>).map((s) => ({
+            key: String(s.key ?? ''),
+            display: String(s.display ?? s.key ?? ''),
+            kg: lensNum(s.kg),
+            // NULL-preserving: 0% and "the block weighs nothing" are different answers.
+            sharePct: lensNumOrNull(s.share_pct),
+          }))
+        : [];
+
+      facts[id] = {
+        batchId: id,
+        batchCode: String(row.batch_code ?? ''),
+        supplierCount: lensNum(row.supplier_count),
+        dominantSupplierKey: row.dominant_supplier_key ?? null,
+        dominantSupplierDisplay: row.dominant_supplier_display ?? null,
+        dominantSharePct: lensNumOrNull(row.dominant_share_pct),
+        // Null, never false — an undated block is neither green nor orange.
+        isSingleSupplier: row.is_single_supplier ?? null,
+        suppliers,
+        firstDeliveryDate: row.first_delivery_date ?? null,
+        lastDeliveryDate: row.last_delivery_date ?? null,
+        daysSinceOpened: lensNumOrNull(row.days_since_opened),
+        daysSinceLastPiled: lensNumOrNull(row.days_since_last_piled),
+        deliveryCount: lensNum(row.delivery_count),
+      };
+    }
+
+    return { ok: true, asOf: asOfUsed, facts };
+  } catch (err: unknown) {
+    console.error('[Blocking] fetchBlendBlockFacts failed:', err);
+    return { ok: false, reason: 'exception', message: BLEND_FACTS_UNREACHABLE_MESSAGE };
   }
 }
