@@ -6039,6 +6039,26 @@ export type Database = {
           unexecutable_callee: string
         }[]
       }
+      fn_blend_block_facts: {
+        Args: { p_as_of?: string; p_batch_ids: string[] }
+        Returns: {
+          as_of: string
+          batch_code: string
+          batch_id: string
+          days_since_last_piled: number
+          days_since_opened: number
+          delivery_count: number
+          dominant_share_pct: number
+          dominant_supplier_display: string
+          dominant_supplier_key: string
+          first_delivery_date: string
+          is_single_supplier: boolean
+          last_delivery_date: string
+          supplier_count: number
+          suppliers: Json
+        }[]
+      }
+      fn_blend_block_facts_probe: { Args: never; Returns: Json }
       fn_blend_production_loss_pct: { Args: never; Returns: number }
       fn_blend_proposal: {
         Args: { p_block_locs: string[] }
@@ -6074,7 +6094,11 @@ export type Database = {
         }[]
       }
       fn_blocking_price_lens: {
-        Args: { p_edge_offsets?: number[]; p_market_php_kg: number }
+        Args: {
+          p_edge_offsets?: number[]
+          p_market_php_kg: number
+          p_rounded_up_php?: number
+        }
         Returns: Json
       }
       fn_blocking_price_lens_probe: {

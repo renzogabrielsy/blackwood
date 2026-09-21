@@ -212,6 +212,33 @@ function isStorableManualPrice(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v) && v > 0 && Math.round(v * 100) === v * 100;
 }
 
+/**
+ * THE TYPED CUT LINE — the ONE place a ₱ is rounded anywhere on the client.
+ *
+ * `R = floor(market) + 1` is right for a MEASURED market (40.23 → 41, so ₱41 and up is
+ * above market) and **wrong for a price a human typed**: an operator who types ₱41 means
+ * ₱41 and up is above market, and `floor(41) + 1` hands them 42 — a lens one peso looser
+ * than the one they asked for. A typed 41 is not a measurement that happens to be whole,
+ * **it IS the line.** So the `manual` basis sends `Math.ceil(typed)` as
+ * `fetchBlockingPriceLens`'s third argument and the server uses it verbatim; every
+ * MEASURED basis sends nothing and R stays computed in exactly one place, in SQL.
+ *
+ * It lives HERE, in the pure settings module, for two reasons the data layer's contract
+ * states outright: `actions.ts` does no arithmetic (`verify-blocking-price-lens.ts`
+ * asserts no `floor`/`ceil` exists in it), and this is the module that already owns every
+ * decision the reader made. `Math.floor` remains banned in every lens file — the market
+ * rule is SQL's — and `verify-blocking-lens-ui.ts` asserts this function is the single
+ * `Math.ceil` in the directory.
+ *
+ * Returns `null` for anything that is not a usable price, so a caller passes nothing
+ * rather than a fabricated line.
+ */
+export function manualRoundedUpPhp(price: number | null): number | null {
+  if (price === null || !Number.isFinite(price) || price <= 0) return null;
+  const r = Math.ceil(price);
+  return r >= 1 ? r : null;
+}
+
 // ── Band identity, labels and colours ───────────────────────────────────────
 
 /**

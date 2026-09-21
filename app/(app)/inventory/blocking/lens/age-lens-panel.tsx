@@ -37,7 +37,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as React from 'react';
-import { Hourglass, Loader2 } from 'lucide-react';
+import { AlertTriangle, Hourglass, Loader2 } from 'lucide-react';
 
 import { errorToast } from '@/lib/toast';
 
@@ -56,10 +56,17 @@ import type {
   BlockingLensPanelProps,
 } from './types';
 import { useLensSettings } from './use-lens-settings';
-import { LensBandRows, LensExcludedRow, LensUnitSwitch } from './lens-band-rows';
+import {
+  LensBandChips,
+  LensBandRows,
+  LensExcludedChip,
+  LensExcludedRow,
+  LensUnitSwitch,
+} from './lens-band-rows';
 import { LensCustomize, type LensBandNameField, type LensCutLineChip, type LensQuickCut } from './lens-customize';
 import { LensRatioBar } from './lens-ratio-bar';
 import { RefusalBanner } from './lens-refusal-banner';
+import { LensSettingsPopover } from './lens-settings-popover';
 import {
   formatLensBlocks,
   formatLensDays,
@@ -68,6 +75,7 @@ import {
   formatLensWholeDays,
   LENS_DEBOUNCE_MS,
   LENS_EMDASH,
+  LENS_STALL_MS,
   type LensUnit,
 } from './lens-shared';
 import {
@@ -122,6 +130,8 @@ export function AgeLensPanel({
 
   /** Which band rows are isolated. Empty = show every band (the "ratio'd" view). */
   const [picked, setPicked] = React.useState<Set<number>>(() => new Set());
+  /** The Settings popover — everything that used to be the docked sidebar's body. */
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [customizeOpen, setCustomizeOpen] = React.useState(false);
   const [edgeDraft, setEdgeDraft] = React.useState('');
   const [edgeError, setEdgeError] = React.useState<string | null>(null);
@@ -133,21 +143,47 @@ export function AgeLensPanel({
     adapterRef.current = adapter;
   }, [adapter]);
 
-  // ── The classification, debounced and race-safe ───────────────────────────
-  // A settings change costs one round-trip, not one per keystroke. `token` is what
-  // makes a slow earlier reply unable to overwrite a fast later one.
+  // ── The classification: FIRST REQUEST IMMEDIATELY, then debounced ─────────
+  //
+  // Both halves of this are the 2026-09-21 stall fix, and the price lens's header note
+  // carries the full reasoning. In short: the only request used to be created inside a
+  // 250 ms `setTimeout` whose cleanup runs on every effect re-run AND on unmount, so
+  // anything that re-mounted the panel body within a quarter of a second — the lens is
+  // opened from a URL param mirrored through `useOptimistic` — destroyed the timer
+  // before it fired and NO request was ever issued; and the monotonic token guard then
+  // discarded any reply whose token had moved, even when that reply was for exactly the
+  // request still wanted, so the stall could not recover. The guard is now the
+  // request's own SIGNATURE (**a reply for what is currently wanted is ALWAYS
+  // applied**) and the first look fires on the mount frame with no timer to lose.
   const edgeKey = settings.edgeDays.join(',');
-  const tokenRef = React.useRef(0);
+  const signature = edgeKey;
+  /** The signature the panel currently wants a payload for. */
+  const wantRef = React.useRef('');
+  /** False until this panel instance has issued its first request. */
+  const firstDoneRef = React.useRef(false);
   const [lensNonce, setLensNonce] = React.useState(0);
+  /** The watchdog: a stall must be VISIBLE and retryable, never an eternal spinner. */
+  const [lensStalled, setLensStalled] = React.useState(false);
+  /** The live watchdog timer — CLEARED the moment a reply lands, refusal or not. */
+  const watchdogRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stopWatchdog = React.useCallback(() => {
+    if (watchdogRef.current !== null) {
+      clearTimeout(watchdogRef.current);
+      watchdogRef.current = null;
+    }
+  }, []);
 
   React.useEffect(() => {
-    const token = ++tokenRef.current;
+    wantRef.current = signature;
     setLensPending(true);
+    setLensStalled(false);
     const edges = edgeKey.split(',').map(Number);
-    const timer = setTimeout(() => {
+
+    const run = () => {
       void adapterRef.current.fetchLens(edges)
         .then((res) => {
-          if (tokenRef.current !== token) return; // a later request owns the screen
+          // A reply for the signature the panel still wants is ALWAYS applied.
+          if (wantRef.current !== signature) return;
           if (res.ok) {
             setLens(res.lens);
             setLensRefusal(null);
@@ -158,17 +194,42 @@ export function AgeLensPanel({
           setLensRefusal(res.message);
         })
         .catch((err: unknown) => {
-          if (tokenRef.current !== token) return;
+          if (wantRef.current !== signature) return;
           errorToast('Could not work out the age lens', {
             description: err instanceof Error ? err.message : String(err),
           });
         })
         .finally(() => {
-          if (tokenRef.current === token) setLensPending(false);
+          if (wantRef.current !== signature) return;
+          // The read ANSWERED — payload or refusal. Stop the watchdog before it can
+          // call a healthy panel stalled eight seconds later.
+          stopWatchdog();
+          setLensPending(false);
+          setLensStalled(false);
         });
-    }, LENS_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
-  }, [edgeKey, lensNonce]);
+    };
+
+    const arm = (ms: number) => {
+      stopWatchdog();
+      watchdogRef.current = setTimeout(() => {
+        watchdogRef.current = null;
+        if (wantRef.current === signature) setLensStalled(true);
+      }, ms);
+    };
+
+    if (!firstDoneRef.current) {
+      firstDoneRef.current = true;
+      arm(LENS_STALL_MS);
+      run();
+      return stopWatchdog;
+    }
+    const timer = setTimeout(run, LENS_DEBOUNCE_MS);
+    arm(LENS_DEBOUNCE_MS + LENS_STALL_MS);
+    return () => {
+      clearTimeout(timer);
+      stopWatchdog();
+    };
+  }, [edgeKey, signature, lensNonce, stopWatchdog]);
 
   // A band set that no longer exists must not stay picked — three bands isolated and
   // then a cut line removed would isolate a band index that is now somebody else's.
@@ -347,11 +408,88 @@ export function AgeLensPanel({
   const customised = !isDefaultAgeLensSettings(settings);
   const oldestLoc = lens?.total.oldestBlockLoc ?? null;
 
+  /** THE BAR'S HEADLINE — `Yard 396.7 d avg`. The payload's figure, never averaged here. */
+  const headline = lens
+    ? `Yard ${formatLensDays(lens.total.kgWeightedAgeDays)} d avg`
+    : 'Working out ages…';
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex flex-col gap-3 text-xs">
-      {/* ── (1) The yard's age ───────────────────────────────────────────── */}
+    <>
+      {/* ═══ THE LEGEND BAR — one line, never wrapping ═══════════════════════ */}
+      <span
+        className="shrink-0 whitespace-nowrap text-[10px] text-muted-foreground"
+        title={
+          lens?.total.kgWeightedAgeDays == null
+            ? undefined
+            : `${lens.total.kgWeightedAgeDays} days, weighted by the kilograms still in each block`
+        }
+      >
+        {headline}
+      </span>
+
+      {lens ? (
+        <LensBandChips
+          rows={bandRows}
+          ramp={AGE_LENS_RAMP}
+          picked={picked}
+          onToggle={togglePicked}
+        />
+      ) : (
+        // Never an empty bar: a quiet, shimmer-free placeholder while the read runs.
+        <span className="shrink-0 text-[10px] text-muted-foreground">…</span>
+      )}
+
+      {lens && (
+        <div className="hidden w-[110px] shrink-0 lg:block">
+          <LensRatioBar
+            ramp={AGE_LENS_RAMP}
+            segments={lens.bands.map((b) => ({ key: b.index, sharePct: share(b) }))}
+            ariaLabel={lens.bands
+              .map(
+                (b) =>
+                  `${ageBandLabel(b, settings.bandNames)}: ${formatLensSharePct(share(b))} by ${
+                    settings.unit
+                  }`,
+              )
+              .join('; ')}
+          />
+        </div>
+      )}
+
+      {/* Undated — its OWN chip, never a band and never 0 days. */}
+      {lens && lens.undated.blockCount > 0 && (
+        <LensExcludedChip
+          title={`No dates ${LENS_EMDASH} ${lens.undated.blockCount}`}
+          note={`${formatLensBlocks(lens.undated.blockCount)}, ${formatLensKg(
+            lens.undated.kg,
+          )} with no dated delivery. In no band and out of every percentage and average — a pile with no dated delivery has no age, which is not the same as being new.`}
+        />
+      )}
+
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        {lensPending && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+        {(lensStalled || lensRefusal) && (
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(true)}
+            className="inline-flex items-center gap-1 rounded-md border border-destructive/40 bg-destructive/10 px-1.5 py-0.5 text-[10px] font-semibold text-destructive cursor-pointer"
+            title="Open Settings to read the problem, copy it, and retry"
+          >
+            <AlertTriangle className="h-3 w-3" />
+            <span className="max-sm:hidden">Problem</span>
+          </button>
+        )}
+        <LensUnitSwitch unit={settings.unit} onChange={setUnit} />
+        <LensSettingsPopover
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          label="Age lens settings"
+          customised={customised}
+        >
+          {/* ═══ THE POPOVER BODY — what used to be the docked sidebar ═══════ */}
+          {/* ── (1) The yard's age ───────────────────────────────────────── */}
       <section className="flex flex-col gap-1.5">
         <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
           Average age of the yard
@@ -418,28 +556,15 @@ export function AgeLensPanel({
         </div>
       </section>
 
-      {/* ── (2)+(3)+(4) Bands, ratio bar, unit switch, undated ──────────── */}
+      {/* ── (2)+(4) The detailed band rows, and the undated row ───────────
+             The RATIO BAR and the kg|blocks switch live in the legend BAR — they are
+             what a reader glances at, and a second copy here would be a second place
+             for the same two controls to disagree. */}
       {lens && (
         <section className="flex flex-col gap-2">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-              Bands
-            </span>
-            <LensUnitSwitch unit={settings.unit} onChange={setUnit} />
-          </div>
-
-          <LensRatioBar
-            ramp={AGE_LENS_RAMP}
-            segments={lens.bands.map((b) => ({ key: b.index, sharePct: share(b) }))}
-            ariaLabel={lens.bands
-              .map(
-                (b) =>
-                  `${ageBandLabel(b, settings.bandNames)}: ${formatLensSharePct(share(b))} by ${
-                    settings.unit
-                  }`,
-              )
-              .join('; ')}
-          />
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Bands
+          </span>
 
           <LensBandRows
             rows={bandRows}
@@ -479,6 +604,18 @@ export function AgeLensPanel({
 
       {lensRefusal && (
         <RefusalBanner message={lensRefusal} onRetry={() => setLensNonce((n) => n + 1)} />
+      )}
+
+      {/* THE WATCHDOG (2026-09-21) — see the price lens's note. A read that never
+          lands must SAY so, with Copy and Retry, rather than spin for ever. */}
+      {lensStalled && !lensRefusal && (
+        <RefusalBanner
+          message={
+            'The age lens did not come back. The bands on screen (if any) are from an earlier read. ' +
+            'Retry, or reload the page; if it keeps happening, copy this and send it on.'
+          }
+          onRetry={() => setLensNonce((n) => n + 1)}
+        />
       )}
 
       {/* ── (5) Customize bands ────────────────────────────────────────── */}
@@ -523,7 +660,9 @@ export function AgeLensPanel({
             : undefined
         }
       />
-    </div>
+        </LensSettingsPopover>
+      </div>
+    </>
   );
 }
 

@@ -203,7 +203,13 @@ export interface BlockingPriceLens {
   /** The market price the bands were built from — echoed back so a UI can label them. */
   marketPhpKg: number;
   /** R = floor(market) + 1. 40.23 → 41, 39.8568 → 40, and 40.00 → 41 as well, which is
-   *  what keeps the market price itself inside the "at market" band [R−1, R). */
+   *  what keeps the market price itself inside the "at market" band [R−1, R).
+   *
+   *  When the caller passed `roundedUpPhp`, this IS that number — a typed price is the
+   *  line itself, so the `manual` basis sets R directly and the measured rule is not
+   *  applied. See `BLOCKING_ROUNDED_UP_MIN_PHP` for the UI rule. Nothing in the payload
+   *  says which of the two happened, deliberately: with no override the whole payload is
+   *  byte-identical to what it was before the parameter existed. */
   roundedUpPhp: number;
   /** The whole-peso offsets from R actually used, de-duplicated and ascending. */
   edgeOffsets: number[];
@@ -231,6 +237,8 @@ export type BlockingPriceLensRefusalReason =
   /** The chosen basis has no priced market kilos yet — offer another basis. */
   | 'no_market_price'
   | 'invalid_market_price'
+  /** A given `roundedUpPhp` that is not a whole number of at least ₱1. */
+  | 'invalid_rounded_up'
   | 'invalid_edge'
   | 'no_edges'
   | 'too_many_edges'
@@ -248,6 +256,24 @@ export type BlockingMarketBasesResult =
 export type BlockingPriceLensResult =
   | { ok: true; lens: BlockingPriceLens }
   | { ok: false; reason: BlockingPriceLensRefusalReason; message: string };
+
+/**
+ * THE MANUAL BASIS OVERRIDES R, because a typed price IS the line itself (2026-09-21).
+ *
+ * `R = floor(market) + 1` is right for a MEASURED market — 40.23 → 41 — and rounding up
+ * even on a whole measured figure is what keeps the market price itself inside the
+ * at-market band. It is WRONG for `manual`: the operator who types ₱41 means ₱41 and up
+ * is above market, and the measured rule hands them 42.
+ *
+ * **THE UI RULE, and it is the whole contract:** for the `manual` basis pass
+ * `roundedUpPhp = Math.ceil(typedPrice)` (41 → 41, 40.5 → 41). For EVERY measured basis
+ * (`this_month`, `last_month`, `last_3_months`, `trailing_days`) pass **nothing** — R is
+ * still computed in exactly one place, in SQL, and omitting the argument leaves the
+ * payload byte-identical to what it was before this parameter existed.
+ */
+export const BLOCKING_ROUNDED_UP_MIN_PHP = 1;
+/** int4's ceiling. Not a business rule — the SQL parameter is an `int`. */
+export const BLOCKING_ROUNDED_UP_MAX_PHP = 2_147_483_647;
 
 /** The cap the SQL function enforces on the DE-DUPLICATED edge list. */
 export const BLOCKING_PRICE_LENS_MAX_EDGES = 6;
@@ -508,3 +534,130 @@ export type BlendProposalWriteResult =
 export type BlendProposalVersionResult =
   | { ok: true; proposal: SavedBlendProposal }
   | { ok: false; message: string };
+
+// ─── Blend BLOCK FACTS (supplier dominance + the two ages) ───────────────────
+// The extra columns the blend modal's "Selected blocks" table, a SAVED version's viewer
+// and the landscape print all want per block: WHO filled it (in the page's own green /
+// orange vocabulary, naming the dominant supplier) and HOW LONG AGO it was opened and
+// last piled on. One server action over `fn_blend_block_facts`
+// (migration `20260921034512_blend_block_facts_and_price_lens_rounded_up`).
+//
+// FOUR THINGS THAT MAKE IT DIFFERENT FROM THE TWO LENSES, all deliberate:
+//
+//   1. IT IS KEYED BY `batch_id`, NEVER BY `block_loc`. A block address is REUSED —
+//      `batches.location_ref` is cleared when a pile empties — so a saved version
+//      resolved by block name would silently describe DIFFERENT charcoal under the same
+//      address. This is the same load-bearing rule
+//      `lib/blocking/blend-diff.ts::resolveBlendBlocks` already follows.
+//
+//   2. IT IS AS-OF. `asOf` omitted (or null) means TODAY in Asia/Manila, which is what
+//      the LIVE modal wants. A SAVED version passes the Asia/Manila calendar date of its
+//      own `created_at` (`BlendProposalVersionSummary.createdAt`, or the snapshot's
+//      `computed_at`) — because a proposal is a statement about the yard ON A PARTICULAR
+//      DAY, and its stored snapshot is immutable and hashed so this could not be added
+//      to it. Only deliveries dated on or before that date are considered.
+//
+//   3. NOTHING HERE IS PRICE-SENSITIVE, so `fetchBlendBlockFacts` has NO
+//      `canViewPrices()` call and every role INCLUDING Production may read it. Suppliers,
+//      kilograms, shares, dates and day counts — no money column exists and none is
+//      derivable. Same posture as `view_blocking_block_suppliers` and the age lens.
+//
+//   4. THESE DATES ARE NOT AN AGE. `BlockingAgeLens.ageByBlock` (the kg-weighted mean
+//      delivery date from `view_batch_age_days`) remains THE age of a block. "Opened" is
+//      the FIRST DELIVERY — not the first feeding, and not a closure date, which is an
+//      `rc_out` fact. The two families are proven consistent every verify run.
+
+/** One supplier's slice of one block, as it stood on the as-of date. */
+export interface BlendBlockSupplierShare {
+  /** Canonical identity from `public.canonical_supplier()` — the SAME key the Blocking
+   *  supplier search matches on, so the two screens name suppliers identically. */
+  key: string;
+  /** A representative raw spelling, for display only — never for matching. */
+  display: string;
+  /** Kilograms that supplier delivered into the block at or before the as-of date. */
+  kg: number;
+  /** That supplier's share of the block's delivered kg, 0–100 (a PERCENT). **Null, never
+   *  0**, when the block's dated deliveries weigh nothing at all. */
+  sharePct: number | null;
+}
+
+/**
+ * One block's supplier picture and its two ages, as of a date.
+ *
+ * **THE GREEN / ORANGE RULE IS `isSingleSupplier`, a column the database computed.**
+ * `true` = the whole block is one supplier (green), `false` = mixed (orange, show
+ * `dominantSupplierDisplay` + `dominantSharePct`). It is identical in meaning to
+ * `BlockingSupplierMap.byBlock[loc].supplierCount === 1` and is proven equal to
+ * `view_blocking_block_suppliers.supplier_count_in_block = 1` on every batch the grid
+ * shows. **Never re-derive it from `suppliers.length`** — that is how the blend modal and
+ * the supplier search would eventually disagree.
+ *
+ * **NULL IS NEVER 0.** A block with no delivery at or before the as-of date reads
+ * `supplierCount: 0`, `deliveryCount: 0`, `suppliers: []` and NULL on every dominant
+ * field, both dates and both day counts — including `isSingleSupplier`, which is
+ * **null, not false**: it is neither green nor orange, so render it un-lensed. It is not
+ * 0 days old either.
+ */
+export interface BlendBlockFacts {
+  batchId: string;
+  batchCode: string;
+  /** How many distinct suppliers filled this block. 0 when nothing was delivered yet. */
+  supplierCount: number;
+  dominantSupplierKey: string | null;
+  dominantSupplierDisplay: string | null;
+  /** The dominant supplier's share, 0–100 (a PERCENT). Null when unknowable. */
+  dominantSharePct: number | null;
+  /** THE green/orange rule. Null = neither (nothing delivered as of that date). */
+  isSingleSupplier: boolean | null;
+  /** Biggest kilograms first; a kg tie breaks on the alphabetically-first canonical key,
+   *  so consecutive calls cannot disagree. An EMPTY ARRAY — never null — when nothing was
+   *  delivered: a list with nothing in it is itself a fact. Good for a tooltip. */
+  suppliers: BlendBlockSupplierShare[];
+  /** `yyyy-MM-dd`. When the block was OPENED — its first delivery, not its first feeding. */
+  firstDeliveryDate: string | null;
+  /** `yyyy-MM-dd`. When it was LAST PILED ON — its latest delivery. */
+  lastDeliveryDate: string | null;
+  /** Whole days, `asOf − firstDeliveryDate`. Null when undated; never 0 for "unknown". */
+  daysSinceOpened: number | null;
+  /** Whole days, `asOf − lastDeliveryDate`. Null when undated. */
+  daysSinceLastPiled: number | null;
+  /** Delivery rows counted, at or before the as-of date. */
+  deliveryCount: number;
+}
+
+/** Why a blend-block-facts call came back empty. Each maps to a human sentence. */
+export type BlendBlockFactsRefusalReason =
+  /** No signed-in user. The page is behind auth, so this is a session problem. */
+  | 'not_signed_in'
+  | 'no_batch_ids'
+  | 'too_many_batch_ids'
+  /** An element that is not a uuid at all — a typo, not a missing batch. */
+  | 'invalid_batch_id'
+  /** Not a `yyyy-MM-dd` date, not a real calendar date, or dated in the future. */
+  | 'invalid_as_of'
+  | 'rpc_error'
+  | 'exception';
+
+export type BlendBlockFactsResult =
+  | {
+      ok: true;
+      /**
+       * The as-of date the DATABASE actually used, `yyyy-MM-dd` — echoed so a caller
+       * never has to compute a Manila calendar date to label the table.
+       *
+       * **Null only when the call matched NO batch at all** (every id was unknown), in
+       * which case there was no row on which to report it and there is nothing to date.
+       */
+      asOf: string | null;
+      /**
+       * Keyed by `batchId`. **A batch id that is not a row in `batches` is ABSENT**, so
+       * this record can be smaller than the list you asked about — that is the honest
+       * answer to "tell me about this batch" when there is no such batch. Render a
+       * missing key un-lensed; never fill it with zeroes.
+       */
+      facts: Record<string, BlendBlockFacts>;
+    }
+  | { ok: false; reason: BlendBlockFactsRefusalReason; message: string };
+
+/** The cap the server action enforces on the DE-DUPLICATED id list. */
+export const BLEND_BLOCK_FACTS_MAX_BATCH_IDS = 250;

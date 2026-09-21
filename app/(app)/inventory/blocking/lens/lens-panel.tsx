@@ -1,31 +1,40 @@
 'use client';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// THE DOCKED LENS PANEL — the frame every lens is rendered inside.
+// THE LENS LEGEND BAR — the frame every lens is rendered inside.
 //
-// ── IT IS DOCKED, NOT MODAL, AND THAT IS THE WHOLE POINT ────────────────────
-// A lens exists to make the GRID light up. A modal would cover the thing it is
-// describing, so on a desktop the panel takes a 300px column beside the warehouse
-// sections and the grid keeps the rest. Below `lg` there is no room for a column
-// and it becomes a bottom sheet — still not covering the grid, which scrolls above
-// it, because the sheet is capped at 65vh and the page keeps scrolling behind it.
+// ── IT IS A BAR, NOT A SIDEBAR (2026-09-21) ─────────────────────────────────
+// It used to be a docked 300px `sticky` COLUMN beside the warehouse sections. The
+// owner's verdict on the live page: *"the right sidebar is completely static and not
+// minimizable … taking up precious space; we want to see the entire blocking as much
+// as possible."* Both halves of that are fair — the grid gave up a fifth of its width
+// permanently, to a panel that was mostly detail nobody reads twice.
 //
-// ── "NEVER CRUSH, ALWAYS SCROLL" IS PRESERVED, NOT DODGED ───────────────────
-// The grid column is `min-w-0 flex-1`. Each warehouse section already carries its
-// own `p-2 overflow-x-auto` wrapper and `.blocking-grid-cols` already floors every
-// cell track at 104px (`minmax(104px, 1fr)`), so narrowing the column makes the
-// SECTION scroll horizontally — it cannot make a cell crush. `min-w-0` is the load-
-// bearing half: without it the flex item refuses to shrink below its content and
-// the panel would push the page sideways instead.
+// So the frame is now ONE SLIM ROW directly under the header strip, full width,
+// sticky with it, holding only what a reader looks at while scanning the grid: which
+// lens, the headline, one chip per band (the isolate toggles), a thin ratio bar, the
+// kg|blocks switch, the "in no band" chip, and a GEAR. Everything else — the market
+// basis and its coverage line, the detailed band rows with their counts and averages,
+// Customize bands, the refusal banner — moved into a POPOVER behind that gear, which
+// floats OVER the grid only while it is open and is never the default state.
+//
+// **The grid is full width again.** There is no flex row and no `min-w-0` column
+// left to reason about: each warehouse section keeps its own `overflow-x-auto` and
+// `.blocking-grid-cols` still floors every track at 104px, so "never crush, always
+// scroll" holds for the reason it always did.
+//
+// ── THE BAR NEVER WRAPS ─────────────────────────────────────────────────────
+// It is one line at every width. The band chips overflow by HORIZONTAL SCROLL inside
+// their own `min-w-0 overflow-x-auto` box, because a legend that grows a second line
+// pushes the whole grid down every time a cut line is added — which is the same
+// mistake the header strip was rebuilt to stop making.
 //
 // ── ESCAPE STEPS BACK ONE RUNG AT A TIME ────────────────────────────────────
-// The detail panel already listens for Escape on the document. Rather than fight it
-// with a capture-phase listener, this one BAILS while the detail panel is open, so
-// Escape closes the drawer first and the lens on the next press — the same
-// "step back one rung" behaviour `supplier-search.tsx` established in this module.
-// It also bails when the event came from inside a Radix popper or dialog (the
-// Customize popover, the basis select, the blend modal), whose own dismiss owns
-// that key press.
+// Unchanged. The detail panel already listens for Escape on the document, so this
+// handler BAILS while the drawer is open (Escape closes the drawer first, the lens on
+// the next press) and bails when the press belongs to a Radix popper, dialog or
+// listbox — which now includes the Settings popover itself, so Escape closes the
+// popover before it closes the lens.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as React from 'react';
@@ -46,9 +55,9 @@ export interface BlockingLensPanelFrameProps {
   /** Which one is active. */
   activeId: BlockingLensId;
   onSelectLens: (id: BlockingLensId) => void;
-  /** Close the panel entirely (also clears the grid's lens styling). */
+  /** Close the bar entirely (also clears the grid's lens styling). */
   onClose: () => void;
-  /** Drop the lens styling without closing — the panel's own Clear. */
+  /** Drop the lens styling without closing — the bar's own Clear. */
   onClear: () => void;
   /** True when the active lens is currently marking anything. Enables Clear. */
   hasClassification: boolean;
@@ -107,69 +116,32 @@ export function BlockingLensPanel({
   }, [escapeSuppressed]);
 
   if (!active) return null;
-  const ActiveIcon = active.icon;
   const ActivePanel = active.Panel;
 
   return (
-    <aside
+    <div
+      data-blocking-lens-bar
       data-blocking-lens-panel
       aria-label={`${active.label} lens`}
+      role="region"
       className={cn(
-        // DESKTOP: a sticky column beside the grid. `shrink-0` + an explicit width
-        // so the grid column (min-w-0 flex-1) is the one that gives, and it gives by
-        // SCROLLING its sections rather than by crushing a cell.
-        'shrink-0 rounded-lg border border-border bg-card',
-        'lg:w-[300px] lg:sticky lg:top-[92px] lg:max-h-[calc(100dvh-108px)] lg:overflow-y-auto',
-        // BELOW lg: a bottom sheet. Glass here is correct — it floats OVER the page
-        // rather than sitting on top of scrolling grid cells (the frozen-pane rule
-        // governs the latter, not this).
-        'max-lg:fixed max-lg:inset-x-2 max-lg:bottom-2 max-lg:z-40 max-lg:max-h-[65dvh]',
-        'max-lg:overflow-y-auto max-lg:shadow-lg',
-        'max-lg:bg-background/95 max-lg:backdrop-blur max-lg:supports-backdrop-filter:bg-background/60',
+        // ONE LINE, FULL WIDTH, never wrapping. Same glass as the header strip it
+        // sits under, because the two are one sticky unit over the scrolling grid.
+        'flex h-9 min-w-0 flex-nowrap items-center gap-2 overflow-hidden rounded-lg',
+        'border border-border bg-card/95 px-2 backdrop-blur-sm',
         // A reveal, not a decoration: 250ms, opacity+transform only.
         'animate-fade-up',
       )}
     >
-      {/* ── Header ── */}
-      <div className="sticky top-0 z-10 flex items-start gap-2 border-b border-border bg-card/90 px-2.5 py-2 backdrop-blur-sm max-lg:bg-transparent">
-        <ActiveIcon className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-        <div className="min-w-0 flex-1">
-          <h2 className="truncate text-xs font-bold text-foreground">{active.label} lens</h2>
-          <p className="mt-0.5 text-[10px] leading-snug text-muted-foreground">{active.blurb}</p>
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          {hasClassification && (
-            <button
-              type="button"
-              onClick={onClear}
-              className="rounded-sm border border-border bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground transition-colors duration-150 hover:text-foreground cursor-pointer"
-              title="Remove the lens styling from the grid"
-            >
-              Clear
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close the lens panel"
-            title="Close (Esc)"
-            className="rounded-sm p-0.5 text-muted-foreground transition-colors duration-150 hover:text-foreground cursor-pointer"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      </div>
-
-      {/* ── Tab strip — only once there is a choice to make. ──
-          Two lenses are registered (Price, Age), so a price-viewer gets a strip. A
+      {/* ── The lens switch — only once there is a choice to make. ──
+          Two lenses are registered (Price, Age), so a price-viewer gets a switch. A
           reader who may be offered only ONE of them — Production, or anyone with the
-          page's Prices toggle off — gets no strip at all rather than a lone tab or a
-          disabled placeholder; the header already names the lens. The frame handles N. */}
-      {lenses.length > 1 && (
+          page's Prices toggle off — gets a plain label instead of a lone tab. */}
+      {lenses.length > 1 ? (
         <div
           role="tablist"
           aria-label="Lenses"
-          className="flex gap-1 border-b border-border px-2.5 py-1.5"
+          className="flex shrink-0 items-center gap-0.5 overflow-hidden rounded-md border border-border"
         >
           {lenses.map((l) => {
             const Icon = l.icon;
@@ -181,8 +153,10 @@ export function BlockingLensPanel({
                 role="tab"
                 aria-selected={selected}
                 onClick={() => onSelectLens(l.id)}
+                title={l.blurb}
                 className={cn(
-                  'inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold transition-colors duration-150 cursor-pointer',
+                  'inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-semibold',
+                  'transition-colors duration-150 cursor-pointer',
                   selected
                     ? 'bg-primary text-primary-foreground'
                     : 'bg-muted text-muted-foreground hover:bg-accent hover:text-foreground',
@@ -194,12 +168,22 @@ export function BlockingLensPanel({
             );
           })}
         </div>
+      ) : (
+        <span
+          className="inline-flex shrink-0 items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-foreground"
+          title={active.blurb}
+        >
+          <active.icon className="h-3 w-3 text-primary" />
+          {active.label}
+        </span>
       )}
 
-      {/* ── The active lens's body. Keyed by id so switching MOUNTS the next one
-             (and unmounts this one), which is what keeps each lens's own hooks and
-             its own fetch lifecycle out of the other's way. ── */}
-      <div className="px-2.5 py-2.5">
+      <span aria-hidden className="h-4 w-px shrink-0 bg-border" />
+
+      {/* ── The active lens's own bar content. Keyed by id so switching MOUNTS the
+             next one (and unmounts this one), which is what keeps each lens's hooks
+             and its own fetch lifecycle out of the other's way. ── */}
+      <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
         <ActivePanel
           key={active.id}
           data={data}
@@ -209,6 +193,29 @@ export function BlockingLensPanel({
           onFocusBlock={onFocusBlock}
         />
       </div>
-    </aside>
+
+      {/* ── Frame actions ── */}
+      <div className="flex shrink-0 items-center gap-1">
+        {hasClassification && (
+          <button
+            type="button"
+            onClick={onClear}
+            className="rounded-sm border border-border bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground transition-colors duration-150 hover:text-foreground cursor-pointer"
+            title="Remove the lens styling from the grid"
+          >
+            Clear
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close the lens bar"
+          title="Close (Esc)"
+          className="rounded-sm p-0.5 text-muted-foreground transition-colors duration-150 hover:text-foreground cursor-pointer"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
   );
 }

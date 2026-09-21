@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Loader2,
   Calculator,
@@ -45,10 +45,13 @@ import {
   type BlendLabKey,
 } from '@/lib/blocking/blend-diff';
 import type {
+  BlendBlockFacts,
+  BlendBlockFactsResult,
   BlendProposalStatus,
   BlendProposalVersionSummary,
   SavedBlendProposal,
 } from '../blocking/types';
+import { fetchBlendBlockFacts } from '../blocking/actions';
 // PERF-4: composeBlendPdfFilename is jspdf-free (pure filename helper) and is used
 // synchronously for the live preview / validity, so it stays a static import. The
 // heavy downloadBlendPdf (jsPDF + jspdf-autotable) is loaded lazily on the Download
@@ -101,10 +104,39 @@ const LAB_ORDER: { key: keyof BlendProposal['weighted']; label: string }[] = [
 // relies solely on the payload flag ANDed with the passed-in preference. The per-block lab
 // columns are NOT gated — everyone prints lab stats. `showPricesPref` defaults to `true`.
 
+/**
+ * What the PRINTOUT needs to say about a block beyond the blend itself.
+ *
+ * It is a plain record keyed by `batch_id` — the same payload the on-screen table
+ * renders — passed in rather than fetched, so the document is a pure function of what
+ * was on screen and the two can never disagree. Absent → the three columns print em
+ * dashes, exactly as the screen does.
+ */
+export interface BlendPrintFacts {
+  facts: Record<string, BlendBlockFacts>;
+  /** `block_loc` → batch id, for the live what-if whose blocks carry none. */
+  batchIdByLoc?: Record<string, string | null>;
+  /**
+   * The supplier/age read's PORT — the same adapter idiom the lens panels carry, at the
+   * same tiny scale. The default IS the server action and is what production always
+   * uses; it is injectable for exactly one reason, which is the one the lens fixtures
+   * record: the gated dev rig has no session, so the real action can only ever refuse
+   * there, and a table that can only be LOOKED at with every cell blank cannot be
+   * reviewed for the green / orange / em-dash cases.
+   */
+  factsAdapter?: (
+    batchIds: string[],
+    asOf?: string,
+  ) => Promise<BlendBlockFactsResult>;
+  /** The day the picture describes — printed under the table when it is not today. */
+  asOf?: string | null;
+}
+
 export function buildBlendPrintDocument(
   proposal: BlendProposal,
   showPricesPref = true,
   meta?: BlendDocMeta | null,
+  blockFacts?: BlendPrintFacts | null,
 ): string {
   const showPrices = proposal.can_view_prices && showPricesPref && proposal.raw_price_per_kg !== null;
 
@@ -143,9 +175,33 @@ export function buildBlendPrintDocument(
   </section>`;
   }
 
-  // ── Selected blocks table (block, batch, balance, 7 lab columns, PHP/KG) ──
+  // ── Selected blocks table ──
+  // Block · Batch · SUPPLIER · OPENED · LAST PILED · Balance · 7 labs · [PHP/KG].
+  // The supplier pill keeps its COLOUR on paper (`print-color-adjust: exact` is
+  // already in PRINT_CSS): green = the whole block is that supplier, orange = mixed.
+  // Printing it grey would throw away the one thing the column is for.
+  const factsOf = (b: (typeof proposal.blocks)[number]): BlendBlockFacts | null => {
+    if (!blockFacts) return null;
+    const id = b.batch_id ?? blockFacts.batchIdByLoc?.[b.block_loc] ?? null;
+    return (id && blockFacts.facts[id]) || null;
+  };
+  const supplierCell = (f: BlendBlockFacts | null): string => {
+    if (!f || f.isSingleSupplier === null || f.dominantSupplierDisplay === null) {
+      return `<td>${EMDASH}</td>`;
+    }
+    const cls = f.isSingleSupplier ? 'sup-all' : 'sup-some';
+    const share =
+      !f.isSingleSupplier && f.dominantSharePct !== null
+        ? ` ${Math.round(f.dominantSharePct)}%`
+        : '';
+    return `<td><span class="${cls}">${escapeHtml(f.dominantSupplierDisplay)}${share}</span></td>`;
+  };
+  const dayCell = (v: number | null | undefined): string =>
+    `<td class="num">${v === null || v === undefined ? EMDASH : `${Math.round(v)} d`}</td>`;
+
   const blockBody = proposal.blocks
     .map((b) => {
+      const f = factsOf(b);
       const labCells = LAB_ORDER.map(
         ({ key }) => `<td class="num">${formatLab(key, b[key])}</td>`,
       ).join('');
@@ -156,6 +212,9 @@ export function buildBlendPrintDocument(
         `<tr>` +
         `<td>${escapeHtml(b.block_loc)}</td>` +
         `<td>${escapeHtml(b.batch_code)}</td>` +
+        supplierCell(f) +
+        dayCell(f?.daysSinceOpened) +
+        dayCell(f?.daysSinceLastPiled) +
         `<td class="num">${formatKg(b.balance)}</td>` +
         labCells +
         priceCell +
@@ -165,22 +224,28 @@ export function buildBlendPrintDocument(
     .join('');
 
   const labHeaders = LAB_ORDER.map(({ label }) => `<th class="num">${label}</th>`).join('');
-  // tfoot spans: Block + Batch (2) under "Total", then Balance, then 7 empty lab cells.
+  // tfoot spans: Block + Batch + Supplier + Opened + Last piled (5) under "Total",
+  // then Balance, then 7 empty lab cells.
+  const asOfLine = blockFacts?.asOf
+    ? `<p class="asof">Supplier and age as of ${escapeHtml(blockFacts.asOf)}.</p>`
+    : '';
   const blockTable = proposal.blocks.length
     ? `<table>` +
       `<thead><tr>` +
-      `<th>Block</th><th>Batch</th><th class="num">Balance (kg)</th>` +
+      `<th>Block</th><th>Batch</th><th>Supplier</th>` +
+      `<th class="num">Opened</th><th class="num">Last piled</th>` +
+      `<th class="num">Balance (kg)</th>` +
       labHeaders +
       (showPrices ? `<th class="num">PHP/KG</th>` : '') +
       `</tr></thead>` +
       `<tbody>${blockBody}</tbody>` +
       `<tfoot><tr>` +
-      `<td colspan="2">Total</td>` +
+      `<td colspan="5">Total</td>` +
       `<td class="num">${formatKg(proposal.total_balance)}</td>` +
       `<td colspan="${LAB_ORDER.length}"></td>` +
       (showPrices ? `<td></td>` : '') +
       `</tr></tfoot>` +
-      `</table>`
+      `</table>${asOfLine}`
     : `<p class="empty">No blocks selected.</p>`;
 
   // A saved version prints under its OWN name; a live what-if keeps the generic one.
@@ -207,7 +272,33 @@ export function buildBlendPrintDocument(
 <meta charset="utf-8">
 <title>${docTitle}</title>
 <style>${PRINT_CSS}
+  /* LANDSCAPE. The table is 15 columns wide once supplier + the two ages join it,
+     and portrait A4 cannot hold that without shrinking the type below legibility.
+     Padding is squeezed BEFORE the font, and the font floor is 7pt. */
+  @page { size: A4 landscape; margin: 10mm; }
+  /* The HEAD BLOCKS are squeezed so the 24-block table still lands on ONE page:
+     A4 landscape leaves ~190mm of height, the table needs ~95mm of it, and the
+     three definition lists were eating nearly all of the rest in white space. */
+  h1 { font-size: 15px; }
+  .subtitle { margin-bottom: 8px; }
+  h2 { margin: 8px 0 3px; padding-bottom: 2px; }
+  .row { padding: 1px 0; }
+  .formula { margin: 3px 0 0; font-size: 9px; }
+  .doc-footer { margin-top: 8px; padding-top: 4px; }
+  /* Padding is squeezed BEFORE the font, and the font floor is 7pt. */
+  table { font-size: 8.5pt; }
+  th, td { padding: 2px 3px; }
+  th { font-size: 7pt; }
   .subtitle.remark { font-style: italic; color: #333; margin: -12px 0 16px; white-space: pre-wrap; }
+  .asof { font-size: 8pt; color: #555; margin: 4px 0 0; }
+  /* The page's own supplier vocabulary, on paper. print-color-adjust:exact is
+     already set on body in PRINT_CSS, so these survive the printer colour pass. */
+  .sup-all, .sup-some {
+    display: inline-block; border-radius: 999px; padding: 0 4px;
+    font-size: 7.5pt; font-weight: 700; white-space: nowrap;
+  }
+  .sup-all  { background: #d1fae5; color: #065f46; border: 1px solid #6ee7b7; }
+  .sup-some { background: #ffedd5; color: #9a3412; border: 1px solid #fdba74; }
 </style>
 </head>
 <body>
@@ -314,6 +405,78 @@ function Delta({
 
 // ─── Per-block table row ──────────────────────────────────────────────────────
 
+// ─── Supplier dominance + the two block ages (2026-09-21) ────────────────────
+//
+// `fetchBlendBlockFacts` answers, per selected block: who filled it (GREEN when the
+// whole block is one supplier, ORANGE with the DOMINANT name and share when it is
+// mixed) and how long ago it was OPENED and LAST PILED ON.
+//
+// ── `isSingleSupplier` IS THE RULE. NEVER `suppliers.length`. ────────────────
+// The flag is the same column the Blocking supplier search reads
+// (`view_blocking_block_suppliers.supplier_count_in_block = 1`), and it is proven
+// equal to it on every batch the grid shows. Re-deriving it from the array's length
+// is how this table and that search would eventually disagree about a block — and
+// `null` is a THIRD answer (nothing was delivered as of that date), which is neither
+// green nor orange and renders as a plain em dash with no colour at all.
+//
+// ── KEYED BY `batch_id`, AND AS OF A DATE ───────────────────────────────────
+// A block address is REUSED when a pile empties, so a saved version resolved by
+// `block_loc` would describe DIFFERENT charcoal under the same address. A SAVED
+// version therefore passes its own batch ids AND the Asia/Manila date it was written,
+// so the picture is the one that was true then; the LIVE modal passes neither date
+// (today) nor stored ids (the grid's current occupants, via `batchIdByLoc`).
+//
+// These columns carry NO money and are shown to EVERY role, Production included.
+
+/** An ISO instant → its Asia/Manila calendar date, `yyyy-MM-dd`. */
+function manilaDate(iso: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  // `en-CA` formats as YYYY-MM-DD, which is the shape the action expects.
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(d);
+}
+
+/** `38 d`, or an em dash. NULL IS NEVER 0 — a block with no dated delivery is blank. */
+function formatDays(v: number | null | undefined): string {
+  return v === null || v === undefined ? EMDASH : `${Math.round(v)} d`;
+}
+
+/** The full split, for the pill's tooltip: `Llanto 71% · Ornales 29%`. */
+function supplierSplitTitle(facts: BlendBlockFacts): string {
+  return facts.suppliers
+    .map((sh) => `${sh.display} ${sh.sharePct === null ? EMDASH : `${sh.sharePct.toFixed(1)}%`}`)
+    .join(' · ');
+}
+
+function SupplierPill({ facts }: { facts: BlendBlockFacts | null }) {
+  // No facts at all (an id the database does not know, or a refusal), or nothing
+  // delivered as of the date: an em dash, and NO colour. `false` here would paint a
+  // pile nobody has delivered into as MIXED.
+  if (!facts || facts.isSingleSupplier === null || facts.dominantSupplierDisplay === null) {
+    return <span className="text-muted-foreground">{EMDASH}</span>;
+  }
+  const single = facts.isSingleSupplier;
+  return (
+    <span
+      title={supplierSplitTitle(facts)}
+      className={cn(
+        'inline-flex max-w-full items-center gap-1 truncate rounded-full border px-1.5 py-[1px] text-[9px] font-semibold',
+        single
+          ? // The `.spotlight-supplier-all` family: the whole block is theirs.
+            'border-emerald-500/40 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
+          : // The `.spotlight-supplier-some` family: they share it.
+            'border-orange-500/40 bg-orange-500/15 text-orange-700 dark:text-orange-400',
+      )}
+    >
+      <span className="truncate">{facts.dominantSupplierDisplay}</span>
+      {!single && facts.dominantSharePct !== null && (
+        <span className="font-mono tabular-nums">{Math.round(facts.dominantSharePct)}%</span>
+      )}
+    </span>
+  );
+}
+
 function BlockRow({
   block,
   showPrices,
@@ -321,6 +484,7 @@ function BlockRow({
   removeDisabled,
   changed,
   currentBatchCode,
+  facts = null,
 }: {
   block: BlendProposalBlock;
   showPrices: boolean;
@@ -329,6 +493,8 @@ function BlockRow({
   /** Compare mode: the block is held by a DIFFERENT batch today. */
   changed?: boolean;
   currentBatchCode?: string | null;
+  /** Supplier dominance + the two ages, or null while they fill in / are unknown. */
+  facts?: BlendBlockFacts | null;
 }) {
   return (
     <tr className={cn('border-b border-border/50 last:border-0', changed && 'bg-amber-500/5')}>
@@ -349,6 +515,24 @@ function BlockRow({
       </td>
       <td className="text-[10px] text-muted-foreground px-1.5 py-1 max-w-[160px] truncate" title={block.batch_code}>
         {block.batch_code}
+      </td>
+      {/* SUPPLIER — the page's existing vocabulary: green = all of it, orange =
+          some of it with the dominant name. Widths are RESERVED on the header, so
+          the table does not jump as these fill in. */}
+      <td className="px-1.5 py-1 text-[10px]">
+        <SupplierPill facts={facts} />
+      </td>
+      <td
+        className="text-[10px] font-mono text-muted-foreground text-right px-1.5 py-1 whitespace-nowrap tabular-nums"
+        title={facts?.firstDeliveryDate ?? undefined}
+      >
+        {formatDays(facts?.daysSinceOpened)}
+      </td>
+      <td
+        className="text-[10px] font-mono text-muted-foreground text-right px-1.5 py-1 whitespace-nowrap tabular-nums"
+        title={facts?.lastDeliveryDate ?? undefined}
+      >
+        {formatDays(facts?.daysSinceLastPiled)}
       </td>
       <td className="text-[10px] font-mono text-foreground text-right px-1.5 py-1 whitespace-nowrap">
         {formatKg(block.balance)} kg
@@ -778,6 +962,28 @@ interface BlendProposalDialogProps {
    * for callers that don't pass it.
    */
   showPrices?: boolean;
+  /**
+   * `block_loc` → the batch occupying it RIGHT NOW, from the grid's own map.
+   *
+   * The live what-if's `BlendProposalBlock` carries no `batch_id` (only a SAVED
+   * version's snapshot records one), and `fetchBlendBlockFacts` is keyed by batch —
+   * never by block address, which is reused when a pile empties. So the live caller
+   * supplies the ids and a saved version uses its own. Omitted → the supplier and age
+   * columns render em dashes, which is the honest answer to "which batch is that?".
+   */
+  batchIdByLoc?: Record<string, string | null>;
+  /**
+   * The supplier/age read's PORT — the same adapter idiom the lens panels carry, at the
+   * same tiny scale. The default IS the server action and is what production always
+   * uses; it is injectable for exactly one reason, which is the one the lens fixtures
+   * record: the gated dev rig has no session, so the real action can only ever refuse
+   * there, and a table that can only be LOOKED at with every cell blank cannot be
+   * reviewed for the green / orange / em-dash cases.
+   */
+  factsAdapter?: (
+    batchIds: string[],
+    asOf?: string,
+  ) => Promise<BlendBlockFactsResult>;
   /** Present → the dialog renders a SAVED version (history mode). */
   saved?: BlendSavedContext | null;
   /** Fresh mode only: save this blend as a brand-new proposal. */
@@ -819,6 +1025,8 @@ export function BlendProposalDialog({
   loading,
   onRemoveBlock,
   showPrices: showPricesPref = true,
+  batchIdByLoc,
+  factsAdapter,
   saved = null,
   onSaveNew,
   saving = false,
@@ -847,6 +1055,67 @@ export function BlendProposalDialog({
     (comparison?.blocks ?? []).map((b) => [b.block_loc, b.currentBatchCode] as const),
   );
 
+  // ── Supplier dominance + the two ages, per selected block ──
+  //
+  // ONE read per open / per version switch, race-safe on the request's own signature
+  // (the same discipline the lens panels use): a reply is applied only while it is
+  // still the one wanted, so a fast switch between versions cannot leave the previous
+  // version's suppliers on screen. The table renders IMMEDIATELY with em dashes in
+  // reserved-width columns and the figures fill in — no layout jump.
+  const savedVersionCreatedAt = saved
+    ? saved.versions.find((v) => v.versionNo === saved.proposal.version_no)?.createdAt ?? null
+    : null;
+  /** A SAVED version asks about the day it was written; the live modal asks about today. */
+  const factsAsOf = manilaDate(savedVersionCreatedAt);
+
+  const batchIds = useMemo(() => {
+    if (!proposal) return [] as string[];
+    const out: string[] = [];
+    for (const b of proposal.blocks) {
+      const id = b.batch_id ?? batchIdByLoc?.[b.block_loc] ?? null;
+      if (id) out.push(id);
+    }
+    return out;
+  }, [proposal, batchIdByLoc]);
+  const idsKey = batchIds.join(',');
+
+  const [facts, setFacts] = useState<Record<string, BlendBlockFacts>>({});
+  const [factsAsOfUsed, setFactsAsOfUsed] = useState<string | null>(null);
+  const factsWantRef = useRef('');
+
+  useEffect(() => {
+    if (!open || idsKey === '') {
+      setFacts({});
+      setFactsAsOfUsed(null);
+      return;
+    }
+    const signature = `${idsKey}|${factsAsOf ?? ''}`;
+    factsWantRef.current = signature;
+    void (factsAdapter ?? fetchBlendBlockFacts)(idsKey.split(','), factsAsOf ?? undefined)
+      .then((res) => {
+        if (factsWantRef.current !== signature) return;
+        if (res.ok) {
+          setFacts(res.facts);
+          setFactsAsOfUsed(res.asOf);
+          return;
+        }
+        // These three columns are ADDITIVE CONTEXT. A refusal leaves them as em
+        // dashes and never fails the modal, the print or the PDF — the blend itself
+        // is unaffected by whether we could say who filled a block.
+        setFacts({});
+        setFactsAsOfUsed(null);
+      })
+      .catch(() => {
+        if (factsWantRef.current !== signature) return;
+        setFacts({});
+        setFactsAsOfUsed(null);
+      });
+    // `factsAdapter` is deliberately NOT a dependency: it is the live action in
+    // production and a module-stable stub in the fixture, and depending on an inline
+    // arrow would re-fire this read on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, idsKey, factsAsOf]);
+
   // ── Download PDF (label prompt) ──
   const [pdfPopoverOpen, setPdfPopoverOpen] = useState(false);
   const [pdfLabel, setPdfLabel] = useState('');
@@ -869,7 +1138,11 @@ export function BlendProposalDialog({
       const { downloadBlendPdf } = await import('./blend-proposal-pdf');
       // Pass the display preference so a hidden-prices PDF carries NO ₱ (the PDF builder
       // re-ANDs it with the server `can_view_prices`).
-      downloadBlendPdf(proposal, pdfLabel, showPricesPref, docMeta);
+      downloadBlendPdf(proposal, pdfLabel, showPricesPref, docMeta, {
+        facts,
+        batchIdByLoc,
+        asOf: saved ? factsAsOfUsed : null,
+      });
       handlePdfPopoverOpenChange(false);
     } catch (err) {
       errorToast('Failed to generate PDF', {
@@ -883,7 +1156,12 @@ export function BlendProposalDialog({
     try {
       // Pass the display preference so a hidden-prices printout carries NO ₱ (the builder
       // re-ANDs it with the server `can_view_prices`).
-      const html = buildBlendPrintDocument(proposal, showPricesPref, docMeta);
+      const html = buildBlendPrintDocument(proposal, showPricesPref, docMeta, {
+        facts,
+        batchIdByLoc,
+        // Only a SAVED version is describing a day other than today.
+        asOf: saved ? factsAsOfUsed : null,
+      });
       const ok = printViaIframe(html);
       if (!ok) {
         errorToast('Could not open the print view', {
@@ -1324,7 +1602,12 @@ export function BlendProposalDialog({
                     loading && 'opacity-60 pointer-events-none',
                   )}
                 >
-                  <table className="w-full min-w-[640px] border-collapse">
+                  {/* NEVER CRUSH, ALWAYS SCROLL: the min-width is the SUM of the
+                      column minimums (640 as it was, + 120 supplier + 54 opened + 58
+                      last-piled = 872), so the wrapper above scrolls instead of
+                      squeezing a supplier name to nothing. The three new columns carry
+                      EXPLICIT widths so the table does not jump when the facts land. */}
+                  <table className="w-full min-w-[872px] border-collapse">
                     <thead>
                       <tr>
                         <th className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider text-left px-1.5 py-1 border-b border-border whitespace-nowrap">
@@ -1332,6 +1615,24 @@ export function BlendProposalDialog({
                         </th>
                         <th className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider text-left px-1.5 py-1 border-b border-border whitespace-nowrap">
                           Batch
+                        </th>
+                        <th
+                          className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider text-left px-1.5 py-1 border-b border-border whitespace-nowrap w-[120px]"
+                          title="Green = the whole block is one supplier. Orange = mixed, showing the biggest."
+                        >
+                          Supplier
+                        </th>
+                        <th
+                          className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider text-right px-1.5 py-1 border-b border-border whitespace-nowrap w-[54px]"
+                          title="Days since the block's FIRST delivery"
+                        >
+                          Opened
+                        </th>
+                        <th
+                          className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider text-right px-1.5 py-1 border-b border-border whitespace-nowrap w-[58px]"
+                          title="Days since the block was last piled on"
+                        >
+                          Last piled
                         </th>
                         <th className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider text-right px-1.5 py-1 border-b border-border whitespace-nowrap">
                           Balance
@@ -1362,6 +1663,12 @@ export function BlendProposalDialog({
                           removeDisabled={loading}
                           changed={changedLocs.has(b.block_loc)}
                           currentBatchCode={currentCodeByLoc.get(b.block_loc) ?? null}
+                          facts={
+                            // Keyed by BATCH, never by block address. An id the
+                            // database does not know is ABSENT from `facts`, which
+                            // renders as em dashes rather than as zero-filled figures.
+                            facts[b.batch_id ?? batchIdByLoc?.[b.block_loc] ?? ''] ?? null
+                          }
                         />
                       ))}
                     </tbody>
@@ -1369,7 +1676,7 @@ export function BlendProposalDialog({
                       <tr className="border-t border-border bg-muted/50">
                         <td
                           className="text-[9px] font-semibold text-muted-foreground uppercase px-1.5 py-1 whitespace-nowrap"
-                          colSpan={2}
+                          colSpan={5}
                         >
                           Total
                         </td>
@@ -1384,6 +1691,17 @@ export function BlendProposalDialog({
                     </tfoot>
                   </table>
                 </div>
+                {/* THE AS-OF LINE. A saved version's supplier picture and ages are
+                    RECONSTRUCTED as they stood on the day that version was written —
+                    balances fall, block addresses are reused and lab averages move, so
+                    saying which day it is describing is not decoration. The live modal
+                    is "now" and says nothing. */}
+                {saved && factsAsOfUsed && (
+                  <p className="text-[10px] text-muted-foreground mt-1.5">
+                    Supplier and age as of{' '}
+                    <span className="font-mono text-foreground">{factsAsOfUsed}</span>
+                  </p>
+                )}
                 {comparison && comparison.missingBlockLocs.length > 0 && (
                   <p className="text-[10px] text-muted-foreground mt-1.5">
                     No longer on the grid:{' '}

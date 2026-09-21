@@ -16,6 +16,21 @@
 /** How long a settings change waits before it costs a round-trip. Both lenses. */
 export const LENS_DEBOUNCE_MS = 250;
 
+/**
+ * How long a lens waits for its payload before it SAYS SO.
+ *
+ * Added 2026-09-21 with the stall fix. A lens whose read never lands used to render an
+ * eternal "Sorting the yard into bands…" — no error, no Retry, no way for the reader to
+ * tell a slow query from a lost request, and nothing to paste into a bug report. That is
+ * the state the owner found the live page in. After this long the panel replaces the
+ * spinner line with the SHARED refusal banner (persistent, with Copy and Retry), which is
+ * what the project's error HARD RULE requires of an inline failure.
+ *
+ * 8 s is deliberately well past the measured cost of both reads (13.5 ms and 105.9 ms
+ * server-side) plus a slow round trip, so a healthy page never sees it.
+ */
+export const LENS_STALL_MS = 8000;
+
 /** The one em dash on this frame — "we don't know", never a zero. */
 export const LENS_EMDASH = '—';
 

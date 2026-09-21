@@ -327,11 +327,31 @@ console.log('\n2. NO STATISTIC IS COMPUTED IN A LENS FILE');
     );
   });
 
-  check('R is SQL\'s: no Math.floor / Math.ceil anywhere in the lens files', () => {
+  // RESTATED 2026-09-21 (it used to ban BOTH `Math.floor` and `Math.ceil` in every
+  // lens file). The MEASURED rule `R = floor(market)+1` is still SQL's and `Math.floor`
+  // is still banned everywhere — but a price the operator TYPES is the cut line itself,
+  // so `manual` sends `Math.ceil(typed)` as the third argument. That single `ceil` is
+  // allowed in ONE function in ONE file, and the assertion now pins exactly that.
+  check('R is SQL\'s: no Math.floor anywhere, and ONE Math.ceil in ONE place', () => {
     for (const rel of ALL_LENS_FILES) {
       const body = code(rel);
-      assert.ok(!/Math\.(floor|ceil)\s*\(/.test(body), `${rel} rounds a price itself — R = floor(market)+1 lives in SQL`);
+      assert.ok(!/Math\.floor\s*\(/.test(body), `${rel} floors a price itself — R = floor(market)+1 lives in SQL`);
+      if (rel === SETTINGS) continue;
+      assert.ok(
+        !/Math\.ceil\s*\(/.test(body),
+        `${rel} rounds a typed price itself — the ONE ceil lives in manualRoundedUpPhp()`,
+      );
     }
+    const settings = code(SETTINGS);
+    assert.strictEqual(
+      (settings.match(/Math\.ceil\s*\(/g) ?? []).length,
+      1,
+      'price-lens-settings.ts must contain EXACTLY one Math.ceil — the typed cut line',
+    );
+    assert.ok(
+      /export function manualRoundedUpPhp\(/.test(settings),
+      'the typed cut line has no named home — it must be manualRoundedUpPhp()',
+    );
     assert.ok(code(PANEL).includes('roundedUpPhp'), 'the panel does not echo the R the server returned');
   });
 
@@ -506,12 +526,49 @@ console.log('\n4. MUTUAL EXCLUSIVITY AND THE DEEP LINK');
 {
   const grid = code(GRID);
 
-  check('opening a lens resets the status filter AND clears the supplier', () => {
+  // RESTATED 2026-09-21. The rule is unchanged — opening a lens still clears the
+  // supplier — but it is now applied in ONE `router.replace`, by the ROUTE, because two
+  // navigations built from the same stale `searchParams` disagreed about whether `lens`
+  // was in the URL and the flip-flop remounted the lens panel mid-fetch. So the
+  // assertion moved from "openLens calls the supplier writer" to "openLens issues ONE
+  // write, and the route's lens writer drops `supplier` in the same params".
+  check('opening a lens resets the status filter and issues ONE navigation', () => {
     const at = grid.indexOf('const openLens');
     assert.ok(at > 0, 'openLens is gone');
-    const body = grid.slice(at, at + 400);
+    const body = grid.slice(at, at + 900);
     assert.ok(body.includes("setStatusFilter('ALL')"), 'openLens does not reset the status spotlight');
-    assert.ok(body.includes('onSupplierFilterChange?.(null)'), 'openLens does not clear the supplier spotlight');
+    assert.ok(
+      !body.includes('onSupplierFilterChange?.(null)'),
+      'openLens writes the supplier param too — that is TWO navigations in one tick, which is the bug',
+    );
+    assert.ok(body.includes('lensWriterRef.current?.(id)'), 'openLens no longer writes the lens param');
+  });
+
+  check('the ROUTE applies the exclusivity: one interaction, one router.replace', () => {
+    const route = code(ROUTE);
+    const lensAt = route.indexOf('const handleLensChange');
+    assert.ok(lensAt > 0, 'handleLensChange is gone');
+    const lensBody = route.slice(lensAt, lensAt + 900);
+    assert.ok(
+      lensBody.includes("params.delete('supplier')"),
+      'opening a lens does not clear the supplier in the SAME URLSearchParams',
+    );
+    assert.strictEqual(
+      (lensBody.match(/router\.replace\(/g) ?? []).length,
+      1,
+      'handleLensChange issues more than one navigation',
+    );
+    const supAt = route.indexOf('const handleSupplierChange');
+    const supBody = route.slice(supAt, supAt + 900);
+    assert.ok(
+      supBody.includes("params.delete('lens')"),
+      'picking a supplier does not clear the lens in the SAME URLSearchParams',
+    );
+    assert.strictEqual(
+      (supBody.match(/router\.replace\(/g) ?? []).length,
+      1,
+      'handleSupplierChange issues more than one navigation',
+    );
   });
 
   check('a status/lab chip closes the lens', () => {
@@ -520,10 +577,20 @@ console.log('\n4. MUTUAL EXCLUSIVITY AND THE DEEP LINK');
     assert.ok(body.includes('closeLens()'), 'clicking a status chip leaves the lens painting the grid');
   });
 
-  check('choosing a supplier closes the lens', () => {
+  // RESTATED 2026-09-21, same reason as above: the tint is dropped on the click frame,
+  // but the URL is written ONCE, by the route. `closeLens()` here would be the second
+  // navigation that caused the stall.
+  check('choosing a supplier drops the lens tint on the same frame', () => {
     const at = grid.indexOf('const handleSupplierSelect');
-    const body = grid.slice(at, at + 400);
-    assert.ok(body.includes('closeLens()'), 'picking a supplier leaves the lens painting the grid');
+    const body = grid.slice(at, at + 700);
+    assert.ok(
+      body.includes('setLensClassifier({ fn: null })'),
+      'picking a supplier leaves the lens painting the grid',
+    );
+    assert.ok(
+      !body.includes('closeLens()'),
+      'handleSupplierSelect writes the lens param too — TWO navigations in one tick',
+    );
   });
 
   check('the lens class takes precedence over both spotlights on every cell', () => {
@@ -1043,9 +1110,13 @@ console.log('\n7. THE FRAME — registry shape, Escape, and the classifier seam'
     assert.ok(code(FRAME).includes('key={active.id}'), 'the frame does not key the body by lens id');
   });
 
-  check('no dead tab strip: it renders only once there is more than one lens', () => {
-    assert.ok(/\{lenses\.length > 1 && \(/.test(code(FRAME)), 'the tab strip is not gated on a real choice');
+  // RESTATED 2026-09-21: the strip became the legend BAR's lens switch, and the
+  // one-lens case now falls through to a plain label instead of rendering nothing, so
+  // the gate is a ternary rather than an `&&`. Same rule: never a lone or dead tab.
+  check('no dead lens switch: it renders only once there is more than one lens', () => {
+    assert.ok(/\{lenses\.length > 1 \? \(/.test(code(FRAME)), 'the lens switch is not gated on a real choice');
     assert.ok(!/disabled.*Supplier|Age.*disabled/.test(code(FRAME)), 'a disabled placeholder tab appeared');
+    assert.ok(code(FRAME).includes('role="tablist"'), 'the switch is not a real tablist');
   });
 
   check('Escape steps back one rung and yields to a dismissable layer', () => {
@@ -1106,17 +1177,87 @@ console.log('\n8. ERRORS AND DOCS');
     }
   });
 
-  check('a stale reply cannot overwrite a fresh one (the request token), in BOTH lenses', () => {
+  // RESTATED 2026-09-21 — THIS IS THE STALL FIX, and the restatement is the fix.
+  // It used to require a MONOTONIC COUNTER (`tokenRef.current !== token`). That guard
+  // dropped a reply whose token had merely moved, even when the reply was for exactly
+  // the request still wanted, which made a stall unrecoverable. The guard is now the
+  // request's SIGNATURE, and the property asserted is the STRONGER one: a reply for
+  // what is currently wanted is ALWAYS applied. A stale reply is still discarded.
+  check('a reply for the LATEST request is always applied; a stale one is dropped', () => {
     for (const rel of [PANEL, AGE_PANEL]) {
       const body = code(rel);
-      assert.ok(body.includes('tokenRef'), `${rel}: the race guard is gone`);
+      assert.ok(body.includes('wantRef'), `${rel}: the race guard is gone`);
       assert.ok(
-        /if \(tokenRef\.current !== token\) return;/.test(body),
-        `${rel}: a late reply is no longer discarded`,
+        /if \(wantRef\.current !== signature\) return;/.test(body),
+        `${rel}: the guard is not the request's own signature`,
+      );
+      assert.ok(
+        !/tokenRef/.test(body),
+        `${rel}: the monotonic counter is back — it discards replies that are still wanted`,
       );
       assert.ok(body.includes('LENS_DEBOUNCE_MS'), `${rel}: the debounce is gone`);
-      assert.ok(body.includes('setTimeout('), `${rel}: the fetch is no longer debounced`);
+      assert.ok(body.includes('setTimeout('), `${rel}: subsequent fetches are no longer debounced`);
     }
+  });
+
+  check('THE FIRST request is NOT debounced — no timer for a remount to destroy', () => {
+    // The 2026-09-21 bug. Every request lived inside a 250 ms `setTimeout` whose
+    // cleanup runs on unmount, so a panel remounted within a quarter of a second (it is
+    // mounted from a URL param mirrored through `useOptimistic`) never issued one at
+    // all: an eternal "Sorting the yard into bands…" with no error and no Retry.
+    for (const rel of [PANEL, AGE_PANEL]) {
+      const body = code(rel);
+      assert.ok(body.includes('firstDoneRef'), `${rel}: nothing distinguishes the first request`);
+      assert.ok(
+        /if \(!firstDoneRef\.current\) \{[\s\S]{0,200}run\(\);/.test(body),
+        `${rel}: the first request is still created inside a timer`,
+      );
+    }
+  });
+
+  check('a STALL is visible and retryable — never an eternal spinner', () => {
+    assert.ok(
+      code(SHARED).includes('export const LENS_STALL_MS'),
+      'there is no shared stall budget',
+    );
+    for (const rel of [PANEL, AGE_PANEL]) {
+      const body = code(rel);
+      assert.ok(body.includes('LENS_STALL_MS'), `${rel}: no watchdog`);
+      assert.ok(body.includes('setLensStalled'), `${rel}: the stall is not recorded`);
+      assert.ok(
+        /lensStalled && !lensRefusal/.test(body),
+        `${rel}: a stall does not surface as the shared copyable banner`,
+      );
+    }
+    // And the spinner line must YIELD to the banner rather than sit beside it forever.
+    assert.ok(
+      code(PANEL).includes('{!lens && !lensStalled && marketPhpKg !== null &&'),
+      'the price lens still shows "Sorting the yard into bands…" after it has given up',
+    );
+  });
+
+  check('the TYPED cut line reaches the server, and only for the manual basis', () => {
+    const body = code(PANEL);
+    assert.ok(
+      /manualRoundedUpPhp\(settings\.manualPrice\)/.test(body),
+      'the manual basis does not ceil the typed price',
+    );
+    assert.ok(
+      /settings\.basis === 'manual' \? manualRoundedUpPhp/.test(body),
+      'a MEASURED basis would send an override — R must stay SQL\'s there',
+    );
+    assert.ok(
+      /roundedUpPhp: number \| null/.test(body),
+      'the adapter port does not carry the typed cut line',
+    );
+    assert.ok(
+      /fetchBlockingPriceLens\(price, \[\.\.\.edges\], roundedUpPhp\)/.test(body),
+      'the live adapter does not pass the override through',
+    );
+    // The LABEL must say the right thing too: "₱41 and up is above" for a typed price,
+    // "rounds up to ₱40" for a measured one. One sentence for each rule.
+    assert.ok(body.includes('and up is above'), 'the typed-price line still says "rounds up to"');
+    assert.ok(body.includes('rounds up to'), 'the measured-price line is gone');
   });
 
   check('a refusal keeps the previous tint — the grid never flashes back to plain', () => {
@@ -1159,6 +1300,334 @@ console.log('\n8. ERRORS AND DOCS');
     ]) {
       assert.ok(doc.includes(phrase), `CONTEXT.md does not mention "${phrase}"`);
     }
+  });
+}
+
+// ===========================================================================
+console.log('\n7. THE CONTROL STRIP — FOUR FIXED SECTIONS (2026-09-21, job B)');
+// ===========================================================================
+//
+// The owner's verdict on the live header: the controls *"just move around and
+// overflow/wrap into weird locations"* when a mode is switched on. It was one
+// `flex-wrap justify-between` row, so anything that grew or shrank by a pixel re-flowed
+// every cluster after it. These assertions pin the replacement: a CSS grid with four
+// explicit tracks, sections that can only wrap INSIDE themselves, reserved widths for
+// everything a toggle changes, and a scrolling wrapper instead of a crush.
+
+{
+  const css = read(GLOBALS);
+  const grid = code(GRID);
+
+  check('the strip is a CSS GRID with four tracks and three divider tracks, in order', () => {
+    const at = css.indexOf('.blocking-controls-strip {');
+    assert.ok(at > 0, '.blocking-controls-strip is gone — the strip is a flex row again');
+    const rule = css.slice(at, css.indexOf('}', at));
+    assert.ok(/display:\s*grid/.test(rule), 'the strip is not a grid — a flex row can reorder under pressure');
+    const tracks = rule.match(/minmax\((\d+)px, max-content\)/g) ?? [];
+    assert.strictEqual(tracks.length, 4, 'the strip does not have exactly four section tracks');
+    assert.strictEqual(
+      (rule.match(/\b1px\b/g) ?? []).length,
+      3,
+      'the three 1px divider tracks are gone — sections would touch',
+    );
+    // The MINIMUMS are load-bearing: below them the wrapper scrolls instead of crushing.
+    assert.deepStrictEqual(
+      tracks.map((t) => Number(/(\d+)/.exec(t)![1])),
+      [232, 236, 180, 200],
+      'a section minimum moved — S1 232 (the search) · S2 236 · S3 180 · S4 200',
+    );
+  });
+
+  check('NEVER CRUSH, ALWAYS SCROLL: the strip sits in an overflow-x-auto wrapper', () => {
+    const at = grid.indexOf('blocking-controls-strip');
+    assert.ok(at > 0, 'the grid does not render the strip');
+    const before = grid.slice(Math.max(0, at - 400), at);
+    assert.ok(
+      before.includes('overflow-x-auto'),
+      'the strip has no scrolling wrapper — a narrow viewport would crush a section',
+    );
+  });
+
+  check('the four sections exist, in the owner\'s order, each wrapping only inside itself', () => {
+    const order = ['filters', 'status', 'totals', 'modes'];
+    let cursor = 0;
+    for (const name of order) {
+      const at = grid.indexOf(`data-blocking-strip-section="${name}"`, cursor);
+      assert.ok(at > cursor, `section "${name}" is missing or out of order`);
+      // A section is a flex box that WRAPS — inside its own grid track, which it
+      // cannot leave. That is what makes "no section spills into another" structural.
+      const body = grid.slice(at, at + 260);
+      assert.ok(body.includes('flex-wrap'), `section "${name}" cannot wrap inside itself`);
+      assert.ok(body.includes('min-w-0'), `section "${name}" cannot give — its track would overflow`);
+      cursor = at;
+    }
+  });
+
+  check('below sm the four sections STACK in the same order, one per row', () => {
+    const at = css.indexOf('@media (max-width: 639px)');
+    const block = css.slice(at, at + 400);
+    assert.ok(
+      block.includes('.blocking-controls-strip'),
+      'the phone rule is gone — a 900px strip inside a 375px screen is all scroll and no overview',
+    );
+    assert.ok(/grid-template-columns:\s*minmax\(0, 1fr\)/.test(block), 'the phone strip is not a single column');
+    assert.ok(block.includes('blocking-strip-divider'), 'the vertical dividers survive as rows');
+  });
+
+  check('A MODE TOGGLE CHANGES A COLOUR, NEVER A WIDTH: every pill is fixed-width', () => {
+    assert.ok(
+      !/min-w-\[16px\] h-4 px-1 rounded-full/.test(grid),
+      'an ON/OFF pill still sizes to its content — turning a mode on would move the section beside it',
+    );
+    assert.strictEqual(
+      (grid.match(/w-\[26px\] h-4 px-1 rounded-full/g) ?? []).length,
+      4,
+      'the four mode pills (Prices · Highlight · Proposals · Blend) do not all reserve their width',
+    );
+    assert.ok(grid.includes('tabular-nums'), 'the counts are not tabular — a digit change would re-flow');
+  });
+
+  check('THE PRICES TOGGLE CANNOT RESIZE THE TOTALS: both ₱ slots are RESERVED', () => {
+    // The two price totals are rendered for anyone who MAY see prices and merely made
+    // invisible when the toggle is off, so section 3's own width does not change and
+    // the modes beside it do not slide. A reader who may never see prices has no slot
+    // to reserve — there is no toggle for them to move it with.
+    assert.ok(
+      /\{serverCanViewPrices && \(\s*<>\s*<StatDivider reserved=/.test(grid),
+      'the price totals are conditional on the CLIENT toggle again — that resizes the section',
+    );
+    assert.ok(grid.includes('reserved?: boolean'), 'GlobalStat cannot reserve a slot');
+    assert.ok(
+      /reserved && 'invisible'/.test(grid),
+      'a reserved slot is hidden with `hidden`, not `invisible` — it must still be laid out',
+    );
+    assert.ok(grid.includes('minWidthClass'), 'the totals do not reserve their own widths');
+  });
+}
+
+// ===========================================================================
+console.log('\n8. THE LEGEND BAR REPLACED THE DOCKED SIDEBAR (job C)');
+// ===========================================================================
+
+{
+  const frame = code(FRAME);
+  const grid = code(GRID);
+
+  check('NO DOCKED SIDEBAR REMAINS — the frame is a bar, not a 300px column', () => {
+    assert.ok(!/lg:w-\[300px\]/.test(frame), 'the 300px docked column is back');
+    assert.ok(!/lg:sticky lg:top-/.test(frame), 'the frame is a sticky column again');
+    assert.ok(!/max-lg:fixed/.test(frame), 'the frame is a bottom sheet again');
+    assert.ok(frame.includes('data-blocking-lens-bar'), 'the bar is not marked as one');
+  });
+
+  check('THE GRID IS FULL WIDTH AGAIN — no flex row, no min-w-0 column', () => {
+    assert.ok(
+      !/flex items-start gap-3/.test(grid),
+      'the grid still shares a flex row with the panel — the lens is eating its width',
+    );
+    assert.ok(
+      !/flex min-w-0 flex-1 flex-col gap-3/.test(grid),
+      'the grid column is still a shrinking flex item beside a panel',
+    );
+    // And the bar is the STRIP's second row: it must appear before the warehouse
+    // sections, inside the one sticky wrapper, so the two cannot overlap at top:0.
+    const sticky = grid.indexOf("className=\"sticky top-0 z-30 flex flex-col gap-2\"");
+    const bar = grid.indexOf('<BlockingLensPanel');
+    const sections = grid.indexOf('{visibleWarehouses.map(');
+    assert.ok(sticky > 0, 'the strip + bar are not one sticky unit');
+    assert.ok(sticky < bar && bar < sections, 'the lens bar is not the strip\'s second row');
+  });
+
+  check('THE BAR IS ONE LINE: it never wraps, and the chips scroll instead', () => {
+    assert.ok(/flex-nowrap/.test(frame), 'the bar can wrap — a second line pushes the grid down');
+    assert.ok(/h-9/.test(frame), 'the bar has no fixed height');
+    const rows = code(ROWS);
+    const at = rows.indexOf('export function LensBandChips');
+    assert.ok(at > 0, 'the compact band chips are gone');
+    const body = rows.slice(at, at + 900);
+    assert.ok(body.includes('overflow-x-auto'), 'the chips wrap instead of scrolling');
+    assert.ok(!body.includes('flex-wrap'), 'the chip row wraps — it must scroll');
+  });
+
+  check('the chips are a VARIANT of the rows, not a fork', () => {
+    const rows = code(ROWS);
+    // Same props type, same isolate semantics, same swatch source.
+    assert.ok(
+      /interface LensBandChipsProps extends LensBandRowsProps/.test(rows),
+      'the chips declare their own row shape — two legends would drift',
+    );
+    assert.ok(/aria-pressed=\{isPicked\}/.test(rows), 'a chip is not a real toggle');
+    assert.ok(
+      (rows.match(/rampClass\(ramp, i, rows\.length\)/g) ?? []).length === 2,
+      'the chips do not derive their swatch from the SAME rampClass call the rows use',
+    );
+    assert.ok(rows.includes('export function LensExcludedChip'), 'the "in no band" chip is gone');
+  });
+
+  check('THE SETTINGS POPOVER holds what the sidebar held, and floats only while open', () => {
+    const pop = code(`${LENS_DIR}/lens-settings-popover.tsx`);
+    assert.ok(pop.includes('export function LensSettingsPopover'), 'the settings popover is gone');
+    // The canonical popover glass, and an internal scroll cap so 7 bands cannot run
+    // off a short viewport.
+    assert.ok(pop.includes('bg-popover/95 backdrop-blur-lg'), 'the popover is not the canonical glass');
+    assert.ok(/max-h-\[min\(70dvh,560px\)\] overflow-y-auto/.test(pop), 'the popover has no internal scroll cap');
+    assert.ok(pop.includes('data-blocking-lens-settings'), 'the gear is not addressable');
+    for (const rel of [PANEL, AGE_PANEL]) {
+      const body = code(rel);
+      assert.ok(body.includes('<LensSettingsPopover'), `${rel} does not open a settings popover`);
+      // The DETAIL still lives in the popover — the shared pieces, not new ones.
+      assert.ok(body.includes('<LensBandRows'), `${rel} lost the detailed band rows`);
+      assert.ok(body.includes('<LensCustomize'), `${rel} lost the Customize disclosure`);
+      assert.ok(body.includes('<RefusalBanner'), `${rel} lost the inline refusal banner`);
+      // ...and the BAR carries the compact pieces.
+      assert.ok(body.includes('<LensBandChips'), `${rel} has no band chips in the bar`);
+      assert.ok(body.includes('<LensRatioBar'), `${rel} has no ratio bar`);
+      assert.ok(body.includes('<LensUnitSwitch'), `${rel} has no kg|blocks switch`);
+    }
+  });
+
+  check('the bar is NEVER EMPTY while a read is in flight', () => {
+    for (const rel of [PANEL, AGE_PANEL]) {
+      const body = code(rel);
+      assert.ok(
+        body.includes('shrink-0 text-[10px] text-muted-foreground">…</span>'),
+        `${rel}: the bar renders nothing at all until the payload lands`,
+      );
+    }
+  });
+}
+
+// ===========================================================================
+console.log('\n9. THE BLEND TABLE — SUPPLIER DOMINANCE + THE TWO AGES (job D)');
+// ===========================================================================
+
+{
+  const DIALOG = 'app/(app)/inventory/_shared/blend-proposal-dialog.tsx';
+  const PDF = 'app/(app)/inventory/_shared/blend-proposal-pdf.ts';
+  const dialog = code(DIALOG);
+  const pdf = code(PDF);
+  const grid = code(GRID);
+
+  check('`isSingleSupplier` IS the green/orange rule — `suppliers.length` never is', () => {
+    assert.ok(dialog.includes('facts.isSingleSupplier'), 'the pill does not read the flag');
+    for (const [rel, body] of [[DIALOG, dialog], [PDF, pdf]] as const) {
+      assert.ok(
+        !/suppliers\.length/.test(body),
+        `${rel} derives the supplier colour from the array's length — that is how this table and the Blocking supplier search end up disagreeing about a block`,
+      );
+    }
+    // The emerald / orange families the page already uses for ALL / SOME.
+    assert.ok(dialog.includes('border-emerald-500/40'), 'the ALL pill is not the emerald family');
+    assert.ok(dialog.includes('border-orange-500/40'), 'the SOME pill is not the orange family');
+  });
+
+  check('NULL IS A THIRD ANSWER: no colour, an em dash, never green and never 0 days', () => {
+    assert.ok(
+      /facts\.isSingleSupplier === null \|\| facts\.dominantSupplierDisplay === null/.test(dialog),
+      'a block with nothing delivered as of the date is not treated as its own case',
+    );
+    assert.ok(
+      /v === null \|\| v === undefined \? EMDASH/.test(dialog),
+      'a missing age reads as 0 rather than blank',
+    );
+    assert.ok(/v === null \|\| v === undefined \? '-'/.test(pdf), 'the PDF prints 0 d for an unknown age');
+  });
+
+  check('KEYED BY batch_id, NEVER by block_loc — a block address is reused', () => {
+    for (const [rel, body] of [[DIALOG, dialog], [PDF, pdf]] as const) {
+      assert.ok(
+        /b\.batch_id \?\? (blockFacts\.)?batchIdByLoc\?\.\[b\.block_loc\]/.test(body),
+        `${rel} resolves the facts by something other than the batch id`,
+      );
+    }
+    assert.ok(grid.includes('batchIdByLoc={batchIdByLoc}'), 'the grid does not supply the live occupants');
+    assert.ok(
+      /out\[loc\] = block\.batch_id \?\? null/.test(grid),
+      'the grid builds its id map from something other than the grid payload',
+    );
+  });
+
+  check('A SAVED VERSION ASKS ABOUT ITS OWN DAY; the live modal passes nothing', () => {
+    assert.ok(
+      /const factsAsOf = manilaDate\(savedVersionCreatedAt\)/.test(dialog),
+      'the as-of date is not the version\'s own creation day',
+    );
+    assert.ok(
+      /saved\s*\?\s*saved\.versions\.find\(\(v\) => v\.versionNo === saved\.proposal\.version_no\)\?\.createdAt/.test(
+        dialog,
+      ),
+      'the date does not come from the version rail the read model always populates',
+    );
+    assert.ok(
+      /Asia\/Manila/.test(dialog),
+      'the date is not resolved in Asia/Manila — a UTC date is the wrong day for eight hours',
+    );
+    assert.ok(
+      /asOf: saved \? factsAsOfUsed : null/.test(dialog),
+      'the live print/PDF claims an as-of day it does not have',
+    );
+    assert.ok(dialog.includes('Supplier and age as of'), 'the table never says which day it is describing');
+  });
+
+  check('the read is race-safe and happens once per open / version switch', () => {
+    assert.ok(dialog.includes('factsWantRef'), 'the facts read has no race guard');
+    assert.ok(
+      /if \(factsWantRef\.current !== signature\) return;/.test(dialog),
+      'a stale facts reply can overwrite a fresh one',
+    );
+    assert.ok(/\}, \[open, idsKey, factsAsOf\]\);/.test(dialog), 'the facts read re-fires on unrelated renders');
+  });
+
+  check('NEVER CRUSH, ALWAYS SCROLL: the min-width is the sum of the columns', () => {
+    assert.ok(dialog.includes('min-w-[872px]'), 'the table min-width did not grow with the three new columns');
+    assert.ok(dialog.includes('rounded-md overflow-x-auto'), 'the table lost its scrolling wrapper');
+    // Reserved widths, so the table does not jump as the figures fill in.
+    assert.ok(/whitespace-nowrap w-\[120px\]/.test(dialog), 'the Supplier column reserves no width');
+    assert.ok(/whitespace-nowrap w-\[54px\]/.test(dialog), 'the Opened column reserves no width');
+    assert.ok(/whitespace-nowrap w-\[58px\]/.test(dialog), 'the Last-piled column reserves no width');
+    assert.ok(/colSpan=\{5\}/.test(dialog), 'the footer still spans 2 columns — Total now sits under five');
+  });
+
+  check('all three surfaces carry the columns: screen, print and PDF', () => {
+    for (const label of ['Supplier', 'Opened', 'Last piled']) {
+      assert.ok(dialog.includes(label), `the screen table lost the ${label} column`);
+      assert.ok(pdf.includes(label), `the PDF lost the ${label} column`);
+    }
+    // The print builder's own header row and its 5-wide total.
+    assert.ok(
+      dialog.includes('<th>Block</th><th>Batch</th><th>Supplier</th>'),
+      'the printed table lost the Supplier column',
+    );
+    assert.ok(dialog.includes('<td colspan="5">Total</td>'), 'the printed footer still spans 2');
+  });
+
+  check('THE PRINT KEEPS THE COLOURS, and it is LANDSCAPE', () => {
+    assert.ok(/@page \{ size: A4 landscape/.test(dialog), 'the proposal print is not landscape');
+    assert.ok(dialog.includes('.sup-all'), 'the printed pill has no ALL colour');
+    assert.ok(dialog.includes('.sup-some'), 'the printed pill has no SOME colour');
+    assert.ok(
+      read('app/(app)/inventory/_shared/print-utils.ts').includes('print-color-adjust: exact'),
+      'the shared print CSS no longer forces exact colour — the pills would print grey',
+    );
+    // Padding is squeezed BEFORE the font, and the font floor is 7pt.
+    assert.ok(/th, td \{ padding: 2px 3px; \}/.test(dialog), 'the print does not tighten cell padding');
+    const sizes = [...dialog.matchAll(/font-size: ([\d.]+)pt/g)].map((m) => Number(m[1]));
+    assert.ok(sizes.length > 0, 'the print declares no point sizes');
+    assert.ok(Math.min(...sizes) >= 7, `a printed font fell below the 7pt floor (${Math.min(...sizes)}pt)`);
+  });
+
+  check('the three columns are NOT price-gated, and the ₱ column still is', () => {
+    // They carry no money — `fetchBlendBlockFacts` has no price gate by design — so a
+    // Production reader (and a hidden-prices print) keeps them and loses only ₱/KG.
+    assert.ok(
+      !/showPrices[\s\S]{0,80}SupplierPill/.test(dialog),
+      'the supplier pill is gated on prices — it carries none',
+    );
+    assert.ok(/if \(showPrices\) head\.push\('PHP\/KG'\)/.test(pdf), 'the PDF ₱ column lost its gate');
+    assert.ok(
+      dialog.includes("showPrices\n        ? `<td class=\"num\">${b.php_kg !== null ? peso(b.php_kg) : EMDASH}</td>`"),
+      'the printed ₱ cell lost its gate',
+    );
   });
 }
 

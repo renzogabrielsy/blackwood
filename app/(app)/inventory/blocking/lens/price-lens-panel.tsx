@@ -51,7 +51,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as React from 'react';
-import { Coins, Loader2 } from 'lucide-react';
+import { AlertTriangle, Coins, Loader2 } from 'lucide-react';
 
 import { errorToast } from '@/lib/toast';
 import { Input } from '@/components/ui/input';
@@ -80,15 +80,23 @@ import type {
   BlockingLensPanelProps,
 } from './types';
 import { useLensSettings } from './use-lens-settings';
-import { LensBandRows, LensExcludedRow, LensUnitSwitch } from './lens-band-rows';
+import {
+  LensBandChips,
+  LensBandRows,
+  LensExcludedChip,
+  LensExcludedRow,
+  LensUnitSwitch,
+} from './lens-band-rows';
 import { LensCustomize, type LensBandNameField, type LensCutLineChip } from './lens-customize';
 import { LensRatioBar } from './lens-ratio-bar';
 import { RefusalBanner } from './lens-refusal-banner';
+import { LensSettingsPopover } from './lens-settings-popover';
 import {
   formatLensKg,
   formatLensSharePct,
   LENS_DEBOUNCE_MS,
   LENS_EMDASH,
+  LENS_STALL_MS,
 } from './lens-shared';
 import {
   addEdgeOffset,
@@ -97,6 +105,7 @@ import {
   bandRampClass,
   DEFAULT_PRICE_LENS_SETTINGS,
   isDefaultPriceLensSettings,
+  manualRoundedUpPhp,
   parseManualPriceInput,
   parsePriceLensSettings,
   PRICE_LENS_BASIS_LABELS,
@@ -153,12 +162,18 @@ export interface PriceLensAdapter {
   fetchLens: (
     marketPhpKg: number,
     edgeOffsets: readonly number[],
+    /**
+     * The TYPED cut line, or `null` for "compute R from the market price".
+     * `manual` basis → `Math.ceil(typed)`; every measured basis → `null`.
+     */
+    roundedUpPhp: number | null,
   ) => Promise<BlockingPriceLensResult>;
 }
 
 const LIVE_ADAPTER: PriceLensAdapter = {
   fetchBases: (days) => fetchBlockingMarketBases(days),
-  fetchLens: (price, edges) => fetchBlockingPriceLens(price, [...edges]),
+  fetchLens: (price, edges, roundedUpPhp) =>
+    fetchBlockingPriceLens(price, [...edges], roundedUpPhp),
 };
 
 export function PriceLensPanel({
@@ -184,6 +199,8 @@ export function PriceLensPanel({
 
   /** Which band rows are isolated. Empty = show every band (the "ratio'd" view). */
   const [picked, setPicked] = React.useState<Set<number>>(() => new Set());
+  /** The Settings popover — everything that used to be the docked sidebar's body. */
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [customizeOpen, setCustomizeOpen] = React.useState(false);
   const [edgeDraft, setEdgeDraft] = React.useState('');
   const [edgeError, setEdgeError] = React.useState<string | null>(null);
@@ -259,30 +276,71 @@ export function PriceLensPanel({
   const marketPhpKg: number | null =
     settings.basis === 'manual' ? settings.manualPrice : activeBasis?.marketPhpKg ?? null;
 
-  // ── (2) The classification, debounced and race-safe ───────────────────────
-  // A settings change costs one round-trip, not one per keystroke. `token` is what
-  // makes a slow earlier reply unable to overwrite a fast later one — the guard the
-  // detail panel's optimistic-open contract calls a "request token".
+  /**
+   * THE TYPED CUT LINE. `manual` → `Math.ceil(typed)`, so a typed ₱41 means ₱41 and up
+   * is above market; every MEASURED basis sends `null` and R stays SQL's `floor+1`. The
+   * rounding lives in `price-lens-settings.ts`, never here and never in `actions.ts`.
+   */
+  const roundedUpOverride: number | null =
+    settings.basis === 'manual' ? manualRoundedUpPhp(settings.manualPrice) : null;
+
+  // ── (2) The classification: FIRST REQUEST IMMEDIATELY, then debounced ─────
+  //
+  // ── WHY THE FIRST ONE IS NOT DEBOUNCED (the 2026-09-21 bug) ──────────────
+  // Every request used to be created INSIDE a 250 ms `setTimeout` whose cleanup runs
+  // on every effect re-run and on unmount. On the live page the panel is mounted from
+  // a URL param mirrored through `useOptimistic`, so anything that flips that param —
+  // or any re-render of the frame that remounts the body — destroyed the pending timer
+  // BEFORE it could fire. No request was ever issued, the panel sat on "Sorting the
+  // yard into bands…" forever, and there was no error, no Retry and no diagnostic.
+  // A debounce exists to coalesce KEYSTROKES; it has no business gating the first look.
+  //
+  // ── WHY THE GUARD IS A SIGNATURE AND NOT A COUNTER ───────────────────────
+  // The old guard was a monotonic `tokenRef`: a reply was dropped whenever the token
+  // had moved, even when the reply was for exactly the request the panel still wanted.
+  // That is what made the stall UNRECOVERABLE — recovery depended on yet another effect
+  // run. The guard is now the request's own SIGNATURE, so **a reply for what is
+  // currently wanted is ALWAYS applied**, whatever else re-ran in the meantime, and a
+  // reply for a superseded request is still dropped.
   const edgeKey = settings.edgeOffsets.join(',');
-  const tokenRef = React.useRef(0);
+  const signature = `${marketPhpKg}|${edgeKey}|${roundedUpOverride ?? ''}`;
+  /** The signature the panel currently wants a payload for. */
+  const wantRef = React.useRef('');
+  /** False until this panel instance has issued its first request. */
+  const firstDoneRef = React.useRef(false);
   const [lensNonce, setLensNonce] = React.useState(0);
+  /** The watchdog: a stall must be VISIBLE and retryable, never an eternal spinner. */
+  const [lensStalled, setLensStalled] = React.useState(false);
+  /** The live watchdog timer — CLEARED the moment a reply lands, refusal or not. */
+  const watchdogRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stopWatchdog = React.useCallback(() => {
+    if (watchdogRef.current !== null) {
+      clearTimeout(watchdogRef.current);
+      watchdogRef.current = null;
+    }
+  }, []);
 
   React.useEffect(() => {
     if (marketPhpKg === null) {
       // Nothing to classify against. Drop the tint rather than leave a stale one
       // painted against a price that is no longer on screen.
+      wantRef.current = '';
       setLens(null);
       setLensRefusal(null);
       setLensPending(false);
+      setLensStalled(false);
       return;
     }
-    const token = ++tokenRef.current;
+    wantRef.current = signature;
     setLensPending(true);
+    setLensStalled(false);
     const offsets = edgeKey.split(',').map(Number);
-    const timer = setTimeout(() => {
-      void adapterRef.current.fetchLens(marketPhpKg, offsets)
+
+    const run = () => {
+      void adapterRef.current.fetchLens(marketPhpKg, offsets, roundedUpOverride)
         .then((res) => {
-          if (tokenRef.current !== token) return; // a later request owns the screen
+          // A reply for the signature the panel still wants is ALWAYS applied.
+          if (wantRef.current !== signature) return;
           if (res.ok) {
             setLens(res.lens);
             setLensRefusal(null);
@@ -297,17 +355,44 @@ export function PriceLensPanel({
           setLensRefusal(res.message);
         })
         .catch((err: unknown) => {
-          if (tokenRef.current !== token) return;
+          if (wantRef.current !== signature) return;
           errorToast('Could not work out the price lens', {
             description: err instanceof Error ? err.message : String(err),
           });
         })
         .finally(() => {
-          if (tokenRef.current === token) setLensPending(false);
+          if (wantRef.current !== signature) return;
+          // The read ANSWERED — payload or refusal. Stop the watchdog before it can
+          // call a healthy panel stalled eight seconds later.
+          stopWatchdog();
+          setLensPending(false);
+          setLensStalled(false);
         });
-    }, LENS_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
-  }, [marketPhpKg, edgeKey, lensNonce]);
+    };
+
+    // FIRST look: fire on this frame, with no timer to lose. Subsequent changes are
+    // debounced, which is what the 250 ms was ever for.
+    const arm = (ms: number) => {
+      stopWatchdog();
+      watchdogRef.current = setTimeout(() => {
+        watchdogRef.current = null;
+        if (wantRef.current === signature) setLensStalled(true);
+      }, ms);
+    };
+
+    if (!firstDoneRef.current) {
+      firstDoneRef.current = true;
+      arm(LENS_STALL_MS);
+      run();
+      return stopWatchdog;
+    }
+    const timer = setTimeout(run, LENS_DEBOUNCE_MS);
+    arm(LENS_DEBOUNCE_MS + LENS_STALL_MS);
+    return () => {
+      clearTimeout(timer);
+      stopWatchdog();
+    };
+  }, [marketPhpKg, edgeKey, roundedUpOverride, signature, lensNonce, stopWatchdog]);
 
   // A band set that no longer exists must not stay picked — three bands isolated
   // and then a cut line removed would isolate a band index that is now somebody
@@ -473,6 +558,23 @@ export function PriceLensPanel({
   const atEdgeCap = settings.edgeOffsets.length >= BLOCKING_PRICE_LENS_MAX_EDGES;
   const customised = !isDefaultPriceLensSettings(settings);
 
+  /**
+   * THE BAR'S HEADLINE — the whole lens in a few words.
+   *
+   * `Market ₱39.86 → ₱40+ above`, or for a TYPED market `Market ₱41 (typed) → ₱41+
+   * above`, which is the visible half of the 2026-09-21 rule: a price the operator
+   * types IS the cut line, so 41 reads back as 41 and never as 42.
+   */
+  const headline = React.useMemo(() => {
+    if (marketPhpKg === null) {
+      return basesLoading ? 'Working out market…' : 'No market price yet';
+    }
+    const typed = settings.basis === 'manual';
+    const base = `Market ${peso(marketPhpKg, 2)}${typed ? ' (typed)' : ''}`;
+    if (!lens) return base;
+    return `${base} → ${peso(lens.roundedUpPhp, 0)}+ above`;
+  }, [marketPhpKg, basesLoading, settings.basis, lens]);
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   // BELT AND BRACES, in the third place. The frame refuses to render a lens whose
@@ -482,8 +584,88 @@ export function PriceLensPanel({
   if (!caps.canViewPrices) return null;
 
   return (
-    <div className="flex flex-col gap-3 text-xs">
-      {/* ── (1) Market is … ─────────────────────────────────────────────── */}
+    <>
+      {/* ═══ THE LEGEND BAR — one line, never wrapping ═══════════════════════
+          What a reader looks at WHILE scanning the grid. Everything they set up
+          once lives behind the gear at the end. */}
+      <span
+        className="shrink-0 whitespace-nowrap text-[10px] text-muted-foreground"
+        title={marketPhpKg === null ? undefined : `${PESO}${marketPhpKg} / kg`}
+      >
+        {headline}
+      </span>
+
+      {/* One chip per band — the SAME isolate toggles the popover's rows are, in
+          their compact variant. They overflow by scrolling, never by wrapping. */}
+      {lens ? (
+        <LensBandChips
+          rows={bandRows}
+          ramp={PRICE_LENS_RAMP}
+          picked={picked}
+          onToggle={togglePicked}
+        />
+      ) : (
+        // Never an empty bar: a quiet, shimmer-free placeholder while the read runs.
+        <span className="shrink-0 text-[10px] text-muted-foreground">…</span>
+      )}
+
+      {/* The thin inline ratio. Widths ARE the published shares. */}
+      {lens && (
+        <div className="hidden w-[110px] shrink-0 lg:block">
+          <LensRatioBar
+            ramp={PRICE_LENS_RAMP}
+            segments={lens.bands.map((b) => ({ key: b.index, sharePct: share(b) }))}
+            ariaLabel={lens.bands
+              .map(
+                (b) =>
+                  `${priceBandLabel(b, lens.roundedUpPhp, settings.bandNames)}: ${formatLensSharePct(
+                    share(b),
+                  )} by ${settings.unit}`,
+              )
+              .join('; ')}
+          />
+        </div>
+      )}
+
+      {/* Unpriced — its OWN chip, never a band and never a ₱0. */}
+      {lens && lens.unpriced.blockCount > 0 && (
+        <LensExcludedChip
+          title={`No price ${EMDASH} ${lens.unpriced.blockCount}`}
+          note={`${lens.unpriced.blockCount} block${
+            lens.unpriced.blockCount === 1 ? '' : 's'
+          }, ${formatLensKg(
+            lens.unpriced.kg,
+          )} with no price yet. In no band and out of both percentages — those cells keep their normal look.`}
+        />
+      )}
+
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        {lensPending && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+        {/* A stall or a refusal must be VISIBLE in the bar and actionable in the
+            popover — never an eternal spinner with nothing to click. */}
+        {(lensStalled || lensRefusal || basesRefusal) && (
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(true)}
+            className="inline-flex items-center gap-1 rounded-md border border-destructive/40 bg-destructive/10 px-1.5 py-0.5 text-[10px] font-semibold text-destructive cursor-pointer"
+            title="Open Settings to read the problem, copy it, and retry"
+          >
+            <AlertTriangle className="h-3 w-3" />
+            <span className="max-sm:hidden">Problem</span>
+          </button>
+        )}
+        {/* kg | blocks — changes the bar AND the popover's row percentages
+            together, so a segment and the number beside it are never in
+            different units. */}
+        <LensUnitSwitch unit={settings.unit} onChange={setUnit} />
+        <LensSettingsPopover
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          label="Price lens settings"
+          customised={customised}
+        >
+          {/* ═══ THE POPOVER BODY — what used to be the docked sidebar ═══════ */}
+          {/* ── (1) Market is … ─────────────────────────────────────────── */}
       <section className="flex flex-col gap-1.5">
         <label
           htmlFor="price-lens-basis"
@@ -579,11 +761,27 @@ export function PriceLensPanel({
                   {peso(marketPhpKg, 2)}
                 </span>
                 {lens && (
+                  // TWO SENTENCES, BECAUSE THERE ARE TWO RULES (2026-09-21).
+                  // A MEASURED market rounds UP to the next whole peso, in SQL. A
+                  // price the operator TYPED is the cut line itself, so saying
+                  // "rounds up to ₱42" about a typed ₱41 would describe a lens one
+                  // peso looser than the one they asked for.
                   <span className="text-[11px] text-muted-foreground">
-                    rounds up to{' '}
-                    <span className="font-mono font-semibold text-foreground">
-                      {peso(lens.roundedUpPhp, 0)}
-                    </span>
+                    {settings.basis === 'manual' ? (
+                      <>
+                        <span className="font-mono font-semibold text-foreground">
+                          {peso(lens.roundedUpPhp, 0)}
+                        </span>{' '}
+                        and up is above
+                      </>
+                    ) : (
+                      <>
+                        rounds up to{' '}
+                        <span className="font-mono font-semibold text-foreground">
+                          {peso(lens.roundedUpPhp, 0)}
+                        </span>
+                      </>
+                    )}
                   </span>
                 )}
               </div>
@@ -620,38 +818,18 @@ export function PriceLensPanel({
         )}
       </section>
 
-      {/* ── (2)+(3) Bands, ratio bar, unit switch ─────────────────────────
-             All three are the SHARED pieces (`lens-band-rows.tsx`,
-             `lens-ratio-bar.tsx`), so the age lens's legend cannot drift from this
-             one. What is price-specific is what is passed IN: the ₱ labels, and the
-             ramp id that keeps this lens on the cost scale. */}
+      {/* ── (2) The detailed band rows ──────────────────────────────────
+             The SHARED legend (`lens-band-rows.tsx`), so the age lens's rows cannot
+             drift from these. What is price-specific is what is passed IN: the ₱
+             labels, and the ramp id that keeps this lens on the cost scale.
+             The RATIO BAR and the kg|blocks switch live in the legend BAR — they are
+             what a reader glances at, and duplicating them here would be a second
+             place for the same two controls to disagree. */}
       {lens && (
         <section className="flex flex-col gap-2">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-              Bands
-            </span>
-            <div className="flex items-center gap-1.5">
-              {lensPending && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
-              {/* kg | blocks — changes the bar AND the row percentages together,
-                  so a segment and the number beside it are never in different units. */}
-              <LensUnitSwitch unit={settings.unit} onChange={setUnit} />
-            </div>
-          </div>
-
-          {/* The stacked ratio bar. Widths ARE the published shares — see header. */}
-          <LensRatioBar
-            ramp={PRICE_LENS_RAMP}
-            segments={lens.bands.map((b) => ({ key: b.index, sharePct: share(b) }))}
-            ariaLabel={lens.bands
-              .map(
-                (b) =>
-                  `${priceBandLabel(b, lens.roundedUpPhp, settings.bandNames)}: ${formatLensSharePct(
-                    share(b),
-                  )} by ${settings.unit}`,
-              )
-              .join('; ')}
-          />
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Bands
+          </span>
 
           {/* One toggle row per band. Every band is present even when empty, so the
               whole scale is legible without inventing rows. */}
@@ -691,7 +869,22 @@ export function PriceLensPanel({
         <RefusalBanner message={lensRefusal} onRetry={() => setLensNonce((n) => n + 1)} />
       )}
 
-      {!lens && marketPhpKg !== null && (
+      {/* THE WATCHDOG (2026-09-21). A read that never lands used to render an
+          eternal "Sorting the yard into bands…" with no error, no Retry and nothing
+          to paste into a bug report — which is the state the owner found the live
+          page in. After `LENS_STALL_MS` the spinner line becomes the shared banner,
+          persistent, with Copy and Retry. */}
+      {lensStalled && !lensRefusal && (
+        <RefusalBanner
+          message={
+            'The price lens did not come back. The bands on screen (if any) are from an earlier read. ' +
+            'Retry, or reload the page; if it keeps happening, copy this and send it on.'
+          }
+          onRetry={() => setLensNonce((n) => n + 1)}
+        />
+      )}
+
+      {!lens && !lensStalled && marketPhpKg !== null && (
         <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
           <Loader2 className="h-3 w-3 animate-spin" />
           Sorting the yard into bands…
@@ -744,7 +937,9 @@ export function PriceLensPanel({
             : undefined
         }
       />
-    </div>
+        </LensSettingsPopover>
+      </div>
+    </>
   );
 }
 
