@@ -29,6 +29,7 @@ import {
   type BlockingLensDefinition,
 } from '@/app/(app)/inventory/blocking/lens/types';
 import type {
+  BlockData,
   BlockingMarketBasis,
   BlockingPriceBand,
   BlockingPriceLens,
@@ -137,10 +138,13 @@ function makeLens(cells: MockCell[], offsets: number[]): BlockingPriceLens {
   const bandByBlock: Record<string, number> = {};
   const counts = new Array(edges.length + 1).fill(0) as number[];
   const kgs = new Array(edges.length + 1).fill(0) as number[];
+  // Σ kg × ₱/kg per band, so `kgWeightedPhpKg` is a real weighted average here too.
+  const vals = new Array(edges.length + 1).fill(0) as number[];
   let unpricedBlocks = 0;
   let unpricedKg = 0;
   let pricedBlocks = 0;
   let pricedKg = 0;
+  let pricedVal = 0;
 
   for (const c of cells) {
     if (c.php === null) {
@@ -152,8 +156,10 @@ function makeLens(cells: MockCell[], offsets: number[]): BlockingPriceLens {
     bandByBlock[c.loc] = b;
     counts[b] += 1;
     kgs[b] += c.balance;
+    vals[b] += c.balance * c.php;
     pricedBlocks += 1;
     pricedKg += c.balance;
+    pricedVal += c.balance * c.php;
   }
 
   const bands: BlockingPriceBand[] = counts.map((_, i) => ({
@@ -164,6 +170,8 @@ function makeLens(cells: MockCell[], offsets: number[]): BlockingPriceLens {
     kg: kgs[i],
     kgSharePct: pricedKg > 0 ? (kgs[i] / pricedKg) * 100 : null,
     blockSharePct: pricedBlocks > 0 ? (counts[i] / pricedBlocks) * 100 : null,
+    // Null, never 0, on an empty band — the live contract.
+    kgWeightedPhpKg: kgs[i] > 0 ? vals[i] / kgs[i] : null,
   }));
 
   return {
@@ -173,7 +181,12 @@ function makeLens(cells: MockCell[], offsets: number[]): BlockingPriceLens {
     bands,
     bandByBlock,
     unpriced: { blockCount: unpricedBlocks, kg: unpricedKg },
-    total: { blockCount: pricedBlocks + unpricedBlocks, kg: pricedKg + unpricedKg },
+    total: {
+      blockCount: pricedBlocks + unpricedBlocks,
+      kg: pricedKg + unpricedKg,
+      // Weighted over the PRICED kilograms only, while the counts cover every block.
+      kgWeightedPhpKg: pricedKg > 0 ? pricedVal / pricedKg : null,
+    },
   };
 }
 
@@ -188,6 +201,30 @@ export function PriceLensFixture() {
   const includeUnpriced = params.get('unpriced') === '1';
 
   const cells = React.useMemo(() => makeCells(includeUnpriced), [includeUnpriced]);
+
+  // The grid map the panel reads for the PRINTED summary's per-block lists (block
+  // code, batch and balance). Shaped exactly like `BlockingGridData.data`.
+  const gridData: Record<string, BlockData> = React.useMemo(() => {
+    const out: Record<string, BlockData> = {};
+    for (const c of cells) {
+      out[c.loc] = {
+        batch_code: c.batch,
+        batch_id: c.loc,
+        status: 'STORED',
+        balance: c.balance,
+        total_in: c.totalIn,
+        php: c.php,
+        bd_astm: c.bdAstm,
+        bd_jis: c.bdAstm,
+        ash: c.ash,
+        mc: c.mc,
+        grit: 1.2,
+        vm: 18.4,
+        fc: 78.2,
+      };
+    }
+    return out;
+  }, [cells]);
 
   const adapter: PriceLensAdapter = React.useMemo(
     () => ({
@@ -260,7 +297,7 @@ export function PriceLensFixture() {
             onClose={() => undefined}
             onClear={() => setClassifier({ fn: null })}
             hasClassification={!!classifier.fn}
-            data={{}}
+            data={gridData}
             caps={{ canViewPrices: true }}
             onClassifierChange={handleClassifier}
           />

@@ -59,6 +59,44 @@ import { fetchBlendBlockFacts } from '../blocking/actions';
 // chunk instead of the main bundle.
 import { composeBlendPdfFilename } from './blend-proposal-filename';
 import type { BlendProposal, BlendProposalBlock } from '../blocking/actions';
+// ── The ANALYSIS PAGES (2026-09-21) ──
+// The owner's extra pages: price groups, quality and age. The payload is ONE read
+// (`fetchBlendAnalysis`), the words and formats are shared with the printout through
+// `blend-analysis-text.ts`, and which pages exist is a per-user preference.
+import {
+  analysisPages,
+  analysisPagesLabel,
+  DEFAULT_BLEND_ANALYSIS_OPTIONS,
+  parseBlendAnalysisOptions,
+  serializeBlendAnalysisOptions,
+  wantsAnalysis,
+  BLEND_ANALYSIS_SETTINGS_MODULE,
+  type BlendAnalysisOptions,
+} from './blend-analysis-options';
+import {
+  BlendAnalysisIncludePopover,
+  BlendAnalysisSections,
+} from './blend-analysis-sections';
+import {
+  BLEND_ANALYSIS_PRINT_CSS,
+  buildBlendAnalysisPages,
+} from './blend-analysis-print';
+import { useBlendAnalysis, type BlendAnalysisAdapter } from './use-blend-analysis';
+import { useModuleSettings, lensSettingsModule } from '../blocking/lens/use-lens-settings';
+import {
+  DEFAULT_PRICE_LENS_SETTINGS,
+  manualRoundedUpPhp,
+  parsePriceLensSettings,
+  PRICE_LENS_ID,
+  serializePriceLensSettings,
+} from '../blocking/lens/price-lens-settings';
+import {
+  AGE_LENS_ID,
+  DEFAULT_AGE_LENS_SETTINGS,
+  parseAgeLensSettings,
+  serializeAgeLensSettings,
+} from '../blocking/lens/age-lens-settings';
+import { useTableSettings } from '@/components/providers/table-settings';
 
 // ─── Display helpers ──────────────────────────────────────────────────────────
 
@@ -137,6 +175,16 @@ export function buildBlendPrintDocument(
   showPricesPref = true,
   meta?: BlendDocMeta | null,
   blockFacts?: BlendPrintFacts | null,
+  /**
+   * The ANALYSIS SHEETS, already built by `buildBlendAnalysisPages` — one `<section
+   * class="apage">` per chosen page, each starting on its own sheet AFTER this one.
+   *
+   * Passed in rather than built here for the same reason `blockFacts` is: the document
+   * stays a pure function of what was on screen, so the print and the screen can never
+   * describe different pages. Absent or empty → this document is byte-identical to
+   * what it was before the analysis existed, including its `<style>` block.
+   */
+  analysisPagesHtml?: string | null,
 ): string {
   const showPrices = proposal.can_view_prices && showPricesPref && proposal.raw_price_per_kg !== null;
 
@@ -266,6 +314,11 @@ export function buildBlendPrintDocument(
   const remark = (meta?.notes ?? '').trim();
   const remarkLine = remark ? `<p class="subtitle remark">${escapeHtml(remark)}</p>` : '';
 
+  // The analysis sheets' CSS rides ONLY when there are analysis sheets, so a printout
+  // with no extra pages is byte-identical to the pre-existing one.
+  const analysisHtml = (analysisPagesHtml ?? '').trim();
+  const analysisCss = analysisHtml === '' ? '' : BLEND_ANALYSIS_PRINT_CSS;
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -299,7 +352,7 @@ export function buildBlendPrintDocument(
   }
   .sup-all  { background: #d1fae5; color: #065f46; border: 1px solid #6ee7b7; }
   .sup-some { background: #ffedd5; color: #9a3412; border: 1px solid #fdba74; }
-</style>
+${analysisCss}</style>
 </head>
 <body>
   <h1>${title}</h1>
@@ -320,7 +373,7 @@ ${pricingSection}
     <h2>Selected Blocks</h2>
     ${blockTable}
   </section>
-
+${analysisHtml}
   <div class="doc-footer">Blackwood ${EMDASH} Blend proposal${
     meta?.versionNo != null ? ` v${meta.versionNo}` : ''
   } &middot; Printed ${escapeHtml(
@@ -984,6 +1037,13 @@ interface BlendProposalDialogProps {
     batchIds: string[],
     asOf?: string,
   ) => Promise<BlendBlockFactsResult>;
+  /**
+   * The ANALYSIS read's PORT — same adapter idiom, same one reason for existing as
+   * `factsAdapter`: the gated dev rig has no session, so the real action can only ever
+   * refuse there, and pages that can only be LOOKED at in their refusal state cannot be
+   * reviewed for layout, colour or wording.
+   */
+  analysisAdapter?: BlendAnalysisAdapter;
   /** Present → the dialog renders a SAVED version (history mode). */
   saved?: BlendSavedContext | null;
   /** Fresh mode only: save this blend as a brand-new proposal. */
@@ -1027,6 +1087,7 @@ export function BlendProposalDialog({
   showPrices: showPricesPref = true,
   batchIdByLoc,
   factsAdapter,
+  analysisAdapter,
   saved = null,
   onSaveNew,
   saving = false,
@@ -1116,6 +1177,108 @@ export function BlendProposalDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, idsKey, factsAsOf]);
 
+  // ── THE ANALYSIS PAGES ──
+  //
+  // Three preferences, all read through the SAME door (`user_table_settings`, via
+  // `useModuleSettings`) and all read-only here except the first:
+  //   • which pages to include — this dialog's own document;
+  //   • the PRICE lens's cut lines, band names and market basis;
+  //   • the AGE lens's cut lines and band names.
+  // The two lens documents are borrowed rather than copied so a band a reader named
+  // "Cheap stock" on the grid is called "Cheap stock" on the printed page too — one
+  // definition of a band's label, exactly as `priceBandLabel` / `ageBandLabel` are one
+  // definition of its wording.
+  const { settings: analysisOptions, patch: patchAnalysisOptions } =
+    useModuleSettings<BlendAnalysisOptions>(
+      BLEND_ANALYSIS_SETTINGS_MODULE,
+      DEFAULT_BLEND_ANALYSIS_OPTIONS,
+      parseBlendAnalysisOptions,
+      serializeBlendAnalysisOptions,
+    );
+  const { settings: priceLensSettings } = useModuleSettings(
+    lensSettingsModule(PRICE_LENS_ID),
+    DEFAULT_PRICE_LENS_SETTINGS,
+    parsePriceLensSettings,
+    serializePriceLensSettings,
+  );
+  const { settings: ageLensSettings } = useModuleSettings(
+    lensSettingsModule(AGE_LENS_ID),
+    DEFAULT_AGE_LENS_SETTINGS,
+    parseAgeLensSettings,
+    serializeAgeLensSettings,
+  );
+  // The reader's own WET / ASHY thresholds — the same document the grid cells read.
+  const { settings: tableSettings } = useTableSettings();
+  const labHighlights = tableSettings.labHighlights;
+
+  const analysisPageCount = analysisPages(analysisOptions, showPrices).length;
+
+  /**
+   * A TYPED market price is the cut line itself, so the `manual` basis sends
+   * `Math.ceil(typed)` and every MEASURED basis sends nothing — which leaves the
+   * database to compare the blend with the market of the month it BELONGS to (the
+   * month a saved version was saved in, not today's). That is the whole point of an
+   * as-of, and it is the price lens's own rule, not a second one.
+   */
+  const analysisMarketPhpKg =
+    priceLensSettings.basis === 'manual' ? priceLensSettings.manualPrice : null;
+  const analysisRoundedUpPhp =
+    priceLensSettings.basis === 'manual' ? manualRoundedUpPhp(priceLensSettings.manualPrice) : null;
+
+  const analysisBlockLocs = useMemo(
+    () => (proposal ? proposal.blocks.map((b) => b.block_loc) : []),
+    [proposal],
+  );
+  const analysisLocsKey = analysisBlockLocs.join('|');
+  const savedProposalId = saved?.proposal.proposal_id ?? null;
+  const savedVersionNo = saved?.proposal.version_no ?? null;
+  const analysisSource = useMemo(() => {
+    if (savedProposalId !== null && savedVersionNo !== null) {
+      // A SAVED version reads its STORED snapshot verbatim and dates its ages from the
+      // day it was written.
+      return { kind: 'saved' as const, proposalId: savedProposalId, versionNo: savedVersionNo };
+    }
+    if (analysisLocsKey === '') return null;
+    return { kind: 'live' as const, blockLocs: analysisLocsKey.split('|') };
+  }, [savedProposalId, savedVersionNo, analysisLocsKey]);
+
+  const {
+    analysis,
+    loading: analysisLoading,
+    refusal: analysisRefusal,
+    stalled: analysisStalled,
+    retry: retryAnalysis,
+  } = useBlendAnalysis({
+    enabled: open && !!proposal && wantsAnalysis(analysisOptions, showPrices),
+    source: analysisSource,
+    priceEdgeOffsets: priceLensSettings.edgeOffsets,
+    ageEdgeDays: ageLensSettings.edgeDays,
+    marketPhpKg: analysisMarketPhpKg,
+    roundedUpPhp: analysisRoundedUpPhp,
+    adapter: analysisAdapter,
+  });
+
+  /** The chosen sheets, for the printout AND the PDF — one build, two documents. */
+  const analysisPagesHtml = useMemo(
+    () =>
+      buildBlendAnalysisPages({
+        analysis,
+        options: analysisOptions,
+        canViewPrices: showPrices,
+        priceBandNames: priceLensSettings.bandNames,
+        ageBandNames: ageLensSettings.bandNames,
+        labHighlights,
+      }),
+    [
+      analysis,
+      analysisOptions,
+      showPrices,
+      priceLensSettings.bandNames,
+      ageLensSettings.bandNames,
+      labHighlights,
+    ],
+  );
+
   // ── Download PDF (label prompt) ──
   const [pdfPopoverOpen, setPdfPopoverOpen] = useState(false);
   const [pdfLabel, setPdfLabel] = useState('');
@@ -1138,11 +1301,26 @@ export function BlendProposalDialog({
       const { downloadBlendPdf } = await import('./blend-proposal-pdf');
       // Pass the display preference so a hidden-prices PDF carries NO ₱ (the PDF builder
       // re-ANDs it with the server `can_view_prices`).
-      downloadBlendPdf(proposal, pdfLabel, showPricesPref, docMeta, {
-        facts,
-        batchIdByLoc,
-        asOf: saved ? factsAsOfUsed : null,
-      });
+      downloadBlendPdf(
+        proposal,
+        pdfLabel,
+        showPricesPref,
+        docMeta,
+        {
+          facts,
+          batchIdByLoc,
+          asOf: saved ? factsAsOfUsed : null,
+        },
+        // The SAME payload and the SAME chosen pages the screen and the printout use.
+        {
+          analysis,
+          options: analysisOptions,
+          canViewPrices: showPrices,
+          priceBandNames: priceLensSettings.bandNames,
+          ageBandNames: ageLensSettings.bandNames,
+          labHighlights,
+        },
+      );
       handlePdfPopoverOpenChange(false);
     } catch (err) {
       errorToast('Failed to generate PDF', {
@@ -1156,12 +1334,20 @@ export function BlendProposalDialog({
     try {
       // Pass the display preference so a hidden-prices printout carries NO ₱ (the builder
       // re-ANDs it with the server `can_view_prices`).
-      const html = buildBlendPrintDocument(proposal, showPricesPref, docMeta, {
-        facts,
-        batchIdByLoc,
-        // Only a SAVED version is describing a day other than today.
-        asOf: saved ? factsAsOfUsed : null,
-      });
+      const html = buildBlendPrintDocument(
+        proposal,
+        showPricesPref,
+        docMeta,
+        {
+          facts,
+          batchIdByLoc,
+          // Only a SAVED version is describing a day other than today.
+          asOf: saved ? factsAsOfUsed : null,
+        },
+        // One sheet per chosen analysis page, after this one. Empty when none is
+        // ticked — the document is then byte-identical to the pre-analysis one.
+        analysisPagesHtml,
+      );
       const ok = printViaIframe(html);
       if (!ok) {
         errorToast('Could not open the print view', {
@@ -1320,6 +1506,15 @@ export function BlendProposalDialog({
                 </>
               )}
 
+              {/* ── Analysis: which extra pages this proposal shows and prints ──
+                     Read-only content, so it stays available on mobile like Compare. */}
+              <BlendAnalysisIncludePopover
+                options={analysisOptions}
+                onChange={patchAnalysisOptions}
+                canViewPrices={showPrices}
+                pageCount={analysisPageCount}
+              />
+
               {/* Download PDF — prompts for a label via a Popover, then saves YYMMDD - {label}.pdf */}
               <Popover open={pdfPopoverOpen} onOpenChange={handlePdfPopoverOpenChange}>
                 <PopoverTrigger asChild>
@@ -1386,13 +1581,35 @@ export function BlendProposalDialog({
               <button
                 onClick={handlePrint}
                 disabled={!proposal || loading}
-                className="flex items-center justify-center w-7 h-7 rounded-md border border-border
-                           text-muted-foreground hover:text-foreground hover:bg-muted
-                           transition-all duration-150 cursor-pointer disabled:opacity-40 disabled:pointer-events-none"
-                title="Print blend proposal"
-                aria-label="Print blend proposal"
+                data-blend-print
+                className={cn(
+                  `flex items-center justify-center h-7 rounded-md border border-border
+                   text-muted-foreground hover:text-foreground hover:bg-muted
+                   transition-all duration-150 cursor-pointer disabled:opacity-40 disabled:pointer-events-none`,
+                  // The page count needs room, so the button widens rather than
+                  // clipping — and it is only ever there when there is a count.
+                  analysisPageCount > 0 ? 'gap-1 px-1.5' : 'w-7',
+                )}
+                // WHAT WILL COME OUT OF THE PRINTER, said before it does. A reader who
+                // ticked three pages and got one sheet would have no way to tell
+                // whether the pages or the printer were at fault.
+                title={
+                  analysisPageCount > 0
+                    ? `Print blend proposal — the blocks sheet plus ${analysisPagesLabel(
+                        analysisPageCount,
+                      )}`
+                    : 'Print blend proposal'
+                }
+                aria-label={
+                  analysisPageCount > 0
+                    ? `Print blend proposal (${analysisPagesLabel(analysisPageCount)})`
+                    : 'Print blend proposal'
+                }
               >
                 <Printer className="w-3.5 h-3.5" />
+                {analysisPageCount > 0 && (
+                  <span className="font-mono text-[9px] font-semibold">+{analysisPageCount}</span>
+                )}
               </button>
               <button
                 onClick={() => onOpenChange(false)}
@@ -1709,6 +1926,24 @@ export function BlendProposalDialog({
                   </p>
                 )}
               </div>
+
+              {/* ── THE ANALYSIS PAGES ──
+                     Sections in this same scroll, each with a heading that reads as a
+                     page; the printout renders the identical payload as separate
+                     SHEETS. Which ones are here is the reader's own Include-pages
+                     choice, ANDed with the effective price flag. */}
+              <BlendAnalysisSections
+                analysis={analysis}
+                options={analysisOptions}
+                canViewPrices={showPrices}
+                loading={analysisLoading}
+                refusal={analysisRefusal}
+                stalled={analysisStalled}
+                onRetry={retryAnalysis}
+                priceBandNames={priceLensSettings.bandNames}
+                ageBandNames={ageLensSettings.bandNames}
+                labHighlights={labHighlights}
+              />
             </>
           )}
         </div>

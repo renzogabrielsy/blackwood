@@ -44,6 +44,7 @@ import {
   type BlockingLensId,
 } from '@/app/(app)/inventory/blocking/lens/types';
 import type {
+  BlockData,
   BlockingAgeBand,
   BlockingAgeLens,
   BlockingMarketBasis,
@@ -239,8 +240,11 @@ function makePriceLens(cells: MockCell[], offsets: number[]): BlockingPriceLens 
   const bandByBlock: Record<string, number> = {};
   const counts = new Array(edges.length + 1).fill(0) as number[];
   const kgs = new Array(edges.length + 1).fill(0) as number[];
+  // Σ kg × ₱/kg per band, so `kgWeightedPhpKg` is a real weighted average here too.
+  const vals = new Array(edges.length + 1).fill(0) as number[];
   let pricedBlocks = 0;
   let pricedKg = 0;
+  let pricedVal = 0;
 
   for (const c of cells) {
     if (c.php === null) continue;
@@ -248,8 +252,10 @@ function makePriceLens(cells: MockCell[], offsets: number[]): BlockingPriceLens 
     bandByBlock[c.loc] = b;
     counts[b] = counts[b] + 1;
     kgs[b] = kgs[b] + c.balance;
+    vals[b] = vals[b] + c.balance * c.php;
     pricedBlocks = pricedBlocks + 1;
     pricedKg = pricedKg + c.balance;
+    pricedVal = pricedVal + c.balance * c.php;
   }
 
   const bands: BlockingPriceBand[] = counts.map((_, i) => ({
@@ -260,6 +266,8 @@ function makePriceLens(cells: MockCell[], offsets: number[]): BlockingPriceLens 
     kg: kgs[i],
     kgSharePct: pricedKg > 0 ? (kgs[i] / pricedKg) * 100 : null,
     blockSharePct: pricedBlocks > 0 ? (counts[i] / pricedBlocks) * 100 : null,
+    // Null, never 0, on an empty band — the live contract.
+    kgWeightedPhpKg: kgs[i] > 0 ? vals[i] / kgs[i] : null,
   }));
 
   return {
@@ -269,7 +277,11 @@ function makePriceLens(cells: MockCell[], offsets: number[]): BlockingPriceLens 
     bands,
     bandByBlock,
     unpriced: { blockCount: 0, kg: 0 },
-    total: { blockCount: pricedBlocks, kg: pricedKg },
+    total: {
+      blockCount: pricedBlocks,
+      kg: pricedKg,
+      kgWeightedPhpKg: pricedKg > 0 ? pricedVal / pricedKg : null,
+    },
   };
 }
 
@@ -285,6 +297,30 @@ export function AgeLensFixture() {
   const canViewPrices = params.get('prices') !== '0';
 
   const cells = React.useMemo(() => makeCells(includeUndated), [includeUndated]);
+
+  // The grid map the panels read for the PRINTED summary's per-block lists (block
+  // code, batch and balance). Shaped exactly like `BlockingGridData.data`.
+  const gridData: Record<string, BlockData> = React.useMemo(() => {
+    const out: Record<string, BlockData> = {};
+    for (const c of cells) {
+      out[c.loc] = {
+        batch_code: c.batch,
+        batch_id: c.loc,
+        status: 'STORED',
+        balance: c.balance,
+        total_in: c.totalIn,
+        php: c.php,
+        bd_astm: c.bdAstm,
+        bd_jis: c.bdAstm,
+        ash: c.ash,
+        mc: c.mc,
+        grit: 1.2,
+        vm: 18.4,
+        fc: 78.2,
+      };
+    }
+    return out;
+  }, [cells]);
 
   const ageAdapter: AgeLensAdapter = React.useMemo(
     () => ({
@@ -388,7 +424,7 @@ export function AgeLensFixture() {
             onClose={() => undefined}
             onClear={() => setClassifier({ fn: null })}
             hasClassification={!!classifier.fn}
-            data={{}}
+            data={gridData}
             caps={caps}
             onClassifierChange={handleClassifier}
             onFocusBlock={setFocused}

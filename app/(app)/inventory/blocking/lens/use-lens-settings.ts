@@ -76,7 +76,26 @@ export function useLensSettings<S>(
   parse: (raw: unknown) => S,
   serialize: (value: S) => Record<string, unknown>,
 ): LensSettingsStore<S> {
-  const moduleKey = lensSettingsModule(lensId);
+  return useModuleSettings(lensSettingsModule(lensId), defaults, parse, serialize);
+}
+
+/**
+ * The SAME storage, keyed by an arbitrary `user_table_settings.module`.
+ *
+ * `useLensSettings` is one caller of this (`blocking_lens_<id>`); the blend
+ * proposal's Include-pages choice is the other (`blocking_blend_analysis`,
+ * `_shared/blend-analysis-options.ts`). It is exported rather than copied because
+ * the four disciplines in the header are the whole value of this file — a second
+ * copy is how one of them quietly loses its `try` or its debounce, and a Blocking
+ * preference that is not a LENS preference should not have to pretend to be one to
+ * reuse them.
+ */
+export function useModuleSettings<S>(
+  moduleKey: string,
+  defaults: S,
+  parse: (raw: unknown) => S,
+  serialize: (value: S) => Record<string, unknown>,
+): LensSettingsStore<S> {
   const storageKey = `bw.${moduleKey}.v1`;
 
   const [settings, setSettings] = React.useState<S>(defaults);

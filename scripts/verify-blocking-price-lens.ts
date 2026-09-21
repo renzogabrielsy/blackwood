@@ -839,6 +839,147 @@ async function liveChecks(env: { url: string; service: string; anon: string }): 
     assert.ok(read(MIGRATION).includes("p_market_php_kg = 'NaN'::numeric"), 'the NaN guard is gone');
     assert.ok(read(MIGRATION).includes("'Infinity'::numeric"), 'the Infinity guard is gone');
   });
+
+  // --- (j) kg_weighted_php_kg (added 2026-09-21, migration 20260921084500) ------
+  // The lens could say how many blocks and how many kilograms were in each band, but not
+  // what those kilograms COST — so a lens print had to re-weight the band in TypeScript,
+  // which CLAUDE.md forbids. One key per band and one on `total`, and nothing else moved.
+  //
+  // The grid is read DIRECTLY here (service_role holds SELECT on it, 170 rows, far under
+  // PostgREST's cap) rather than through a new probe key, so the existing probe is
+  // untouched and the recomputation is genuinely independent of the function under test.
+  const ANALYSIS_MIGRATION = 'supabase/migrations/20260921084500_blend_analysis_natural_breaks.sql';
+
+  check('the NEW migration is where kg_weighted_php_kg comes from, and it is ADDITIVE', () => {
+    const sql = read(ANALYSIS_MIGRATION);
+    assert.ok(
+      sql.includes('CREATE OR REPLACE FUNCTION public.fn_blocking_price_lens('),
+      'the lens is not replaced by the analysis migration',
+    );
+    // A signature change would mean DROP + CREATE, which discards the grants.
+    assert.ok(!/DROP FUNCTION[^;]*fn_blocking_price_lens/.test(sql), 'the lens was dropped, losing its grants');
+    assert.ok(sql.includes("'kg_weighted_php_kg', br.wtd_php"), 'the per-band key is not emitted');
+    assert.ok(
+      sql.includes("'kg_weighted_php_kg', (SELECT p.wtd_php FROM priced p)"),
+      "the total's key is not weighted over the PRICED population",
+    );
+    // ...and the grants and COMMENT are re-stated in the same file anyway.
+    assert.ok(
+      sql.includes('GRANT  EXECUTE ON FUNCTION public.fn_blocking_price_lens(numeric, int[], int) TO authenticated;'),
+      'the grant is not re-applied',
+    );
+  });
+
+  const gridRes = await svc
+    .from('view_blocking_grid')
+    .select('block_loc,balance,avg_php_kg')
+    .gt('balance', 0);
+  assert.ok(!gridRes.error, `reading view_blocking_grid failed: ${gridRes.error?.message}`);
+  const gridRows = (gridRes.data ?? []) as Array<{ block_loc: string; balance: number; avg_php_kg: number }>;
+  assert.ok(gridRows.length > 0, 'the grid read came back empty — an empty read is a FAILURE, not a pass');
+  assert.ok(gridRows.length < 1000, `the grid returned ${gridRows.length} rows — PostgREST may have truncated`);
+  const gridByLoc = new Map(gridRows.map((r) => [r.block_loc, r]));
+
+  check("every band's kg_weighted_php_kg IS Σ(kg × ₱/kg) ÷ Σkg over the grid's own blocks", () => {
+    // The tolerance is the JSON float boundary, NOT the arithmetic: SQL computes this in
+    // exact numeric and a direct SQL comparison measured a gap of exactly 0 on every band.
+    const sumKg = new Map<number, number>();
+    const sumVal = new Map<number, number>();
+    for (const b of arr(lens, 'blocks')) {
+      const loc = String(b.block_loc);
+      const g = gridByLoc.get(loc);
+      assert.ok(g, `the lens classified ${loc}, which is not an occupied grid block`);
+      const bi = Number(b.band_index);
+      sumKg.set(bi, (sumKg.get(bi) ?? 0) + Number(g!.balance));
+      sumVal.set(bi, (sumVal.get(bi) ?? 0) + Number(g!.balance) * Number(g!.avg_php_kg));
+    }
+    let nonEmpty = 0;
+    for (const band of arr(lens, 'bands')) {
+      const bi = Number(band.index);
+      const kg = sumKg.get(bi) ?? 0;
+      if (kg === 0) {
+        // NULL, never 0, on an EMPTY band — no charcoal there means no price there.
+        assert.equal(band.kg_weighted_php_kg, null, `empty band ${bi} published a price instead of null`);
+        assert.equal(Number(band.block_count), 0, `band ${bi} has blocks but no kilograms`);
+        continue;
+      }
+      const mine = (sumVal.get(bi) ?? 0) / kg;
+      const theirs = Number(band.kg_weighted_php_kg);
+      assert.ok(
+        Math.abs(theirs - mine) <= Math.max(1e-9, Math.abs(mine) * 1e-12),
+        `band ${bi}: published ₱${theirs} against a recomputed ₱${mine}`,
+      );
+      nonEmpty += 1;
+    }
+    assert.ok(nonEmpty >= 2, `only ${nonEmpty} non-empty bands — too few to have proven anything`);
+  });
+
+  check("total.kg_weighted_php_kg is weighted over the PRICED blocks, not over every block", () => {
+    // The asymmetry is deliberate and is the L-008 rule again: an unpriced block's ₱0 is a
+    // placeholder, so averaging it in would drag the figure down the way batches.avg_cost
+    // once read ₱11.01 against a real ₱39.99. The counts still cover the whole yard.
+    const priced = gridRows.filter((r) => Number(r.avg_php_kg) > 0);
+    const kg = priced.reduce((s, r) => s + Number(r.balance), 0);
+    const val = priced.reduce((s, r) => s + Number(r.balance) * Number(r.avg_php_kg), 0);
+    const mine = kg > 0 ? val / kg : null;
+    const theirs = lensTotal.kg_weighted_php_kg;
+    assert.ok(theirs !== undefined, 'total.kg_weighted_php_kg is missing');
+    if (mine === null) {
+      assert.equal(theirs, null, 'nothing is priced yet the total published a price');
+    } else {
+      assert.ok(
+        Math.abs(Number(theirs) - mine) <= Math.max(1e-9, Math.abs(mine) * 1e-12),
+        `total: published ₱${String(theirs)} against a recomputed ₱${mine}`,
+      );
+      // ...and it is NOT the average over every block, whenever those differ.
+      const allKg = gridRows.reduce((s, r) => s + Number(r.balance), 0);
+      const allVal = gridRows.reduce((s, r) => s + Number(r.balance) * Number(r.avg_php_kg), 0);
+      if (Math.abs(allKg - kg) > 1e-9) {
+        const naive = allVal / allKg;
+        assert.ok(
+          Math.abs(Number(theirs) - naive) > 1e-9,
+          'the total matches the whole-yard average — an unpriced ₱0 is being averaged in',
+        );
+      }
+    }
+    console.log(
+      `    weighted price: ${arr(lens, 'bands')
+        .map((b) => (b.kg_weighted_php_kg === null ? '—' : `₱${Number(b.kg_weighted_php_kg).toFixed(4)}`))
+        .join(' / ')}  ·  total ₱${theirs === null ? '—' : Number(theirs).toFixed(4)}` +
+        `  (${priced.length} of ${gridRows.length} blocks priced)`,
+    );
+  });
+
+  check('NOTHING ELSE IN THE PAYLOAD MOVED — the key sets are exactly what they were, plus one', () => {
+    assert.deepEqual(
+      Object.keys(lens).sort(),
+      ['bands', 'blocks', 'edge_offsets', 'market_php_kg', 'ok', 'rounded_up_php', 'total', 'unpriced'],
+      'the top-level key set changed',
+    );
+    for (const b of arr(lens, 'bands')) {
+      assert.deepEqual(
+        Object.keys(b).sort(),
+        [
+          'block_count',
+          'block_share_pct',
+          'index',
+          'kg',
+          'kg_share_pct',
+          'kg_weighted_php_kg',
+          'lower_php',
+          'upper_php',
+        ],
+        'a band gained or lost a key beyond kg_weighted_php_kg',
+      );
+    }
+    assert.deepEqual(Object.keys(obj(lens, 'total')).sort(), ['block_count', 'kg', 'kg_weighted_php_kg'],
+      'the total key set is not the old two plus one');
+    assert.deepEqual(Object.keys(obj(lens, 'unpriced')).sort(), ['block_count', 'kg'],
+      'the unpriced bucket changed — it has no price to publish');
+    for (const b of arr(lens, 'blocks')) {
+      assert.deepEqual(Object.keys(b).sort(), ['band_index', 'block_loc'], 'a per-block row changed shape');
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------

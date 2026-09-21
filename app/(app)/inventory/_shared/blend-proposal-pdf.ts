@@ -22,12 +22,34 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { format } from 'date-fns';
 import type { BlendProposal } from '../blocking/actions';
-import type { BlendBlockFacts } from '../blocking/types';
+import type {
+  BlendAnalysis,
+  BlendBlockFacts,
+  BlendQualityMetric,
+} from '../blocking/types';
 // PERF-4: the pure filename helpers live in a jspdf-free module so callers can import
 // them WITHOUT pulling jsPDF into the bundle. Re-exported here for back-compat + the
 // node/test path.
 import { sanitizeLabel, composeBlendPdfFilename } from './blend-proposal-filename';
 import { blendVersionLine, type BlendDocMeta } from './print-utils';
+import { analysisPages, type BlendAnalysisOptions } from './blend-analysis-options';
+import {
+  blocksWord,
+  fmtDays,
+  fmtQuality,
+  fmtSharePct,
+  fmtWholeDays,
+  groupWord,
+  naturalMethodNote,
+  QUALITY_METRIC_LABELS,
+  QUALITY_METRIC_UNITS,
+  vsMarketCaption,
+  vsMarketUnavailableNote,
+} from './blend-analysis-text';
+import { rampRgb } from '../blocking/lens/lens-ramp';
+import { ageBandLabel } from '../blocking/lens/age-lens-settings';
+import { priceBandLabel } from '../blocking/lens/price-lens-settings';
+import type { LabHighlightSpec, LabMetric } from '@/types/table-settings';
 
 export { sanitizeLabel, composeBlendPdfFilename };
 
@@ -90,6 +112,12 @@ export function buildBlendPdf(
   date: Date = new Date(),
   meta?: BlendDocMeta | null,
   blockFacts?: BlendPdfFacts | null,
+  /**
+   * The ANALYSIS PAGES (2026-09-21) — the same payload, the same chosen pages and the
+   * same words the screen and the HTML printout use. Absent → the document is exactly
+   * what it was before the analysis existed.
+   */
+  analysis?: BlendPdfAnalysis | null,
 ): jsPDF {
   const showPrices = proposal.can_view_prices && showPricesPref && proposal.raw_price_per_kg !== null;
 
@@ -315,8 +343,457 @@ export function buildBlendPdf(
     afterTableY + 18,
   );
 
+  // ── The ANALYSIS PAGES, one per chosen page, each on its own sheet ──
+  if (analysis) appendAnalysisPages(doc, marginX, analysis);
+
   return doc;
 }
+
+// ─── The analysis pages ───────────────────────────────────────────────────────
+//
+// Same payload, same order, same words as the screen and the HTML printout (the words
+// come from `blend-analysis-text.ts`, which both surfaces already share). What differs
+// is only what jsPDF needs: `PHP ` instead of `₱` (its built-in Helvetica is WinAnsi
+// and has no peso glyph), RGB fill arrays instead of CSS, and a `didParseCell` hook
+// instead of a class for the subtotal / footer rows.
+//
+// NOTHING IS RE-DERIVED: every subtotal and footer figure is the payload's own group /
+// `overall` field, and the only arithmetic is the per-ROW `kg × ₱/kg` product the other
+// two surfaces also show.
+
+/** What the analysis pages need — the screen's own inputs, unchanged. */
+export interface BlendPdfAnalysis {
+  analysis: BlendAnalysis | null;
+  options: BlendAnalysisOptions;
+  /** The EFFECTIVE price flag. False → no price page, and the payload carries no ₱. */
+  canViewPrices: boolean;
+  priceBandNames?: Record<string, string>;
+  ageBandNames?: Record<string, string>;
+  labHighlights: Record<LabMetric, LabHighlightSpec>;
+}
+
+/** A row tagged so the cell hook can paint it. */
+interface AnalysisPdfRow {
+  cells: string[];
+  kind: 'head' | 'block' | 'sub' | 'total' | 'muted';
+  /** The group tint, for a `head` row. */
+  fill?: [number, number, number];
+}
+
+/** `rgb(r g b)` → jsPDF's own `[r, g, b]`, lightened onto white for a row fill. */
+function tintFill(triple: string): [number, number, number] {
+  const [r, g, b] = triple.split(' ').map(Number);
+  // 18% of the hue over white — the same weight the screen's `rgb(… / 0.18)` carries.
+  const mix = (c: number) => Math.round(255 - (255 - c) * 0.18);
+  return [mix(r), mix(g), mix(b)];
+}
+
+function analysisHeading(doc: jsPDF, marginX: number, title: string, note: string): number {
+  doc.addPage();
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.setTextColor(0, 0, 0);
+  doc.text(title, marginX, 48);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(80, 80, 80);
+  const lines = doc.splitTextToSize(note, 760) as string[];
+  doc.text(lines, marginX, 62);
+  doc.setTextColor(20, 20, 20);
+  return 62 + lines.length * 10 + 6;
+}
+
+function analysisTable(
+  doc: jsPDF,
+  marginX: number,
+  startY: number,
+  head: string[],
+  rows: AnalysisPdfRow[],
+  numericFrom: number,
+): number {
+  const columnStyles: Record<number, { halign: 'right' }> = {};
+  for (let i = numericFrom; i < head.length; i++) columnStyles[i] = { halign: 'right' };
+
+  autoTable(doc, {
+    startY,
+    theme: 'grid',
+    margin: { left: marginX, right: marginX },
+    styles: { fontSize: 7.5, cellPadding: 2, lineColor: [170, 170, 170], lineWidth: 0.5 },
+    headStyles: {
+      fillColor: [238, 238, 238],
+      textColor: [30, 30, 30],
+      fontStyle: 'bold',
+      halign: 'left',
+      fontSize: 7,
+    },
+    columnStyles,
+    head: [head.map(pdfText)],
+    // EVERY cell goes through `pdfText`: jsPDF's built-in Helvetica is WinAnsi, so a
+    // stray `₱`, em dash or `·` from the shared text module would print as garbage.
+    body: rows.map((r) => r.cells.map(pdfText)),
+    // A group header spans the table; the subtotal and the grand total are BODY rows
+    // (never a `foot`, which jspdf-autotable repeats on every page — the same reason
+    // the HTML sheets avoid `<tfoot>`).
+    didParseCell: (data) => {
+      if (data.section !== 'body') return;
+      const row = rows[data.row.index];
+      if (!row) return;
+      if (row.kind === 'head') {
+        data.cell.styles.fontStyle = 'bold';
+        if (row.fill) data.cell.styles.fillColor = row.fill;
+        if (data.column.index === 0) data.cell.colSpan = head.length;
+      }
+      if (row.kind === 'sub') {
+        data.cell.styles.fontStyle = 'bold';
+        data.cell.styles.fillColor = [244, 244, 244];
+        if (data.column.index === 0) data.cell.colSpan = 2;
+      }
+      if (row.kind === 'total') {
+        data.cell.styles.fontStyle = 'bold';
+        data.cell.styles.fillColor = [233, 233, 233];
+        if (data.column.index === 0) data.cell.colSpan = 2;
+      }
+      if (row.kind === 'muted') data.cell.styles.textColor = [110, 110, 110];
+    },
+  });
+  // @ts-expect-error lastAutoTable runtime field.
+  return doc.lastAutoTable.finalY as number;
+}
+
+function appendAnalysisPages(doc: jsPDF, marginX: number, input: BlendPdfAnalysis): void {
+  const { analysis, options, canViewPrices, labHighlights } = input;
+  if (!analysis) return;
+
+  for (const page of analysisPages(options, canViewPrices)) {
+    if (page === 'price') {
+      const price = analysis.price;
+      if (!price) continue;
+      const nat = price.natural;
+      let y = analysisHeading(
+        doc,
+        marginX,
+        'Price groups - natural breaks',
+        `${pdfText(
+          naturalMethodNote({
+            subject: 'prices',
+            groupCount: nat.groupCount,
+            cuts: nat.cuts,
+            gvf: nat.gvf,
+            formatCut: (v) => pdfPhp(v),
+          }),
+        )} High to low; dearest block first inside each group.`,
+      );
+
+      const priceHead = ['Block', 'Batch', 'Balance (kg)', 'PHP/KG', 'Value'];
+      const rows: AnalysisPdfRow[] = [];
+      for (const g of [...nat.groups].sort((a, b) => b.index - a.index)) {
+        rows.push({
+          kind: 'head',
+          fill: tintFill(rampRgb('cost', g.index, nat.groupCount)),
+          cells: [
+            `${groupWord(g.label, nat.groupCount)}   ${pdfPhp(g.rangeMin)} - ${pdfPhp(g.rangeMax)}`,
+            '',
+            '',
+            '',
+            '',
+          ],
+        });
+        for (const b of g.blocks) {
+          rows.push({
+            kind: 'block',
+            cells: [
+              b.blockLoc,
+              b.batchCode,
+              fmtKg(b.kg),
+              pdfPhp(b.phpKg),
+              pdfPhp(b.kg * b.phpKg, 0),
+            ],
+          });
+        }
+        rows.push({
+          kind: 'sub',
+          cells: [
+            `${groupWord(g.label, nat.groupCount)} subtotal - ${blocksWord(
+              g.blockCount,
+            )} - ${fmtSharePct(g.kgSharePct)} of kg`,
+            '',
+            `${fmtKg(g.kg)} kg`,
+            pdfPhpOrDash(g.kgWeightedPhpKg),
+            pdfPhp(g.valuePhp, 0),
+          ],
+        });
+      }
+      pushMuted(rows, nat.unmeasured.blocks, priceHead.length, 'No price');
+      rows.push({
+        kind: 'total',
+        cells: [
+          `Whole blend - ${blocksWord(nat.overall.blockCount)}`,
+          '',
+          `${fmtKg(nat.overall.kg)} kg`,
+          pdfPhpOrDash(nat.overall.kgWeightedPhpKg),
+          pdfPhp(nat.overall.valuePhp, 0),
+        ],
+      });
+      y = analysisTable(doc, marginX, y, priceHead, rows, 2);
+
+      // ── Against market ──
+      const vm = price.vsMarket;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.text('Against market', marginX, y + 18);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(80, 80, 80);
+      const caption = vm
+        ? `${pdfText(vsMarketCaption(vm))} Dearest band first.`
+        : pdfText(
+            price.vsMarketUnavailable
+              ? vsMarketUnavailableNote(price.vsMarketUnavailable)
+              : 'No market comparison is available for this blend.',
+          );
+      const capLines = doc.splitTextToSize(caption, 760) as string[];
+      doc.text(capLines, marginX, y + 30);
+      doc.setTextColor(20, 20, 20);
+      if (vm) {
+        const vmRows: AnalysisPdfRow[] = [];
+        for (const b of [...vm.bands].sort((a, x) => x.index - a.index)) {
+          vmRows.push({
+            kind: 'head',
+            fill: tintFill(rampRgb('cost', b.index, vm.bands.length)),
+            cells: [pdfText(priceBandLabel(b, vm.roundedUpPhp, input.priceBandNames ?? {})), '', '', '', ''],
+          });
+          for (const blk of b.blocks) {
+            vmRows.push({
+              kind: 'block',
+              cells: [
+                blk.blockLoc,
+                blk.batchCode,
+                fmtKg(blk.kg),
+                pdfPhp(blk.phpKg),
+                pdfPhp(blk.kg * blk.phpKg, 0),
+              ],
+            });
+          }
+          vmRows.push({
+            kind: 'sub',
+            cells: [
+              `Band subtotal - ${blocksWord(b.blockCount)} - ${fmtSharePct(b.kgSharePct)} of kg`,
+              '',
+              `${fmtKg(b.kg)} kg`,
+              pdfPhpOrDash(b.kgWeightedPhpKg),
+              pdfPhp(b.valuePhp, 0),
+            ],
+          });
+        }
+        pushMuted(vmRows, vm.unmeasured.blocks, priceHead.length, 'No price');
+        vmRows.push({
+          kind: 'total',
+          cells: [
+            `Whole blend - ${blocksWord(vm.overall.blockCount)}`,
+            '',
+            `${fmtKg(vm.overall.kg)} kg`,
+            pdfPhpOrDash(vm.overall.kgWeightedPhpKg),
+            pdfPhp(vm.overall.valuePhp, 0),
+          ],
+        });
+        analysisTable(doc, marginX, y + 30 + capLines.length * 10 + 4, priceHead, vmRows, 2);
+      }
+    }
+
+    if (page === 'quality') {
+      let y = analysisHeading(
+        doc,
+        marginX,
+        'Quality - MC / ASH / BD',
+        'Highest reading first. A reading past your own WET / ASHY limit is coloured, exactly as it is on the grid. BD JIS rides beside BD ASTM rather than in a fourth table - its group averages are cut in different places, so only the blend’s own weighted JIS is shown, in the footer.',
+      );
+      for (const { metric, companion } of QUALITY_PDF_TABLES) {
+        const nat = analysis.quality.byMetric[metric];
+        const comp = companion ? analysis.quality.byMetric[companion] : null;
+        const compByBlock = new Map<string, number>();
+        if (comp) for (const g of comp.groups) for (const b of g.blocks) compByBlock.set(b.blockLoc, b.value);
+
+        const head = ['Block', 'Batch', 'Balance (kg)', QUALITY_METRIC_LABELS[metric]];
+        if (companion) head.push(QUALITY_METRIC_LABELS[companion]);
+
+        const rows: AnalysisPdfRow[] = [];
+        for (const g of [...nat.groups].sort((a, b) => b.index - a.index)) {
+          rows.push({
+            kind: 'head',
+            fill: tintFill(rampRgb('age', g.index, nat.groupCount)),
+            cells: padCells(
+              [
+                `${groupWord(g.label, nat.groupCount)}   ${fmtQuality(
+                  metric,
+                  g.rangeMin,
+                )} - ${fmtQuality(metric, g.rangeMax)}`,
+              ],
+              head.length,
+            ),
+          });
+          for (const b of g.blocks) {
+            const cells = [b.blockLoc, b.batchCode, fmtKg(b.kg), fmtQuality(metric, b.value)];
+            if (companion) {
+              const cv = compByBlock.get(b.blockLoc);
+              cells.push(cv === undefined ? '-' : fmtQuality(companion, cv));
+            }
+            rows.push({ kind: 'block', cells });
+          }
+          const sub = [
+            `${groupWord(g.label, nat.groupCount)} subtotal - ${blocksWord(
+              g.blockCount,
+            )} - ${fmtSharePct(g.kgSharePct)} of kg`,
+            '',
+            `${fmtKg(g.kg)} kg`,
+            fmtQuality(metric, g.kgWeightedValue),
+          ];
+          if (companion) sub.push('-');
+          rows.push({ kind: 'sub', cells: sub });
+        }
+        pushMuted(rows, nat.unmeasured.blocks, head.length, 'No reading');
+        const total = [
+          `Whole blend - ${blocksWord(nat.overall.blockCount)}`,
+          '',
+          `${fmtKg(nat.overall.kg)} kg`,
+          fmtQuality(metric, nat.overall.kgWeightedValue),
+        ];
+        if (companion && comp) total.push(fmtQuality(companion, comp.overall.kgWeightedValue));
+        rows.push({ kind: 'total', cells: total });
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9);
+        doc.text(
+          `${QUALITY_METRIC_LABELS[metric]}${
+            companion ? ` + ${QUALITY_METRIC_LABELS[companion]}` : ''
+          } - ${QUALITY_METRIC_UNITS[metric]}`,
+          marginX,
+          y + 12,
+        );
+        y = analysisTable(doc, marginX, y + 18, head, rows, 2) + 14;
+      }
+      // The thresholds are the reader's own; naming them keeps the colour honest even
+      // in a PDF a printer renders in grey.
+      void labHighlights;
+    }
+
+    if (page === 'age') {
+      const age = analysis.age;
+      const o = age.overall;
+      const y = analysisHeading(
+        doc,
+        marginX,
+        'Age',
+        `Ages as of ${age.asOf}, weighted by the kilograms still in each pile, from its deliveries’ average date. Oldest band first.${
+          o.oldestAgeDays !== null
+            ? ` Oldest pile ${fmtWholeDays(o.oldestAgeDays)}${
+                o.oldestBlockLoc ? ` at ${o.oldestBlockLoc}` : ''
+              }.`
+            : ''
+        }`,
+      );
+      const head = ['Block', 'Batch', 'Balance (kg)', 'Age (d)', 'First delivery', 'Last delivery'];
+      const rows: AnalysisPdfRow[] = [];
+      for (const b of [...age.bands].sort((a, x) => x.index - a.index)) {
+        rows.push({
+          kind: 'head',
+          fill: tintFill(rampRgb('age', b.index, age.bands.length)),
+          cells: padCells([pdfText(ageBandLabel(b, input.ageBandNames ?? {}))], head.length),
+        });
+        for (const blk of b.blocks) {
+          rows.push({
+            kind: 'block',
+            cells: [
+              blk.blockLoc,
+              blk.batchCode,
+              fmtKg(blk.kg),
+              fmtDays(blk.ageDays),
+              blk.firstDeliveryDate ?? '-',
+              blk.lastDeliveryDate ?? '-',
+            ],
+          });
+        }
+        rows.push({
+          kind: 'sub',
+          cells: [
+            `Band subtotal - ${blocksWord(b.blockCount)} - ${fmtSharePct(b.kgSharePct)} of kg`,
+            '',
+            `${fmtKg(b.kg)} kg`,
+            fmtDays(b.kgWeightedAgeDays),
+            '-',
+            '-',
+          ],
+        });
+      }
+      pushMuted(rows, age.undated.blocks, head.length, 'No delivery dates');
+      rows.push({
+        kind: 'total',
+        cells: [
+          `Whole blend - ${blocksWord(o.blockCount)}`,
+          '',
+          `${fmtKg(o.kg)} kg`,
+          fmtDays(o.kgWeightedAgeDays),
+          '-',
+          '-',
+        ],
+      });
+      analysisTable(doc, marginX, y, head, rows, 2);
+    }
+  }
+}
+
+/** `PHP 43.56` — the PDF's own currency spelling. An em dash becomes a plain `-`. */
+function pdfPhp(v: number, decimals = 2): string {
+  return `PHP ${v.toLocaleString(undefined, {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  })}`;
+}
+
+function pdfPhpOrDash(v: number | null, decimals = 2): string {
+  return v === null ? '-' : pdfPhp(v, decimals);
+}
+
+/** WinAnsi has no `₱`, no em dash and no `→`; the PDF spells them out. */
+function pdfText(s: string): string {
+  return s
+    .replace(/₱/g, 'PHP ')
+    .replace(/—|–/g, '-')
+    .replace(/→/g, 'to')
+    .replace(/·/g, '-')
+    .replace(/…/g, '...')
+    .replace(/’/g, "'");
+}
+
+function padCells(cells: string[], length: number): string[] {
+  const out = [...cells];
+  while (out.length < length) out.push('');
+  return out;
+}
+
+/** The blocks with no reading — one muted group, never folded into the first one. */
+function pushMuted(
+  rows: AnalysisPdfRow[],
+  blocks: readonly { blockLoc: string; batchCode: string; kg: number }[],
+  colCount: number,
+  label: string,
+): void {
+  if (blocks.length === 0) return;
+  rows.push({ kind: 'head', cells: padCells([label], colCount) });
+  for (const b of blocks) {
+    rows.push({
+      kind: 'muted',
+      cells: padCells([b.blockLoc, b.batchCode, fmtKg(b.kg)], colCount).map((c, i) =>
+        i >= 3 ? '-' : c,
+      ),
+    });
+  }
+}
+
+const QUALITY_PDF_TABLES: { metric: BlendQualityMetric; companion?: BlendQualityMetric }[] = [
+  { metric: 'mc' },
+  { metric: 'ash' },
+  { metric: 'bd_astm', companion: 'bd_jis' },
+];
 
 /**
  * Generate the blend-proposal PDF and trigger a browser download named
@@ -332,11 +809,12 @@ export function downloadBlendPdf(
   showPricesPref = true,
   meta?: BlendDocMeta | null,
   blockFacts?: BlendPdfFacts | null,
+  analysis?: BlendPdfAnalysis | null,
 ): void {
   const filename = composeBlendPdfFilename(label);
   if (!filename) {
     throw new Error('A label is required to name the PDF.');
   }
-  const doc = buildBlendPdf(proposal, showPricesPref, new Date(), meta, blockFacts);
+  const doc = buildBlendPdf(proposal, showPricesPref, new Date(), meta, blockFacts, analysis);
   doc.save(filename);
 }

@@ -113,5 +113,12 @@ class cleared immediately, stage and injected rules both gone well inside the fa
   arithmetic** (`ledgerMetrics`, `OPS_PRINT_MAX_ROWS_PER_PAGE`); it was deliberately not
   edited when `print-fit.ts` was extracted, and **re-pointing it at this module is an open
   follow-up**, not a completed migration.
+- `app/(app)/inventory/blocking/CONTEXT.md` → `lens/lens-summary-print.tsx` — the FOURTH
+  caller (2026-09-21): the Blocking Highlight lens's one-sheet summary. It uses
+  `GroupPrintStage` + `buildPrintPageRules` + `printCard` verbatim, portals the stage to
+  `<body>`, passes `showHeader={false}` (its sheet carries its own title and settings lines)
+  and puts its total in the last `<tbody>` row, per the no-`tfoot` rule above. **Nothing in
+  this folder was changed for it** — the one adaptation it needed, a re-skinnable track on a
+  stacked ratio bar, lives in the tenant module beside the lens.
 - `app/(app)/analytics/CONTEXT.md` — where `printCard` and `GroupPrintStage` originated.
 - `components/shared/grid/CONTEXT.md` — the sibling platform primitive, same layer rule.

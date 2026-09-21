@@ -35,6 +35,46 @@ export const LENS_RAMP_CLASS_PREFIX: Record<LensRampId, string> = {
   age: 'lens-age-',
 };
 
+/**
+ * THE SEVEN HUES PER RAMP, as `r g b` triples — the SAME values `globals.css`
+ * declares as `--lens-hue` on `.lens-band-0…6` and `.lens-age-0…6`.
+ *
+ * ── WHY A SECOND COPY EXISTS, AND WHY IT CANNOT DRIFT ───────────────────────
+ * On screen nothing needs it: a band's colour is the CSS class, and no component
+ * spells one. But the blend proposal's printout is a **fully self-contained HTML
+ * document printed in a hidden iframe** (`_shared/print-utils.ts`) — it has no
+ * `globals.css`, so `.lens-band-3` means nothing inside it, and a printed group
+ * header tinted by a class would come out white. The alternative — reading the
+ * computed custom property off a probe element at print time — is a clever way to
+ * make a document depend on the live DOM it was built to be independent of.
+ *
+ * So the triples are duplicated here, deliberately, and made PROVABLY equal rather
+ * than assumed: `scripts/verify-blend-analysis-ui.ts` parses `globals.css` and
+ * asserts every one of the fourteen matches. That is the project's standing answer to
+ * a constant that must live in two places (CLAUDE.md, the client/server boundary
+ * trap: duplicate it, then assert the copies match).
+ */
+export const LENS_RAMP_RGB: Record<LensRampId, readonly string[]> = {
+  cost: [
+    '16 185 129', // emerald — cheapest
+    '132 204 22', // lime
+    '234 179 8', // yellow
+    '245 158 11', // amber
+    '249 115 22', // orange
+    '239 68 68', // red
+    '225 29 72', // rose — dearest
+  ],
+  age: [
+    '56 189 248', // sky — freshest
+    '37 99 235', // blue
+    '79 70 229', // indigo
+    '124 58 237', // violet
+    '147 51 234', // purple
+    '192 38 211', // fuchsia
+    '162 28 175', // deep fuchsia — oldest
+  ],
+};
+
 /** Which stop (0…6) a band lands on, by POSITION across the ramp. */
 export function rampStop(index: number, bandCount: number): number {
   const last = LENS_RAMP_STOPS - 1;
@@ -46,4 +86,12 @@ export function rampStop(index: number, bandCount: number): number {
 /** The class name for that stop on that ramp. */
 export function rampClass(ramp: LensRampId, index: number, bandCount: number): string {
   return `${LENS_RAMP_CLASS_PREFIX[ramp]}${rampStop(index, bandCount)}`;
+}
+
+/**
+ * The `r g b` triple for that stop — for a document that cannot reach `globals.css`
+ * (the blend proposal's iframe printout). On screen use `rampClass`.
+ */
+export function rampRgb(ramp: LensRampId, index: number, bandCount: number): string {
+  return LENS_RAMP_RGB[ramp][rampStop(index, bandCount)];
 }

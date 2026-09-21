@@ -188,6 +188,10 @@ export interface BlockingPriceBand {
   kgSharePct: number | null;
   /** PERCENT 0–100 of the PRICED population's blocks. Null when nothing is priced. */
   blockSharePct: number | null;
+  /** What the band's kilograms cost, Σ(kg × ₱/kg) ÷ Σkg (added 2026-09-21 so a lens print
+   *  never re-weights a band in TypeScript). **Null, never 0, on an EMPTY band** — no
+   *  charcoal in the band means no price in the band. */
+  kgWeightedPhpKg: number | null;
 }
 
 /**
@@ -226,8 +230,17 @@ export interface BlockingPriceLens {
   /** Occupied positive-balance blocks with no price — in no band, out of both share
    *  denominators. */
   unpriced: { blockCount: number; kg: number };
-  /** Every occupied block with a positive balance — banded plus unpriced. */
-  total: { blockCount: number; kg: number };
+  /**
+   * Every occupied block with a positive balance — banded plus unpriced.
+   *
+   * **`kgWeightedPhpKg` is weighted over the PRICED population only**, while
+   * `blockCount` / `kg` count EVERY occupied block. The asymmetry is deliberate: an
+   * unpriced block's ₱0 is the L-008 placeholder, so averaging it in would drag the
+   * figure down exactly as `batches.avg_cost` once read ₱11.01 against a real ₱39.99.
+   * The counts are a count of the yard; the price is a price of what is priced — the same
+   * population the two share denominators already use. Null when nothing is priced.
+   */
+  total: { blockCount: number; kg: number; kgWeightedPhpKg: number | null };
 }
 
 /** Why a lens call came back empty. Each maps to a sentence written for a human. */
@@ -661,3 +674,375 @@ export type BlendBlockFactsResult =
 
 /** The cap the server action enforces on the DE-DUPLICATED id list. */
 export const BLEND_BLOCK_FACTS_MAX_BATCH_IDS = 250;
+
+// ─── Blend ANALYSIS (the extra viewer / print pages) ─────────────────────────
+// Renzo, 2026-09-21: in a saved blend proposal, when viewing AND printing, extra pages
+// that "group and arrange blocks according to high priced and low priced and average
+// priced … a statistical way of properly grouping these as something we can objectively
+// agree to be high and low", another page for MC / ash / BD, maybe age, tables "with
+// footers that show totals or averages when appropriate". ONE server action over
+// `fn_blend_analysis` (migration `20260921084500_blend_analysis_natural_breaks`).
+//
+// FIVE THINGS TO KNOW BEFORE RENDERING ANY OF IT:
+//
+//   1. THE GROUPING IS WEIGHTED NATURAL BREAKS (Jenks), k = 3, labels low / mid / high,
+//      computed in SQL by `fn_natural_breaks_3`. It is EXACT — every pair of cut
+//      positions between two DISTINCT adjacent values is scored and the best one wins —
+//      and the cut lines land where the gaps in THIS blend actually are, not at mean ± 1
+//      SD. That statistic was measured on the owner's own proposal and rejected: 24
+//      blocks in two price clumps with the kg-weighted mean sitting in the empty gap
+//      between them, so mean ± 1 SD filed a ₱39 block and a ₱48 block together as
+//      "average". `gvf` (0…1) says how clean the split is and is NULL, never 0, when
+//      there is no variance to explain. Read `groupCount`: a blend with fewer than three
+//      distinct values legitimately has TWO groups (low / high) or ONE (labelled `mid`).
+//
+//   2. AGE USES FIXED CUT LINES IN DAYS (default 60 / 120 / 365), not natural breaks,
+//      because those days are meaningful in themselves and a grouping that moved with the
+//      yard would make "over a year old" mean something different on every proposal.
+//      Semantics are the Age lens's exactly, including a NEGATIVE age landing in band 0.
+//
+//   3. NULL IS NEVER 0. A metric value that is NULL or ≤ 0 is the NOT-RECORDED
+//      placeholder (₱0 is the L-008 unpriced placeholder; a lab reading of 0 means no lab
+//      result — 11 of the yard's 170 occupied blocks read exactly 0 on ash and both BDs).
+//      Such a block is in `unmeasured`, in NO group, out of every average and every share
+//      denominator. **Render it un-lensed — never in the cheapest or the freshest band.**
+//      In every section Σ `groups[].kg` + `unmeasured.kg` = `totalKg`, and each share
+//      family sums to 100 over the measured population.
+//
+//   4. SAVED vs LIVE. `proposalId` (+ optional `versionNo`, default the current one)
+//      reads the STORED snapshot verbatim; `blockLocs` computes a live what-if. `asOf` is
+//      the saved version's own Manila date, or today — and it governs AGE only, so a
+//      delivery that lands later can never repaint an old proposal. Proven on live data:
+//      a saved version dated 2026-09-03 reads its block's last delivery as 2026-09-01
+//      while the live analysis of the same blocks reads 2026-09-07.
+//
+//   5. MONEY IS IN `price` AND NOWHERE ELSE. `quality` and `age` carry no money-named key
+//      and nothing derivable into one, so `fetchBlendAnalysis` sets `price` to **null**
+//      with `pricesHidden: true` for a `canViewPrices()`-denied caller and still returns
+//      the other two. That is the OPPOSITE of the price lens, whose whole payload is
+//      price and whose action refuses such a caller outright. Do not add a gate to the
+//      quality or age half; `scripts/verify-blend-analysis.ts` asserts the split.
+
+export type BlendAnalysisSource = 'saved' | 'live';
+
+/** The CLOSED label vocabulary, so a colour map can be total. Ascending by VALUE — for
+ *  BD, where higher means denser, `high` still means the larger number and the wording is
+ *  the UI's decision. */
+export type BlendNaturalGroupLabel = 'low' | 'mid' | 'high';
+
+/** Where one cut line sits. `above` IS the membership test; `value` is for a legend. */
+export interface BlendNaturalCut {
+  index: number;
+  /** The largest observed value BELOW the cut. */
+  below: number;
+  /** The smallest observed value AT OR ABOVE it — the test a block passes. */
+  above: number;
+  /** The midpoint of `below` and `above`. A LABEL. **Never re-derive membership from it.** */
+  value: number;
+}
+
+/** What the split cost, for a print that wants to say how good it is. */
+export interface BlendNaturalStats {
+  /** Blocks that had a measurable value AND a positive weight. */
+  n: number;
+  distinctCount: number;
+  totalWeight: number;
+  weightedMean: number | null;
+  totalSs: number | null;
+  withinSs: number | null;
+  betweenSs: number | null;
+  /** How many cut pairs were scored. 0 when no search was needed. */
+  candidatesConsidered: number;
+}
+
+/** The identity every block row in this payload carries. */
+export interface BlendAnalysisBlockRef {
+  batchId: string | null;
+  blockLoc: string;
+  batchCode: string;
+  /** The block's kilograms IN THE BLEND (the snapshot's balance) — the weight behind
+   *  every average in this payload. */
+  kg: number;
+}
+
+export interface BlendPriceBlock extends BlendAnalysisBlockRef {
+  phpKg: number;
+}
+
+export interface BlendQualityBlock extends BlendAnalysisBlockRef {
+  /** The metric's own reading — a percentage for mc/ash, g/cc for BD. NOT money. */
+  value: number;
+}
+
+export interface BlendAgeBlock extends BlendAnalysisBlockRef {
+  /** Full precision, as `view_batch_age_days` publishes it. **Round for display** — the
+   *  Age lens shows 1 decimal. */
+  ageDays: number;
+  /** `yyyy-MM-dd`. When the block was OPENED (its first delivery at or before `asOf`). */
+  firstDeliveryDate: string | null;
+  /** `yyyy-MM-dd`. When it was LAST PILED ON (its latest delivery at or before `asOf`). */
+  lastDeliveryDate: string | null;
+  deliveryCount: number;
+}
+
+/** Blocks with no reading (or no positive weight) — in NO group, out of every average. */
+export interface BlendAnalysisUnmeasured {
+  blockCount: number;
+  kg: number;
+  /** No reading at all: NULL, or the ≤ 0 placeholder. */
+  noValueCount: number;
+  /** A reading, but nothing in the pile to weight it with. */
+  noWeightCount: number;
+  blocks: BlendAnalysisBlockRef[];
+}
+
+export interface BlendPriceNaturalGroup {
+  index: number;
+  label: BlendNaturalGroupLabel;
+  /** The range ACTUALLY OBSERVED in the group — not the cut lines around it. */
+  rangeMin: number;
+  rangeMax: number;
+  blockCount: number;
+  kg: number;
+  /** PERCENT 0–100 of the MEASURED population. Null when nothing is measured. */
+  kgSharePct: number | null;
+  blockSharePct: number | null;
+  kgWeightedPhpKg: number | null;
+  /** Σ kg × ₱/kg for the group. */
+  valuePhp: number;
+  /** Dearest first. */
+  blocks: BlendPriceBlock[];
+}
+
+export interface BlendPriceNatural {
+  metric: 'php_kg';
+  /** 3, or fewer on a degenerate blend. Read it; never infer it from `groups.length`. */
+  groupCount: number;
+  /** Goodness of variance fit, 0…1. NULL — never 0 — when there is no variance. */
+  gvf: number | null;
+  cuts: BlendNaturalCut[];
+  stats: BlendNaturalStats;
+  groups: BlendPriceNaturalGroup[];
+  unmeasured: BlendAnalysisUnmeasured;
+  /** The table's FOOTER. `kgWeightedPhpKg` is the blend's raw price over the MEASURED
+   *  blocks; `snapshotPhpKg` is the figure the blend itself stored, lifted verbatim. They
+   *  are equal (gap exactly 0) whenever nothing is unmeasured, and when something IS, the
+   *  snapshot's figure is the one dragged down by an L-008 zero. */
+  overall: {
+    blockCount: number;
+    kg: number;
+    kgWeightedPhpKg: number | null;
+    valuePhp: number;
+    snapshotPhpKg: number | null;
+    snapshotGap: number | null;
+    equalsSnapshot: boolean | null;
+  };
+}
+
+export interface BlendVsMarketBand {
+  index: number;
+  /** Null = OPEN below (the first band). Null means OPEN, never ₱0. */
+  lowerPhp: number | null;
+  /** Null = OPEN above (the last band). */
+  upperPhp: number | null;
+  blockCount: number;
+  kg: number;
+  kgSharePct: number | null;
+  blockSharePct: number | null;
+  kgWeightedPhpKg: number | null;
+  valuePhp: number;
+  blocks: BlendPriceBlock[];
+}
+
+/** THE PRICE LENS's logic, applied to this blend's blocks — proven to classify them
+ *  identically to `fn_blocking_price_lens` for the same market price, R and edges. */
+export interface BlendVsMarket {
+  marketPhpKg: number;
+  /** `given` = the caller typed it. `as_of_month` = the market of the month the blend
+   *  belongs to, read from `view_analytics_rcin_monthly` — THE one definition. */
+  marketBasis: 'given' | 'as_of_month';
+  /** `yyyy-MM-01` of the month read, or null on the `given` basis. */
+  marketBasisMonth: string | null;
+  /** R. `floor(market) + 1`, or the caller's `roundedUpPhp` when given — a typed price is
+   *  the cut line itself. */
+  roundedUpPhp: number;
+  edgeOffsets: number[];
+  bands: BlendVsMarketBand[];
+  unmeasured: { blockCount: number; kg: number; blocks: BlendAnalysisBlockRef[] };
+  overall: { blockCount: number; kg: number; kgWeightedPhpKg: number | null; valuePhp: number };
+}
+
+/** Why there is no market comparison. A null cannot carry a reason, so it rides beside. */
+export interface BlendVsMarketUnavailable {
+  reason: 'no_market_price';
+  message: string;
+  marketBasis: 'given' | 'as_of_month';
+  marketBasisMonth: string | null;
+}
+
+export interface BlendAnalysisPriceSection {
+  natural: BlendPriceNatural;
+  /** NULL when market could not be measured — read `vsMarketUnavailable` for the reason
+   *  and offer a typed price. NEVER treat a missing market as ₱0. */
+  vsMarket: BlendVsMarket | null;
+  vsMarketUnavailable: BlendVsMarketUnavailable | null;
+}
+
+export type BlendQualityMetric = 'mc' | 'ash' | 'bd_astm' | 'bd_jis';
+
+export interface BlendQualityGroup {
+  index: number;
+  label: BlendNaturalGroupLabel;
+  rangeMin: number;
+  rangeMax: number;
+  blockCount: number;
+  kg: number;
+  kgSharePct: number | null;
+  blockSharePct: number | null;
+  kgWeightedValue: number | null;
+  /** Highest reading first. */
+  blocks: BlendQualityBlock[];
+}
+
+export interface BlendQualityNatural {
+  metric: BlendQualityMetric;
+  groupCount: number;
+  gvf: number | null;
+  cuts: BlendNaturalCut[];
+  stats: BlendNaturalStats;
+  groups: BlendQualityGroup[];
+  unmeasured: BlendAnalysisUnmeasured;
+  /** `kgWeightedValue` is the blend's weighted reading over the MEASURED blocks;
+   *  `snapshotValue` is the blend's own stored weighted stat, lifted verbatim. The gap is
+   *  exactly 0 whenever nothing is unmeasured. */
+  overall: {
+    blockCount: number;
+    kg: number;
+    kgWeightedValue: number | null;
+    snapshotValue: number | null;
+    snapshotGap: number | null;
+    equalsSnapshot: boolean | null;
+  };
+}
+
+export interface BlendAnalysisQualitySection {
+  /** Render in this order. */
+  metrics: BlendQualityMetric[];
+  byMetric: Record<BlendQualityMetric, BlendQualityNatural>;
+}
+
+export interface BlendAgeBand {
+  index: number;
+  /** 0 on the first band — age has a floor where money does not. */
+  lowerDays: number;
+  /** Null = OPEN ABOVE, never 0 days. */
+  upperDays: number | null;
+  blockCount: number;
+  kg: number;
+  kgSharePct: number | null;
+  blockSharePct: number | null;
+  kgWeightedAgeDays: number | null;
+  /** Oldest first. */
+  blocks: BlendAgeBlock[];
+}
+
+export interface BlendAnalysisAgeSection {
+  /** `yyyy-MM-dd`. The day the ages are measured on. */
+  asOf: string;
+  edgeDays: number[];
+  bands: BlendAgeBand[];
+  /** Blocks whose batch has NO delivery at or before `asOf` — in no band, out of every
+   *  average. NOT 0 days old. */
+  undated: { blockCount: number; kg: number; blocks: BlendAnalysisBlockRef[] };
+  overall: {
+    blockCount: number;
+    kg: number;
+    kgWeightedAgeDays: number | null;
+    oldestAgeDays: number | null;
+    oldestBlockLoc: string | null;
+    oldestBatchCode: string | null;
+  };
+}
+
+export interface BlendAnalysis {
+  source: BlendAnalysisSource;
+  /** `yyyy-MM-dd`. The saved version's own Manila date, or today. */
+  asOf: string;
+  proposalId: string | null;
+  versionNo: number | null;
+  title: string | null;
+  /** The snapshot's own `computed_at`, for an "as computed on" line. */
+  snapshotComputedAt: string | null;
+  /** When THIS analysis was run. */
+  computedAt: string;
+  blockCount: number;
+  totalKg: number;
+  /** **NULL when the caller may not see prices** — the whole section is removed server
+   *  side, see `pricesHidden`. Everything else is still there. */
+  price: BlendAnalysisPriceSection | null;
+  /** True when `price` was removed because of `canViewPrices()`. Say so in the UI rather
+   *  than rendering an empty page. */
+  pricesHidden: boolean;
+  quality: BlendAnalysisQualitySection;
+  age: BlendAnalysisAgeSection;
+}
+
+/** Why an analysis call came back empty. Each maps to a sentence written for a human. */
+export type BlendAnalysisRefusalReason =
+  | 'not_signed_in'
+  /** A proposal AND a block list were both given. Pick one. */
+  | 'both_sources'
+  /** Neither was given (a `versionNo` on its own counts as neither). */
+  | 'no_source'
+  | 'invalid_proposal_id'
+  | 'invalid_version_no'
+  | 'unknown_proposal'
+  | 'unknown_version'
+  | 'no_blocks'
+  | 'too_many_blocks'
+  /** A block_loc with no active batch in it right now — NAMED, never silently dropped. */
+  | 'unknown_block_loc'
+  | 'invalid_price_edge'
+  | 'no_price_edges'
+  | 'too_many_price_edges'
+  | 'invalid_age_edge'
+  | 'no_age_edges'
+  | 'too_many_age_edges'
+  /** A `roundedUpPhp` that is not a whole number of at least ₱1. */
+  | 'invalid_rounded_up'
+  | 'invalid_market_price'
+  | 'rpc_error'
+  | 'exception';
+
+export type BlendAnalysisResult =
+  | { ok: true; analysis: BlendAnalysis }
+  | { ok: false; reason: BlendAnalysisRefusalReason; message: string };
+
+/** Exactly ONE source. `versionNo` without `proposalId` is `no_source`. */
+export interface BlendAnalysisInput {
+  proposalId?: string | null;
+  /** Omitted = the proposal's CURRENT version, which is what the viewer opens on. */
+  versionNo?: number | null;
+  blockLocs?: readonly string[] | null;
+  priceEdgeOffsets?: readonly number[] | null;
+  ageEdgeDays?: readonly number[] | null;
+  /** A typed market ₱/kg. Omitted = the market of the blend's own month. */
+  marketPhpKg?: number | null;
+  /** THE cut line R, for a TYPED market price only: pass `Math.ceil(typedPrice)`. For a
+   *  measured market pass nothing — R stays `floor(market) + 1`, computed in SQL. */
+  roundedUpPhp?: number | null;
+}
+
+/** The cap the server action AND the SQL function enforce on the block list. */
+export const BLEND_ANALYSIS_MAX_BLOCKS = 250;
+/** `p_price_edge_offsets`' own default — below market / at market / above market. */
+export const BLEND_ANALYSIS_DEFAULT_PRICE_EDGES: readonly number[] = [-1, 0];
+/** `p_age_edge_days`' own default — the owner-approved cut lines. */
+export const BLEND_ANALYSIS_DEFAULT_AGE_EDGES: readonly number[] = [60, 120, 365];
+/** Render order for the quality pages. ONE definition, imported never re-typed. */
+export const BLEND_ANALYSIS_QUALITY_METRICS: readonly BlendQualityMetric[] = [
+  'mc',
+  'ash',
+  'bd_astm',
+  'bd_jis',
+];

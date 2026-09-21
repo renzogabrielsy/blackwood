@@ -245,7 +245,22 @@ function staticChecks(): void {
   const actions = read(ACTIONS);
   const factsStart = actions.indexOf('export async function fetchBlendBlockFacts(');
   assert.ok(factsStart > 0, 'fetchBlendBlockFacts not found in actions.ts');
-  const factsBody = actions.slice(factsStart);
+  // BOUNDED AT THE NEXT SECTION DIVIDER (the file's own `// ─── <name> ───` convention),
+  // not at end-of-file. Slicing to the end used to work only because this was the last
+  // action in the file; `fetchBlendAnalysis` (2026-09-21) follows it and legitimately DOES
+  // carry a price gate — and its own block comment names `canViewPrices()` in prose — so an
+  // unbounded slice would have read ITS gate as this one's. Bounding at the divider rather
+  // than at the next `export` is what keeps that neighbouring PROSE out too. This is
+  // strictly MORE precise than the old slice, never weaker.
+  const factsEnd = [
+    actions.indexOf('\n// ─── ', factsStart + 1),
+    actions.indexOf('\nexport async function ', factsStart + 1),
+  ]
+    .filter((i) => i > 0)
+    .sort((a, b) => a - b)[0];
+  const factsBody = actions.slice(factsStart, factsEnd ?? undefined);
+  assert.ok(factsBody.includes("'fn_blend_block_facts'"), 'the isolated body is not the block-facts action');
+  assert.ok(!factsBody.includes('fetchBlendAnalysis'), 'the slice leaked into the next section');
 
   check('fetchBlendBlockFacts has NO canViewPrices gate — and that is the point', () => {
     // Nothing in the payload is money and none is derivable, so a gate here would hide a

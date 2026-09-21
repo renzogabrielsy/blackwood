@@ -68,6 +68,10 @@ import { LensRatioBar } from './lens-ratio-bar';
 import { RefusalBanner } from './lens-refusal-banner';
 import { LensSettingsPopover } from './lens-settings-popover';
 import {
+  LensSummaryPrintControl,
+  type LensSummaryPrintModel,
+} from './lens-summary-print';
+import {
   formatLensBlocks,
   formatLensDays,
   formatLensKg,
@@ -113,6 +117,7 @@ const LIVE_ADAPTER: AgeLensAdapter = {
 };
 
 export function AgeLensPanel({
+  data,
   onClassifierChange,
   onFocusBlock,
   adapter = LIVE_ADAPTER,
@@ -408,6 +413,108 @@ export function AgeLensPanel({
   const customised = !isDefaultAgeLensSettings(settings);
   const oldestLoc = lens?.total.oldestBlockLoc ?? null;
 
+
+  /**
+   * THE PRINTED SUMMARY's model — this lens as it is configured RIGHT NOW.
+   *
+   * Built here rather than in the print component, because only the lens knows what its
+   * settings mean. Nothing is computed: every figure is the payload's own, formatted by
+   * the shared formatters, and the per-band block lists are a BUCKETING of `bandByBlock`
+   * (a lookup, never a sum) joined to the grid's own `data` map. Band ISOLATION is
+   * respected — the sheet prints the bands the screen is showing and says "Showing 2 of
+   * 4 bands" when that is fewer than all of them.
+   *
+   * There is NO price gate here and there must never be one: nothing in this payload is
+   * money and none of it is derivable into money, so Production — the role that actually
+   * walks the yard — can print it.
+   */
+  const printModel: LensSummaryPrintModel | null = React.useMemo(() => {
+    if (!lens) return null;
+    const bandCount = lens.bands.length;
+
+    const buckets = new Map<
+      number,
+      { blockLoc: string; batchCode: string; kg: string; figure: string; sortBy: number }[]
+    >();
+    const undatedRows: { blockLoc: string; batchCode: string; kg: string; figure: string }[] = [];
+    for (const [loc, block] of Object.entries(data)) {
+      const band = lens.bandByBlock[loc];
+      if (band === undefined) {
+        // In NO band: the batch has no dated delivery, so it has no age. NOT 0 days old.
+        undatedRows.push({
+          blockLoc: loc,
+          batchCode: block.batch_code,
+          kg: formatLensKg(block.balance),
+          figure: LENS_EMDASH,
+        });
+        continue;
+      }
+      const age = lens.ageByBlock[loc];
+      const list = buckets.get(band) ?? [];
+      list.push({
+        blockLoc: loc,
+        batchCode: block.batch_code,
+        kg: formatLensKg(block.balance),
+        figure: age === undefined ? LENS_EMDASH : `${formatLensDays(age)} d`,
+        sortBy: age ?? 0,
+      });
+      buckets.set(band, list);
+    }
+
+    const visible = lens.bands.filter((b) => picked.size === 0 || picked.has(b.index));
+
+    return {
+      title: 'Yard by age',
+      settingsLines: [
+        `Average age ${formatLensDays(lens.total.kgWeightedAgeDays)} days`,
+        `as of ${lens.asOf}`,
+        lens.total.oldestAgeDays !== null
+          ? `oldest ${formatLensWholeDays(lens.total.oldestAgeDays)}${
+              lens.total.oldestBlockLoc ? ` at ${lens.total.oldestBlockLoc}` : ''
+            }`
+          : 'no dated pile in the yard',
+        'weighted by the kilograms still in each block, from its deliveries\u2019 average date',
+      ],
+      cutLine: `Cut lines ${settings.edgeDays.map((d) => `${d} d`).join(', ')}`,
+      unit: settings.unit,
+      ramp: AGE_LENS_RAMP,
+      bandCount,
+      figureColumnLabel: 'Avg age (d)',
+      bands: visible.map((b) => ({
+        index: b.index,
+        label: ageBandLabel(b, settings.bandNames),
+        blocks: formatLensBlocks(b.blockCount),
+        kg: formatLensKg(b.kg),
+        sharePct: share(b),
+        share: formatLensSharePct(share(b)),
+        figure: `${formatLensDays(b.kgWeightedAgeDays)} d`,
+        rows: (buckets.get(b.index) ?? [])
+          .sort((x, y) => y.sortBy - x.sortBy)
+          // The sort key is dropped explicitly rather than rest-destructured, so the
+          // printed row shape is the one the model declares and nothing else.
+          .map((r) => ({ blockLoc: r.blockLoc, batchCode: r.batchCode, kg: r.kg, figure: r.figure })),
+      })),
+      total: {
+        blocks: formatLensBlocks(lens.total.blockCount),
+        kg: formatLensKg(lens.total.kg),
+        figure: `${formatLensDays(lens.total.kgWeightedAgeDays)} d`,
+        // The same documented asymmetry the price lens carries, in days: the counts
+        // cover every occupied block, the average covers the DATED ones.
+        figureNote: 'avg of dated',
+      },
+      excluded:
+        lens.undated.blockCount > 0
+          ? {
+              title: `No delivery dates \u2014 ${formatLensBlocks(
+                lens.undated.blockCount,
+              )}, ${formatLensKg(lens.undated.kg)}`,
+              note: 'In no band and out of every percentage and average. A pile with no dated delivery has no age, which is not the same as being new.',
+              rows: undatedRows,
+            }
+          : null,
+    };
+  }, [lens, data, picked, settings.bandNames, settings.edgeDays, settings.unit, share]);
+
   /** THE BAR'S HEADLINE — `Yard 396.7 d avg`. The payload's figure, never averaged here. */
   const headline = lens
     ? `Yard ${formatLensDays(lens.total.kgWeightedAgeDays)} d avg`
@@ -481,6 +588,9 @@ export function AgeLensPanel({
             <span className="max-sm:hidden">Problem</span>
           </button>
         )}
+        {/* PRINT — one A4 landscape sheet of this lens as configured. No price gate:
+            there is no money in this payload, so every role can print it. */}
+        <LensSummaryPrintControl model={printModel} lensLabel="age" />
         <LensUnitSwitch unit={settings.unit} onChange={setUnit} />
         <LensSettingsPopover
           open={settingsOpen}
