@@ -92,6 +92,10 @@ import { LensRatioBar } from './lens-ratio-bar';
 import { RefusalBanner } from './lens-refusal-banner';
 import { LensSettingsPopover } from './lens-settings-popover';
 import {
+  LensSummaryPrintControl,
+  type LensSummaryPrintModel,
+} from './lens-summary-print';
+import {
   formatLensKg,
   formatLensSharePct,
   LENS_DEBOUNCE_MS,
@@ -177,6 +181,7 @@ const LIVE_ADAPTER: PriceLensAdapter = {
 };
 
 export function PriceLensPanel({
+  data,
   caps,
   onClassifierChange,
   onRequestClose,
@@ -559,6 +564,104 @@ export function PriceLensPanel({
   const customised = !isDefaultPriceLensSettings(settings);
 
   /**
+   * THE PRINTED SUMMARY's model — this lens as it is configured RIGHT NOW.
+   *
+   * It is built here, not in the print component, because only the lens knows what its
+   * settings MEAN. Nothing is computed: every figure is the payload's own, formatted by
+   * the shared `lens-shared.ts` formatters, and the per-band block lists are a BUCKETING
+   * of `bandByBlock` (a lookup, never a sum) joined to the grid's own `data` map.
+   *
+   * Band ISOLATION is respected — the sheet prints the bands the screen is showing, and
+   * says "Showing 2 of 4 bands" when that is fewer than all of them. A printout that
+   * silently widened the filter would not be a printout of the filter.
+   */
+  const printModel: LensSummaryPrintModel | null = React.useMemo(() => {
+    if (!lens || marketPhpKg === null) return null;
+    const bandCount = lens.bands.length;
+
+    // One bucket per band, filled by walking the published map.
+    const buckets = new Map<number, { blockLoc: string; batchCode: string; kg: string; figure: string; sortBy: number }[]>();
+    const unpricedRows: { blockLoc: string; batchCode: string; kg: string; figure: string }[] = [];
+    for (const [loc, block] of Object.entries(data)) {
+      const band = lens.bandByBlock[loc];
+      if (band === undefined) {
+        // In NO band: no price at all (the L-008 placeholder). Listed separately and
+        // never as the cheapest band.
+        unpricedRows.push({
+          blockLoc: loc,
+          batchCode: block.batch_code,
+          kg: formatLensKg(block.balance),
+          figure: EMDASH,
+        });
+        continue;
+      }
+      const list = buckets.get(band) ?? [];
+      list.push({
+        blockLoc: loc,
+        batchCode: block.batch_code,
+        kg: formatLensKg(block.balance),
+        figure: block.php === null ? EMDASH : peso(block.php, 2),
+        sortBy: block.php ?? 0,
+      });
+      buckets.set(band, list);
+    }
+
+    const visible = lens.bands.filter((b) => picked.size === 0 || picked.has(b.index));
+    const typed = settings.basis === 'manual';
+
+    return {
+      title: 'Yard by price against market',
+      settingsLines: [
+        `Market is ${PRICE_LENS_BASIS_LABELS[settings.basis].toLowerCase()}`,
+        `${peso(marketPhpKg, 2)}${typed ? ' (typed)' : ''}`,
+        typed
+          ? `${peso(lens.roundedUpPhp, 0)} and up is above market`
+          : `rounds up to ${peso(lens.roundedUpPhp, 0)}`,
+        activeBasis ? basisCoverage(activeBasis) : 'Typed in by hand — not measured from deliveries.',
+      ],
+      cutLine: `Cut lines ${settings.edgeOffsets
+        .map((o) => (o === 0 ? 'market' : `${o > 0 ? '+' : ''}${o}`))
+        .join(', ')} from ${peso(lens.roundedUpPhp, 0)}`,
+      unit: settings.unit,
+      ramp: PRICE_LENS_RAMP,
+      bandCount,
+      figureColumnLabel: '₱/kg',
+      bands: visible.map((b) => ({
+        index: b.index,
+        label: priceBandLabel(b, lens.roundedUpPhp, settings.bandNames),
+        blocks: `${b.blockCount} block${b.blockCount === 1 ? '' : 's'}`,
+        kg: formatLensKg(b.kg),
+        sharePct: share(b),
+        share: formatLensSharePct(share(b)),
+        figure: b.kgWeightedPhpKg === null ? EMDASH : peso(b.kgWeightedPhpKg, 2),
+        rows: (buckets.get(b.index) ?? [])
+          .sort((x, y) => y.sortBy - x.sortBy)
+          // The sort key is dropped explicitly rather than rest-destructured, so the
+          // printed row shape is the one the model declares and nothing else.
+          .map((r) => ({ blockLoc: r.blockLoc, batchCode: r.batchCode, kg: r.kg, figure: r.figure })),
+      })),
+      total: {
+        blocks: `${lens.total.blockCount} block${lens.total.blockCount === 1 ? '' : 's'}`,
+        kg: formatLensKg(lens.total.kg),
+        figure: lens.total.kgWeightedPhpKg === null ? EMDASH : peso(lens.total.kgWeightedPhpKg, 2),
+        // THE DOCUMENTED ASYMMETRY, said on the sheet: the counts cover every occupied
+        // block, the price covers the PRICED ones.
+        figureNote: 'avg of priced',
+      },
+      excluded:
+        lens.unpriced.blockCount > 0
+          ? {
+              title: `No price yet — ${lens.unpriced.blockCount} block${
+                lens.unpriced.blockCount === 1 ? '' : 's'
+              }, ${formatLensKg(lens.unpriced.kg)}`,
+              note: 'In no band and out of both percentages. Those cells keep their normal look on the grid.',
+              rows: unpricedRows,
+            }
+          : null,
+    };
+  }, [lens, marketPhpKg, data, picked, settings.basis, settings.bandNames, settings.edgeOffsets, settings.unit, activeBasis, share]);
+
+  /**
    * THE BAR'S HEADLINE — the whole lens in a few words.
    *
    * `Market ₱39.86 → ₱40+ above`, or for a TYPED market `Market ₱41 (typed) → ₱41+
@@ -653,6 +756,13 @@ export function PriceLensPanel({
             <AlertTriangle className="h-3 w-3" />
             <span className="max-sm:hidden">Problem</span>
           </button>
+        )}
+        {/* PRINT — one A4 landscape sheet of this lens as configured. It is inside
+            the `caps.canViewPrices` branch by construction (the whole panel returns
+            null without it), and the condition is written out anyway so the gate is
+            visible where the button is. */}
+        {caps.canViewPrices && (
+          <LensSummaryPrintControl model={printModel} lensLabel="price" />
         )}
         {/* kg | blocks — changes the bar AND the popover's row percentages
             together, so a segment and the number beside it are never in

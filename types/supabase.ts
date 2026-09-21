@@ -6039,6 +6039,22 @@ export type Database = {
           unexecutable_callee: string
         }[]
       }
+      fn_blend_analysis: {
+        Args: {
+          p_age_edge_days?: number[]
+          p_block_locs?: string[]
+          p_market_php_kg?: number
+          p_price_edge_offsets?: number[]
+          p_proposal_id?: string
+          p_rounded_up_php?: number
+          p_version_no?: number
+        }
+        Returns: Json
+      }
+      fn_blend_analysis_probe: {
+        Args: { p_proposal_id: string; p_version_no: number }
+        Returns: Json
+      }
       fn_blend_block_facts: {
         Args: { p_as_of?: string; p_batch_ids: string[] }
         Returns: {
@@ -6117,6 +6133,10 @@ export type Database = {
         Returns: Json
       }
       fn_is_close_remark: { Args: { p_remarks: string }; Returns: boolean }
+      fn_natural_breaks_3: {
+        Args: { p_values: number[]; p_weights?: number[] }
+        Returns: Json
+      }
       fn_ops_ledger_group_blocks: {
         Args: { p_campaign_keys: string[] }
         Returns: {

@@ -35,12 +35,24 @@ export interface LensRatioBarProps {
   ramp: LensRampId;
   /** Names every band and its share; the bar's accessible text alternative. */
   ariaLabel: string;
+  /**
+   * The TRACK's classes, for a surface that is not the app's own.
+   *
+   * The printed lens summary is laid out in the live DOM and then printed, so a track
+   * painted with `bg-muted` would come out of a dark-mode browser as a dark strip. The
+   * SEGMENTS need no such escape — `lens-band-swatch` is a solid `rgb(var(--lens-hue))`
+   * and is identical in both themes.
+   */
+  trackClassName?: string;
 }
 
-export function LensRatioBar({ segments, ramp, ariaLabel }: LensRatioBarProps) {
+export function LensRatioBar({ segments, ramp, ariaLabel, trackClassName }: LensRatioBarProps) {
   return (
     <div
-      className="flex h-3 w-full overflow-hidden rounded-full border border-border bg-muted"
+      className={cn(
+        'flex h-3 w-full overflow-hidden rounded-full border',
+        trackClassName ?? 'border-border bg-muted',
+      )}
       role="img"
       aria-label={ariaLabel}
     >

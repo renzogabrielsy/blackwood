@@ -377,7 +377,27 @@ console.log('\n2. NO STATISTIC IS COMPUTED IN A LENS FILE');
     const body = code(AGE_PANEL);
     assert.ok(body.includes('total.oldestBlockLoc'), 'the oldest block is not the published one');
     assert.ok(body.includes('total.oldestAgeDays'), 'the oldest age is not the published one');
-    assert.ok(!/sort\s*\(/.test(body), 'the age panel sorts blocks to find an extreme');
+    // RESTATED, NOT WEAKENED (2026-09-21, with the printed lens summary).
+    //
+    // The original assertion banned `sort(` outright, which was the right shape of
+    // guard for a panel whose only reason to sort would have been to SCAN FOR AN
+    // EXTREME — and `oldestAgeDays` / `oldestBlockLoc` are the payload's, so a scan
+    // would have been a second definition of "the oldest pile".
+    //
+    // The printed summary legitimately sorts: its per-band block list reads oldest
+    // first, which is an ORDER, not a statistic. So the ban moves onto what actually
+    // matters — a sorted list may be MAPPED, never INDEXED. `sort(...)[0]` is how a
+    // scan for an extreme is spelled, and it is still refused here; the two extremes
+    // must still be read from `total`, which the check above this one requires.
+    assert.ok(body.includes('total.oldestAgeDays'), 'the oldest age is no longer the published one');
+    assert.ok(
+      !/\.sort\([\s\S]{0,200}?\)\s*\[\s*0\s*\]/.test(body),
+      'the age panel indexes a sorted list — that is scanning for an extreme, and the payload publishes it',
+    );
+    assert.ok(
+      !/Math\.(min|max)\s*\(/.test(body),
+      'the age panel picks an extreme itself — the payload publishes `oldestAgeDays`',
+    );
   });
 
   check('no lens or shared file spells a `.lens-band-*`/`.lens-age-*` class itself', () => {
@@ -1777,6 +1797,87 @@ console.log('\n9. THE BLEND TABLE — SUPPLIER DOMINANCE + THE TWO AGES (job D)'
       dialog.includes("showPrices\n        ? `<td class=\"num\">${b.php_kg !== null ? peso(b.php_kg) : EMDASH}</td>`"),
       'the printed ₱ cell lost its gate',
     );
+  });
+}
+
+
+// ===========================================================================
+console.log('\n10. THE PRINTED LENS SUMMARY (2026-09-21)');
+// ===========================================================================
+//
+// The owner: *"In the lens section, would be nice to also print some kind of summary
+// based on the filter we set."* The sheet itself is proven in
+// `scripts/verify-blend-analysis-ui.ts` (the platform kit, the light surfaces, the
+// isolation line, the labelled footer). What belongs HERE is the part that is about the
+// two LENSES rather than about the sheet: that each one builds its own model, that
+// neither computes a statistic to do it, and that the price gate sits on the price
+// lens's button and nowhere near the age lens's.
+{
+  const PRINT = `${LENS_DIR}/lens-summary-print.tsx`;
+
+  check('each lens builds its OWN model — the sheet knows nothing about either', () => {
+    for (const panel of [PANEL, AGE_PANEL]) {
+      const body = code(panel);
+      assert.ok(/printModel: LensSummaryPrintModel \| null/.test(body), `${panel} builds no print model`);
+      assert.ok(/<LensSummaryPrintControl/.test(body), `${panel} has no Print button`);
+    }
+    const sheet = code(PRINT);
+    // The sheet takes STRINGS. A formatter reached for here would be a second way to
+    // print a kilogram.
+    assert.ok(!/formatLens/.test(sheet), 'the sheet formats a figure itself');
+    assert.ok(!/toFixed\(/.test(sheet) && !/toLocaleString\(/.test(sheet), 'the sheet formats a number itself');
+  });
+
+  check('the print models COMPUTE NOTHING — they bucket a published map and format', () => {
+    for (const panel of [PANEL, AGE_PANEL]) {
+      const body = code(panel);
+      // A bucketing of `bandByBlock` is a LOOKUP; a sum of its kilograms would not be.
+      assert.ok(/bandByBlock\[loc\]/.test(body), `${panel} does not read the published band map`);
+      assert.ok(!/\breduce\s*\(/.test(body), `${panel} folds its print rows`);
+      assert.ok(!/[^+]\+=[^=]/.test(body), `${panel} accumulates a print total`);
+    }
+    // And the figures on the sheet are the payload's own.
+    assert.ok(/b\.kgWeightedPhpKg === null \? EMDASH/.test(code(PANEL)), 'the price band figure is derived');
+    assert.ok(/formatLensDays\(b\.kgWeightedAgeDays\)/.test(code(AGE_PANEL)), 'the age band figure is derived');
+  });
+
+  check('a block the lens cannot place is listed SEPARATELY, never inside a band', () => {
+    assert.ok(/unpricedRows\.push/.test(code(PANEL)), 'the price print folds unpriced blocks into a band');
+    assert.ok(/undatedRows\.push/.test(code(AGE_PANEL)), 'the age print folds undated blocks into a band');
+    for (const panel of [PANEL, AGE_PANEL]) {
+      assert.ok(
+        /if \(band === undefined\) \{/.test(code(panel)),
+        `${panel} does not test for the ABSENCE of a band before bucketing`,
+      );
+    }
+  });
+
+  check('the PRICE print is behind the price flag; the AGE print is not, and must not be', () => {
+    const price = code(PANEL).replace(/\s+/g, ' ');
+    assert.ok(
+      /caps\.canViewPrices && \( <LensSummaryPrintControl/.test(price),
+      'the price lens print button is not behind the effective price flag',
+    );
+    const age = code(AGE_PANEL);
+    assert.ok(/<LensSummaryPrintControl model=\{printModel\} lensLabel="age"/.test(age));
+    assert.ok(
+      !/canViewPrices/.test(age),
+      'the AGE panel grew a price flag — there is no money in its payload and Production must keep it',
+    );
+    assert.ok(!/canViewPrices/.test(code(PRINT)), 'the shared sheet grew a price concern');
+  });
+
+  check('the ratio bar can be re-skinned for paper WITHOUT a second implementation', () => {
+    const bar = code(`${LENS_DIR}/lens-ratio-bar.tsx`);
+    assert.ok(/trackClassName\?: string;/.test(bar), 'the bar cannot be re-skinned');
+    assert.ok(
+      /trackClassName \?\? 'border-border bg-muted'/.test(bar),
+      'the default track changed — every on-screen bar would move with it',
+    );
+    // The segments must NOT be re-skinnable: their fill is the ramp, and the ramp is the
+    // one thing the sheet and the grid must agree on exactly.
+    assert.ok(/rampClass\(ramp, i, segments\.length\), 'lens-band-swatch'/.test(bar));
+    assert.ok(!/segmentClassName/.test(bar), 'a segment colour became a caller concern');
   });
 }
 

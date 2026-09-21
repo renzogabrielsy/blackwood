@@ -12,9 +12,9 @@ Physical warehouse grid visualization — the digital equivalent of the Excel bl
 
 | File | Description |
 |---|---|
-| `types.ts` | Shared interfaces: **`BlockSupplierShare`** (`{ supplierKey; supplierDisplay; kg; sharePct; deliveryCount }` — one supplier's contribution to one block) and **`BlockingSupplierMap`** (`{ suppliers: Array<{ key; display; blockCount; totalKg }>; byBlock: Record<block_loc, { supplierCount; shares: BlockSupplierShare[] }> }` — the supplier-search payload; `supplierCount` is the VIEW's `supplier_count_in_block`, never `shares.length`, and the whole shape carries NO ₱). Plus `BlockData` (single cell data; `status` is the widened `BlockStatus` = the 4 styled statuses **or** any string, so the RC Movement panel can render a historical CLOSED/FEED batch), `BlockStatus`, `BlockingGridData` (full grid payload with aggregates), `BlockDataForBatch` (`{ blockData: BlockData \| null; canViewPrices }` — return of `fetchBlockDataForBatch`), `DeliveryHistoryRecord` (includes `id`, `mc`, `bd_astm`, `ash`, `cost_basis`), `UsageHistoryRecord`, `BlockingDetailData` (detail panel payload), `FullDeliveryRecord` (full delivery for edit dialog; **`cost_basis: number \| null`** — `null` when role-gated/withheld for non-price-viewers). **Stays in `blocking/`** (tenant domain types); the shell-agnostic detail panel in `_shared/` imports these via `../blocking/types`. **Also owns the PRICE LENS contract (2026-09-19)**: `BlockingMarketBasisKey`, `BlockingMarketBasis`, `BlockingPriceBand`, `BlockingPriceLens`, `BlockingPriceLensRefusalReason`, `BlockingMarketBasesResult`, `BlockingPriceLensResult`, plus the shared constants `BLOCKING_PRICE_LENS_MAX_EDGES` (6), `BLOCKING_PRICE_LENS_DEFAULT_EDGES` (`[-1, 0]`) and `BLOCKING_TRAILING_DAYS_MIN`/`_MAX`/`_DEFAULT` (1 / 400 / 30) — the SAME numbers the SQL enforces, imported by `actions.ts` rather than re-typed, and pinned to the SQL by `scripts/verify-blocking-price-lens.ts`. **Every one of these shapes is price-sensitive, including a bare band index** — see **Data → Price lens**. **2026-09-19 — also owns the AGE LENS contract**: `BlockingAgeBand`, `BlockingAgeLens`, `BlockingAgeLensRefusalReason`, `BlockingAgeLensResult`, plus `BLOCKING_AGE_LENS_MAX_EDGES` (6), `BLOCKING_AGE_LENS_DEFAULT_EDGES` (`[60, 120, 365]`) and `BLOCKING_AGE_EDGE_MIN_DAYS`/`_MAX_DAYS` (1 / 5000), pinned to the SQL by `scripts/verify-blocking-age-lens.ts`. **The age shapes are the exact OPPOSITE of the price ones: not one of them is price-sensitive and none is derivable into money**, so the Age lens is shown to every role including Production — see **Data → Age lens**. **2026-09-21 — also owns the BLEND BLOCK FACTS contract**: `BlendBlockSupplierShare`, `BlendBlockFacts`, `BlendBlockFactsRefusalReason`, `BlendBlockFactsResult` and `BLEND_BLOCK_FACTS_MAX_BATCH_IDS` (250), pinned to the SQL by `scripts/verify-blend-block-facts.ts`. Like the age shapes, **not one of them carries money**, so the blend modal's supplier/age columns are safe for every role. `isSingleSupplier` is `boolean | null` on purpose — null is NEITHER green nor orange — see **Data → Blend block facts**. The same date also adds **`BLOCKING_ROUNDED_UP_MIN_PHP`** / **`_MAX_PHP`** and the `invalid_rounded_up` refusal for the price lens's typed cut line. |
+| `types.ts` | Shared interfaces: **`BlockSupplierShare`** (`{ supplierKey; supplierDisplay; kg; sharePct; deliveryCount }` — one supplier's contribution to one block) and **`BlockingSupplierMap`** (`{ suppliers: Array<{ key; display; blockCount; totalKg }>; byBlock: Record<block_loc, { supplierCount; shares: BlockSupplierShare[] }> }` — the supplier-search payload; `supplierCount` is the VIEW's `supplier_count_in_block`, never `shares.length`, and the whole shape carries NO ₱). Plus `BlockData` (single cell data; `status` is the widened `BlockStatus` = the 4 styled statuses **or** any string, so the RC Movement panel can render a historical CLOSED/FEED batch), `BlockStatus`, `BlockingGridData` (full grid payload with aggregates), `BlockDataForBatch` (`{ blockData: BlockData \| null; canViewPrices }` — return of `fetchBlockDataForBatch`), `DeliveryHistoryRecord` (includes `id`, `mc`, `bd_astm`, `ash`, `cost_basis`), `UsageHistoryRecord`, `BlockingDetailData` (detail panel payload), `FullDeliveryRecord` (full delivery for edit dialog; **`cost_basis: number \| null`** — `null` when role-gated/withheld for non-price-viewers). **Stays in `blocking/`** (tenant domain types); the shell-agnostic detail panel in `_shared/` imports these via `../blocking/types`. **Also owns the PRICE LENS contract (2026-09-19)**: `BlockingMarketBasisKey`, `BlockingMarketBasis`, `BlockingPriceBand`, `BlockingPriceLens`, `BlockingPriceLensRefusalReason`, `BlockingMarketBasesResult`, `BlockingPriceLensResult`, plus the shared constants `BLOCKING_PRICE_LENS_MAX_EDGES` (6), `BLOCKING_PRICE_LENS_DEFAULT_EDGES` (`[-1, 0]`) and `BLOCKING_TRAILING_DAYS_MIN`/`_MAX`/`_DEFAULT` (1 / 400 / 30) — the SAME numbers the SQL enforces, imported by `actions.ts` rather than re-typed, and pinned to the SQL by `scripts/verify-blocking-price-lens.ts`. **Every one of these shapes is price-sensitive, including a bare band index** — see **Data → Price lens**. **2026-09-19 — also owns the AGE LENS contract**: `BlockingAgeBand`, `BlockingAgeLens`, `BlockingAgeLensRefusalReason`, `BlockingAgeLensResult`, plus `BLOCKING_AGE_LENS_MAX_EDGES` (6), `BLOCKING_AGE_LENS_DEFAULT_EDGES` (`[60, 120, 365]`) and `BLOCKING_AGE_EDGE_MIN_DAYS`/`_MAX_DAYS` (1 / 5000), pinned to the SQL by `scripts/verify-blocking-age-lens.ts`. **The age shapes are the exact OPPOSITE of the price ones: not one of them is price-sensitive and none is derivable into money**, so the Age lens is shown to every role including Production — see **Data → Age lens**. **2026-09-21 — also owns the BLEND BLOCK FACTS contract**: `BlendBlockSupplierShare`, `BlendBlockFacts`, `BlendBlockFactsRefusalReason`, `BlendBlockFactsResult` and `BLEND_BLOCK_FACTS_MAX_BATCH_IDS` (250), pinned to the SQL by `scripts/verify-blend-block-facts.ts`. Like the age shapes, **not one of them carries money**, so the blend modal's supplier/age columns are safe for every role. `isSingleSupplier` is `boolean | null` on purpose — null is NEITHER green nor orange — see **Data → Blend block facts**. The same date also adds **`BLOCKING_ROUNDED_UP_MIN_PHP`** / **`_MAX_PHP`** and the `invalid_rounded_up` refusal for the price lens's typed cut line. **2026-09-21 — also owns the BLEND ANALYSIS contract**: `BlendAnalysisSource`, `BlendNaturalGroupLabel` (the CLOSED `low \| mid \| high`), `BlendNaturalCut`, `BlendNaturalStats`, `BlendAnalysisBlockRef`, `BlendPriceBlock` / `BlendQualityBlock` / `BlendAgeBlock`, `BlendAnalysisUnmeasured`, `BlendPriceNaturalGroup`, `BlendPriceNatural`, `BlendVsMarketBand`, `BlendVsMarket`, `BlendVsMarketUnavailable`, `BlendAnalysisPriceSection`, `BlendQualityMetric`, `BlendQualityGroup`, `BlendQualityNatural`, `BlendAnalysisQualitySection`, `BlendAgeBand`, `BlendAnalysisAgeSection`, `BlendAnalysis`, `BlendAnalysisRefusalReason`, `BlendAnalysisResult`, `BlendAnalysisInput`, plus `BLEND_ANALYSIS_MAX_BLOCKS` (250), `BLEND_ANALYSIS_DEFAULT_PRICE_EDGES` (`[-1, 0]`), `BLEND_ANALYSIS_DEFAULT_AGE_EDGES` (`[60, 120, 365]`) and `BLEND_ANALYSIS_QUALITY_METRICS` (`['mc','ash','bd_astm','bd_jis']`), pinned to the SQL by `scripts/verify-blend-analysis.ts`. **This is the one contract in the file that SPLITS on money**: `BlendAnalysis.price` is `BlendAnalysisPriceSection \| null` with a sibling `pricesHidden: boolean`, because the price section is DELETED for a price-denied caller while `quality` and `age` are still returned — see **Data → Blend analysis**. The same date adds `kgWeightedPhpKg` to `BlockingPriceBand` and to `BlockingPriceLens.total` (additive; **null, never 0, on an empty band**, and the `total` figure is weighted over the PRICED population while its counts cover every block). |
 | `constants.ts` | `WarehouseConfig` interface (`cols`, `colStart`, `rows`), `WAREHOUSES` constant (A/B/C/D + PCA/PCB), and `STANDARD_WAREHOUSES` (`['A','B','C','D']` — the 220-slot baseline). `colStart` lets PCA/PCB render columns 15-17 with correct labels and `locKey` math |
-| `actions.ts` | Server actions (all price gating now via the canonical `roleCanViewPrices(role)` / `canViewPrices()` from `@/lib/auth` — DUP-2 replaced the former inline `role !== 'Production'` compares): `fetchBlockingGridData()` (queries `view_blocking_grid`, returns grid data with role-gated PHP/KG), **`fetchBlockingSupplierMap(): Promise<BlockingSupplierMap>`** (the supplier-search data layer — reads `view_blocking_block_suppliers` ONCE and folds it into `{ suppliers, byBlock }`; **does NO aggregation** — every kg, share and count comes out of SQL, and the ALL/SOME test is the view's `supplier_count_in_block`; **NOT price-gated on purpose** — the view carries no ₱ column and none derivable, so the payload is safe for Production; failures return an empty map and log, never throw), `fetchBlockingDetail(batchCode, batchId)` (fetches delivery + usage history with delivery IDs + lab results (mc/bd_astm/ash), batch notes, and avg_cost for a specific batch), **`fetchBlockDataForBatch(batchId)`** (batch-accurate `BlockData` header summary for ONE batch_id — queries `batches` + `deliveries` + `rc_out`, **no status/loc filter**, weighted-avg php+lab and `balance = total_in − total_out`, role-gated php; used by the **RC Movement matrix** so it can open the panel for a historical/closed batch that `view_blocking_grid` omits), `fetchSingleDelivery(deliveryId)` (fetches full delivery record for edit dialog and info dialog; **`cost_basis` is role-gated** — resolves the effective role via `getUserRole()` and only includes it for `roleCanViewPrices(role)`, else returns `cost_basis: null` so a Production user never receives the price through the panel's edit/info path; `FullDeliveryRecord.cost_basis` is therefore `number \| null`), `updateBlockNotes(batchId, notes)` (updates `batches.notes`, calls `revalidatePath('/inventory')`), **`buildBlendProposal(blockLocs: string[]): Promise<BlendProposal>`** (Blend Proposal mode — given selected block_locs, queries `view_blocking_grid` for the per-block passthrough rows + calls the `fn_blend_proposal` SQL RPC for the balance-weighted lab/price aggregation; TS does only the ×1.30 product-cost markup; **price-gated via `canViewPrices()`** — nulls `php_kg`/`raw_price_per_kg`/`product_cost_per_kg` and sets `can_view_prices: false` for Production BEFORE returning). **Exports the `BlendProposal` + `BlendProposalBlock` interfaces** (co-located with the action — consumer seam is `import { BlendProposal } from '.../blocking/actions'`). **2026-09-02 — the ×1.30 markup no longer lives here**: `buildBlendProposal` reads `production_loss_pct` from the SQL `fn_blend_production_loss_pct()` RPC (same `Promise.all`, no added latency) so the live what-if and a SAVED snapshot can never disagree about it; output is byte-identical (`raw * (1 + 30/100) === raw * 1.3` verified in IEEE-754). **Also adds the seven BLEND PROPOSAL HISTORY actions** — `saveBlendProposal`, `updateBlendProposalHeader`, `archiveBlendProposal`, `restoreBlendProposal`, `fetchBlendProposalList`, `fetchBlendProposalVersions`, `fetchBlendProposalVersion` — see **Data → Blend Proposal HISTORY** below. **All seven are WIRED as of 2026-09-03**: the reads by `blocking-route-view.tsx` (the saved version) and `blocking-grid.tsx` (the list), the writes by the grid. **2026-09-19 — adds the TWO PRICE LENS actions**, `fetchBlockingMarketBases(trailingDays?)` (the four market bases) and `fetchBlockingPriceLens(marketPhpKg, edgeOffsets?)` (band-classify the yard), plus the local `normalizeEdgeOffsets()` helper. **These two are gated DIFFERENTLY from everything else in the file**: they call `canViewPrices()` FIRST and return `{ok:false, reason:'prices_hidden'}` *without querying the database*, because band membership is itself price information and there is nothing to null — see **Data → Price lens** for the full contract. **2026-09-19 — adds the AGE LENS action `fetchBlockingAgeLens(edgeDays?)`** plus the local `normalizeEdgeDays()` helper (local, not exported, because `'use server'` allows only async exports — the UI's pure twin belongs in `lens/age-lens-settings.ts`). **It has NO `canViewPrices()` call and must never grow one**: nothing in its payload is money and none is derivable, so the Age lens is for EVERY role including Production; `scripts/verify-blocking-age-lens.ts` asserts the gate's ABSENCE so the asymmetry with the price sibling cannot be "tidied up". It does require a signed-in user (`auth.getUser()` → `not_signed_in`), like the other non-price reads here. See **Data → Age lens**. Backend only; no UI consumes it yet. **2026-09-21 — adds `fetchBlendBlockFacts(batchIds, asOf?)`** (the blend modal's supplier dominance + the two block ages, over `fn_blend_block_facts`). Keyed by **`batch_id`, never `block_loc`**; `asOf` omitted = today in Asia/Manila (the LIVE modal), a SAVED version passes its own version date; **no `canViewPrices()` call and it must never grow one** (nothing in the payload is money) though it does require a signed-in user; an unknown id is ABSENT from the record rather than zero-filled. See **Data → Blend block facts**. Backend only. **The same date gives `fetchBlockingPriceLens` an optional third argument `roundedUpPhp`** — for the `manual` basis pass `Math.ceil(typedPrice)`, for every measured basis pass nothing; omitted, the payload is byte-identical to before. |
+| `actions.ts` | Server actions (all price gating now via the canonical `roleCanViewPrices(role)` / `canViewPrices()` from `@/lib/auth` — DUP-2 replaced the former inline `role !== 'Production'` compares): `fetchBlockingGridData()` (queries `view_blocking_grid`, returns grid data with role-gated PHP/KG), **`fetchBlockingSupplierMap(): Promise<BlockingSupplierMap>`** (the supplier-search data layer — reads `view_blocking_block_suppliers` ONCE and folds it into `{ suppliers, byBlock }`; **does NO aggregation** — every kg, share and count comes out of SQL, and the ALL/SOME test is the view's `supplier_count_in_block`; **NOT price-gated on purpose** — the view carries no ₱ column and none derivable, so the payload is safe for Production; failures return an empty map and log, never throw), `fetchBlockingDetail(batchCode, batchId)` (fetches delivery + usage history with delivery IDs + lab results (mc/bd_astm/ash), batch notes, and avg_cost for a specific batch), **`fetchBlockDataForBatch(batchId)`** (batch-accurate `BlockData` header summary for ONE batch_id — queries `batches` + `deliveries` + `rc_out`, **no status/loc filter**, weighted-avg php+lab and `balance = total_in − total_out`, role-gated php; used by the **RC Movement matrix** so it can open the panel for a historical/closed batch that `view_blocking_grid` omits), `fetchSingleDelivery(deliveryId)` (fetches full delivery record for edit dialog and info dialog; **`cost_basis` is role-gated** — resolves the effective role via `getUserRole()` and only includes it for `roleCanViewPrices(role)`, else returns `cost_basis: null` so a Production user never receives the price through the panel's edit/info path; `FullDeliveryRecord.cost_basis` is therefore `number \| null`), `updateBlockNotes(batchId, notes)` (updates `batches.notes`, calls `revalidatePath('/inventory')`), **`buildBlendProposal(blockLocs: string[]): Promise<BlendProposal>`** (Blend Proposal mode — given selected block_locs, queries `view_blocking_grid` for the per-block passthrough rows + calls the `fn_blend_proposal` SQL RPC for the balance-weighted lab/price aggregation; TS does only the ×1.30 product-cost markup; **price-gated via `canViewPrices()`** — nulls `php_kg`/`raw_price_per_kg`/`product_cost_per_kg` and sets `can_view_prices: false` for Production BEFORE returning). **Exports the `BlendProposal` + `BlendProposalBlock` interfaces** (co-located with the action — consumer seam is `import { BlendProposal } from '.../blocking/actions'`). **2026-09-02 — the ×1.30 markup no longer lives here**: `buildBlendProposal` reads `production_loss_pct` from the SQL `fn_blend_production_loss_pct()` RPC (same `Promise.all`, no added latency) so the live what-if and a SAVED snapshot can never disagree about it; output is byte-identical (`raw * (1 + 30/100) === raw * 1.3` verified in IEEE-754). **Also adds the seven BLEND PROPOSAL HISTORY actions** — `saveBlendProposal`, `updateBlendProposalHeader`, `archiveBlendProposal`, `restoreBlendProposal`, `fetchBlendProposalList`, `fetchBlendProposalVersions`, `fetchBlendProposalVersion` — see **Data → Blend Proposal HISTORY** below. **All seven are WIRED as of 2026-09-03**: the reads by `blocking-route-view.tsx` (the saved version) and `blocking-grid.tsx` (the list), the writes by the grid. **2026-09-19 — adds the TWO PRICE LENS actions**, `fetchBlockingMarketBases(trailingDays?)` (the four market bases) and `fetchBlockingPriceLens(marketPhpKg, edgeOffsets?)` (band-classify the yard), plus the local `normalizeEdgeOffsets()` helper. **These two are gated DIFFERENTLY from everything else in the file**: they call `canViewPrices()` FIRST and return `{ok:false, reason:'prices_hidden'}` *without querying the database*, because band membership is itself price information and there is nothing to null — see **Data → Price lens** for the full contract. **2026-09-19 — adds the AGE LENS action `fetchBlockingAgeLens(edgeDays?)`** plus the local `normalizeEdgeDays()` helper (local, not exported, because `'use server'` allows only async exports — the UI's pure twin belongs in `lens/age-lens-settings.ts`). **It has NO `canViewPrices()` call and must never grow one**: nothing in its payload is money and none is derivable, so the Age lens is for EVERY role including Production; `scripts/verify-blocking-age-lens.ts` asserts the gate's ABSENCE so the asymmetry with the price sibling cannot be "tidied up". It does require a signed-in user (`auth.getUser()` → `not_signed_in`), like the other non-price reads here. See **Data → Age lens**. Backend only; no UI consumes it yet. **2026-09-21 — adds `fetchBlendBlockFacts(batchIds, asOf?)`** (the blend modal's supplier dominance + the two block ages, over `fn_blend_block_facts`). Keyed by **`batch_id`, never `block_loc`**; `asOf` omitted = today in Asia/Manila (the LIVE modal), a SAVED version passes its own version date; **no `canViewPrices()` call and it must never grow one** (nothing in the payload is money) though it does require a signed-in user; an unknown id is ABSENT from the record rather than zero-filled. See **Data → Blend block facts**. Backend only. **The same date gives `fetchBlockingPriceLens` an optional third argument `roundedUpPhp`** — for the `manual` basis pass `Math.ceil(typedPrice)`, for every measured basis pass nothing; omitted, the payload is byte-identical to before. **2026-09-21 — adds `fetchBlendAnalysis(input)`** (the blend proposal's ANALYSIS pages, over `fn_blend_analysis` + `fn_natural_breaks_3`) plus the local `normalizeAnalysisEdges()` helper and the pure `map*` re-keyers. **Its price gate is unlike anything else in this file: it is a DELETION, not a refusal and not a nulling pass.** The price lens refuses a `!canViewPrices()` caller outright because its whole payload is price; this one's payload SPLITS, so the action sets `price: null` with `pricesHidden: true` **and still returns `quality` + `age` to Production**. The gate runs AFTER the RPC (the non-price half is still wanted) and before the payload is assembled, fails closed, and `scripts/verify-blend-analysis.ts` asserts the ORDER, the single branch, the absence of a `prices_hidden` refusal, and that no money-named key exists outside `price` on a real payload. See **Data → Blend analysis**. Backend only. **`fetchBlockingPriceLens`'s mapper also now passes `kgWeightedPhpKg` through** on each band and on `total` (`lensNumOrNull`, never `?? 0`). |
 | `page.tsx` | **Standalone route entry (`/inventory/blocking`).** Server component — renders `<BlockingRouteView>` inside a `<Suspense>` (the route view uses `useSearchParams`). Replaced the old "Coming soon" stub. |
 | `blocking-route-view.tsx` | **NEW. Standalone-route host.** Client component owning the grid fetch / loading / error / Retry (repurposed from the deleted `blocking-lazy-tab`) — which now runs `fetchBlockingGridData()` and **`fetchBlockingSupplierMap()` in ONE `Promise.all`** (independent reads of two views; serializing would add the supplier round-trip to time-to-paint, and a failed supplier read returns an empty map by contract so it is never fatal) — the `?block=` URL selection (read via `useSearchParams`, toggled via `router.replace`), and the `onNavigateToBatch` wiring (`router.push('/inventory?tab=deliveries\|usage&search=…&editBatch=…&editView=deliveries\|usage')` — **`editView` discriminates which always-mounted table consumes `editBatch`**, see the editView deep-link contract under Key Behaviors). SHELL-AGNOSTIC — does NOT use `useInventoryTab`. Renders `<BlockingGrid>` controlled. **2026-09-03 — it also owns `?proposal=<id>&v=<n>` AND resolves it**: the two params are written TOGETHER by one `handleProposalLinkChange` (so switching proposals can never leave a stale version number behind, which would ask the server for a version that does not exist on this proposal), a junk `?v=` is treated as ABSENT rather than as version 0, and an effect turns the pair into `savedProposal` / `savedVersions` / `savedLoading` via `fetchBlendProposalVersions` → `fetchBlendProposalVersion`. **The route resolves it because the route owns the params** — the same division `?block=` and the supplier map already follow — which keeps the grid a component that RENDERS a saved proposal rather than one that goes and finds it. The writer is held in a `useRef` so the effect does not refetch every time an unrelated search param moves. |
 | `supplier-search.tsx` | **NEW. The supplier search bar** (`BlockingSupplierSearch` + the `ActiveSupplierSummary` interface it takes). A **cmdk combobox** (shadcn `Command`/`CommandInput`/`CommandList`/`CommandItem`) whose suggestion list is an **absolutely-positioned panel, NOT a `Popover`** — the input stays the focus target, so nothing fights the sticky header for focus and no trap is created. Keyboard-first: typing filters, ↑/↓ moves, **Enter picks the highlighted suggestion**, and **Escape steps BACK one rung at a time** (clear the query → close the list → return to the chip); the Escape handler `stopPropagation`s so stepping back through the search never also closes the detail panel (which listens on the document). Filtering is a **case-insensitive SUBSTRING** match via a custom `filter` prop — deliberately not cmdk's fuzzy scorer — over a value that carries BOTH the canonical key and the display spelling, with a prefix hit outranking a mid-string one. Each suggestion reads `<display>` + a muted `N blocks · X t`. With a supplier active the bar renders an **emerald chip** — `Ornales · 9 blocks (all 5 · some 4)` — whose label re-opens the search and whose `×` clears the filter. Presentational only: it owns no filter state (the grid/route do) and does no aggregation. |
@@ -50,6 +50,13 @@ Physical warehouse grid visualization — the digital equivalent of the Excel bl
 | `../../../dev/table-playground/agelens/` | **NEW, KEPT (not deleted).** `page.tsx` + `agelens-fixture.tsx` — the AGE lens's look rig **and the TWO-LENS rig for the frame**, gated exactly like the `pricelens` sibling (`notFound()` unless `TABLE_PLAYGROUND`, plus `middleware.ts`'s `PUBLIC_PATHS` prefix). It mounts the REAL frame with the REAL `AgeLensPanel` **and** `PriceLensPanel` (each through its adapter port) over static contract-shaped payloads, so the questions Node cannot answer can be looked at with no login: does the age ramp read fresh→old, is a lab-highlighted MC still legible on band 4's purple, do the two tabs feel like one tool, does the docked column still let the grid scroll at 375px. `?bands=2\|3\|4\|5\|7` seeds the cut lines **through the same localStorage key a real reader's settings use**; `?undated=1` adds undated blocks; **`?prices=0` simulates a PRICE-DENIED reader** (the lens list is filtered by each definition's own `canShow`, so the tab strip correctly disappears and Age stands alone). Holds no data access of any kind. |
 | `../../../dev/table-playground/blockinghead/` | **NEW (2026-09-21), KEPT.** `page.tsx` + `blockinghead-fixture.tsx` — the CONTROL STRIP's and the BLEND TABLE's look rig, gated exactly like the `pricelens` / `agelens` siblings (`notFound()` unless `TABLE_PLAYGROUND`, plus `middleware.ts`'s `PUBLIC_PATHS` prefix). It mounts the REAL `BlockingGrid` over a static `BlockingGridData` and the REAL `BlendProposalDialog` over a static facts record, because Node can assert that the strip is a four-track grid with the documented minimums but cannot tell you whether a SECTION MOVES when a mode is switched on, whether the strip scrolls rather than crushes at 1024px, or whether a supplier pill is legible in dark mode. `?prices=0` gives a price-denied reader; `?blend=1` opens the modal with a GREEN, an ORANGE and an em-dash row. Holds no data access of any kind. **ITS FIGURES ARE THE LIVE PAGE'S OWN SHAPE (2026-09-21), because the strip is MEASURED by them** — it occupies **170 of the real 220 slots** (so `77.3%` falls out of the count rather than being typed) and its last block absorbs the rounding residual on both weight and price so the totals land exactly on `10,543.09 t · 170 / 220 · 77.3% · ₱ 389,587,962 · ₱ 36.95`; a rig printing `1,234.00 t` would answer a narrower question than the one being asked, since a 5-digit tonnage and a 9-digit peso total are what set section 3's width. The Proposals badge reads the real `fetchBlendProposalList`, which degrades to an empty list with no session, so it shows `0` rather than a count — its width is reserved (`w-[26px] tabular-nums`), so a single digit either way is the same measurement. |
 | `../../../dev/table-playground/pricelens/` | **NEW, KEPT (not deleted).** `page.tsx` + `pricelens-fixture.tsx` — the lens's LOOK RIG, gated exactly like the `rcmprint` sibling (`notFound()` unless `TABLE_PLAYGROUND`, plus `middleware.ts`'s `PUBLIC_PATHS` prefix). It mounts the REAL `BlockingLensPanel` + `PriceLensPanel` (through the adapter port) and the REAL cell classes over a static contract-shaped payload, so the questions Node cannot answer — does the ramp read cheap→expensive, is a lab-highlighted MC still legible on band 3's amber, does the docked column still let the grid scroll at 375px — can be looked at in both themes with no login. `?bands=2|3|4|5|7` seeds the edge offsets **through the same localStorage key a real reader's settings use**; `?unpriced=1` adds unpriced blocks. Holds no data access of any kind. |
+| `../_shared/blend-analysis-options.ts` | **NEW (2026-09-21). WHICH ANALYSIS PAGES a proposal carries** — pure. `BlendAnalysisOptions` (`price` · `quality` · `age`), `DEFAULT_BLEND_ANALYSIS_OPTIONS` (**all three ON**), `parseBlendAnalysisOptions` (**untrusted, FIELD BY FIELD, falling back per field** — never "one bad key, everything to defaults"), `serializeBlendAnalysisOptions` (**defaults OMITTED**, so turning everything back on is a REMOVAL), `analysisPages(options, canViewPrices)` — **THE one place the reader's CHOICE meets the reader's PERMISSION** — plus `wantsAnalysis`, `analysisPagesLabel` and `BLEND_ANALYSIS_SETTINGS_MODULE` (`blocking_blend_analysis`). Stored per user in `user_table_settings` through the shape-agnostic pair, so it needs **no migration, no table and no new action**. |
+| `../_shared/blend-analysis-text.ts` | **NEW. THE WORDS AND THE FORMATS, shared by the SCREEN and the PRINT** — pure. The screen renders React and the printout builds an HTML string in an iframe, so they cannot share a component; a method note that read one way on screen and another on paper would be two explanations of one statistic. So `naturalMethodNote` (*"Grouped where the prices naturally separate into 3 groups: cut lines at ₱38.97 and ₱44.50 minimise the spread inside each group. Fit 97.6%."*, and the honest degenerate forms), `groupWord` (`low\|mid\|high` → **HIGH / AVERAGE / LOW**, and `ALL ONE GROUP` when there is one), `vsMarketCaption` (**two sentences because there are two rules** — a measured market *rounds up to ₱40*, a TYPED one *is* the line), `vsMarketUnavailableNote`, `unmeasuredNote`, `snapshotGapNote`, `monthName`, and the formatters `fmtKg` / `fmtPeso` / `fmtPesoNum` / `fmtWholePeso` / `fmtSharePct` / `fmtDays` / `fmtWholeDays` / `fmtQuality` / `qualityDecimals` (BD → 3, MC and ASH → 2) live here, once. **It formats and labels; it does not compute** — `toFixed` and `Math.round` plus the single `gvf * 100` unit conversion are the whole of its arithmetic. |
+| `../_shared/use-blend-analysis.ts` | **NEW. THE ANALYSIS READ** — one payload per open / version switch / option change, and nothing else. Takes a DISCRIMINATED source (`{kind:'saved', proposalId, versionNo}` or `{kind:'live', blockLocs}`) so it is structurally incapable of sending both (the contract refuses that). **NO DEBOUNCE AT ALL** — its inputs are discrete events, not keystrokes, so a debounce would only be a timer for a remount to destroy (the 2026-09-21 lens stall) — and the guard is the request's own **SIGNATURE**, so a reply for what is still wanted is ALWAYS applied. A stall says so after `LENS_STALL_MS` with Copy and Retry; a refusal KEEPS the previous payload. Exports the `BlendAnalysisAdapter` port, defaulted to the live action and injectable only for the gated dev rig. |
+| `../_shared/blend-analysis-sections.tsx` | **NEW. THE ANALYSIS PAGES ON SCREEN** — `BlendAnalysisSections` (the stack) and `BlendAnalysisIncludePopover` (the header's **Include pages** control). Three pages: **Price groups — natural breaks** (a plain-language method note, then HIGH → AVERAGE → LOW, each group a dense table with a SUBTOTAL row and one grand FOOTER from the payload's `overall`, which is what makes it visibly equal the proposal's own raw blend price) plus **Against market** (the PRICE LENS's bands, labelled with the lens's OWN `priceBandLabel` and the reader's own band names, dearest first); **Quality** (three tables — MC, ASH, and BD ASTM **with BD JIS as a second value column**, not a fourth table — highest reading first, with the reader's own WET / ASHY highlight applied through `getLabHighlightText`); **Age** (the AGE LENS's bands via `ageBandLabel`, oldest first, block · batch · balance · age · first delivery · last delivery). Excel Standard throughout: `table-fixed`, explicit pixel widths whose STATED sum is the table's `minWidth`, `font-mono` right-aligned numerics, accounting ₱. **Every subtotal and footer figure is the payload's own** — there is no `reduce`, no `+=` and no division by a total in the file; the one piece of money arithmetic is a per-ROW `kg × ₱/kg`, which contributes to no total. An unmeasured / undated block is listed in a MUTED group with an em dash, **never in the cheapest, cleanest or freshest group**. |
+| `../_shared/blend-analysis-print.ts` | **NEW. THE ANALYSIS PAGES ON PAPER** — `buildBlendAnalysisPages(input)` returns one `<section class="apage">` per chosen page and `BLEND_ANALYSIS_PRINT_CSS` carries their rules; both are appended to the existing self-contained iframe document by `buildBlendPrintDocument`'s new fifth argument. **An empty analysis leaves that document byte-identical, including its `<style>` block.** Print-specific rules the screen does not need: **no `<tfoot>`** (Chrome repeats one on every page, so a subtotal and the grand total are `<tbody>` rows), **a group is its own `<tbody>`** with `break-inside: avoid` only while it is SMALL (≤ 4 rows — forcing a 24-row group whole would push a page of white space ahead of it), `break-after: avoid` on every heading and caption, a **7pt font floor** with the padding squeezed first, and the group tints written as inline `rgb(r g b / 0.18)` from `lens/lens-ramp.ts` because **an iframe has no `globals.css`, so a `.lens-band-3` class would print white**. |
+| `lens/lens-summary-print.tsx` | **NEW. THE PRINTED LENS SUMMARY** — `LensSummaryPrintControl` (the legend bar's **Print** button) + the sheet, over a normalized `LensSummaryPrintModel` each lens builds for itself. ONE A4 landscape sheet of the ACTIVE lens AS CONFIGURED: the title, the settings in words, the cut lines, the unit, printed-at; a BAND TABLE (band · blocks · kg · share · weighted ₱/kg or age) whose total is the last `<tbody>` row and whose figure cell says **`avg of priced`** / `avg of dated`, because the price lens's `total.kgWeightedPhpKg` covers the PRICED population while its counts cover every occupied block; the shared ratio bar (widths ARE the published shares); then each band's blocks as a compact 3-column list, with the excluded (unpriced / undated) population in a muted dashed list. **Band ISOLATION is respected and SAID** (*"Showing 2 of 4 bands"*) — a sheet that silently widened the filter would not be a printout of the filter. It reuses the PLATFORM print kit (`GroupPrintStage` + `printCard` + `buildPrintPageRules`, stage PORTALLED to `<body>`) and adds nothing to it; the sheet is explicitly LIGHT (`bg-white` / `text-zinc-*`) because it lays out in the live DOM, with two deliberate exceptions — the swatch and the bar segments use `lens-band-swatch` + `rampClass`, whose solid `rgb(var(--lens-hue))` is identical in both themes and identical to the grid. **It formats nothing**: every figure arrives preformatted. |
+| `../../../dev/table-playground/blendanalysis/` | **NEW (2026-09-21), KEPT.** `page.tsx` + `blendanalysis-fixture.tsx` — the ANALYSIS PAGES' look rig, gated exactly like its siblings (`notFound()` unless `TABLE_PLAYGROUND`, plus `middleware.ts`'s `PUBLIC_PATHS` prefix). It mounts the REAL `BlendProposalDialog` — real header actions, real Include-pages popover, real print, real PDF — and swaps only the two data PORTS for static contract-shaped payloads over the owner's own `26 OCT RUN V2` shape (24 blocks, two price clumps, market ₱39.8272 → R 40). **Its adapter answers after a REALISTIC ~300 ms on purpose**: a microtask-resolving stub hid a request race on the lens panels, and a skeleton that never renders cannot be reviewed. `?saved=1` · `?prices=0` (the price-denied reader) · `?pages=quality` (seeded **through the same localStorage key** a real reader's choice uses) · `?unmeasured=1` · `?slow=2000` · `?stall=1` (the watchdog banner). Holds no data access of any kind. |
 | `CONTEXT.md` | This file |
 
 ## Data
@@ -457,6 +464,370 @@ candidate live, and hands everything back so every assertion lives in readable T
 deliberately NOT a whole-database verifier (the 2026-09-14 `fn_ops_ledger_verify()` incident took the
 live site down), and it returns **no money value of any kind**.
 
+### Blend analysis — DATA LAYER (2026-09-21, migration `20260921084500_blend_analysis_natural_breaks`)
+
+> **BACKEND ONLY.** The two SQL functions, the server action and the types are LIVE and verified;
+> the viewer pages and the print are the next pass. **This section IS the contract** — a UI can be
+> built from it without reading any SQL. Proofs: `npx tsx scripts/verify-blend-analysis.ts`
+> (**71 assertions, all passing 2026-09-21**).
+
+**What the owner asked for.** In a saved blend proposal, when viewing **and printing**, extra pages
+that *"group and arrange blocks according to high priced and low priced and average priced … a
+statistical way of properly grouping these as something we can objectively agree to be high and
+low"*, another page for **MC, ash and BD**, maybe **age**, tables *"with footers that show totals or
+averages when appropriate"*, *"incorporating some of the logic of our price lens into blend
+proposal"*.
+
+#### WHY NATURAL BREAKS AND NOT MEAN ± 1 SD — read this first
+
+Mean ± one standard deviation was the obvious answer. It was **measured on the owner's own proposal
+and rejected.** `26 OCT RUN V2` v2 holds 24 blocks at a kg-weighted mean of **₱43.56** with SD
+**₱5.11**, and the prices sit in **two clumps — ₱36.57…₱42.00 and ₱47.00…₱49.50 — with the mean
+landing in the empty gap between them.** So mean ± 1 SD is `[₱38.45, ₱48.67]`, which files a ₱39
+block and a ₱48 block together as *"average"*: it puts the two clumps' inner halves in one band and
+splits each clump down the middle. The statistic describes a distribution the data does not have.
+
+**WEIGHTED NATURAL BREAKS (Jenks, the 1-D optimal partition)** puts the cut lines where the gaps
+actually are, by minimising the **kg-weighted within-group sum of squares**:
+
+> minimise  Σ<sub>groups</sub> Σ<sub>i</sub> `kg`<sub>i</sub> × (`x`<sub>i</sub> − weighted mean of its group)²
+
+On that same proposal it cuts at **₱38.5946 | ₱39.3391** and **₱42.0000 | ₱47.0000** — the second
+cut landing exactly in the owner's empty gap — for `low` ₱36.57–38.59 (7 blocks, 433,408 kg, 28.99%,
+**₱37.4262**), `mid` ₱39.34–42.00 (5 blocks, 304,406 kg, 20.36%, **₱40.0977**) and `high`
+₱47.00–49.50 (12 blocks, 757,293 kg, 50.65%, **₱48.4573**), with **gvf 0.9761**.
+
+**It is EXACT, not a heuristic.** `fn_natural_breaks_3` enumerates **every pair of cut positions**
+taken between two **DISTINCT adjacent values** and returns the pair with the lowest score; prefix
+sums of `Σw`, `Σwx` and `Σwx²` make each candidate O(1) (`SS = Q − S²/W`). The verify script proves
+this by **brute force in TypeScript** over the values the DB returned: no other pair scores lower,
+and the documented tie-break picks the same one.
+
+* **THE TIE-BREAK IS PART OF THE CONTRACT:** on equal within-SS the **lowest first cut wins, then
+  the lowest second cut.** Without a stated rule two calls on identical data could return different
+  groupings and nobody could say which was right. Proven: two identical calls are byte-identical.
+* **Weighted by KILOGRAMS, always.** A 74,590 kg block and a 30,115 kg block are not equal opinions
+  about what a pile contains — and that weighting is also what makes the group footers agree with
+  the blend's own weighted averages.
+* **`gvf` = `1 − within_ss / total_ss`**, 0…1, says how clean the split is. **NULL — never 0 — when
+  `total_ss` is 0** (one distinct value: there is no variance to explain, and "explained none of it"
+  would be a lie).
+* **DEGENERATE CASES RETURN FEWER GROUPS, never an empty one and never a fabricated cut.** ≥ 3
+  distinct values → 3 groups `low · mid · high`; **2 → 2 groups `low · high`; 1 → ONE group labelled
+  `mid`** (it is neither low nor high); nothing measurable → 0 groups with NULL statistics. The
+  label vocabulary is **CLOSED** to `{low, mid, high}` so a colour map can be total. **Read
+  `groupCount`** — never infer it from `groups.length`.
+* Both degenerate cases are proven on **live** blocks the probe discovers (two occupied blocks that
+  happen to share one ₱/kg → one group; plus a third at a different price → two).
+
+**AGE IS THE ONE SECTION THAT DOES NOT USE NATURAL BREAKS.** It uses **fixed cut lines in days**
+(default **60 / 120 / 365**, the Age lens's own defaults and its exact semantics, including a
+NEGATIVE age landing in band 0), because those days are meaningful in themselves and a grouping that
+moved with the yard would make "over a year old" mean something different on every proposal.
+
+#### The action — `fetchBlendAnalysis(input)`
+
+```ts
+interface BlendAnalysisInput {
+  proposalId?: string | null;         // SAVED source
+  versionNo?: number | null;          // omitted = the proposal's CURRENT version
+  blockLocs?: readonly string[] | null; // LIVE source. EXACTLY ONE SOURCE, never both
+  priceEdgeOffsets?: readonly number[] | null;  // default [-1, 0]
+  ageEdgeDays?: readonly number[] | null;       // default [60, 120, 365]
+  marketPhpKg?: number | null;        // omitted = the market of the blend's OWN month
+  roundedUpPhp?: number | null;       // typed market only: pass Math.ceil(typedPrice)
+}
+
+interface BlendAnalysis {
+  source: 'saved' | 'live';
+  asOf: string;                 // yyyy-MM-dd — decided by the DATABASE
+  proposalId: string | null;  versionNo: number | null;  title: string | null;
+  snapshotComputedAt: string | null;  computedAt: string;
+  blockCount: number;  totalKg: number;
+  price: BlendAnalysisPriceSection | null;  // NULL when the caller may not see prices
+  pricesHidden: boolean;                    // true = `price` was DELETED server-side
+  quality: { metrics: BlendQualityMetric[];                 // ['mc','ash','bd_astm','bd_jis']
+             byMetric: Record<BlendQualityMetric, BlendQualityNatural> };
+  age: BlendAnalysisAgeSection;
+}
+
+type BlendAnalysisResult =
+  | { ok: true; analysis: BlendAnalysis }
+  | { ok: false; reason: BlendAnalysisRefusalReason; message: string };
+```
+
+**The three sections, in the shapes a table renders from.** Every group/band carries
+`index`, `blockCount`, `kg`, `kgSharePct`, `blockSharePct` and a `blocks[]` list already in the
+right order, so a UI renders rows and a footer without folding anything.
+
+| Section | Grouping | Per group / band | `blocks[]` rows, already sorted | Footer (`overall`) |
+|---|---|---|---|---|
+| `price.natural` | natural breaks on `php_kg` | `label`, `rangeMin`, `rangeMax`, **`kgWeightedPhpKg`**, **`valuePhp`** (Σ kg×₱) | `{batchId, blockLoc, batchCode, kg, phpKg}` — **dearest first** | `kgWeightedPhpKg`, `valuePhp`, `snapshotPhpKg`, `snapshotGap`, `equalsSnapshot` |
+| `price.vsMarket` | the **PRICE LENS's** bands | `lowerPhp`/`upperPhp` (**null = OPEN**), `kgWeightedPhpKg`, `valuePhp` | same | `kgWeightedPhpKg`, `valuePhp` |
+| `quality.byMetric[m]` | natural breaks on the reading | `label`, `rangeMin`, `rangeMax`, **`kgWeightedValue`** | `{…, value}` — **highest reading first** | `kgWeightedValue`, `snapshotValue`, `snapshotGap`, `equalsSnapshot` |
+| `age` | **fixed** cut lines in days | `lowerDays` (0 on band 0), `upperDays` (**null = open above**), `kgWeightedAgeDays` | `{…, ageDays, firstDeliveryDate, lastDeliveryDate, deliveryCount}` — **oldest first** | `kgWeightedAgeDays`, `oldestAgeDays`, `oldestBlockLoc`, `oldestBatchCode` |
+
+`price.natural` and every `quality.byMetric[m]` also carry `groupCount`, `gvf`, `cuts[]` and
+`stats` (`n`, `distinctCount`, `totalWeight`, `weightedMean`, `totalSs`, `withinSs`, `betweenSs`,
+`candidatesConsidered`). **A `cut` is published three ways — `below`, `above`, `value` (their
+midpoint). `above` IS the membership test; the midpoint is for a legend and must never be used as
+the test.**
+
+**BD is "higher = denser", and the labels still go by VALUE.** `high` means the larger number on
+every metric; whether that reads as "best" or "worst" is the UI's wording decision. Measured on the
+owner's proposal: mc gvf 0.8959 · ash 0.8698 · bd_astm 0.8986 · bd_jis 0.8986.
+
+#### SAVED vs LIVE, AND THE AS-OF RULE
+
+**Exactly one source.** `proposalId` (+ optional `versionNo`, default the current version) reads the
+**STORED** `blend_proposal_versions.snapshot` **verbatim** — a proposal is a statement about the
+yard on a particular day, and its snapshot is immutable and **hashed**, so the analysis is
+*reconstructed* from it rather than added to it. **Nothing in the saved feature was touched** (no
+table, no snapshot, no hash, no grant; the verify script asserts it against the migration text).
+`blockLocs` computes the same thing live from **`fn_blend_proposal_snapshot`, the ONE existing
+builder** — its arithmetic is not restated. Both + neither are refusals; a `versionNo` on its own is
+`no_source`.
+
+**READING AN ARCHIVED PROPOSAL IS ALLOWED** (only *writing* to one is refused) — the proposals list
+shows archived rows, and the as-of proof below runs on one.
+
+**`asOf` is decided by the DATABASE**: the saved version's own **`created_at` in Asia/Manila** (the
+same choice `fn_blend_block_facts` documents — `created_at` is the column the version read model
+always populates), or **today in Asia/Manila** for live. It governs the **AGE section only**, so a
+delivery that lands after a proposal was saved can never repaint it. **Proven on live data, with
+nothing written:** the archived `ZZ TEST` v3 (as of **2026-09-03**) reads `AUG-26-BLK12`'s last
+delivery as **2026-09-01** over **3** deliveries, while the live analysis of the same blocks reads
+**2026-09-07** over **4** — and every *unchanged* pile's dates are identical while its age moves by
+exactly the number of days between the two as-of dates.
+
+**AGE IS NOT REDEFINED.** It is `view_batch_age_days`' own kg-weighted-mean-delivery-date expression
+narrowed by `transaction_date <= asOf`, and at `asOf = today` it equals that view **exactly**
+(measured: 24 blocks, 0 mismatches, max gap 0 — including both delivery dates). `ageDays` is
+published at **full precision**; **round it for display**, as the Age lens does at 1 decimal.
+
+#### MARKET FOR THE AS-OF MONTH
+
+`vsMarket` is the **price lens's own logic** applied to this blend's blocks — proven to classify all
+24 of them into the same bands as `fn_blocking_price_lens` for the same market price, R and edges.
+
+* `marketPhpKg` given → `marketBasis: 'given'`, `marketBasisMonth: null`.
+* Omitted → the **`this_month`-style market OF THE BLEND'S OWN MONTH**, read from
+  `view_analytics_rcin_monthly.market_avg_price` (THE one definition). A saved version is therefore
+  compared with the market of the month it was **saved** in, not with today's — which is the whole
+  point of an as-of. Measured: the owner's proposal reads market **₱39.8272** for `2026-09-01`,
+  R = 40, and **7 blocks below / 3 at / 14 above** market.
+* **`R = roundedUpPhp ?? floor(market) + 1`**, and the UI rule is the price lens's: **for a TYPED
+  price pass `Math.ceil(typedPrice)`; for a measured basis pass nothing.** Proven: market 41 with
+  the override reads R = 41, without it R = 42.
+* **A market that cannot be measured gives `vsMarket: null`** — never ₱0, which would put every
+  block above market — **and the reason rides beside it** in `vsMarketUnavailable`
+  `{reason:'no_market_price', message, marketBasis, marketBasisMonth}`, because a null cannot carry
+  one. Offer a typed price.
+
+#### NULL IS NEVER 0 — the `unmeasured` bucket
+
+**A metric value that is NULL *or ≤ 0* is the NOT-RECORDED placeholder, not a reading.** `php_kg` 0
+is the L-008 unpriced placeholder, and **`view_blocking_grid` COALESCEs `avg_ash` / `avg_bd_astm` /
+`avg_bd_jis` to 0 — measured, 11 of the yard's 170 occupied blocks read exactly 0 on all three**
+(0 of 170 on `mc` or `php_kg`). Charcoal with 0.000 % ash does not exist; calling it the cleanest
+block in the blend is the ₱11.01-vs-₱39.99 `avg_cost` bug in a new costume.
+
+Such a block lands in **`unmeasured`** (`blockCount`, `kg`, `noValueCount`, `noWeightCount`,
+`blocks[]`), in **NO group**, excluded from every average and from both share denominators. A block
+with **no positive weight** is excluded too and counted separately, so a UI can explain the blank.
+
+> **UI RULE: render an unmeasured block un-lensed — no colour, an em dash for the figure. Never put
+> it in the cheapest, the cleanest or the freshest group.**
+
+**Checkable invariants, asserted in every section on both sources:**
+`Σ groups[].kg + unmeasured.kg === totalKg` (and the same for `blockCount`) ·
+`Σ kgSharePct === 100` and `Σ blockSharePct === 100` (±1e-9, over the **measured** population, all
+null when nothing is measured) · an **empty** group's weighted figure is **null, never 0** ·
+`groupCount === groups.length`.
+
+**`overall.snapshotGap` / `equalsSnapshot` is how the two footers are reconciled.**
+`kgWeightedPhpKg` / `kgWeightedValue` is the honest figure over the **measured** blocks;
+`snapshotPhpKg` / `snapshotValue` is what the blend itself stored, lifted verbatim. **Gap exactly 0
+whenever nothing is unmeasured** (proven on the owner's proposal for the raw price and all four lab
+stats), and when something IS, the snapshot's figure is the one dragged down by a 0 — measured live,
+a blend containing `B-1A` (ash 0) reads an honest **3.1299** against the snapshot's **2.1273**, and
+`equalsSnapshot` is `false`, which is the UI's cue to explain rather than to pick a winner.
+
+#### ₱ LIVES IN ONE SECTION, AND THE GATE IS A DELETION
+
+`sections.price` carries money — group ₱/kg, band edges, Σ kg×₱, and, exactly as the price lens
+records, **band membership itself** (knowing a block is in `high` pins its ₱/kg to a range).
+`quality` and `age` carry none and none is derivable: readings, kilograms, day counts, shares.
+
+So this action does **not** refuse a price-denied caller the way `fetchBlockingPriceLens` does, and
+it does **not** null fields either — **it DELETES the whole section**: `price: null` with
+`pricesHidden: true`, and **Production still gets the quality and age pages.** Deleting the section
+rather than nulling inside it is what makes the gate total — there is no `bands[].blockCount` left
+to read a price distribution off. Asserted twice: statically on the gate's ORDER and shape, and on a
+real payload by scanning every key under `quality` + `age` for `php|peso|cost|price|value_php|amount`
+(**56 keys, 0 offenders** — while `price` does carry them, so the scan is not vacuous).
+
+> The quality reading is deliberately named `value` / `kgWeightedValue`. A moisture percentage is
+> not money, and `value_php` — Σ kg × ₱/kg — is; that is why the money scan looks for `value_php`
+> and not for a bare `value`.
+
+**UI rule:** when `pricesHidden`, say so once ("prices are not shown for your role") rather than
+rendering an empty page or hiding the tab.
+
+#### Refusals — all jsonb `{ok:false, reason, message}`, never a throw
+
+`not_signed_in` · `both_sources` · `no_source` · `invalid_proposal_id` · `invalid_version_no` ·
+`unknown_proposal` · `unknown_version` (names the latest version) · `no_blocks` ·
+`too_many_blocks` (cap **250**, `BLEND_ANALYSIS_MAX_BLOCKS`) · **`unknown_block_loc`** (a
+`block_loc` with no active batch in it right now — **NAMED**, never silently dropped, because
+analysing a set you could not resolve would quietly describe a different blend) ·
+`invalid_price_edge` / `no_price_edges` / `too_many_price_edges` (cap 6) · `invalid_age_edge`
+(a NULL, a non-positive, or one above 5,000 days) / `no_age_edges` / `too_many_age_edges` (cap 6) ·
+`invalid_rounded_up` · `invalid_market_price` · `rpc_error` · `exception`.
+
+**The reason codes are PREFIXED by family** (`invalid_price_edge` vs `invalid_age_edge`) because one
+function takes both edge lists and a caller has to know which one it got wrong — a deliberate
+divergence from the two lenses, which each use a bare `invalid_edge`. **The messages are the lenses'
+own, verbatim.** Integrality of both edge lists and of `roundedUpPhp` is checked **in the action**,
+because `int[]` / `int` means Postgres has already rounded `1.5` to `2` before the SQL body runs.
+
+#### Posture and cost
+
+`fn_natural_breaks_3` is **IMMUTABLE, PARALLEL SAFE, reads no table** (proven — no `FROM public.`,
+no `now()`); `fn_blend_analysis` is **STABLE, SECURITY INVOKER**. Both pin `search_path = public`,
+both revoke `PUBLIC` + `anon`, both grant **`authenticated` only** and **NOT `service_role`** (no
+sync worker calls them, so `verify-worker-view-grants` stays at 4 views / 0 findings). Proven by
+really calling them as `anon` and as `service_role` and requiring both to be refused (L-043: prove a
+permission by assuming the victim's role).
+
+**Cost, measured before any proof was written** (the 2026-09-14 rule — `set local
+statement_timeout='5s'` then `EXPLAIN (ANALYZE, BUFFERS)`, 2026-09-21):
+
+| call | time | buffers |
+|---|---|---|
+| `fn_natural_breaks_3`, 250 distinct values (31,125 candidate pairs) | **57.7 ms** | 754 |
+| `fn_natural_breaks_3`, 1,000 values — the hard cap (499,500 pairs) | 726.5 ms | — |
+| `fn_blend_analysis`, the owner's SAVED 24-block version | **39.5 ms** | 2,220 |
+| `fn_blend_analysis`, LIVE over ALL 170 occupied blocks | **211.9 ms** | 2,931 |
+| `fn_blend_analysis`, LIVE over a realistic 3 blocks | 43.2 ms | 3,023 |
+
+**The candidate SEARCH runs on `double precision` prefix sums and every PUBLISHED figure is
+recomputed in exact `numeric`, and that split is measured rather than stylistic:** a `numeric[]`
+element is varlena, so `arr[k]` walks the array and the "O(1) per candidate" claim is false — the
+identical function on numeric prefix sums took **279 ms** at 250 values against 57.7 ms on float8.
+Cost is quadratic in DISTINCT values, so `fn_natural_breaks_3` refuses more than **1,000** outright
+and the action caps a blend at **250** blocks; both bounds are by construction, since a blend cannot
+hold more blocks than the yard has occupied ones.
+
+#### The verify script reaches the functions through TWO probes, and why
+
+They are `authenticated`-only by design and no verify script holds a user JWT — and worse,
+**`service_role` holds NOTHING AT ALL on `blend_proposals` / `blend_proposal_versions`**, so the
+script cannot even find out which saved versions exist. **`fn_blend_analysis_probe(proposal_id,
+version_no)`** (both arguments required, so it is structurally impossible to point it at all of
+history) and **`fn_blend_analysis_probe_cases()`** (the version index, capped at 200 with a
+`truncated` flag, plus the degenerate and unmeasured cases **discovered from the grid**) are the
+bridges — SECURITY DEFINER, `service_role` **only**, never `authenticated`, never `anon`. **Both
+assert nothing**; every assertion lives in readable TypeScript, including a **brute-force oracle**
+that re-derives the objective function so the optimality claim is a proof rather than a restatement.
+They are deliberately NOT whole-database verifiers (the 2026-09-14 `fn_ops_ledger_verify()` incident
+took the live site down). Both existing lens probes and the block-facts probe are **untouched**.
+
+> Two sibling verify scripts had to be made MORE precise in the same changeset, not weaker:
+> `verify-blocking-age-lens.ts` and `verify-blend-block-facts.ts` each sliced `actions.ts` from
+> their own action **to end-of-file** to assert that no `canViewPrices` gate existed in it. That
+> worked only while nothing after them carried one. `fetchBlendAnalysis` legitimately does — and its
+> block comment names `canViewPrices()` in prose — so both now bound the slice at the file's own
+> `// ─── <name> ───` section divider and additionally assert the slice did not leak.
+
+### Blend analysis — UI + PRINT (2026-09-21)
+
+> **THE DATA LAYER IS THE SECTION ABOVE.** This one is what the reader sees and what
+> comes out of the printer. Proofs: `npx tsx scripts/verify-blend-analysis-ui.ts`
+> (**65 assertions**), which is the UI twin of `verify-blend-analysis.ts`'s 71.
+
+**What the owner asked for**, verbatim: *"in the proposals, when printing and viewing saved
+blend proposals, add more pages that group and arrange blocks according to high priced and
+low priced and average priced … Do another page that talks about mc, ash and bd as well.
+Maybe even age? Maybe make those extras an option. Make sure the groups are tables with
+footers that show totals or averages when appropriate … incorporating some of the logic of
+our price lens into blend proposal to make it printable. In the lens section, would be nice
+to also print some kind of summary based on the filter we set."*
+
+#### THE PAGES ARE A PREFERENCE, NOT A PER-PROPOSAL FIELD
+
+An **Analysis** button in the dialog header opens **Include pages** — three checkboxes
+(Price groups · Quality (MC · Ash · BD) · Age), **all three ON by default**, stored per user
+in `user_table_settings` under `module = 'blocking_blend_analysis'` through the same
+`getUserModuleSettings` / `saveUserModuleSettings` pair the two lenses use (`useModuleSettings`,
+exported from `lens/use-lens-settings.ts` — ONE storage implementation, two names, no new
+table and no migration). The trigger shows the count, and the **Print** button shows `+N` and
+says *"the blocks sheet plus 3 extra pages"* on its tooltip: a reader who ticked three pages
+and got one sheet would have no way to tell whether the pages or the printer were at fault.
+
+**The chosen pages render as SECTIONS below the Selected Blocks table, in the dialog's own
+scroll, and as SEPARATE SHEETS in the print** — one payload, two surfaces, every word and
+format shared through `blend-analysis-text.ts`.
+
+#### THE PRICE PAGE IS GATED TWICE, AND THE GATE IS A DELETION EITHER WAY
+
+`analysisPages(options, canViewPrices)` is the ONE place the stored choice meets the reader's
+permission, and the flag it takes is the grid's **EFFECTIVE** one (`serverCanViewPrices &&
+showPrices`) — so flipping the page's Prices toggle off removes the price page as surely as a
+Production role does. Independently, the server has already DELETED `price` from the payload
+(`price: null`, `pricesHidden: true`) while still returning `quality` and `age`, so there is
+nothing to render even if a gate were missed. The price CHECKBOX is **absent**, not disabled,
+for such a reader, and the sections say so once: *"Prices are not shown for your role."*
+
+#### WHAT EACH PAGE SHOWS
+
+| Page | Grouping | Tables | Footer |
+|---|---|---|---|
+| **Price groups — natural breaks** | the payload's `natural` | one method note, then HIGH → AVERAGE → LOW; blocks dearest first | group SUBTOTAL (blocks · share · kg · weighted ₱/kg · value) + a grand FOOTER from `overall`, which **visibly equals the proposal's own raw blend price** |
+| **Against market** | the PRICE LENS's bands | dearest band first, labelled with the lens's OWN `priceBandLabel` + the reader's band names | band subtotal + grand footer |
+| **Quality — MC · ASH · BD** | natural breaks per metric | three tables; **BD JIS is a COLUMN in the BD table, not a fourth table** (its groups are cut in different places, so its per-group average would describe a different population — only the blend's own weighted JIS is shown, in the footer) | subtotal with the kg-weighted reading + grand footer |
+| **Age** | the AGE LENS's fixed day bands | oldest band first, oldest block first; block · batch · balance · age (1 dp) · first delivery · last delivery | band subtotal (weighted age) + grand footer (weighted age, and the oldest pile named) |
+
+**The reader's own lens settings drive all of it** — `priceEdgeOffsets` from the price lens's
+saved cut lines, `ageEdgeDays` from the age lens's, both band-name documents, and the market:
+a **typed** price sends `Math.ceil(typed)` as the cut line exactly as the lens does, while
+every MEASURED basis sends nothing so the database compares a saved version with the market of
+the month it was SAVED in. The caption then names that month.
+
+**NULL IS NEVER 0, on every page.** An unmeasured (`unmeasured`) or undated (`undated`) block
+is listed in a MUTED group with em dashes and is in NO group, out of every average and both
+share denominators. When the honest figure and the blend's own stored figure disagree
+(`equalsSnapshot === false`) the page prints BOTH and says which population each covers,
+rather than picking a winner.
+
+#### THE PRINT'S OWN RULES
+
+The printout is still the one self-contained HTML document in a hidden iframe, A4 **landscape**
+at a 10mm margin, `print-color-adjust: exact`. The analysis sheets are appended by
+`buildBlendPrintDocument`'s fifth argument and carry: `break-before: page` per page;
+`break-after: avoid` on every heading and caption; one `<tbody>` per group, with
+`break-inside: avoid` only while the group is small (≤ 4 rows); **no `<tfoot>` anywhere**
+(Chrome repeats one on every sheet, so a total in one reads as a duplicated total); a 7pt font
+floor; and group tints from `lens/lens-ramp.ts`'s `rampRgb`, because the iframe cannot see
+`globals.css`. `LENS_RAMP_RGB` is a deliberate second copy of the fourteen `--lens-hue`
+triples, **PROVEN equal to `globals.css` by the verify script** rather than assumed — the
+project's standing answer to a constant that must live in two places.
+
+**The PDF carries the same pages**, built from the same payload and the same words through
+`pdfText` (jsPDF's Helvetica is WinAnsi, so `₱` is spelled `PHP` and every cell is filtered),
+with the subtotal and total as body rows for the same reason.
+
+#### THE LENS SUMMARY PRINT
+
+A **Print** button on the Highlight legend bar prints ONE A4 landscape sheet of the ACTIVE
+lens as configured — see `lens/lens-summary-print.tsx` in Files. It is the PLATFORM print kit
+(`GroupPrintStage` + `printCard` + `buildPrintPageRules`, portalled to `<body>`), the sheet is
+explicitly light, band ISOLATION is respected and stated, and the footer's figure cell is
+labelled **`avg of priced`** / `avg of dated` because the price lens's weighted total covers
+the priced population while its counts cover the whole yard. **The button is ABSENT on Price
+for a reader without the effective price flag** (the panel itself renders nothing without it)
+and **present for every role on Age**, which carries no money at all.
+
 ### Price lens — DATA LAYER (2026-09-19, migration `20260919025729_blocking_price_lens`)
 
 > **BACKEND ONLY so far.** The two SQL functions, the two server actions and the types are LIVE
@@ -527,6 +898,8 @@ interface BlockingPriceBand {
   kg: number;
   kgSharePct: number | null;     // PERCENT 0-100 of the PRICED population; null if nothing priced
   blockSharePct: number | null;  // PERCENT 0-100 of the PRICED population; null if nothing priced
+  kgWeightedPhpKg: number | null; // ADDED 2026-09-21. Σ(kg × ₱/kg) ÷ Σkg for the band.
+                                  // NULL, NEVER 0, on an EMPTY band
 }
 
 interface BlockingPriceLens {
@@ -536,7 +909,8 @@ interface BlockingPriceLens {
   bands: BlockingPriceBand[];
   bandByBlock: Record<string, number>;   // block_loc -> band index. THE map a cell colours from
   unpriced: { blockCount: number; kg: number };
-  total:    { blockCount: number; kg: number };
+  total:    { blockCount: number; kg: number;
+              kgWeightedPhpKg: number | null };  // ADDED 2026-09-21 — see the note below
 }
 
 type BlockingPriceLensResult =
@@ -554,6 +928,26 @@ off-by-one: rounding up even on a whole number keeps the market price **itself**
 "at market" band `[R−1, R)` rather than promoting it to "above market", because a block priced at
 exactly market is not dearer than market. **R is defined once, in SQL** — the verify script
 asserts no `floor`/`Math.floor` exists in the TypeScript.
+
+##### `kgWeightedPhpKg` — WHAT THE BAND COST (2026-09-21, migration `20260921084500`)
+
+The lens could say how many blocks and how many kilograms were in each band, but not what those
+kilograms **cost** — so a lens print had to re-weight the band in TypeScript, which CLAUDE.md
+forbids. **Additive jsonb keys only: the signature did not change, no existing key moved, and the
+verify script asserts the whole key set is exactly what it was plus this one.**
+
+* **Per band:** `Σ(kg × avg_php_kg) ÷ Σkg`. **NULL — never 0 — on an EMPTY band**: no charcoal in
+  the band means no price in the band.
+* **On `total`: it is weighted over the PRICED population only, while `total.blockCount` /
+  `total.kg` still count EVERY occupied block.** The asymmetry is deliberate and is the L-008 rule
+  again — an unpriced block's ₱0 is a placeholder, so averaging it in would drag the figure down
+  exactly as `batches.avg_cost` once read **₱11.01 against a real ₱39.99**. The counts are a count
+  of the yard; the price is a price of what is priced, which is the same population the two share
+  denominators already use.
+
+Proven every run by reading `view_blocking_grid` **directly** (service_role holds SELECT on it) and
+recomputing each band: measured 2026-09-21 on the live grid, **₱23.8801 / ₱39.4000 / ₱45.4434**
+across the three default bands and **₱36.9520** on `total`, 170 of 170 blocks priced, gap 0 in SQL.
 
 ##### `roundedUpPhp` — A TYPED PRICE IS THE LINE ITSELF (2026-09-21, migration `20260921034512`)
 
@@ -1384,6 +1778,9 @@ columns.
 | `settingsOpen` (per lens) | `boolean` | `false` | **The Settings popover**, inside each lens panel — the gear's disclosure, holding everything that used to be the docked sidebar's body. Not the grid's and not the frame's: a lens owns its own settings, so a second lens gets the gear for free |
 | `lensStalled` / `wantRef` / `firstDoneRef` (per lens) | `boolean` / `string` ref / `boolean` ref | `false` / `''` / `false` | **The 2026-09-21 stall fix.** `wantRef` is the SIGNATURE of the request the panel currently wants — a reply matching it is ALWAYS applied, a superseded one is dropped (it replaced a monotonic token that also discarded replies it still wanted). `firstDoneRef` makes the FIRST request fire on the mount frame with no timer for a remount to destroy. `lensStalled` is the watchdog (`LENS_STALL_MS`), which turns an eternal spinner into the shared copyable banner with a Retry |
 | `facts` / `factsAsOfUsed` / `factsWantRef` | `Record<batchId, BlendBlockFacts>` / `string \| null` / `string` ref | `{}` / `null` / `''` | **The blend modal's supplier dominance + the two block ages.** Fetched once per open / per version switch and race-safe on the same signature discipline the lenses use. A refusal leaves em dashes — these columns are additive context and never fail the modal, the print or the PDF |
+| `analysisOptions` | `BlendAnalysisOptions` | `{price:true, quality:true, age:true}` | **Which ANALYSIS PAGES the blend dialog shows and prints.** Not grid state — the dialog's own document, stored per user under `module = 'blocking_blend_analysis'` via `useModuleSettings`. Parsed as UNTRUSTED field by field; defaults omitted on save, so turning everything back on is a removal. ANDed with the effective price flag by `analysisPages()` |
+| `analysis` / `analysisLoading` / `analysisRefusal` / `analysisStalled` | `BlendAnalysis \| null` / `boolean` / `string \| null` / `boolean` | `null` / `false` / `null` / `false` | **The analysis payload**, from `useBlendAnalysis` — one read per open / version switch / option change, fired on the MOUNT FRAME and guarded by the request's own SIGNATURE (no debounce: the inputs are discrete events). A refusal keeps the previous payload and is shown inline with Copy; a stall becomes the same banner with Retry after `LENS_STALL_MS` |
+| `printModel` (per lens) | `LensSummaryPrintModel \| null` | `null` | **The printed lens summary's model**, built inside each lens panel because only the lens knows what its settings mean. Null while the payload has not arrived, which disables the bar's Print button. Respects band isolation and carries preformatted strings only |
 | `showPrices` | `boolean` | `true` | **Price-visibility display preference** (the "Prices" Eye/EyeOff toggle). Persisted to `localStorage` key **`blocking_show_prices`** (`'false'` = hidden; anything else = shown). Hydrated from storage in a post-mount `useEffect` (state starts `true` to avoid SSR/CSR hydration mismatch). HIDE-ONLY — the effective price flag is `serverCanViewPrices && showPrices`, so it can never reveal beyond the server gate |
 
 ## Key Behaviors
@@ -1392,6 +1789,8 @@ columns.
 - **A `flex-wrap` ROW'S MAX-CONTENT IS ITS ONE-LINE WIDTH — a section that always renders stacked must be BUILT stacked, or it starves its neighbours (2026-09-21, second pass)** — the lesson from the owner's 1790px screenshot, in which the totals wrapped 4 + 1 and the modes 3 + 1 while a 214px hole sat beside the supplier search. Section 1 was ONE `flex-wrap` row holding the search AND the seven warehouse chips, so its max-content was **620px measured** although it always rendered as search-over-chips in 444; the four tracks therefore asked for 2,174px against 1,766px of real room and the grid shrank every one of them. **Section 1 is now an explicit two-row block** (`.blocking-strip-filters`, a single-column grid: search, then chips) and asks for **384px**; the totals row is `sm:flex-nowrap` on a `max-content` track so the fifth stat can never drop to a line of its own; and the modes are `.blocking-strip-modes`, a grid of `max-content` columns — **4 across or a clean 2 × 2, never a ragged 3 + 1** — switched by a CONTAINER query on the strip's own scroller (`container-name: blockingstrip`), with `data-mode-count` telling the CSS whether this reader has three buttons or four, since CSS cannot count children. Measured at the owner's width: filters slack **214px → 0**, totals **2 rows → 1**, modes **2 rows → 2 × 2**, and one row of four from ~1910px of strip width up
 - **THE LENS LEGEND BAR replaced the docked sidebar (2026-09-21)** — the lens is now the strip's second sticky row: lens switch · headline · one CHIP per band (the isolate toggles) · a thin ratio bar · the unpriced/undated chip · a Problem chip on a refusal or stall · kg\|blocks · **Settings** (gear) · Clear · close, on ONE line that scrolls rather than wraps. The detail — market basis, the band rows with their counts and averages, Customize, the refusal banner — lives in the Settings POPOVER, which floats over the grid only while open. **The grid is full width again**
 - **The blend modal's SUPPLIER · OPENED · LAST PILED columns (2026-09-21)** — after BATCH: a GREEN pill when `isSingleSupplier === true`, ORANGE with the dominant supplier + share when `false`, a plain em dash when `null`; then the two ages as `38 d`, dates on the `title`, NULL never 0. Keyed by `batch_id` (a block address is reused), and a SAVED version asks about the Asia/Manila date of its own version and says so. No ₱ — every role sees them. The print is A4 LANDSCAPE and keeps the pill colours
+- **THE ANALYSIS PAGES in the blend dialog (2026-09-21)** — an **Analysis** button in the header opens **Include pages** (Price groups · Quality · Age, all three ON by default, remembered per user under `blocking_blend_analysis`); the chosen pages render as sections below the blocks table AND as separate sheets in the printout and the PDF, with the Print button showing `+N`. Groups read HIGH → LOW on every table, each with a SUBTOTAL row and one grand FOOTER taken from the payload's own `overall` — **nothing is summed, averaged or shared out in TypeScript**. The price page is dropped for any reader without the EFFECTIVE price flag, and the payload they receive has no `price` section at all. An unmeasured or undated block sits in a muted "no reading" group with an em dash, never in the cheapest, cleanest or freshest group
+- **THE LENS SUMMARY PRINT (2026-09-21)** — a **Print** button on the Highlight legend bar prints one A4 landscape sheet of the active lens as configured: title, the settings in words, the cut lines, the band table (its total labelled **`avg of priced`** / `avg of dated`), the ratio bar, then each band's blocks in compact multi-column lists and the unpriced/undated population in a muted list. **Band isolation is respected and stated** ("Showing 2 of 4 bands"). Absent on Price for a reader without the effective price flag; present for every role on Age
 - **Warehouse filter chips** — ALL/WHSE A/B/C/D toggle buttons in global header. Individual chips toggle on/off. If all deselected, auto-reverts to ALL. Global stats recalculate for visible warehouses only
 - **Weighted average stats** — Each warehouse header shows all 7 lab result weighted averages (weighted by balance): MC, ASH, BD ASTM, BD JIS, GRIT, VM, FC. Also shows weighted PHP/KG (gated via the EFFECTIVE `canViewPrices` = server gate AND the `showPrices` toggle)
 - **Prices visibility toggle** — Eye/EyeOff "Prices" button in the top-right controls (default ON). Hide-only presenter/privacy switch — see **Role-Gating → Price-Visibility Toggle**. Hides ALL ₱ across Blocking (cells, detail panel, blend modal, and every print/PDF export) when OFF; the effective flag is always `serverCanViewPrices && showPrices`; persisted to `localStorage` `blocking_show_prices`; the control is hidden entirely for server-gated no-price users

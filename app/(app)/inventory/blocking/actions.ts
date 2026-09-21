@@ -23,6 +23,30 @@ import type {
   BlendBlockFacts,
   BlendBlockFactsResult,
   BlendBlockSupplierShare,
+  BlendAnalysis,
+  BlendAnalysisAgeSection,
+  BlendAnalysisBlockRef,
+  BlendAnalysisInput,
+  BlendAnalysisPriceSection,
+  BlendAnalysisQualitySection,
+  BlendAnalysisRefusalReason,
+  BlendAnalysisResult,
+  BlendAnalysisUnmeasured,
+  BlendAgeBand,
+  BlendAgeBlock,
+  BlendNaturalCut,
+  BlendNaturalGroupLabel,
+  BlendNaturalStats,
+  BlendPriceBlock,
+  BlendPriceNatural,
+  BlendPriceNaturalGroup,
+  BlendQualityBlock,
+  BlendQualityGroup,
+  BlendQualityMetric,
+  BlendQualityNatural,
+  BlendVsMarket,
+  BlendVsMarketBand,
+  BlendVsMarketUnavailable,
 } from './types';
 import {
   BLOCKING_PRICE_LENS_DEFAULT_EDGES,
@@ -37,6 +61,10 @@ import {
   BLOCKING_AGE_EDGE_MIN_DAYS,
   BLOCKING_AGE_EDGE_MAX_DAYS,
   BLEND_BLOCK_FACTS_MAX_BATCH_IDS,
+  BLEND_ANALYSIS_MAX_BLOCKS,
+  BLEND_ANALYSIS_DEFAULT_PRICE_EDGES,
+  BLEND_ANALYSIS_DEFAULT_AGE_EDGES,
+  BLEND_ANALYSIS_QUALITY_METRICS,
 } from './types';
 import type { Json } from '@/types/supabase';
 
@@ -1124,7 +1152,11 @@ type PriceLensEnvelope = {
   bands?: Array<Record<string, unknown>> | null;
   blocks?: Array<Record<string, unknown>> | null;
   unpriced?: { block_count?: number | null; kg?: number | string | null } | null;
-  total?: { block_count?: number | null; kg?: number | string | null } | null;
+  total?: {
+    block_count?: number | null;
+    kg?: number | string | null;
+    kg_weighted_php_kg?: number | string | null;
+  } | null;
 } | null;
 
 const lensNum = (v: unknown): number => Number(v ?? 0);
@@ -1397,6 +1429,8 @@ export async function fetchBlockingPriceLens(
       kg: lensNum(b.kg),
       kgSharePct: lensNumOrNull(b.kg_share_pct),
       blockSharePct: lensNumOrNull(b.block_share_pct),
+      // Null on an EMPTY band — no charcoal in the band means no price in the band.
+      kgWeightedPhpKg: lensNumOrNull(b.kg_weighted_php_kg),
     }));
 
     // RE-KEY, not aggregate: the grid needs a per-cell lookup, and SQL already decided
@@ -1418,7 +1452,13 @@ export async function fetchBlockingPriceLens(
       bands,
       bandByBlock,
       unpriced: { blockCount: lensNum(res.unpriced?.block_count), kg: lensNum(res.unpriced?.kg) },
-      total: { blockCount: lensNum(res.total?.block_count), kg: lensNum(res.total?.kg) },
+      total: {
+        blockCount: lensNum(res.total?.block_count),
+        kg: lensNum(res.total?.kg),
+        // Weighted over the PRICED population only, while the counts cover every block —
+        // see the type doc. Null-preserving: nothing priced means no price.
+        kgWeightedPhpKg: lensNumOrNull(res.total?.kg_weighted_php_kg),
+      },
     };
 
     return { ok: true, lens };
@@ -1891,5 +1931,597 @@ export async function fetchBlendBlockFacts(
   } catch (err: unknown) {
     console.error('[Blocking] fetchBlendBlockFacts failed:', err);
     return { ok: false, reason: 'exception', message: BLEND_FACTS_UNREACHABLE_MESSAGE };
+  }
+}
+
+// ─── Blend ANALYSIS — DATA LAYER ──────────────────────────────────────────────
+//
+// The extra viewer / print pages for a blend proposal: the blocks GROUPED by price, by
+// lab reading and by age, with footers. One action over `fn_blend_analysis` (migration
+// `20260921084500_blend_analysis_natural_breaks`).
+//
+// FOUR RULES, and the FIRST is the one that makes this action different from every other
+// price-bearing read in this file.
+//
+//   1. THE PRICE GATE IS A DELETION, NOT A REFUSAL — and not a nulling pass either.
+//      `fetchBlockingPriceLens` REFUSES a `!canViewPrices()` caller outright, because a
+//      price lens is price all the way through: even a band's block count describes the
+//      yard's price distribution. This payload is not like that. It SPLITS: `price` is
+//      money (group ₱/kg, band edges, Σ kg·₱, and band membership itself), while
+//      `quality` and `age` are readings, kilograms, day counts and shares with no money
+//      key and nothing derivable into one. So the whole `price` SECTION IS DELETED —
+//      set to `null`, with `pricesHidden: true` — BEFORE the payload leaves the server,
+//      and Production still gets the quality and age pages. Deleting the section rather
+//      than nulling fields inside it is what makes the gate total: there is no
+//      `bands[].blockCount` left to read a distribution off.
+//
+//   2. NOTHING IS COMPUTED HERE. The groups, the cut lines, the goodness-of-fit, every
+//      share and every weighted average come out of SQL (CLAUDE.md: never aggregate in
+//      TypeScript). This function validates its inputs and camelCases the payload.
+//
+//   3. A BUSINESS REFUSAL IS DATA, NEVER A THROW — `{ok:false, reason, message}`, and the
+//      message goes straight to `errorToast()`.
+//
+//   4. NULL IS PRESERVED EVERYWHERE. `gvf` on a single-valued blend, an empty group's
+//      weighted average, a share when nothing is measured, an undated block's age: all
+//      null, never 0. "There is nothing of this kind" and "there is something and it
+//      measures zero" are different answers, and the ₱ column is where confusing them is
+//      expensive.
+//
+// Read-only: no writes, no audit logs, no `revalidatePath()`.
+
+const BLEND_ANALYSIS_UNREACHABLE_MESSAGE =
+  'Could not reach the database to work out the blend analysis. Nothing changed — try again.';
+const BLEND_ANALYSIS_PRICE_EDGE_MESSAGE =
+  'Every band edge has to be a whole number of pesos away from market.';
+const BLEND_ANALYSIS_AGE_EDGE_MESSAGE = `Every cut line has to be a whole number of days between ${BLOCKING_AGE_EDGE_MIN_DAYS} and ${BLOCKING_AGE_EDGE_MAX_DAYS.toLocaleString('en-US')}.`;
+
+/** The `{ok, ...}` envelope `fn_blend_analysis` returns. Typed loosely on purpose: every
+ *  figure is mapped through `lensNum` / `lensNumOrNull` below so a NULL the function
+ *  deliberately returns cannot be coerced by an optimistic generated type. */
+type BlendAnalysisEnvelope = {
+  ok?: boolean;
+  reason?: string;
+  message?: string;
+  source?: string;
+  as_of?: string | null;
+  proposal_id?: string | null;
+  version_no?: number | null;
+  title?: string | null;
+  snapshot_computed_at?: string | null;
+  computed_at?: string | null;
+  block_count?: number | null;
+  total_kg?: number | string | null;
+  sections?: {
+    price?: Record<string, unknown> | null;
+    quality?: Record<string, unknown> | null;
+    age?: Record<string, unknown> | null;
+  } | null;
+} | null;
+
+type Row = Record<string, unknown>;
+
+const asRows = (v: unknown): Row[] => (Array.isArray(v) ? (v as Row[]) : []);
+const asRow = (v: unknown): Row => (v && typeof v === 'object' ? (v as Row) : {});
+const asStr = (v: unknown): string => (typeof v === 'string' ? v : '');
+const asStrOrNull = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+
+/** The identity half of every block row. A RE-KEY, never a computation. */
+function mapBlockRef(b: Row): BlendAnalysisBlockRef {
+  return {
+    batchId: asStrOrNull(b.batch_id),
+    blockLoc: asStr(b.block_loc),
+    batchCode: asStr(b.batch_code),
+    kg: lensNum(b.kg),
+  };
+}
+
+function mapCuts(v: unknown): BlendNaturalCut[] {
+  return asRows(v).map((c) => ({
+    index: lensNum(c.index),
+    below: lensNum(c.below),
+    above: lensNum(c.above),
+    value: lensNum(c.value),
+  }));
+}
+
+function mapStats(v: unknown): BlendNaturalStats {
+  const s = asRow(v);
+  return {
+    n: lensNum(s.n),
+    distinctCount: lensNum(s.distinct_count),
+    totalWeight: lensNum(s.total_weight),
+    // All four of these are NULL on a blend with nothing measurable.
+    weightedMean: lensNumOrNull(s.weighted_mean),
+    totalSs: lensNumOrNull(s.total_ss),
+    withinSs: lensNumOrNull(s.within_ss),
+    betweenSs: lensNumOrNull(s.between_ss),
+    candidatesConsidered: lensNum(s.candidates_considered),
+  };
+}
+
+function mapUnmeasured(v: unknown): BlendAnalysisUnmeasured {
+  const u = asRow(v);
+  return {
+    blockCount: lensNum(u.block_count),
+    kg: lensNum(u.kg),
+    noValueCount: lensNum(u.no_value_count),
+    noWeightCount: lensNum(u.no_weight_count),
+    blocks: asRows(u.blocks).map(mapBlockRef),
+  };
+}
+
+/** The label vocabulary is CLOSED in SQL; anything else is a contract break, so it falls
+ *  back to the neutral `mid` rather than widening the union at runtime. */
+function mapLabel(v: unknown): BlendNaturalGroupLabel {
+  return v === 'low' || v === 'mid' || v === 'high' ? v : 'mid';
+}
+
+function mapPriceNatural(v: unknown): BlendPriceNatural {
+  const n = asRow(v);
+  const o = asRow(n.overall);
+  const groups: BlendPriceNaturalGroup[] = asRows(n.groups).map((g) => ({
+    index: lensNum(g.index),
+    label: mapLabel(g.label),
+    rangeMin: lensNum(g.range_min),
+    rangeMax: lensNum(g.range_max),
+    blockCount: lensNum(g.block_count),
+    kg: lensNum(g.kg),
+    kgSharePct: lensNumOrNull(g.kg_share_pct),
+    blockSharePct: lensNumOrNull(g.block_share_pct),
+    // Null on an empty group. "No charcoal here" is not "₱0 here".
+    kgWeightedPhpKg: lensNumOrNull(g.kg_weighted_php_kg),
+    valuePhp: lensNum(g.value_php),
+    blocks: asRows(g.blocks).map((b): BlendPriceBlock => ({ ...mapBlockRef(b), phpKg: lensNum(b.php_kg) })),
+  }));
+  return {
+    metric: 'php_kg',
+    groupCount: lensNum(n.group_count),
+    gvf: lensNumOrNull(n.gvf),
+    cuts: mapCuts(n.cuts),
+    stats: mapStats(n.stats),
+    groups,
+    unmeasured: mapUnmeasured(n.unmeasured),
+    overall: {
+      blockCount: lensNum(o.block_count),
+      kg: lensNum(o.kg),
+      kgWeightedPhpKg: lensNumOrNull(o.kg_weighted_php_kg),
+      valuePhp: lensNum(o.value_php),
+      snapshotPhpKg: lensNumOrNull(o.snapshot_php_kg),
+      snapshotGap: lensNumOrNull(o.snapshot_gap),
+      // Tri-state on purpose: null means "cannot say", not "no".
+      equalsSnapshot: typeof o.equals_snapshot === 'boolean' ? o.equals_snapshot : null,
+    },
+  };
+}
+
+function mapVsMarket(v: unknown): BlendVsMarket | null {
+  if (!v || typeof v !== 'object') return null;
+  const m = asRow(v);
+  const o = asRow(m.overall);
+  const u = asRow(m.unmeasured);
+  const bands: BlendVsMarketBand[] = asRows(m.bands).map((b) => ({
+    index: lensNum(b.index),
+    // null = OPEN. lensNumOrNull, never `?? 0` — a zero bound would be a real ₱0 edge.
+    lowerPhp: lensNumOrNull(b.lower_php),
+    upperPhp: lensNumOrNull(b.upper_php),
+    blockCount: lensNum(b.block_count),
+    kg: lensNum(b.kg),
+    kgSharePct: lensNumOrNull(b.kg_share_pct),
+    blockSharePct: lensNumOrNull(b.block_share_pct),
+    kgWeightedPhpKg: lensNumOrNull(b.kg_weighted_php_kg),
+    valuePhp: lensNum(b.value_php),
+    blocks: asRows(b.blocks).map((x): BlendPriceBlock => ({ ...mapBlockRef(x), phpKg: lensNum(x.php_kg) })),
+  }));
+  return {
+    marketPhpKg: lensNum(m.market_php_kg),
+    marketBasis: m.market_basis === 'given' ? 'given' : 'as_of_month',
+    marketBasisMonth: asStrOrNull(m.market_basis_month),
+    roundedUpPhp: lensNum(m.rounded_up_php),
+    edgeOffsets: Array.isArray(m.edge_offsets) ? m.edge_offsets.map((e) => Number(e)) : [],
+    bands,
+    unmeasured: {
+      blockCount: lensNum(u.block_count),
+      kg: lensNum(u.kg),
+      blocks: asRows(u.blocks).map(mapBlockRef),
+    },
+    overall: {
+      blockCount: lensNum(o.block_count),
+      kg: lensNum(o.kg),
+      kgWeightedPhpKg: lensNumOrNull(o.kg_weighted_php_kg),
+      valuePhp: lensNum(o.value_php),
+    },
+  };
+}
+
+function mapVsMarketUnavailable(v: unknown): BlendVsMarketUnavailable | null {
+  if (!v || typeof v !== 'object') return null;
+  const x = asRow(v);
+  return {
+    reason: 'no_market_price',
+    message: asStr(x.message),
+    marketBasis: x.market_basis === 'given' ? 'given' : 'as_of_month',
+    marketBasisMonth: asStrOrNull(x.market_basis_month),
+  };
+}
+
+function mapQualityNatural(metric: BlendQualityMetric, v: unknown): BlendQualityNatural {
+  const n = asRow(v);
+  const o = asRow(n.overall);
+  const groups: BlendQualityGroup[] = asRows(n.groups).map((g) => ({
+    index: lensNum(g.index),
+    label: mapLabel(g.label),
+    rangeMin: lensNum(g.range_min),
+    rangeMax: lensNum(g.range_max),
+    blockCount: lensNum(g.block_count),
+    kg: lensNum(g.kg),
+    kgSharePct: lensNumOrNull(g.kg_share_pct),
+    blockSharePct: lensNumOrNull(g.block_share_pct),
+    kgWeightedValue: lensNumOrNull(g.kg_weighted_value),
+    blocks: asRows(g.blocks).map((b): BlendQualityBlock => ({ ...mapBlockRef(b), value: lensNum(b.value) })),
+  }));
+  return {
+    metric,
+    groupCount: lensNum(n.group_count),
+    gvf: lensNumOrNull(n.gvf),
+    cuts: mapCuts(n.cuts),
+    stats: mapStats(n.stats),
+    groups,
+    unmeasured: mapUnmeasured(n.unmeasured),
+    overall: {
+      blockCount: lensNum(o.block_count),
+      kg: lensNum(o.kg),
+      kgWeightedValue: lensNumOrNull(o.kg_weighted_value),
+      snapshotValue: lensNumOrNull(o.snapshot_value),
+      snapshotGap: lensNumOrNull(o.snapshot_gap),
+      equalsSnapshot: typeof o.equals_snapshot === 'boolean' ? o.equals_snapshot : null,
+    },
+  };
+}
+
+function mapAgeSection(v: unknown): BlendAnalysisAgeSection {
+  const a = asRow(v);
+  const o = asRow(a.overall);
+  const u = asRow(a.undated);
+  const bands: BlendAgeBand[] = asRows(a.bands).map((b) => ({
+    index: lensNum(b.index),
+    // lowerDays is 0 on the first band and never null — age has a floor.
+    lowerDays: lensNum(b.lower_days),
+    // null = OPEN ABOVE. A 0 here would read as "this band ends at day zero".
+    upperDays: lensNumOrNull(b.upper_days),
+    blockCount: lensNum(b.block_count),
+    kg: lensNum(b.kg),
+    kgSharePct: lensNumOrNull(b.kg_share_pct),
+    blockSharePct: lensNumOrNull(b.block_share_pct),
+    kgWeightedAgeDays: lensNumOrNull(b.kg_weighted_age_days),
+    blocks: asRows(b.blocks).map((x): BlendAgeBlock => ({
+      ...mapBlockRef(x),
+      ageDays: lensNum(x.age_days),
+      firstDeliveryDate: asStrOrNull(x.first_delivery_date),
+      lastDeliveryDate: asStrOrNull(x.last_delivery_date),
+      deliveryCount: lensNum(x.delivery_count),
+    })),
+  }));
+  return {
+    asOf: asStr(a.as_of),
+    edgeDays: Array.isArray(a.edge_days) ? a.edge_days.map((e) => Number(e)) : [],
+    bands,
+    undated: {
+      blockCount: lensNum(u.block_count),
+      kg: lensNum(u.kg),
+      blocks: asRows(u.blocks).map(mapBlockRef),
+    },
+    overall: {
+      blockCount: lensNum(o.block_count),
+      kg: lensNum(o.kg),
+      kgWeightedAgeDays: lensNumOrNull(o.kg_weighted_age_days),
+      oldestAgeDays: lensNumOrNull(o.oldest_age_days),
+      oldestBlockLoc: asStrOrNull(o.oldest_block_loc),
+      oldestBatchCode: asStrOrNull(o.oldest_batch_code),
+    },
+  };
+}
+
+/**
+ * NORMALIZE AN EDGE LIST THE WAY SQL DOES and refuse what it would refuse, so the two can
+ * never disagree. The one check that MUST happen here is INTEGRALITY: both SQL parameters
+ * are `int[]`, so Postgres has already rounded `1.5` to `2` by the time the function body
+ * runs and that refusal is structurally unreachable there. De-duplicating BEFORE the cap
+ * is what keeps the two caps identical — SQL measures the cap on the collapsed list.
+ */
+function normalizeAnalysisEdges(
+  input: readonly number[] | null | undefined,
+  fallback: readonly number[],
+  kind: 'price' | 'age',
+):
+  | { ok: true; edges: number[] }
+  | { ok: false; reason: BlendAnalysisRefusalReason; message: string } {
+  const isPrice = kind === 'price';
+  const badEdge = {
+    ok: false as const,
+    reason: (isPrice ? 'invalid_price_edge' : 'invalid_age_edge') as BlendAnalysisRefusalReason,
+    message: isPrice ? BLEND_ANALYSIS_PRICE_EDGE_MESSAGE : BLEND_ANALYSIS_AGE_EDGE_MESSAGE,
+  };
+
+  const raw = input === null || input === undefined ? [...fallback] : input;
+  if (!Array.isArray(raw)) return badEdge;
+
+  for (const e of raw) {
+    if (typeof e !== 'number' || !Number.isFinite(e) || !Number.isInteger(e)) return badEdge;
+    // Age cut lines additionally have a range; price offsets legitimately go negative.
+    if (!isPrice && (e < BLOCKING_AGE_EDGE_MIN_DAYS || e > BLOCKING_AGE_EDGE_MAX_DAYS)) return badEdge;
+  }
+
+  const edges = Array.from(new Set(raw)).sort((a, b) => a - b);
+
+  if (edges.length === 0) {
+    return {
+      ok: false,
+      reason: isPrice ? 'no_price_edges' : 'no_age_edges',
+      message: isPrice
+        ? 'A price lens needs at least one band edge — with none, every block is in the same band and nothing is highlighted.'
+        : 'An age lens needs at least one cut line — with none, every block is in the same band and nothing is highlighted.',
+    };
+  }
+  const cap = isPrice ? BLOCKING_PRICE_LENS_MAX_EDGES : BLOCKING_AGE_LENS_MAX_EDGES;
+  if (edges.length > cap) {
+    return {
+      ok: false,
+      reason: isPrice ? 'too_many_price_edges' : 'too_many_age_edges',
+      message: isPrice
+        ? `A price lens takes at most ${cap} band edges; this one has ${edges.length}.`
+        : `An age lens takes at most ${cap} cut lines; this one has ${edges.length}.`,
+    };
+  }
+  return { ok: true, edges };
+}
+
+/**
+ * The blend ANALYSIS: this blend's blocks grouped by PRICE (weighted natural breaks, plus
+ * the price lens's market comparison), by LAB READING (mc / ash / BD ASTM / BD JIS) and by
+ * AGE, each with a footer that totals and weights.
+ *
+ * EXACTLY ONE SOURCE. `proposalId` (+ optional `versionNo`, default the proposal's current
+ * version) reads the STORED snapshot verbatim — a proposal is a statement about the yard
+ * on a particular day, and its snapshot is immutable and hashed. `blockLocs` computes the
+ * same thing live from `fn_blend_proposal_snapshot`, the ONE existing builder. Giving both
+ * is `both_sources`; giving neither (or a `versionNo` on its own) is `no_source`.
+ *
+ * `asOf` is decided by the DATABASE — the saved version's own Manila date, or today — and
+ * it narrows the AGE section only, so a delivery that lands after a proposal was saved can
+ * never repaint it.
+ *
+ * PRICE GATING IS A DELETION: a `!canViewPrices()` caller gets `price: null` and
+ * `pricesHidden: true`, and still gets `quality` and `age`. See the block comment above
+ * for why that is different from the price lens's outright refusal.
+ */
+export async function fetchBlendAnalysis(
+  input: BlendAnalysisInput = {},
+): Promise<BlendAnalysisResult> {
+  // (1) SOURCE. Exactly one, decided before anything else touches the database.
+  const hasProposal = input.proposalId !== null && input.proposalId !== undefined && input.proposalId !== '';
+  const hasLocs = input.blockLocs !== null && input.blockLocs !== undefined;
+
+  if (hasProposal && hasLocs) {
+    return {
+      ok: false,
+      reason: 'both_sources',
+      message: 'Analyse either a saved proposal version or a live list of blocks — not both at once.',
+    };
+  }
+  if (!hasProposal && !hasLocs) {
+    return {
+      ok: false,
+      reason: 'no_source',
+      message:
+        input.versionNo !== null && input.versionNo !== undefined
+          ? 'A version number needs a proposal to belong to. Give the proposal as well, or give a list of blocks.'
+          : 'Nothing to analyse yet — give a saved proposal, or a list of blocks.',
+    };
+  }
+
+  let proposalId: string | null = null;
+  let versionNo: number | null = null;
+  let blockLocs: string[] | null = null;
+
+  if (hasProposal) {
+    const id = String(input.proposalId);
+    if (!UUID_RE.test(id)) {
+      return {
+        ok: false,
+        reason: 'invalid_proposal_id',
+        message: 'That proposal reference is not usable — reopen the proposals list and try again.',
+      };
+    }
+    proposalId = id;
+
+    if (input.versionNo !== null && input.versionNo !== undefined) {
+      const v = Number(input.versionNo);
+      if (!Number.isFinite(v) || !Number.isInteger(v) || v < 1) {
+        return {
+          ok: false,
+          reason: 'invalid_version_no',
+          message: 'A version number has to be a whole number of at least 1.',
+        };
+      }
+      versionNo = v;
+    }
+  } else {
+    const raw = input.blockLocs ?? [];
+    if (!Array.isArray(raw)) {
+      return { ok: false, reason: 'no_blocks', message: 'Pick at least one block first.' };
+    }
+    // Trimmed, blanks dropped, de-duplicated — exactly what SQL does, so the cap and the
+    // "no blocks" test are measured on the same list on both sides.
+    const locs = Array.from(
+      new Set(raw.map((l) => (typeof l === 'string' ? l.trim() : '')).filter((l) => l.length > 0)),
+    );
+    if (locs.length === 0) {
+      return { ok: false, reason: 'no_blocks', message: 'Pick at least one block first.' };
+    }
+    if (locs.length > BLEND_ANALYSIS_MAX_BLOCKS) {
+      return {
+        ok: false,
+        reason: 'too_many_blocks',
+        message: `That is ${locs.length} blocks; an analysis covers at most ${BLEND_ANALYSIS_MAX_BLOCKS} at a time.`,
+      };
+    }
+    blockLocs = locs;
+  }
+
+  // (2) The two edge lists, then the optional typed cut line and market price.
+  const priceEdges = normalizeAnalysisEdges(
+    input.priceEdgeOffsets,
+    BLEND_ANALYSIS_DEFAULT_PRICE_EDGES,
+    'price',
+  );
+  if (!priceEdges.ok) return { ok: false, reason: priceEdges.reason, message: priceEdges.message };
+
+  const ageEdges = normalizeAnalysisEdges(input.ageEdgeDays, BLEND_ANALYSIS_DEFAULT_AGE_EDGES, 'age');
+  if (!ageEdges.ok) return { ok: false, reason: ageEdges.reason, message: ageEdges.message };
+
+  let roundedUpPhp: number | null = null;
+  if (input.roundedUpPhp !== null && input.roundedUpPhp !== undefined) {
+    const r = Number(input.roundedUpPhp);
+    // Integrality is checked HERE because it cannot be checked in SQL: the parameter is
+    // `int`, so Postgres has already rounded 40.5 to 41 by the time the body runs.
+    if (
+      !Number.isFinite(r) ||
+      !Number.isInteger(r) ||
+      r < BLOCKING_ROUNDED_UP_MIN_PHP ||
+      r > BLOCKING_ROUNDED_UP_MAX_PHP
+    ) {
+      return {
+        ok: false,
+        reason: 'invalid_rounded_up',
+        message: `The price you type has to be a whole number of pesos, at least ₱${BLOCKING_ROUNDED_UP_MIN_PHP}.`,
+      };
+    }
+    roundedUpPhp = r;
+  }
+
+  let marketPhpKg: number | null = null;
+  if (input.marketPhpKg !== null && input.marketPhpKg !== undefined) {
+    const m = Number(input.marketPhpKg);
+    if (!Number.isFinite(m) || m <= 0) {
+      return {
+        ok: false,
+        reason: 'invalid_market_price',
+        message:
+          'The market price has to be a real amount above zero — a price of zero would put every block above market.',
+      };
+    }
+    marketPhpKg = m;
+  }
+
+  try {
+    const supabase = await createClient();
+
+    // (3) A signed-in user, the way the other reads in this file require one. The PRICE
+    // gate is separate and comes below; this is not it.
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError || !user) {
+      return {
+        ok: false,
+        reason: 'not_signed_in',
+        message: 'Your session has expired — reload the page and sign in again.',
+      };
+    }
+
+    const { data, error } = await supabase.rpc('fn_blend_analysis', {
+      p_proposal_id: proposalId,
+      p_version_no: versionNo,
+      p_block_locs: blockLocs,
+      p_price_edge_offsets: priceEdges.edges,
+      p_age_edge_days: ageEdges.edges,
+      p_market_php_kg: marketPhpKg,
+      p_rounded_up_php: roundedUpPhp,
+    });
+
+    if (error) {
+      console.error('[Blocking] fn_blend_analysis error:', error);
+      return { ok: false, reason: 'rpc_error', message: error.message || BLEND_ANALYSIS_UNREACHABLE_MESSAGE };
+    }
+
+    const res = data as BlendAnalysisEnvelope;
+    if (!res?.ok) {
+      const reason = res?.reason;
+      const known: readonly string[] = [
+        'both_sources',
+        'no_source',
+        'unknown_proposal',
+        'unknown_version',
+        'no_blocks',
+        'too_many_blocks',
+        'unknown_block_loc',
+        'invalid_price_edge',
+        'no_price_edges',
+        'too_many_price_edges',
+        'invalid_age_edge',
+        'no_age_edges',
+        'too_many_age_edges',
+        'invalid_rounded_up',
+        'invalid_market_price',
+      ];
+      return {
+        ok: false,
+        // The RPC's own vocabulary, passed through; anything unrecognized is reported as
+        // an rpc_error rather than silently widening the union.
+        reason: (typeof reason === 'string' && known.includes(reason)
+          ? reason
+          : 'rpc_error') as BlendAnalysisRefusalReason,
+        message: res?.message ?? 'The blend analysis could not be worked out.',
+      };
+    }
+
+    // (4) THE PRICE GATE. Fails closed on any error, and it is a DELETION of the whole
+    // section — see rule 1 in the block comment above.
+    let canView = false;
+    try {
+      canView = await canViewPricesGate();
+    } catch {
+      canView = false;
+    }
+
+    const sections = res.sections ?? {};
+
+    const price: BlendAnalysisPriceSection | null = canView
+      ? {
+          natural: mapPriceNatural(asRow(sections.price).natural),
+          vsMarket: mapVsMarket(asRow(sections.price).vs_market),
+          vsMarketUnavailable: mapVsMarketUnavailable(asRow(sections.price).vs_market_unavailable),
+        }
+      : null;
+
+    const qualityRaw = asRow(sections.quality);
+    const byMetric = {} as Record<BlendQualityMetric, BlendQualityNatural>;
+    for (const m of BLEND_ANALYSIS_QUALITY_METRICS) {
+      byMetric[m] = mapQualityNatural(m, qualityRaw[m]);
+    }
+    const quality: BlendAnalysisQualitySection = {
+      metrics: [...BLEND_ANALYSIS_QUALITY_METRICS],
+      byMetric,
+    };
+
+    const analysis: BlendAnalysis = {
+      source: res.source === 'live' ? 'live' : 'saved',
+      asOf: asStr(res.as_of),
+      proposalId: asStrOrNull(res.proposal_id),
+      versionNo: lensNumOrNull(res.version_no),
+      title: asStrOrNull(res.title),
+      snapshotComputedAt: asStrOrNull(res.snapshot_computed_at),
+      computedAt: asStr(res.computed_at),
+      blockCount: lensNum(res.block_count),
+      totalKg: lensNum(res.total_kg),
+      price,
+      pricesHidden: !canView,
+      quality,
+      age: mapAgeSection(sections.age),
+    };
+
+    return { ok: true, analysis };
+  } catch (err: unknown) {
+    console.error('[Blocking] fetchBlendAnalysis failed:', err);
+    return { ok: false, reason: 'exception', message: BLEND_ANALYSIS_UNREACHABLE_MESSAGE };
   }
 }

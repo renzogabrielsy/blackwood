@@ -215,7 +215,22 @@ function staticChecks(): void {
   const actions = read(ACTIONS);
   const ageStart = actions.indexOf('export async function fetchBlockingAgeLens(');
   assert.ok(ageStart > 0, 'fetchBlockingAgeLens not found');
-  const ageBody = actions.slice(ageStart);
+  // BOUNDED AT THE NEXT SECTION DIVIDER (the file's own `// ─── <name> ───` convention),
+  // not at end-of-file. Slicing to the end used to work only because nothing after this
+  // action carried a price gate; `fetchBlendAnalysis` (2026-09-21) legitimately does — and
+  // its own block comment names `canViewPrices()` in prose — so an unbounded slice would
+  // have read ITS gate as this one's. Bounding at the divider rather than at the next
+  // `export` is what keeps that neighbouring PROSE out too. Strictly MORE precise, never
+  // weaker.
+  const ageEnd = [
+    actions.indexOf('\n// ─── ', ageStart + 1),
+    actions.indexOf('\nexport async function ', ageStart + 1),
+  ]
+    .filter((i) => i > 0)
+    .sort((a, b) => a - b)[0];
+  const ageBody = actions.slice(ageStart, ageEnd ?? undefined);
+  assert.ok(ageBody.includes("'fn_blocking_age_lens'"), 'the isolated body is not the age lens action');
+  assert.ok(!ageBody.includes('fetchBlendBlockFacts'), 'the slice leaked into the next section');
 
   check('fetchBlockingAgeLens has NO canViewPrices gate — and that is the point', () => {
     // THE central rule of this lens. Nothing in the payload is money and none is
