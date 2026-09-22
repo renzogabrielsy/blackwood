@@ -8,15 +8,22 @@
 // mixed blocks."* Same shared legend, same ratio bar, same Settings popover — and four
 // deliberate differences from its two siblings.
 //
-// ── 1. THERE IS NO PRICE GATE, AND THAT IS THE POINT ────────────────────────
-// The price lens refuses a `!canViewPrices()` caller before touching the database,
-// because band membership there pins a block's ₱/kg to within a peso. That argument has
-// NO analogue here: this payload is supplier names, kilograms, counts and percentages,
-// `cost_basis` is never read and `avg_php_kg` is never selected, and a supplier's name
-// beside a kilogram total says nothing about what it cost (asserted, not promised — the
-// data layer's verify script scans every key of the live payload against
-// /php|peso|cost|price|value|amount/). So `SUPPLIER_LENS.canShow` is `() => true` and
-// Production sees this lens. Do not "tidy up" the asymmetry with its price sibling.
+// ── 1. THE LENS IS NOT GATED; EXACTLY ONE COLUMN IS ─────────────────────────
+// The price lens refuses a `!canViewPrices()` caller before touching the database, because
+// band membership there pins a block's ₱/kg to within a peso. That argument has NO analogue
+// here: bands are SUPPLIERS, and a supplier's name beside a kilogram total says nothing
+// about what it cost. So `SUPPLIER_LENS.canShow` is `() => true`, Production sees this lens,
+// and every band, kilogram, share and the ratio bar — and the **Print button** — are
+// unconditional. Do not "tidy up" the asymmetry with its price sibling.
+//
+// Since 2026-09-22 the payload does carry **exactly two ₱ keys**, `kgWeightedPhpKg` and
+// `pricedDominantKg` per band and on `total`, which `fetchBlockingSupplierLens` NULLS
+// server-side beside `pricesHidden: true` for a reader without the flag (the
+// `fetchBlendAnalysis` idiom, narrowed from a section to two keys). This panel therefore
+// reads `caps.canViewPrices` in ONE place — `showPrice` — and it decides one thing only:
+// whether the printed band table's last column is **₱/kg** or **Mixed**. A null ₱ means two
+// different things and only `pricesHidden` tells them apart, so both halves are read; see
+// `showPrice`'s own note.
 //
 // ── 2. ⚠️ THERE ARE TWO KILOGRAM ATTRIBUTIONS AND THIS PANEL MUST NOT MIX THEM ──
 // A block belongs to ONE band, but a MIXED block's kilos belong to SEVERAL suppliers, so
@@ -130,8 +137,15 @@ const LIVE_ADAPTER: SupplierLensAdapter = {
   fetchLens: (topN) => fetchBlockingSupplierLens(topN),
 };
 
+/** `₱43.5690` split for the printed sheet's ACCOUNTING column. Four decimals, as SQL gives. */
+const PESO = '₱';
+function pesoAmount(v: number): string {
+  return v.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+}
+
 export function SupplierLensPanel({
   data,
+  caps,
   onClassifierChange,
   adapter = LIVE_ADAPTER,
 }: BlockingLensPanelProps & { adapter?: SupplierLensAdapter }) {
@@ -347,6 +361,25 @@ export function SupplierLensPanel({
 
   // ── Derived view models (labels and strings only — no arithmetic) ──────────
 
+  /**
+   * ⚠️ MAY THIS READER SEE THE BAND'S ₱/kg? — BOTH halves, and neither alone.
+   *
+   * `caps.canViewPrices` is the grid's EFFECTIVE flag (`serverCanViewPrices && showPrices`),
+   * so flipping the page's own Prices toggle off takes the column away exactly as being
+   * Production does. `lens.pricesHidden` is the payload's own statement that the two ₱ keys
+   * were **WITHHELD rather than absent** — `fetchBlockingSupplierLens` nulls
+   * `kgWeightedPhpKg` / `pricedDominantKg` server-side and sets the flag, so a null here can
+   * mean two different things and only the flag tells them apart (data-layer contract:
+   * *"null + pricesHidden = WITHHELD; null + pricedDominantKg 0 = dominates no priced
+   * block"*). Reading only the cap would print an em dash where the honest answer is that
+   * the figure does not exist; reading only the flag would ignore the toggle.
+   *
+   * Note what this does NOT gate: the lens itself, its bands, its kilograms, its ratio bar
+   * and its **Print button** are unconditional and must stay so — this payload is otherwise
+   * peso-free and Production is the role that actually walks the yard.
+   */
+  const showPrice = caps.canViewPrices && lens !== null && !lens.pricesHidden;
+
   const bandRows = React.useMemo(
     () =>
       (lens?.bands ?? []).map((b) => ({
@@ -354,14 +387,24 @@ export function SupplierLensPanel({
         label: supplierBandLabel(b),
         sharePct: share(b),
         // The quiet second line names BOTH attributions, because the two figures
-        // legitimately disagree and a reader must be able to see which is which.
-        detail: `${formatLensBlocks(b.dominantBlockCount)} dominant · ${formatLensKg(
-          b.apportionedKg,
-        )} apportioned${b.mixedBlockCount > 0 ? ` · ${b.mixedBlockCount} mixed` : ''}`,
+        // legitimately disagree and a reader must be able to see which is which — and it is
+        // now **the only place `dominantKg` is shown**. The owner, on the printed sheet:
+        // *"I don't get the last column — 'kg dominant' — kind of useless."* It left the
+        // print and stayed here, because it is still the attribution the TINT is drawn from
+        // and the popover is where a reader goes to ask what a colour means.
+        detail: [
+          `${formatLensBlocks(b.dominantBlockCount)} dominant`,
+          `${formatLensKg(b.dominantKg)} dominant`,
+          `${formatLensKg(b.apportionedKg)} apportioned`,
+          ...(showPrice && b.kgWeightedPhpKg !== null
+            ? [`${PESO}${pesoAmount(b.kgWeightedPhpKg)}/kg`]
+            : []),
+          ...(b.mixedBlockCount > 0 ? [`${b.mixedBlockCount.toLocaleString()} mixed`] : []),
+        ].join(' · '),
         // NOMINAL: the band's own slot, never its position across a gradient.
         rampStop: supplierBandRampStop(b),
       })),
-    [lens, share],
+    [lens, share, showPrice],
   );
 
   const customised = !isDefaultSupplierLensSettings(settings);
@@ -374,12 +417,30 @@ export function SupplierLensPanel({
    * the shared formatters, and the per-band block lists are a BUCKETING of `bandByBlock`
    * (a lookup, never a sum) joined to the grid's own `data` map.
    *
-   * There is NO price gate here and there must never be one: nothing in this payload is
-   * money and none of it is derivable into money.
+   * ── THE BAND TABLE'S LAST COLUMN IS ₱/kg, OR **MIXED** (2026-09-22) ─────────
+   * The owner, on the live sheet: *"I don't get the last column — 'kg dominant' — kind of
+   * useless. Replace it with average weighted price or something."* He was right: a band row
+   * already carried `Blocks` and `Kg`, so a third kilogram figure beside them said nothing a
+   * reader could act on. It is now **`kgWeightedPhpKg`** — the kg-weighted mean of
+   * `view_blocking_grid.avg_php_kg` over the band's PRICED DOMINANT blocks, i.e. the price of
+   * the kilograms on its own row — in the Excel Standard's accounting layout, with the footer
+   * labelled `avg of priced` exactly as the price lens's is.
+   *
+   * **AND IT IS ABSENT, NOT BLANK AND NEVER ₱0, FOR A READER WITHOUT THE PRICE FLAG.** The
+   * column then heads **Mixed** and carries `mixedBlockCount`, so the table keeps its width
+   * and a Production reader still gets a last column worth reading rather than a row of em
+   * dashes. That is the data layer's own rule: the two ₱ keys are WITHHELD (nulled
+   * server-side beside `pricesHidden: true`), and a withheld figure is not a figure of zero.
+   *
+   * Everything ELSE here is unconditional, including the Print button: the rest of this
+   * payload is peso-free.
    */
   const printModel: LensSummaryPrintModel | null = React.useMemo(() => {
     if (!lens) return null;
     const bandCount = lens.bands.length;
+    // Recomputed inside the memo rather than closed over, so the memo's dependency is the
+    // flag itself and not a value that changed shape between renders.
+    const priced = caps.canViewPrices && !lens.pricesHidden;
 
     const { byBand, excludedRows } = buildLensSummaryBuckets({
       data,
@@ -421,7 +482,10 @@ export function SupplierLensPanel({
       unit: settings.unit,
       ramp: SUPPLIER_LENS_RAMP,
       bandCount,
+      // The PER-BLOCK tables still name the block's dominant supplier — right per row. The
+      // BAND table heads its own column, because a band row already IS a supplier.
       figureColumnLabel: 'Supplier',
+      bandFigureColumnLabel: priced ? '₱/kg' : 'Mixed',
       bands: visible.map((b) => ({
         index: b.index,
         label: supplierBandLabel(b),
@@ -430,15 +494,36 @@ export function SupplierLensPanel({
         kg: formatLensKg(b.apportionedKg),
         sharePct: share(b),
         share: formatLensSharePct(share(b)),
-        figure: `${formatLensKg(b.dominantKg)} dominant`,
+        // ⚠️ NULL IS AN EM DASH, NEVER ₱0 — a band that dominates no PRICED block has no
+        // price, which is a different statement from a free one (the L-008 placeholder).
+        figure: priced
+          ? b.kgWeightedPhpKg === null
+            ? LENS_EMDASH
+            : `${PESO}${pesoAmount(b.kgWeightedPhpKg)}`
+          : `${b.mixedBlockCount.toLocaleString()} mixed`,
+        figureAccounting:
+          priced && b.kgWeightedPhpKg !== null
+            ? { symbol: PESO, amount: pesoAmount(b.kgWeightedPhpKg) }
+            : null,
         rampStop: supplierBandRampStop(b),
         warehouses: byBand.get(b.index) ?? [],
       })),
       total: {
         blocks: formatLensBlocks(lens.total.blockCount),
         kg: formatLensKg(lens.total.kg),
-        figure: `${lens.total.supplierCount} suppliers`,
-        figureNote: '',
+        figure: priced
+          ? lens.total.kgWeightedPhpKg === null
+            ? LENS_EMDASH
+            : `${PESO}${pesoAmount(lens.total.kgWeightedPhpKg)}`
+          : `${lens.total.mixedBlockCount.toLocaleString()} mixed`,
+        figureAccounting:
+          priced && lens.total.kgWeightedPhpKg !== null
+            ? { symbol: PESO, amount: pesoAmount(lens.total.kgWeightedPhpKg) }
+            : null,
+        // THE DOCUMENTED ASYMMETRY, said on the sheet in the price lens's own words: the
+        // counts cover every occupied block, the ₱/kg covers the PRICED ones. A `Mixed`
+        // column needs no qualifier — it counts exactly what its header says.
+        figureNote: priced ? 'avg of priced' : '',
       },
       yardMap,
       excluded:
@@ -452,7 +537,7 @@ export function SupplierLensPanel({
             }
           : null,
     };
-  }, [lens, data, picked, settings.unit, share]);
+  }, [lens, data, picked, settings.unit, share, caps.canViewPrices]);
 
   /** THE BAR'S HEADLINE — `17 suppliers · 23 mixed`. The payload's own figures. */
   const headline = lens

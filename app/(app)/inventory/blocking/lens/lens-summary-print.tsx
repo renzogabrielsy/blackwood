@@ -95,6 +95,23 @@ export type { LensSummaryBlockRow, LensSummaryWarehouse };
 
 // ── The model a lens hands over ─────────────────────────────────────────────
 
+/**
+ * A ₱ figure in the Excel Standard's ACCOUNTING shape — the glyph pinned LEFT, the number
+ * pinned RIGHT, `tabular-nums` so a column of them lines up.
+ *
+ * It exists because the band table's last column became a **₱/kg** on the supplier lens
+ * (2026-09-22), and the project's currency rule is a `flex justify-between` layout rather
+ * than a string. A lens that has no money in that column simply omits it and the cell
+ * prints `figure` as it always did — which is why the price and age sheets are byte-for-byte
+ * unchanged.
+ */
+export interface LensPrintAccounting {
+  /** The currency glyph, pinned left. */
+  symbol: string;
+  /** The number, preformatted, pinned right. */
+  amount: string;
+}
+
 export interface LensSummaryBand {
   index: number;
   /** The lens's OWN label for the band — the same function the legend uses. */
@@ -109,6 +126,11 @@ export interface LensSummaryBand {
   share: string;
   /** The band's own weighted figure, preformatted. */
   figure: string;
+  /**
+   * The SAME figure as `figure`, split for the accounting layout. Omit for a non-money
+   * column; `figure` is then printed plainly, and an em dash always is.
+   */
+  figureAccounting?: LensPrintAccounting | null;
   /**
    * The ramp stop this band wears, when the LENS decides it rather than its position.
    * Ordinal lenses (price, age) omit it; the NOMINAL supplier lens states it so the
@@ -138,10 +160,27 @@ export interface LensSummaryPrintModel {
   bandCount: number;
   /** The column heading for the per-block figure — `₱/kg` / `Age (d)` / `Supplier`. */
   figureColumnLabel: string;
+  /**
+   * The BAND TABLE's own last-column heading, when it differs from the per-block one.
+   *
+   * ⚠️ THE TWO TABLES ANSWER DIFFERENT QUESTIONS, AND THE SUPPLIER LENS IS WHERE THAT
+   * STOPPED BEING A COINCIDENCE. Its per-block column names the block's dominant supplier
+   * (`Supplier`), which is exactly right per row — while its BAND row already IS a
+   * supplier, so repeating the name there said nothing. The owner, on the live sheet:
+   * *"I don't get the last column — 'kg dominant' — kind of useless. Replace it with average
+   * weighted price or something."* So the band table now heads **₱/kg** (or **Mixed** for a
+   * price-denied reader) while the per-block tables still head `Supplier`.
+   *
+   * Omitted by the price and age lenses, whose two columns are genuinely the same figure at
+   * two grains — so their sheets are unchanged.
+   */
+  bandFigureColumnLabel?: string;
   total: {
     blocks: string;
     kg: string;
     figure: string;
+    /** The footer's figure in the accounting shape. Same rule as the band's. */
+    figureAccounting?: LensPrintAccounting | null;
     /**
      * WHAT the total's figure is an average OF.
      *
@@ -238,6 +277,25 @@ function bandSwatchClass(model: LensSummaryPrintModel, band: LensSummaryBand): s
   return rampClassAtStop(
     model.ramp,
     resolveBandRampStop(model.ramp, band.index, model.bandCount, band.rampStop),
+  );
+}
+
+/**
+ * The band table's last cell: the ACCOUNTING layout when the lens supplied one, otherwise
+ * the preformatted string it has always printed.
+ *
+ * It formats NOTHING — `symbol` and `amount` are both the lens's own strings, so the sheet
+ * still has no opinion about how a peso is written (`verify-blocking-lens-ui.ts` asserts it
+ * calls no formatter and no `toFixed`).
+ */
+function BandFigure({ band }: { band: Pick<LensSummaryBand, 'figure' | 'figureAccounting'> }) {
+  const acc = band.figureAccounting;
+  if (!acc) return <>{band.figure}</>;
+  return (
+    <span className="flex justify-between gap-1 tabular-nums">
+      <span>{acc.symbol}</span>
+      <span>{acc.amount}</span>
+    </span>
   );
 }
 
@@ -373,7 +431,10 @@ function LensSummarySheet({
             <th className={cn(TH, 'text-right')}>Blocks</th>
             <th className={cn(TH, 'text-right')}>Kg</th>
             <th className={cn(TH, 'text-right')}>Share</th>
-            <th className={cn(TH, 'text-right')}>{model.figureColumnLabel}</th>
+            {/* The BAND table's own heading — see `bandFigureColumnLabel`. */}
+            <th className={cn(TH, 'text-right')}>
+              {model.bandFigureColumnLabel ?? model.figureColumnLabel}
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -395,7 +456,9 @@ function LensSummarySheet({
               <td className={cn(TD, 'text-right font-mono')}>{b.blocks}</td>
               <td className={cn(TD, 'text-right font-mono')}>{b.kg}</td>
               <td className={cn(TD, 'text-right font-mono')}>{b.share}</td>
-              <td className={cn(TD, 'text-right font-mono')}>{b.figure}</td>
+              <td className={cn(TD, 'text-right font-mono')}>
+                <BandFigure band={b} />
+              </td>
             </tr>
           ))}
           <tr>
@@ -406,9 +469,21 @@ function LensSummarySheet({
             <td className={cn(TD, 'bg-zinc-100 text-right font-mono font-bold')}>{model.total.kg}</td>
             <td className={cn(TD, 'bg-zinc-100 text-right font-mono font-bold')}>100.0%</td>
             <td className={cn(TD, 'bg-zinc-100 text-right font-mono font-bold')}>
-              {model.total.figure}
+              <BandFigure
+                band={{
+                  figure: model.total.figure,
+                  figureAccounting: model.total.figureAccounting,
+                }}
+              />
               {model.total.figureNote !== '' && (
-                <span className="ml-1 font-sans text-[7px] font-normal text-zinc-600">
+                <span
+                  className={cn(
+                    'font-sans text-[7px] font-normal text-zinc-600',
+                    // An ACCOUNTING figure is a full-width flex row, so the qualifier goes
+                    // UNDER it rather than trying to share the line it has just filled.
+                    model.total.figureAccounting ? 'block' : 'ml-1',
+                  )}
+                >
                   {model.total.figureNote}
                 </span>
               )}

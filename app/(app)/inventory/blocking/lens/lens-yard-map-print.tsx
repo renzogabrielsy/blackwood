@@ -28,6 +28,24 @@
 // with today's geometry — the height floor is 20 px against a 39 px solution) the sheet
 // SAYS so in its own caption rather than silently cropping the yard.
 //
+// ── THE FILLS ARE A **PRINT** PALETTE, NOT THE SCREEN RAMP (2026-09-22, 2nd pass) ──
+// The owner, on the first live map: *"verify these are easy to read when printed on
+// lower-quality printers. Use simple colours that contrast well from BLACK text — don't use
+// dark colours that clash with black."* Painting the screen ramp SOLID put six of the
+// fourteen ordinal hues and six of the thirteen categorical ones below the white/black
+// contrast crossover, so the loc flipped to WHITE on about half the map — and white on deep
+// fuchsia off a tired office laser is precisely the case he was asking about.
+//
+// So every cell and every legend swatch on this page reads `printFillRgbAtStop`
+// (`lens-ramp.ts`): a white TINT of the same hue, worst case **7.75:1 against black**, so
+// the ink is black on every fill the map can produce. The BAND TABLE on page one keeps the
+// saturated `.lens-cat-N` class — a pale tint in an 8px table swatch reads as nothing — and
+// the two are matchable because the tint preserves the hue angle to within 0.79°. The
+// sequential ramps stay strictly monotonic in luminance (min adjacent gap 0.0751), so a
+// GREYSCALE print still reads "dearer / older = darker"; the twelve categorical hues are
+// deliberately flat at ≈ 0.70 and are told apart by the legend, the loc and the dashed
+// mixed outline, because a supplier is not "more" than another supplier.
+//
 // ── WHAT IT DELIBERATELY DOES NOT CARRY ────────────────────────────────────
 // No batch code, no balance, no ₱, no age, no supplier name, no lab reading. "Purely for
 // location reference" is the whole specification: the loc is the only large text, which
@@ -44,7 +62,7 @@ import {
   PX_PER_PT,
 } from '@/components/shared/print/print-fit';
 
-import { resolveBandRampStop, rampRgbAtStop, type LensRampId } from './lens-ramp';
+import { resolveBandRampStop, printFillRgbAtStop, type LensRampId } from './lens-ramp';
 import {
   LENS_YARD_MAP_EMPTY_BG,
   LENS_YARD_MAP_EMPTY_INK,
@@ -335,7 +353,10 @@ export function LensYardMapPage({
       {/* ── ONE legend line: every band on the sheet, then the two non-band fills ── */}
       <p className="mt-[3px] flex flex-wrap items-center gap-x-2 gap-y-[1px] text-[7.5px] text-zinc-700">
         {bands.map((b) => {
-          const rgb = rampRgbAtStop(
+          // THE SAME FILL THE CELLS CARRY, read through the same PRINT accessor — a legend
+          // swatch in the screen saturation beside a pale cell is a legend that describes a
+          // different map.
+          const rgb = printFillRgbAtStop(
             ramp,
             resolveBandRampStop(ramp, b.index, bandCount, b.rampStop),
           );

@@ -1720,41 +1720,58 @@ export async function fetchBlockingAgeLens(
 // ─── Supplier lens — DATA LAYER ────────────────────────────────────────────────
 //
 // "Whose charcoal is in my yard." The THIRD lens on the frame the price lens built, over
-// `fn_blocking_supplier_lens` (migration `20260922011759_blocking_supplier_lens`). It is
-// the AGE lens's sibling in posture, not the price lens's:
+// `fn_blocking_supplier_lens` (migration `20260922011759_blocking_supplier_lens`, plus
+// `20260922051500_blocking_supplier_lens_weighted_price` for the two ₱ keys).
 //
-//   ***  THERE IS NO PRICE GATE HERE, AND THAT IS DELIBERATE. DO NOT ADD ONE.  ***
+//   ***  THE PRICE GATE HERE IS A NULLING OF EXACTLY TWO KEYS — NOT A REFUSAL.  ***
 //
-//      Nothing in this payload is money and nothing in it is derivable back into money:
-//      the RPC publishes supplier names, kilograms, counts and percentages, `cost_basis`
-//      is never read and `avg_php_kg` is never selected. A supplier's name beside a
-//      kilogram total says nothing about what it cost. So the Supplier lens is visible to
-//      EVERY role INCLUDING Production — the same posture as
-//      `view_blocking_block_suppliers` (which this lens reads) and
-//      `fn_blocking_age_lens`. The PRICE lens must REFUSE a `!canViewPrices()` caller
-//      because band membership pins a block's ₱/kg to within a peso; that argument has no
-//      analogue here. `scripts/verify-blocking-supplier-lens.ts` asserts that this
-//      function contains NO `canViewPrices` call, so the asymmetry cannot be "tidied up"
-//      by accident.
+//      Until 2026-09-22 this payload carried no money at all and this function deliberately
+//      had NO `canViewPrices()` call. It now carries exactly TWO ₱-bearing keys, on each
+//      band and on `total` — `kgWeightedPhpKg` and `pricedDominantKg` — and NOTHING else in
+//      it is money or derivable into money: the rest is supplier names, kilograms, counts,
+//      percentages and block addresses, and a supplier's name beside a kilogram total says
+//      nothing about what it cost.
 //
-// What it DOES require is a signed-in user, exactly as `fetchBlockingAgeLens` does.
+//      So the gate nulls those two and lets the WHOLE REST of the payload through, with
+//      `pricesHidden: true` beside it. That matters: the Supplier lens stays usable by
+//      EVERY role INCLUDING Production — THE ROLE THAT WALKS THE YARD — which is the whole
+//      reason this lens was built without a gate in the first place.
+//
+//      CONTRAST, and it is the load-bearing distinction: `fetchBlockingPriceLens` REFUSES a
+//      denied caller BEFORE touching the database, because THERE band membership itself is
+//      price information — a block's band pins its ₱/kg to within a peso, so that payload
+//      has no price-free half. HERE band membership is a SUPPLIER. The idiom this follows
+//      is `fetchBlendAnalysis`, which deletes its `price` SECTION and still returns
+//      `quality` and `age`; this is the same thing narrowed from a section to two keys.
+//      `scripts/verify-blocking-supplier-lens.ts` asserts that the gate exists, that it
+//      nulls exactly those two keys, that it is NOT a `prices_hidden` refusal, and that no
+//      OTHER money-named key exists in the live payload.
+//
+// It also requires a signed-in user, exactly as `fetchBlockingAgeLens` does.
 //
 // Three rules it shares with its siblings.
 //
-//   1. NOTHING IS COMPUTED HERE. The apportionment, the dominance, the bands and both
-//      share families are arithmetic over the yard, so all of it lives in SQL
-//      (CLAUDE.md: never aggregate in TypeScript). This function validates its input,
-//      camelCases the rows, and folds `blocks[]` into the two per-cell lookups the grid
-//      needs. That fold is a RE-KEYING, not an aggregation.
+//   1. NOTHING IS COMPUTED HERE. The apportionment, the dominance, the bands, both share
+//      families and the weighted ₱/kg are arithmetic over the yard, so all of it lives in
+//      SQL (CLAUDE.md: never aggregate in TypeScript). This function validates its input,
+//      camelCases the rows, nulls two keys for a denied reader, and folds `blocks[]` into
+//      the two per-cell lookups the grid needs. That fold is a RE-KEYING, not an
+//      aggregation — and the ₱ figure is emphatically NOT re-weighted here, which is the
+//      reason the SQL publishes it at all.
 //
 //   2. A BUSINESS REFUSAL IS DATA, NEVER A THROW. The RPC returns
 //      `{ok:false, reason, message}` written for a human; this action passes the message
 //      straight through so the UI can hand it to `errorToast()`.
 //
 //   3. NULL IS PRESERVED. A band's share percentages are null — never 0 — when nothing in
-//      the yard has a supplier at all. But `dominantKg` and `dominantBlockCount` are
-//      REAL ZEROES on a supplier that dominates no block (MERCADO today), so they are not
-//      null-preserving: "dominates nothing" is a measurement, not a missing value.
+//      the yard has a supplier at all, and `kgWeightedPhpKg` is null — never ₱0 — when the
+//      band dominates no PRICED block (the L-008 rule: `avg_php_kg` 0 is the unpriced
+//      placeholder). But `dominantKg`, `dominantBlockCount` and `pricedDominantKg` are
+//      REAL ZEROES in their empty cases (MERCADO dominates nothing today), so they are not
+//      null-preserving there: "dominates nothing" and "zero priced kilograms" are
+//      measurements, not missing values. A denied reader is the ONE case where
+//      `pricedDominantKg` is null, because then it is withheld rather than measured — read
+//      `pricesHidden` to tell the two apart.
 //
 // Read-only: no writes, no audit logs, no `revalidatePath()`.
 
@@ -1779,6 +1796,8 @@ type SupplierLensEnvelope = {
     mixed_block_count?: number | null;
     attributed_block_count?: number | null;
     attributed_kg?: number | string | null;
+    kg_weighted_php_kg?: number | string | null;
+    priced_dominant_kg?: number | string | null;
   } | null;
 } | null;
 
@@ -1803,8 +1822,11 @@ type SupplierLensEnvelope = {
  * A block whose batch has NO delivery is ABSENT from both maps and counted in
  * `lens.unattributed` — render it un-lensed, and never fold it into `others`.
  *
- * NOT price-gated, on purpose — see the block comment above. Every role, Production
- * included, may read this.
+ * PRICE GATING IS A NULLING OF TWO KEYS: a `!canViewPrices()` caller gets
+ * `bands[].kgWeightedPhpKg` / `pricedDominantKg` and their `total` twins set to `null` with
+ * `pricesHidden: true`, and still gets every band, the tint map, both kilogram families and
+ * every share and count. See the block comment above for why that is a nulling rather than
+ * the price lens's outright refusal.
  */
 export async function fetchBlockingSupplierLens(
   topN: number = BLOCKING_SUPPLIER_LENS_DEFAULT_TOP_N,
@@ -1854,6 +1876,22 @@ export async function fetchBlockingSupplierLens(
       };
     }
 
+    // (3) THE PRICE GATE. It runs AFTER the RPC and BEFORE the payload is assembled —
+    // deliberately, and for the same reason `fetchBlendAnalysis` does it here: the non-price
+    // half of this payload is still wanted by a denied caller, so there is nothing to save
+    // by refusing before the round trip, and placing the gate beside the assembly keeps the
+    // nulling and the mapping in one readable place. (Ordering is not a security question
+    // here: the RPC result is nulled either way. It IS a security question for
+    // `fetchBlockingPriceLens`, which is why THAT one gates before `createClient()`.)
+    //
+    // FAILS CLOSED: any throw from the gate is read as "cannot see prices".
+    let canView = false;
+    try {
+      canView = await canViewPricesGate();
+    } catch {
+      canView = false;
+    }
+
     const bands: BlockingSupplierBand[] = (res.bands ?? []).map((b) => ({
       index: lensNum(b.index),
       // Null on the `others` band — read `isOthers`, never a null name.
@@ -1872,6 +1910,12 @@ export async function fetchBlockingSupplierLens(
       kgSharePct: lensNumOrNull(b.kg_share_pct),
       blockSharePct: lensNumOrNull(b.block_share_pct),
       mixedBlockCount: lensNum(b.mixed_block_count),
+      // THE TWO ₱-BEARING KEYS, nulled BEFORE the payload leaves the server for a reader
+      // who may not see prices. `kgWeightedPhpKg` is null-preserving anyway (a band with no
+      // priced block has no price); `pricedDominantKg` is a real 0 when measured, so its
+      // null here means WITHHELD — read `pricesHidden` to tell the two apart.
+      kgWeightedPhpKg: canView ? lensNumOrNull(b.kg_weighted_php_kg) : null,
+      pricedDominantKg: canView ? lensNumOrNull(b.priced_dominant_kg) : null,
     }));
 
     // RE-KEY, not aggregate: the grid needs per-cell lookups, and SQL already decided which
@@ -1924,7 +1968,14 @@ export async function fetchBlockingSupplierLens(
         mixedBlockCount: lensNum(res.total?.mixed_block_count),
         attributedBlockCount: lensNum(res.total?.attributed_block_count),
         attributedKg: lensNum(res.total?.attributed_kg),
+        // Same nulling as the bands. NOTE `blockCount` and `kg` above still count EVERY
+        // occupied block while this price covers the PRICED ones only — the asymmetry
+        // `fn_blocking_price_lens` records, carried through unchanged.
+        kgWeightedPhpKg: canView ? lensNumOrNull(res.total?.kg_weighted_php_kg) : null,
+        pricedDominantKg: canView ? lensNumOrNull(res.total?.priced_dominant_kg) : null,
       },
+      // TRUE means the two ₱ keys above were withheld, not measured as absent.
+      pricesHidden: !canView,
     };
 
     return { ok: true, lens };
