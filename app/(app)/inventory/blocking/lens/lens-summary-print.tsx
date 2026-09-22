@@ -36,13 +36,35 @@
 // the four cell kinds and the one luminance rule are documented there.
 //
 // ── THE LAB READINGS ARE READ, NEVER COMPUTED ───────────────────────────────
-// They come off the grid payload the page already holds (`view_blocking_grid` rows),
-// joined by `block_loc`. A WAREHOUSE SUBTOTAL therefore carries its block count and its
-// kilograms and leaves **every lab cell BLANK**: a kg-weighted MC over a partition SQL
-// never computed would be a second definition of a lab average, living in TypeScript.
-// A blank cell says "not published"; a computed one would say something untrue. The one
-// sum that does happen — the warehouse kilograms — is stated and justified in
-// `lens-summary-model.ts`, and the band and yard totals beside it stay the payload's.
+// A per-block row's seven readings come off the grid payload the page already holds
+// (`view_blocking_grid` rows), joined by `block_loc`. The one sum that happens — the
+// warehouse kilograms — is stated and justified in `lens-summary-model.ts`, and every band
+// and yard total beside it stays the payload's.
+//
+// ── THE 2026-09-22 SECOND PASS — WHAT THE OWNER ASKED FOR NEXT ──────────────
+// Three changes, all PRICE-SHEET ONLY; the age and supplier sheets are byte for byte what
+// they were, which is asserted rather than hoped.
+//
+//   1. **ONE PAGE PER WAREHOUSE INSIDE A BAND.** Each `WHSE X` heading starts a fresh
+//      sheet, with the band heading repeating above it as a small running line. See
+//      `warehousePages`.
+//   2. **THE WAREHOUSE SUBTOTAL'S LAB CELLS ARE FILLED IN** — and they are filled in by
+//      SQL. They were blank on purpose, because *"a kg-weighted MC over a partition SQL
+//      never computed would be a second definition of a lab average living in
+//      TypeScript"*; so `fn_blocking_price_lens` gained `warehouse_subtotals[]` and the
+//      cells became a LOOKUP of it. The rule did not move: this sheet may RENDER a figure,
+//      it still must not COMPUTE one, and a lens that publishes no such partition passes no
+//      `figures` and prints the blank row it always did. NULL is an em dash, never a 0.
+//   3. **A SUPPLIER COLUMN PER BLOCK**, between BATCH and BALANCE. The table is re-fitted
+//      to exactly 100% so nothing crushes, and the column simply does not exist when a lens
+//      passes no heading for it.
+//
+// ── PAGE ONE'S CONTEXT BLOCK ────────────────────────────────────────────────
+// `page1Extra` is a NODE, not a model: the price lens's MARKET table + chart and the
+// supplier lens's PRICE vs VOLUME panels live in their own files, so this sheet still
+// formats nothing, spells no currency glyph and knows nothing about a market series. A
+// lens whose context read refused or has not landed passes nothing, and page one is then
+// exactly what it was.
 //
 // ── IT IS THE PLATFORM PRINT KIT, NOT A NEW MECHANISM ───────────────────────
 // `GroupPrintStage` (an offstage, really-laid-out 1040px column) + `printCard` (which
@@ -86,12 +108,13 @@ import {
   LENS_SUMMARY_LAB_KEYS,
   LENS_SUMMARY_LAB_LABELS,
   type LensSummaryBlockRow,
+  type LensSummaryGroupFigures,
   type LensSummaryWarehouse,
 } from './lens-summary-model';
 import type { LensYardMap } from './lens-yard-map-model';
 import { LensYardMapPage } from './lens-yard-map-print';
 
-export type { LensSummaryBlockRow, LensSummaryWarehouse };
+export type { LensSummaryBlockRow, LensSummaryGroupFigures, LensSummaryWarehouse };
 
 // ── The model a lens hands over ─────────────────────────────────────────────
 
@@ -139,6 +162,14 @@ export interface LensSummaryBand {
   rampStop?: number;
   /** Its blocks, grouped by warehouse in the page's own warehouse order. */
   warehouses: LensSummaryWarehouse[];
+  /**
+   * The BAND TOTAL row's PUBLISHED lab means and weighted figure.
+   *
+   * Absent or null ⇒ the seven lab cells on that row stay blank, which is what the age and
+   * supplier sheets get: neither payload publishes a kg-weighted lab mean, and computing
+   * one here is the thing this whole directory is forbidden to do.
+   */
+  totalFigures?: LensSummaryGroupFigures | null;
 }
 
 export interface LensSummaryPrintModel {
@@ -175,6 +206,40 @@ export interface LensSummaryPrintModel {
    * two grains — so their sheets are unchanged.
    */
   bandFigureColumnLabel?: string;
+  /**
+   * The heading for a per-block SUPPLIER column, between BATCH and BALANCE.
+   *
+   * ⚠️ **PRICE LENS ONLY, and omitted means the column does not exist** — not an empty
+   * column. The owner asked for it on the price sheet (2026-09-22); the supplier sheet's
+   * per-block column already IS the supplier, and the age payload carries no supplier
+   * fact. Omitting it keeps the age and supplier tables at their original five-plus-seven
+   * shape and their original column widths, byte for byte.
+   */
+  blockSupplierColumnLabel?: string;
+  /**
+   * ⚠️ **ONE PAGE PER WAREHOUSE INSIDE A BAND — PRICE LENS ONLY** (2026-09-22).
+   *
+   * The owner, on the live price sheet: each `WHSE X` heading should start a fresh page,
+   * with the band heading repeating above it as a small running line. That is a real trade
+   * — a price lens with three bands over four warehouses prints twelve block pages instead
+   * of three — and it is the right one THERE because the price sheet now carries a supplier
+   * column and seven weighted subtotal figures per warehouse, so a warehouse group is a
+   * self-contained table a reader takes to the yard.
+   *
+   * The AGE and SUPPLIER sheets keep MERGED warehouses (one table per band, one `<tbody>`
+   * per warehouse), which is exactly what they printed before this flag existed.
+   */
+  warehousePages?: boolean;
+  /**
+   * An extra section for PAGE ONE, under the ratio bar — the price lens's MARKET table and
+   * chart, and the supplier lens's PRICE vs VOLUME panels.
+   *
+   * It is a node rather than a model because this sheet must stay ignorant of what a market
+   * series is: it formats nothing, spells no currency glyph and knows no supplier. A lens
+   * whose context read refused, errored or has not landed passes nothing, and page one is
+   * then exactly what it was.
+   */
+  page1Extra?: React.ReactNode;
   total: {
     blocks: string;
     kg: string;
@@ -223,10 +288,16 @@ export const LENS_PRINT_MARGIN_MM = 10;
  * printed page, so every total here is the LAST `<tbody>` row.
  *
  * `break-before: page` on `.lens-print-band` is what makes each band start a fresh
- * sheet: page one is the title, the settings line, the band table and the ratio bar,
- * then the YARD MAP, and then one page per band. A warehouse group is one `<tbody>`,
- * `break-inside: avoid` while it is small enough to travel whole, and its heading row
- * carries `break-after: avoid` so a large group's title cannot be stranded at a page foot.
+ * sheet: page one is the title, the settings line, the band table, the ratio bar and the
+ * lens's own context block, then the YARD MAP, and then the BLOCK pages. A warehouse group
+ * is one `<tbody>`, `break-inside: avoid` while it is small enough to travel whole, and its
+ * heading row carries `break-after: avoid` so a large group's title cannot be stranded at a
+ * page foot.
+ *
+ * `.lens-print-whse-page` is the PRICE sheet's extra break: the second and later warehouses
+ * of a band each take their own sheet (the first rides the band's own break, so a band never
+ * opens with a blank page), and `.lens-print-band-run` carries `break-after: avoid` so the
+ * repeated band line can never be stranded above a page boundary from its own table.
  *
  * `.lens-print-yardmap` takes the SAME `break-before: page` plus a `break-inside: avoid`:
  * "all blocks in one landscape page" is the owner's requirement, so the map must be
@@ -248,11 +319,39 @@ export const LENS_SUMMARY_PRINT_RULES = buildPrintPageRules({
   page-break-inside: avoid;
 }
 [data-lens-print] .lens-print-yardmap h2 { break-after: avoid; }
+[data-lens-print] .lens-print-whse-page { break-before: page; page-break-before: always; }
+[data-lens-print] .lens-print-whse-page h2 { break-after: avoid; }
+[data-lens-print] .lens-print-band-run { break-after: avoid; }
 `,
 });
 
 /** How many rows still let a warehouse group travel whole on one sheet. */
 const SMALL_WAREHOUSE_ROWS = 6;
+
+/**
+ * The seven lab cells of a subtotal / total row — the payload's own strings, or blanks.
+ *
+ * A lens with no published partition passes no `figures` and gets exactly the blank row it
+ * printed before. It is one component so the SUBTOTAL and the BAND TOTAL can never diverge
+ * about what a missing figure looks like.
+ */
+function LabCells({
+  figures,
+  className,
+}: {
+  figures: LensSummaryGroupFigures | null | undefined;
+  className: string;
+}) {
+  return (
+    <>
+      {LENS_SUMMARY_LAB_KEYS.map((k) => (
+        <td key={k} className={cn(className, figures ? 'text-right font-mono' : undefined)}>
+          {figures ? figures.lab[k] : null}
+        </td>
+      ))}
+    </>
+  );
+}
 
 // ── The sheet ───────────────────────────────────────────────────────────────
 
@@ -265,6 +364,19 @@ const TD_SMALL = 'border border-zinc-300 px-1 py-[2px] text-[7.5px] text-zinc-90
 const BLOCK_COL_WIDTHS = ['8%', '17%', '11%'] as const;
 const LAB_COL_WIDTH = '7.5%';
 const FIGURE_COL_WIDTH = '11.5%';
+
+/**
+ * The same table RE-FITTED for the price sheet's extra SUPPLIER column (2026-09-22).
+ *
+ * BLOCK · BATCH · SUPPLIER · BALANCE = 7 + 15 + 13 + 10, the seven lab columns at 6.5
+ * each = 45.5, the figure 9.5 — **100% exactly**, so `table-fixed` has nothing to
+ * redistribute and no column silently crushes. It is a SEPARATE table because the age and
+ * supplier sheets must keep the original widths byte for byte, which is what makes their
+ * sheets provably unchanged.
+ */
+const BLOCK_COL_WIDTHS_WITH_SUPPLIER = ['7%', '15%', '13%', '10%'] as const;
+const LAB_COL_WIDTH_WITH_SUPPLIER = '6.5%';
+const FIGURE_COL_WIDTH_WITH_SUPPLIER = '9.5%';
 
 /**
  * The swatch class for one band.
@@ -299,35 +411,67 @@ function BandFigure({ band }: { band: Pick<LensSummaryBand, 'figure' | 'figureAc
   );
 }
 
-/** One band's blocks: a full-width table, one `<tbody>` per warehouse. */
+/**
+ * A band's blocks as a full-width table, one `<tbody>` per warehouse in `warehouses`.
+ *
+ * Called with the band's WHOLE warehouse list (age, supplier) or with ONE of them (price,
+ * which pages per warehouse) — so the two modes cannot render different columns, a
+ * different subtotal or a different set of decimals.
+ */
 function BandBlocksTable({
   band,
+  warehouses,
   figureColumnLabel,
+  supplierColumnLabel,
+  showBandTotal,
+  showWarehouseHeadingRow = true,
 }: {
   band: LensSummaryBand;
+  warehouses: readonly LensSummaryWarehouse[];
   figureColumnLabel: string;
+  /** Present ⇒ the SUPPLIER column exists. Absent ⇒ it does not (see the model's doc). */
+  supplierColumnLabel?: string;
+  showBandTotal: boolean;
+  /**
+   * The in-table `WHSE A 10 blocks · 1,047,000 kg` row.
+   *
+   * It is what separates one warehouse from the next in the MERGED tables (age, supplier),
+   * so it stays on by default. The PAGED price sheet puts each warehouse on its own sheet
+   * under its own `<h2>` saying exactly the same words, so it turns this off — measured on a
+   * real PDF (2026-09-22), leaving both printed the heading TWICE, one line apart.
+   */
+  showWarehouseHeadingRow?: boolean;
 }) {
-  const colCount = 3 + LENS_SUMMARY_LAB_KEYS.length + 1;
+  const withSupplier = supplierColumnLabel !== undefined;
+  // BLOCK · BATCH [· SUPPLIER] · BALANCE, the seven lab columns, the lens's figure.
+  const leadCols = withSupplier ? 4 : 3;
+  const colCount = leadCols + LENS_SUMMARY_LAB_KEYS.length + 1;
+  /** The label cell of a subtotal / total row spans everything left of BALANCE kg. */
+  const labelSpan = leadCols - 1;
+  const widths = withSupplier ? BLOCK_COL_WIDTHS_WITH_SUPPLIER : BLOCK_COL_WIDTHS;
+  const labWidth = withSupplier ? LAB_COL_WIDTH_WITH_SUPPLIER : LAB_COL_WIDTH;
+  const figureWidth = withSupplier ? FIGURE_COL_WIDTH_WITH_SUPPLIER : FIGURE_COL_WIDTH;
 
-  if (band.warehouses.length === 0) {
+  if (warehouses.length === 0) {
     return <p className="text-[9px] italic text-zinc-500">No block is in this band.</p>;
   }
 
   return (
     <table className="mt-[3px] w-full table-fixed border-collapse">
       <colgroup>
-        {BLOCK_COL_WIDTHS.map((w) => (
+        {widths.map((w) => (
           <col key={w} style={{ width: w }} />
         ))}
         {LENS_SUMMARY_LAB_KEYS.map((k) => (
-          <col key={k} style={{ width: LAB_COL_WIDTH }} />
+          <col key={k} style={{ width: labWidth }} />
         ))}
-        <col style={{ width: FIGURE_COL_WIDTH }} />
+        <col style={{ width: figureWidth }} />
       </colgroup>
       <thead>
         <tr>
           <th className={cn(TH, 'text-left')}>Block</th>
           <th className={cn(TH, 'text-left')}>Batch</th>
+          {withSupplier && <th className={cn(TH, 'text-left')}>{supplierColumnLabel}</th>}
           <th className={cn(TH, 'text-right')}>Balance kg</th>
           {LENS_SUMMARY_LAB_KEYS.map((k) => (
             <th key={k} className={cn(TH, 'text-right')}>
@@ -337,23 +481,26 @@ function BandBlocksTable({
           <th className={cn(TH, 'text-right')}>{figureColumnLabel}</th>
         </tr>
       </thead>
-      {band.warehouses.map((w) => (
+      {warehouses.map((w) => (
         <tbody
           key={w.key}
           className={w.rows.length <= SMALL_WAREHOUSE_ROWS ? 'lens-print-whse-small' : undefined}
         >
-          <tr className="lens-print-whse-head bg-zinc-100">
-            <td className={cn(TD, 'font-bold uppercase')} colSpan={colCount}>
-              {w.label}
-              <span className="ml-1.5 font-mono font-normal text-zinc-600">
-                {w.blocks} · {w.kg}
-              </span>
-            </td>
-          </tr>
+          {showWarehouseHeadingRow && (
+            <tr className="lens-print-whse-head bg-zinc-100">
+              <td className={cn(TD, 'font-bold uppercase')} colSpan={colCount}>
+                {w.label}
+                <span className="ml-1.5 font-mono font-normal text-zinc-600">
+                  {w.blocks} · {w.kg}
+                </span>
+              </td>
+            </tr>
+          )}
           {w.rows.map((r) => (
             <tr key={r.blockLoc}>
               <td className={cn(TD_SMALL, 'font-mono font-semibold')}>{r.blockLoc}</td>
               <td className={cn(TD_SMALL, 'truncate')}>{r.batchCode}</td>
+              {withSupplier && <td className={cn(TD_SMALL, 'truncate')}>{r.supplier}</td>}
               <td className={cn(TD_SMALL, 'text-right font-mono')}>{r.kg}</td>
               {LENS_SUMMARY_LAB_KEYS.map((k) => (
                 <td key={k} className={cn(TD_SMALL, 'text-right font-mono')}>
@@ -363,35 +510,147 @@ function BandBlocksTable({
               <td className={cn(TD_SMALL, 'text-right font-mono')}>{r.figure}</td>
             </tr>
           ))}
-          {/* THE WAREHOUSE SUBTOTAL — blocks and kilograms only. Every lab cell is
-              deliberately BLANK: a kg-weighted reading over a partition the payload
-              does not publish would be a second definition of a lab average. */}
+          {/* ── THE WAREHOUSE SUBTOTAL ──────────────────────────────────────────
+              Its blocks, its kilograms, and — since 2026-09-22 — the (band × warehouse)
+              group's own kg-weighted MC · ASH · BD ASTM · BD JIS · GRIT · VM · FC and
+              ₱/kg, straight out of `warehouseSubtotals`. NOT computed here: a lens that
+              has no such published partition passes no `figures` and the cells stay blank,
+              which is what they were before SQL published them. NULL prints an em dash,
+              never a zero. */}
           <tr className="bg-zinc-50">
-            <td className={cn(TD_SMALL, 'font-bold uppercase')} colSpan={2}>
+            <td className={cn(TD_SMALL, 'font-bold uppercase')} colSpan={labelSpan}>
               {w.label} subtotal
+              {/* Only when a stat covers FEWER kilograms than the group. */}
+              {w.figures && w.figures.coverageNote !== '' && (
+                <span className="ml-1 font-sans text-[7px] font-normal normal-case text-zinc-600">
+                  {w.figures.coverageNote}
+                </span>
+              )}
             </td>
             <td className={cn(TD_SMALL, 'text-right font-mono font-bold')}>{w.kg}</td>
-            {LENS_SUMMARY_LAB_KEYS.map((k) => (
-              <td key={k} className={TD_SMALL} />
-            ))}
-            <td className={TD_SMALL} />
+            <LabCells figures={w.figures} className={TD_SMALL} />
+            <td className={cn(TD_SMALL, w.figures ? 'text-right font-mono font-bold' : undefined)}>
+              {w.figures ? w.figures.figure : null}
+            </td>
           </tr>
         </tbody>
       ))}
       {/* THE BAND TOTAL — the payload's own figures, never a fold of the rows above. */}
-      <tbody>
-        <tr className="bg-zinc-200">
-          <td className={cn(TD, 'font-bold uppercase')} colSpan={2}>
-            Band total
-          </td>
-          <td className={cn(TD, 'text-right font-mono font-bold')}>{band.kg}</td>
-          {LENS_SUMMARY_LAB_KEYS.map((k) => (
-            <td key={k} className={TD} />
-          ))}
-          <td className={cn(TD, 'text-right font-mono font-bold')}>{band.figure}</td>
-        </tr>
-      </tbody>
+      {showBandTotal && (
+        <tbody>
+          <tr className="bg-zinc-200">
+            <td className={cn(TD, 'font-bold uppercase')} colSpan={labelSpan}>
+              Band total
+              {band.totalFigures && band.totalFigures.coverageNote !== '' && (
+                <span className="ml-1 font-sans text-[7px] font-normal normal-case text-zinc-600">
+                  {band.totalFigures.coverageNote}
+                </span>
+              )}
+            </td>
+            <td className={cn(TD, 'text-right font-mono font-bold')}>{band.kg}</td>
+            <LabCells figures={band.totalFigures} className={TD} />
+            <td className={cn(TD, 'text-right font-mono font-bold')}>{band.figure}</td>
+          </tr>
+        </tbody>
+      )}
     </table>
+  );
+}
+
+/** The band heading a block page carries — its swatch, its name and its own figures. */
+function BandHeading({
+  model,
+  band,
+}: {
+  model: LensSummaryPrintModel;
+  band: LensSummaryBand;
+}) {
+  return (
+    <h2 className="flex items-baseline gap-1.5 border-b border-zinc-400 pb-[1px] text-[11px] font-bold uppercase text-zinc-900">
+      <span
+        aria-hidden
+        className={cn(
+          'h-2.5 w-2.5 shrink-0 self-center rounded-sm border border-zinc-400',
+          bandSwatchClass(model, band),
+          'lens-band-swatch',
+        )}
+      />
+      {band.label}
+      <span className="font-mono text-[9px] font-normal text-zinc-600">
+        {band.blocks} · {band.kg} · {band.share} · {band.figure}
+      </span>
+    </h2>
+  );
+}
+
+/**
+ * ONE PAGE PER WAREHOUSE — the price sheet's shape.
+ *
+ * The band heading repeats above each warehouse as a SMALL RUNNING LINE (the owner's own
+ * word), because a page whose only heading is `WHSE C` does not say which band's `WHSE C`
+ * it is. The BAND TOTAL rides on the LAST warehouse's page, so it is stated exactly once
+ * per band and a reader reaches it by finishing the band rather than by turning back.
+ */
+function BandWarehousePages({ model, band }: { model: LensSummaryPrintModel; band: LensSummaryBand }) {
+  if (band.warehouses.length === 0) {
+    return (
+      <div className="lens-print-band">
+        <BandHeading model={model} band={band} />
+        <p className="mt-[3px] text-[9px] italic text-zinc-500">No block is in this band.</p>
+      </div>
+    );
+  }
+  return (
+    <>
+      {band.warehouses.map((w, i) => (
+        <div
+          key={w.key}
+          // The FIRST warehouse takes the band's own page break; every later one takes its
+          // own, so each `WHSE X` heading starts a fresh sheet.
+          className={i === 0 ? 'lens-print-band' : 'lens-print-whse-page'}
+        >
+          {i === 0 ? (
+            <BandHeading model={model} band={band} />
+          ) : (
+            <p className="lens-print-band-run flex items-baseline gap-1.5 text-[8px] font-semibold uppercase text-zinc-600">
+              <span
+                aria-hidden
+                className={cn(
+                  'h-2 w-2 shrink-0 self-center rounded-sm border border-zinc-400',
+                  bandSwatchClass(model, band),
+                  'lens-band-swatch',
+                )}
+              />
+              {band.label}
+              <span className="font-mono font-normal text-zinc-500">
+                {band.blocks} · {band.kg} · {band.share} · {band.figure}
+              </span>
+            </p>
+          )}
+          <h2
+            className={cn(
+              'flex items-baseline gap-1.5 text-[11px] font-bold uppercase text-zinc-900',
+              i === 0 ? 'mt-[3px]' : 'mt-[1px]',
+            )}
+          >
+            {w.label}
+            <span className="font-mono text-[9px] font-normal text-zinc-600">
+              {w.blocks} · {w.kg}
+            </span>
+          </h2>
+          <BandBlocksTable
+            band={band}
+            warehouses={[w]}
+            figureColumnLabel={model.figureColumnLabel}
+            supplierColumnLabel={model.blockSupplierColumnLabel}
+            showBandTotal={i === band.warehouses.length - 1}
+            // The `<h2>` directly above says `WHSE A 10 blocks · 1,047,000 kg`; the in-table
+            // row would say it again, one line down.
+            showWarehouseHeadingRow={false}
+          />
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -506,6 +765,14 @@ function LensSummarySheet({
         />
       </div>
 
+      {/* ── PAGE ONE'S CONTEXT BLOCK ─────────────────────────────────────────
+          The owner, on both sheets: page one was barren under the bar. The price lens puts
+          its MARKET table + chart here, the supplier lens its PRICE vs VOLUME panels +
+          table. A node, not a model: this sheet formats nothing and knows nothing about a
+          market series, and a lens whose context read refused or has not landed passes
+          nothing — page one is then exactly what it was. */}
+      {model.page1Extra}
+
       {/* ── PAGE TWO: THE YARD MAP — every slot, solid colour, loc in big type ──
           Its own page, and that was measured rather than preferred: the band table above
           is data-sized (2 to 13 rows), so a map sharing page one would be legible or not
@@ -519,26 +786,25 @@ function LensSummarySheet({
         marginMm={LENS_PRINT_MARGIN_MM}
       />
 
-      {/* ── One PAGE per band: its blocks, grouped by warehouse, with the lab panel ── */}
-      {model.bands.map((b) => (
-        <div key={b.index} className="lens-print-band">
-          <h2 className="flex items-baseline gap-1.5 border-b border-zinc-400 pb-[1px] text-[11px] font-bold uppercase text-zinc-900">
-            <span
-              aria-hidden
-              className={cn(
-                'h-2.5 w-2.5 shrink-0 self-center rounded-sm border border-zinc-400',
-                bandSwatchClass(model, b),
-                'lens-band-swatch',
-              )}
+      {/* ── The BLOCK PAGES ──────────────────────────────────────────────────
+          One page per BAND (age, supplier — unchanged), or one page per (band ×
+          WAREHOUSE) on the price sheet. See `warehousePages`. */}
+      {model.bands.map((b) =>
+        model.warehousePages ? (
+          <BandWarehousePages key={b.index} model={model} band={b} />
+        ) : (
+          <div key={b.index} className="lens-print-band">
+            <BandHeading model={model} band={b} />
+            <BandBlocksTable
+              band={b}
+              warehouses={b.warehouses}
+              figureColumnLabel={model.figureColumnLabel}
+              supplierColumnLabel={model.blockSupplierColumnLabel}
+              showBandTotal
             />
-            {b.label}
-            <span className="font-mono text-[9px] font-normal text-zinc-600">
-              {b.blocks} · {b.kg} · {b.share} · {b.figure}
-            </span>
-          </h2>
-          <BandBlocksTable band={b} figureColumnLabel={model.figureColumnLabel} />
-        </div>
-      ))}
+          </div>
+        ),
+      )}
 
       {/* The population in NO band — its own page, muted, never folded into a band. */}
       {model.excluded && model.excluded.rows.length > 0 && (
@@ -547,6 +813,10 @@ function LensSummarySheet({
             {model.excluded.title}
           </h2>
           <p className="text-[8px] text-zinc-500">{model.excluded.note}</p>
+          {/* The excluded population is NOT paged per warehouse even on the price sheet:
+              it is one short list of blocks the lens cannot place, and a page each would be
+              a page each for a handful of rows. `showBandTotal` is off — there is no band,
+              so there is no band total to state. */}
           <BandBlocksTable
             band={{
               index: -1,
@@ -556,17 +826,21 @@ function LensSummarySheet({
               sharePct: null,
               share: '',
               figure: '',
-              warehouses: [
-                {
-                  key: '-',
-                  label: 'In no band',
-                  blocks: '',
-                  kg: '',
-                  rows: model.excluded.rows,
-                },
-              ],
+              warehouses: [],
             }}
+            warehouses={[
+              {
+                key: '-',
+                label: 'In no band',
+                blocks: '',
+                kg: '',
+                rows: model.excluded.rows,
+                figures: null,
+              },
+            ]}
             figureColumnLabel={model.figureColumnLabel}
+            supplierColumnLabel={model.blockSupplierColumnLabel}
+            showBandTotal={false}
           />
         </div>
       )}
@@ -575,6 +849,18 @@ function LensSummarySheet({
 }
 
 // ── The control ─────────────────────────────────────────────────────────────
+
+/**
+ * How many BLOCK pages this sheet will produce — one per band, or one per (band ×
+ * warehouse) when the price sheet pages per warehouse. A band with no block still takes a
+ * page, because it prints the sentence that says so.
+ */
+function blockPageCount(model: LensSummaryPrintModel): number {
+  if (!model.warehousePages) return model.bands.length;
+  let n = 0;
+  for (const b of model.bands) n = n + Math.max(1, b.warehouses.length);
+  return n;
+}
 
 /** `yyyy-MM-dd HH:mm` — the project's date format, plus the clock. */
 function stamp(d: Date): string {
@@ -627,12 +913,15 @@ export function LensSummaryPrintControl({ model, lensLabel }: LensSummaryPrintCo
               showHeader={false}
               title={model.title}
               subtitle={model.settingsLine}
-              // Page one, the YARD MAP page, one page per band, and the excluded page
-              // when there is one. The header is off, so this only reaches the console
-              // and the stage — but a count that silently stopped counting the map would
-              // be the first thing to go stale.
+              // Page one, the YARD MAP page, the BLOCK pages, and the excluded page when
+              // there is one. The header is off, so this only reaches the console and the
+              // stage — but a count that silently stopped counting the map, or that still
+              // counted one page per band after the price sheet started paging per
+              // WAREHOUSE, would be the first thing to go stale.
               countLabel={`${
-                model.bands.length + 2 + (model.excluded && model.excluded.rows.length > 0 ? 1 : 0)
+                blockPageCount(model) +
+                2 +
+                (model.excluded && model.excluded.rows.length > 0 ? 1 : 0)
               } pages`}
               onDone={() => setPrintedAt(null)}
             >

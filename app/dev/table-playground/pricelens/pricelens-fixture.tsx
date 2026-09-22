@@ -34,6 +34,13 @@ import type {
   BlockingPriceBand,
   BlockingPriceLens,
 } from '@/app/(app)/inventory/blocking/types';
+import {
+  FIXTURE_MARKET_CONTEXT,
+  fixtureLabStats,
+  fixturePriceBlockByLoc,
+  fixtureWarehouseSubtotals,
+  type FixturePriceBlock,
+} from '../lens-fixture-lab';
 
 const MARKET = 39.8568;
 const R = 40; // floor(39.8568) + 1 — what SQL returns as `roundedUpPhp`
@@ -63,6 +70,23 @@ const BASES: BlockingMarketBasis[] = [
     fromDate: '2026-07-01',
     toDate: '2026-09-30',
   },
+  // ⚠️ THE SHIPPED DEFAULT SINCE 2026-09-22, so a rig WITHOUT this row opens the price lens
+  // on a basis that does not exist: `activeBasis` is null, no market price is resolved, the
+  // classify read never fires, no band chip renders and the Print button stays disabled.
+  // Placed AFTER `last_3_months`, mirroring `PRICE_LENS_BASIS_ORDER` and the SQL row order.
+  //
+  // Note it reads the SAME figure as `last_3_months` would in the third month of a quarter —
+  // here it carries the LIVE Q3-2026 measurement (₱39.1816 over 2,479,361 kg / 153
+  // deliveries) so the two rows are visibly distinct on the rig and the highlighted MARKET
+  // row on page one can be told apart from its neighbour.
+  {
+    basisKey: 'this_quarter',
+    marketPhpKg: 39.1816,
+    pricedKg: 2_479_361,
+    deliveryCount: 153,
+    fromDate: '2026-07-01',
+    toDate: '2026-09-30',
+  },
   // Deliberately NULL — the state a lens must never coerce to ₱0.
   {
     basisKey: 'trailing_days',
@@ -83,10 +107,18 @@ const SHAPES: Record<string, number[]> = {
   '7': [-10, -5, -1, 0, 3, 8],
 };
 
+/**
+ * THREE WAREHOUSES, not three rows of one (changed 2026-09-22).
+ *
+ * The price sheet now prints ONE PAGE PER WAREHOUSE inside a band, so a rig whose thirty
+ * cells all sat in warehouse A could produce exactly one warehouse per band and the paging
+ * it is meant to exercise would be unreachable. A / B / C, ten slots each, is the shape the
+ * supplier rig already uses (`A`/`B`/`D`) and it makes every band span two or three sheets.
+ */
 const MOCK_BLOCKS = [
   'A-1A', 'A-2A', 'A-3A', 'A-4A', 'A-5A', 'A-6A', 'A-7A', 'A-8A', 'A-9A', 'A-10A',
-  'A-1B', 'A-2B', 'A-3B', 'A-4B', 'A-5B', 'A-6B', 'A-7B', 'A-8B', 'A-9B', 'A-10B',
-  'A-1C', 'A-2C', 'A-3C', 'A-4C', 'A-5C', 'A-6C', 'A-7C', 'A-8C', 'A-9C', 'A-10C',
+  'B-1A', 'B-2A', 'B-3A', 'B-4A', 'B-5A', 'B-6A', 'B-7A', 'B-8A', 'B-9A', 'B-10A',
+  'C-1A', 'C-2A', 'C-3A', 'C-4A', 'C-5A', 'C-6A', 'C-7A', 'C-8A', 'C-9A', 'C-10A',
 ] as const;
 
 interface MockCell {
@@ -146,6 +178,10 @@ function makeLens(cells: MockCell[], offsets: number[]): BlockingPriceLens {
   let pricedKg = 0;
   let pricedVal = 0;
 
+  // The BANDED (i.e. priced) blocks, which is exactly the population `blockByLoc` and
+  // `warehouseSubtotals` cover in the live payload.
+  const banded: FixturePriceBlock[] = [];
+
   for (const c of cells) {
     if (c.php === null) {
       unpricedBlocks += 1;
@@ -160,6 +196,13 @@ function makeLens(cells: MockCell[], offsets: number[]): BlockingPriceLens {
     pricedBlocks += 1;
     pricedKg += c.balance;
     pricedVal += c.balance * c.php;
+    banded.push({
+      loc: c.loc,
+      band: b,
+      kg: c.balance,
+      php: c.php,
+      lab: { mc: c.mc, ash: c.ash, bdAstm: c.bdAstm },
+    });
   }
 
   const bands: BlockingPriceBand[] = counts.map((_, i) => ({
@@ -172,6 +215,9 @@ function makeLens(cells: MockCell[], offsets: number[]): BlockingPriceLens {
     blockSharePct: pricedBlocks > 0 ? (counts[i] / pricedBlocks) * 100 : null,
     // Null, never 0, on an empty band — the live contract.
     kgWeightedPhpKg: kgs[i] > 0 ? vals[i] / kgs[i] : null,
+    // The three readings the mock cells carry, weighted for real; the other four stay
+    // unmeasured rather than invented. See `lens-fixture-lab.ts`.
+    ...fixtureLabStats(banded.filter((b) => b.band === i).map((b) => ({ kg: b.kg, lab: b.lab }))),
   }));
 
   return {
@@ -180,12 +226,17 @@ function makeLens(cells: MockCell[], offsets: number[]): BlockingPriceLens {
     edgeOffsets: offsets,
     bands,
     bandByBlock,
+    // SAME key set as `bandByBlock` — the invariant the live payload guarantees.
+    blockByLoc: fixturePriceBlockByLoc(banded),
+    warehouseSubtotals: fixtureWarehouseSubtotals(banded),
     unpriced: { blockCount: unpricedBlocks, kg: unpricedKg },
     total: {
       blockCount: pricedBlocks + unpricedBlocks,
       kg: pricedKg + unpricedKg,
-      // Weighted over the PRICED kilograms only, while the counts cover every block.
+      // Weighted over the PRICED kilograms only, while the counts cover every block. The
+      // seven lab means inherit that population, which is what makes the fold hold.
       kgWeightedPhpKg: pricedKg > 0 ? pricedVal / pricedKg : null,
+      ...fixtureLabStats(banded.map((b) => ({ kg: b.kg, lab: b.lab }))),
     },
   };
 }
@@ -233,6 +284,10 @@ export function PriceLensFixture() {
         ok: true,
         lens: makeLens(cells, [...edgeOffsets]),
       }),
+      // The PRINT-ONLY third read — page one's MARKET table and chart. Without it the rig
+      // could only ever show that section ABSENT, which is the one shape a reviewer does
+      // not need to look at. See `lens-fixture-lab.ts`.
+      fetchMarketContext: async () => ({ ok: true, context: FIXTURE_MARKET_CONTEXT }),
     }),
     [cells],
   );

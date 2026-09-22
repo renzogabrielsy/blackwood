@@ -41,6 +41,21 @@
 // error rule, satisfied by a banner rather than a toast); a thrown error goes to
 // `errorToast()`.
 //
+// ── THE THIRD READ IS PRINT-ONLY, AND IT IS NOT LOAD-BEARING (2026-09-22) ───
+// `fetchMarketContext` supplies page one's MARKET table and chart — the owner's *"maybe a
+// deliveries price for the year — an indication of what the market price is."* It is fired
+// ONCE on mount, sits in NO signature and NO dependency of the classify effect, and a
+// refusal or an error simply leaves the section OUT of the printed model. Nothing about it
+// reaches the screen: no spinner, no banner, no toast. The series is a fact about
+// deliveries and does not move when a reader drags a cut line, so re-reading it per
+// settings change would buy nothing and cost a round trip.
+//
+// The same pass gave the PRINTED sheet a SUPPLIER column per block, filled the warehouse
+// subtotals' seven lab cells from the payload's own `warehouseSubtotals`, and made each
+// `WHSE X` heading start a fresh page. All three are price-sheet only — see
+// `lens-summary-print.tsx`'s header — and the shipped default basis became
+// `this_quarter`.
+//
 // ── THE ROWS, THE BAR AND THE DISCLOSURE ARE SHARED WITH THE AGE LENS ───────
 // The legend, the stacked ratio bar, the kg|blocks switch, the muted "in no band"
 // row, the inline refusal banner and the Customize scaffolding live in `lens/` and
@@ -63,13 +78,20 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 
-import { fetchBlockingMarketBases, fetchBlockingPriceLens } from '../actions';
 import {
+  fetchBlockingMarketBases,
+  fetchBlockingMarketContext,
+  fetchBlockingPriceLens,
+} from '../actions';
+import {
+  BLOCKING_MARKET_CONTEXT_DEFAULT_MONTHS,
   BLOCKING_PRICE_LENS_MAX_EDGES,
   BLOCKING_TRAILING_DAYS_MAX,
   BLOCKING_TRAILING_DAYS_MIN,
   type BlockingMarketBasesResult,
   type BlockingMarketBasis,
+  type BlockingMarketContext,
+  type BlockingMarketContextResult,
   type BlockingPriceBand,
   type BlockingPriceLens,
   type BlockingPriceLensResult,
@@ -95,7 +117,9 @@ import {
   LensSummaryPrintControl,
   type LensSummaryPrintModel,
 } from './lens-summary-print';
-import { buildLensSummaryBuckets } from './lens-summary-model';
+import { buildLensGroupFigures, buildLensSummaryBuckets } from './lens-summary-model';
+import { buildLensMarketPrintModel } from './lens-market-model';
+import { LensMarketContextSection } from './lens-market-print';
 import { buildLensYardMap } from './lens-yard-map-model';
 import { priceBasisNoun } from '../../_shared/blend-analysis-text';
 import {
@@ -176,12 +200,24 @@ export interface PriceLensAdapter {
      */
     roundedUpPhp: number | null,
   ) => Promise<BlockingPriceLensResult>;
+  /**
+   * The PRINT-ONLY third read (2026-09-22) — the monthly market series page one's MARKET
+   * table and chart are built from.
+   *
+   * It is deliberately NOT part of the screen's critical path: the bar, the chips, the
+   * ratio bar and the tint all work without it, and a refusal or an error simply leaves the
+   * section out of the printed model. The read is fired ONCE per mount rather than per
+   * settings change, because the series is a fact about deliveries and does not move when
+   * the reader drags a cut line.
+   */
+  fetchMarketContext: (months: number) => Promise<BlockingMarketContextResult>;
 }
 
 const LIVE_ADAPTER: PriceLensAdapter = {
   fetchBases: (days) => fetchBlockingMarketBases(days),
   fetchLens: (price, edges, roundedUpPhp) =>
     fetchBlockingPriceLens(price, [...edges], roundedUpPhp),
+  fetchMarketContext: (months) => fetchBlockingMarketContext(months),
 };
 
 export function PriceLensPanel({
@@ -284,6 +320,41 @@ export function PriceLensPanel({
       cancelled = true;
     };
   }, [trailingDays, basesNonce]);
+
+  // ── (1b) THE MARKET SERIES — print only, fired ONCE, and never load-bearing ──
+  //
+  // Page one used to be barren below the ratio bar. The owner: *"maybe a deliveries price
+  // for the year — an indication of what the market price is."* So the printed sheet gets a
+  // twelve-month market table and chart, built from `fetchBlockingMarketContext`.
+  //
+  // THREE PROPERTIES, each deliberate:
+  //   RACE-SAFE      the fetch is fired on mount and its reply is dropped if the panel has
+  //                  gone away. It is in no signature and no dependency of the classify
+  //                  effect, so it can never delay, cancel or re-trigger a band read.
+  //   NEVER BLANK    a refusal (including `prices_hidden`, which this whole panel is
+  //                  already behind) or a thrown error leaves `marketContext` null, and the
+  //                  print model then OMITS the section rather than printing empty cells. A
+  //                  section of blanks would say the market has no price.
+  //   QUIET          nothing about this read reaches the screen. It is not an operational
+  //                  fact the reader is waiting on, so it gets no spinner, no banner and no
+  //                  toast — the Print button simply prints page one as it was if it failed.
+  const [marketContext, setMarketContext] = React.useState<BlockingMarketContext | null>(null);
+  React.useEffect(() => {
+    let cancelled = false;
+    void adapterRef.current
+      .fetchMarketContext(BLOCKING_MARKET_CONTEXT_DEFAULT_MONTHS)
+      .then((res) => {
+        if (cancelled) return;
+        setMarketContext(res.ok ? res.context : null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setMarketContext(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const activeBasis: BlockingMarketBasis | null = React.useMemo(() => {
     if (settings.basis === 'manual') return null;
@@ -594,6 +665,13 @@ export function PriceLensPanel({
     const bandCount = lens.bands.length;
     const typed = settings.basis === 'manual';
 
+    // THE (band × warehouse) SUBTOTALS, indexed for lookup (2026-09-22). SQL publishes one
+    // row per pair that HOLDS a block; a pair it omitted has no row here either, and its
+    // cells print blank rather than a guess.
+    const subtotalByPair = new Map(
+      lens.warehouseSubtotals.map((s) => [`${s.bandIndex}|${s.warehouse}`, s]),
+    );
+
     // ONE bucketing, shared by all three lenses: band → warehouse → rows, with the
     // grid's own lab readings joined in. A LOOKUP of `bandByBlock`, never a sum of it.
     const { byBand, excludedRows } = buildLensSummaryBuckets({
@@ -604,6 +682,32 @@ export function PriceLensPanel({
       formatKg: formatLensKg,
       formatBlocks: formatLensBlocks,
       excludedFigure: EMDASH,
+      // ── THE SUPPLIER COLUMN, per block ────────────────────────────────────
+      // The payload's own `dominantSupplierDisplay` (the RAW spelling, `Ornales`) plus its
+      // `dominantSharePct` when the block is MIXED, and the plain name when it is the whole
+      // pile. **NULL — never a placeholder and never `false`** — is a batch with no delivery
+      // row at all, which reads as an em dash; the three fields move together, so one null
+      // means all three are.
+      supplierOf: (loc) => {
+        const b = lens.blockByLoc[loc];
+        if (!b || b.dominantSupplierDisplay === null) return EMDASH;
+        if (b.isMixed !== true || b.dominantSharePct === null) return b.dominantSupplierDisplay;
+        return `${b.dominantSupplierDisplay} ${b.dominantSharePct.toFixed(0)}%`;
+      },
+      // ── THE SUBTOTAL'S SEVEN LAB MEANS AND ITS ₱/kg ───────────────────────
+      // A LOOKUP, formatted. Every figure is SQL's; the only arithmetic
+      // `buildLensGroupFigures` does is the comparison that decides whether a stat's
+      // coverage is short of the group's kilograms.
+      figuresOf: (bandIndex, warehouse) => {
+        const s = subtotalByPair.get(`${bandIndex}|${warehouse}`);
+        if (!s) return null;
+        return buildLensGroupFigures(
+          s,
+          s.kg,
+          s.kgWeightedPhpKg === null ? EMDASH : peso(s.kgWeightedPhpKg, 2),
+          formatLensKg,
+        );
+      },
     });
 
     // THE YARD MAP page — the SAME `bandOf` lookup the buckets above use, so the map and
@@ -612,6 +716,29 @@ export function PriceLensPanel({
     const yardMap = buildLensYardMap({ data, bandOf: (loc) => lens.bandByBlock[loc] });
 
     const visible = lens.bands.filter((b) => picked.size === 0 || picked.has(b.index));
+
+    // ── PAGE ONE'S MARKET CONTEXT ────────────────────────────────────────────
+    // Present only when the read landed. WHICH row the basis is measured over is decided
+    // from the basis's OWN window anchor — a calendar month's `fromDate` IS that month's
+    // first day — so no date arithmetic happens here and `last_3_months` / `trailing_days` /
+    // a typed price correctly highlight nothing (this table carries no row for an aggregate
+    // it does not publish; the caption names the basis instead).
+    const marketSection =
+      marketContext === null
+        ? null
+        : buildLensMarketPrintModel({
+            context: marketContext,
+            basisPhpKg: marketPhpKg,
+            basisLabel: typed ? 'a set price' : PRICE_LENS_BASIS_LABELS[settings.basis],
+            highlight:
+              settings.basis === 'this_month' || settings.basis === 'last_month'
+                ? activeBasis === null
+                  ? null
+                  : { kind: 'month', month: activeBasis.fromDate }
+                : settings.basis === 'this_quarter'
+                  ? { kind: 'currentQuarter' }
+                  : null,
+          });
 
     return {
       // THE TITLE IS THE LENS'S NAME. The settings line says what it is set to.
@@ -633,6 +760,13 @@ export function PriceLensPanel({
       ramp: PRICE_LENS_RAMP,
       bandCount,
       figureColumnLabel: '₱/kg',
+      // PRICE SHEET ONLY: a SUPPLIER column per block, and ONE PAGE PER WAREHOUSE. Both
+      // are the owner's 2026-09-22 asks, and both are absent from the age and supplier
+      // models, which is what keeps those two sheets unchanged.
+      blockSupplierColumnLabel: 'Supplier',
+      warehousePages: true,
+      page1Extra:
+        marketSection === null ? null : <LensMarketContextSection model={marketSection} />,
       bands: visible.map((b) => ({
         index: b.index,
         label: priceBandLabel(b, lens.roundedUpPhp, settings.bandNames),
@@ -642,6 +776,14 @@ export function PriceLensPanel({
         share: formatLensSharePct(share(b)),
         figure: b.kgWeightedPhpKg === null ? EMDASH : peso(b.kgWeightedPhpKg, 2),
         warehouses: byBand.get(b.index) ?? [],
+        // THE BAND TOTAL's own seven weighted lab means — the band row of the payload,
+        // read the same way its warehouse children are.
+        totalFigures: buildLensGroupFigures(
+          b,
+          b.kg,
+          b.kgWeightedPhpKg === null ? EMDASH : peso(b.kgWeightedPhpKg, 2),
+          formatLensKg,
+        ),
       })),
       total: {
         blocks: formatLensBlocks(lens.total.blockCount),
@@ -663,7 +805,19 @@ export function PriceLensPanel({
             }
           : null,
     };
-  }, [lens, marketPhpKg, data, picked, settings.basis, settings.bandNames, settings.edgeOffsets, settings.unit, share]);
+  }, [
+    lens,
+    marketPhpKg,
+    marketContext,
+    activeBasis,
+    data,
+    picked,
+    settings.basis,
+    settings.bandNames,
+    settings.edgeOffsets,
+    settings.unit,
+    share,
+  ]);
 
   /**
    * THE BAR'S HEADLINE — the whole lens in a few words.

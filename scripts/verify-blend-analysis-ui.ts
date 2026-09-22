@@ -1301,7 +1301,7 @@ console.log('\n9. THE LENS SUMMARY PRINT — the platform kit, the filter, the a
     assert.ok(/const SMALL_WAREHOUSE_ROWS = 6;/.test(sheet), 'the small-group threshold moved');
   });
 
-  check('⚠️ THE LAB COLUMNS ARE READ, and a SUBTOTAL\'s lab cells stay BLANK', () => {
+  check('⚠️ THE LAB COLUMNS ARE READ, and a SUBTOTAL still COMPUTES none of them', () => {
     const sheet = code(LENS_PRINT);
     // Seven readings, in the RC IN column order, spelled in ONE place.
     const model = code(`${LENS}/lens-summary-model.ts`);
@@ -1312,13 +1312,36 @@ console.log('\n9. THE LENS SUMMARY PRINT — the platform kit, the filter, the a
     // The Excel Standard: BD → 3 decimals, everything else → 2.
     assert.ok(/bdAstm: lab3\(/.test(model) && /bdJis: lab3\(/.test(model), 'a BD reading is not 3 dp');
     assert.ok(/mc: lab2\(/.test(model) && /ash: lab2\(/.test(model), 'MC or ASH is not 2 dp');
-    // ⚠️ NEVER a weighted average in TypeScript: the subtotal's lab cells are EMPTY.
+
+    // ── RESTATED 2026-09-22, AND DELIBERATELY NOT WEAKENED ────────────────────
+    // This used to require the subtotal's seven `<td>`s to be literally EMPTY
+    // (`<td key={k} className={TD_SMALL} />`). That was the right guard while the payload
+    // published no (band × warehouse) partition: a figure in that cell could only have been
+    // a kg-weighted mean computed in TypeScript, which is the one thing this directory may
+    // not do. Migration `20260922093000` gave `fn_blocking_price_lens` a
+    // `warehouse_subtotals[]` array carrying those seven means, so the cell is now a LOOKUP
+    // of SQL's own figure — and the owner asked for it.
+    //
+    // **The rule did not move; the assertion moved onto the rule.** What is forbidden is
+    // COMPUTING a lab mean, so that is what is now checked, in the only two files that
+    // could: the sheet may not multiply a reading by a kilogram or divide by one, and the
+    // bucketing module may not either. The blank cell is still the ONLY thing a lens with no
+    // such published partition can print, which the `LabCells` fallback is what guarantees —
+    // pinned below, and pinned again behaviourally in `verify-blocking-lens-ui.ts` §13.
     assert.ok(
-      /\{LENS_SUMMARY_LAB_KEYS\.map\(\(k\) => \(\s*<td key=\{k\} className=\{TD_SMALL\} \/>/.test(
-        sheet.replace(/\s+/g, ' ').replace(/ /g, ' '),
-      ) || /<td key=\{k\} className=\{TD_SMALL\} \/>/.test(sheet),
-      'a warehouse subtotal prints a lab value — that would be a TS-computed weighted average',
+      /figures \? figures\.lab\[k\] : null/.test(sheet.replace(/\s+/g, ' ')),
+      "a subtotal's lab cell is no longer a LOOKUP of the payload with a blank fallback",
     );
+    for (const [rel, body] of [['the sheet', sheet], ['the bucketing module', model]] as const) {
+      assert.ok(
+        !/\*\s*(kg|weight|balance)\b/i.test(body) && !/\b(kg|weight|balance)\s*\*/i.test(body),
+        `${rel} multiplies a reading by a kilogram — that is a weighted average in TypeScript`,
+      );
+      assert.ok(
+        !/\/\s*(kg|groupKg|totalKg|weight)\b/i.test(body),
+        `${rel} divides by a weight — a lab mean must come out of SQL`,
+      );
+    }
     assert.ok(
       !/weighted/i.test(model) || /never/i.test(model),
       'the bucketing module claims to weight something',
