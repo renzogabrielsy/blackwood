@@ -6110,6 +6110,8 @@ export type Database = {
           to_date: string
         }[]
       }
+      fn_blocking_market_context: { Args: { p_months?: number }; Returns: Json }
+      fn_blocking_market_context_probe: { Args: never; Returns: Json }
       fn_blocking_price_lens: {
         Args: {
           p_edge_offsets?: number[]
@@ -6124,6 +6126,11 @@ export type Database = {
       }
       fn_blocking_supplier_lens: { Args: { p_top_n?: number }; Returns: Json }
       fn_blocking_supplier_lens_probe: { Args: never; Returns: Json }
+      fn_blocking_supplier_market: {
+        Args: { p_months?: number; p_supplier_keys?: string[] }
+        Returns: Json
+      }
+      fn_blocking_supplier_market_probe: { Args: never; Returns: Json }
       fn_bulk_update_deliveries: { Args: { rows: Json }; Returns: undefined }
       fn_bulk_update_usage: { Args: { rows: Json }; Returns: undefined }
       fn_close_batch: { Args: { p_batch_id: string }; Returns: boolean }

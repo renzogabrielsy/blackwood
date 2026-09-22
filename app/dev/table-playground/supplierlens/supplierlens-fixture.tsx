@@ -71,6 +71,15 @@ import type {
   BlockingSupplierLens,
   BlockingSupplierSlice,
 } from '@/app/(app)/inventory/blocking/types';
+import {
+  FIXTURE_MARKET_CONTEXT,
+  fixtureLabStats,
+  fixturePriceBlockByLoc,
+  fixtureSupplierMarket,
+  fixtureWarehouseSubtotals,
+  type FixturePriceBlock,
+  type FixtureSupplierMarketSpec,
+} from '../lens-fixture-lab';
 
 /** Roughly the live round trip. See the header note on why it is not zero. */
 const FIXTURE_LATENCY_MS = 300;
@@ -106,6 +115,32 @@ const SUPPLIERS: SupplierSpec[] = [
   { key: 'LLANTO', display: 'Llanto', dominant: 7, mixed: 6, kgShare: 3.751, phpKg: 29.9501 },
   { key: 'SEVILLA', display: 'Sevilla', dominant: 5, mixed: 0, kgShare: 2.9124, phpKg: 19.0265 },
   { key: 'LAYUPAN', display: 'Layupan', dominant: 6, mixed: 5, kgShare: 2.8445, phpKg: 20.7090 },
+];
+
+/**
+ * Each named supplier's PRICE-vs-VOLUME history, for page one's new section (2026-09-22).
+ *
+ * The first three reproduce the live figures recorded in `blocking/CONTEXT.md` (measured
+ * 2026-09-22): ORNALES 5,620,744 kg at ₱44.9225, down 11.67%, corr 0.264 over 12 months,
+ * premium +0.4968; PAQUIBOT down 10.07%, corr 0.597, +0.8267; TAG-AT down 12.36%, corr
+ * 0.735, −0.3792 — mapped onto the rig's own band names.
+ *
+ * ⚠️ **THREE SHAPES ARE HERE ON PURPOSE, and each one is a rendering path the live data can
+ * reach:** `SEVILLA` is FLAT inside the ±2% dead band (so the table prints `→ flat` rather
+ * than dressing noise up as a trend), `LAYUPAN` has only two priced months so its
+ * correlation is **NULL and prints `n/a (2 m)`** rather than a spurious ±1, and it is also
+ * the one with QUIET MONTHS at the start of the window — which is what puts a real GAP on a
+ * chart whose axis is the WINDOW's spine rather than the series'.
+ */
+const SUPPLIER_MARKET_SPECS: FixtureSupplierMarketSpec[] = [
+  { key: 'ORNALES', kgFirst: 430_000, kgDriftPct: 18, priceFirst: 50.86, priceLast: 44.92, corr: 0.264, corrMonths: 12, premium: 0.4968 },
+  { key: 'PAQUIBOT', kgFirst: 360_000, kgDriftPct: -12, priceFirst: 49.42, priceLast: 44.44, corr: 0.597, corrMonths: 12, premium: 0.8267 },
+  { key: '2023 BACKLOG', kgFirst: 96_000, kgDriftPct: -40, priceFirst: 19.80, priceLast: 17.11, corr: 0.735, corrMonths: 12, premium: -0.3792 },
+  { key: 'LLANTO', kgFirst: 52_000, kgDriftPct: 26, priceFirst: 28.40, priceLast: 31.62, corr: -0.318, corrMonths: 12, premium: 0.1104 },
+  // FLAT — inside the ±2% dead band, so `direction` reads `flat` and not a trend.
+  { key: 'SEVILLA', kgFirst: 41_000, kgDriftPct: 4, priceFirst: 19.02, priceLast: 19.18, corr: 0.081, corrMonths: 12, premium: -0.2210 },
+  // TWO priced months ⇒ NULL correlation, and a nine-month gap at the head of the window.
+  { key: 'LAYUPAN', kgFirst: 38_000, kgDriftPct: 9, priceFirst: 20.44, priceLast: 21.06, corr: null, corrMonths: 2, premium: null, quietMonths: 10 },
 ];
 
 /** The eleven suppliers the live yard folds into `others`, plus that fold's figures. */
@@ -362,6 +397,9 @@ const BASES: BlockingMarketBasis[] = [
   { basisKey: 'this_month', marketPhpKg: MARKET, pricedKg: 566_870, deliveryCount: 37, fromDate: '2026-09-01', toDate: '2026-09-30' },
   { basisKey: 'last_month', marketPhpKg: 39.9698, pricedKg: 824_027, deliveryCount: 50, fromDate: '2026-08-01', toDate: '2026-08-31' },
   { basisKey: 'last_3_months', marketPhpKg: 39.1187, pricedKg: 2_292_401, deliveryCount: 138, fromDate: '2026-07-01', toDate: '2026-09-30' },
+  // ⚠️ THE SHIPPED DEFAULT SINCE 2026-09-22 — without this row the price tab opens on a basis
+  // that does not exist and renders no band at all. See the price rig's own note.
+  { basisKey: 'this_quarter', marketPhpKg: 39.1816, pricedKg: 2_479_361, deliveryCount: 153, fromDate: '2026-07-01', toDate: '2026-09-30' },
   { basisKey: 'trailing_days', marketPhpKg: null, pricedKg: 0, deliveryCount: 0, fromDate: '2026-09-18', toDate: '2026-09-19' },
 ];
 
@@ -448,6 +486,13 @@ function makePriceLens(cells: MockCell[], offsets: number[]): BlockingPriceLens 
   let pricedKg = 0;
   let pricedVal = 0;
 
+  // The BANDED (i.e. priced) blocks — exactly the population `blockByLoc` and
+  // `warehouseSubtotals` cover in the live payload. This fixture is the one that HAS supplier
+  // facts, so it fills all three supplier keys for real, including the
+  // `unattributed` shape: NULL display and NULL `isMixed`, never a placeholder and never
+  // `false`.
+  const banded: FixturePriceBlock[] = [];
+
   for (const c of cells) {
     if (c.php === null) continue;
     const b = bandOf(c.php);
@@ -458,6 +503,17 @@ function makePriceLens(cells: MockCell[], offsets: number[]): BlockingPriceLens 
     pricedBlocks += 1;
     pricedKg += c.balance;
     pricedVal += c.balance * c.php;
+    const spec = c.supplierIdx >= 0 ? SUPPLIERS[c.supplierIdx] : undefined;
+    banded.push({
+      loc: c.loc,
+      band: b,
+      kg: c.balance,
+      php: c.php,
+      lab: { mc: c.mc, ash: c.ash, bdAstm: c.bdAstm },
+      supplier: c.unattributed ? null : (spec?.display ?? 'Others'),
+      isMixed: c.unattributed ? null : c.mixed,
+      sharePct: c.unattributed ? null : c.mixed ? 62.5 : 100,
+    });
   }
 
   const bands: BlockingPriceBand[] = counts.map((_, i) => ({
@@ -469,6 +525,9 @@ function makePriceLens(cells: MockCell[], offsets: number[]): BlockingPriceLens 
     kgSharePct: pricedKg > 0 ? (kgs[i] / pricedKg) * 100 : null,
     blockSharePct: pricedBlocks > 0 ? (counts[i] / pricedBlocks) * 100 : null,
     kgWeightedPhpKg: kgs[i] > 0 ? vals[i] / kgs[i] : null,
+    // The three readings the mock cells carry, weighted for real; the other four stay
+    // unmeasured rather than invented. See `lens-fixture-lab.ts`.
+    ...fixtureLabStats(banded.filter((b) => b.band === i).map((b) => ({ kg: b.kg, lab: b.lab }))),
   }));
 
   return {
@@ -477,11 +536,15 @@ function makePriceLens(cells: MockCell[], offsets: number[]): BlockingPriceLens 
     edgeOffsets: offsets,
     bands,
     bandByBlock,
+    // SAME key set as `bandByBlock` — the invariant the live payload guarantees.
+    blockByLoc: fixturePriceBlockByLoc(banded),
+    warehouseSubtotals: fixtureWarehouseSubtotals(banded),
     unpriced: { blockCount: 0, kg: 0 },
     total: {
       blockCount: pricedBlocks,
       kg: pricedKg,
       kgWeightedPhpKg: pricedKg > 0 ? pricedVal / pricedKg : null,
+      ...fixtureLabStats(banded.map((b) => ({ kg: b.kg, lab: b.lab }))),
     },
   };
 }
@@ -537,6 +600,33 @@ export function SupplierLensFixture() {
         await sleep(FIXTURE_LATENCY_MS);
         return { ok: true, lens: makeSupplierLens(cells, n, canViewPrices) };
       },
+      // ── PAGE ONE's PRICE vs VOLUME ────────────────────────────────────────
+      // The rig answers for the keys it was ASKED about, so a key the fixture has no spec
+      // for is genuinely absent from the reply and the printed section NAMES it — exactly
+      // what the live function does with a supplier that bought nothing in the window.
+      //
+      // `?prices=0` REFUSES, byte for byte as the action does: the whole payload is money
+      // (including the correlation, which is ₱-derived), so there is no nulled half to
+      // hand a price-denied reader. That is what makes "the entire section is absent"
+      // reachable on the rig at all.
+      fetchMarket: async (months, keys) => {
+        await sleep(FIXTURE_LATENCY_MS);
+        if (!canViewPrices) {
+          return {
+            ok: false,
+            reason: 'prices_hidden',
+            message: 'Prices are hidden for this view.',
+          };
+        }
+        const asked = new Set(keys);
+        return {
+          ok: true,
+          market: fixtureSupplierMarket(
+            SUPPLIER_MARKET_SPECS.filter((s) => asked.has(s.key)),
+            FIXTURE_MARKET_CONTEXT.months.slice(-months).map((m) => m.month),
+          ),
+        };
+      },
     }),
     [cells, canViewPrices],
   );
@@ -560,6 +650,13 @@ export function SupplierLensFixture() {
       fetchLens: async (_market, edgeOffsets) => {
         await sleep(FIXTURE_LATENCY_MS);
         return { ok: true, lens: makePriceLens(cells, [...edgeOffsets]) };
+      },
+      // Page one's MARKET table and chart. The price lens is only OFFERED when
+      // `canViewPrices` is true (its own `canShow`), so this needs no gate of its own — but
+      // the LIVE action refuses regardless, which is the boundary.
+      fetchMarketContext: async () => {
+        await sleep(FIXTURE_LATENCY_MS);
+        return { ok: true, context: FIXTURE_MARKET_CONTEXT };
       },
     }),
     [cells],

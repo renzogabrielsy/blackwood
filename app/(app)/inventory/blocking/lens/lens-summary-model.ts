@@ -23,17 +23,25 @@
 //   payload's, and the verify script proves the warehouse subtotals of a band FOLD BACK
 //   to the band's own published kilograms rather than replacing them.
 //
-// What is still absolutely forbidden, and is NOT done here: a weighted average. A
-// warehouse subtotal's lab cells are left **BLANK**, because a kg-weighted MC over a
+// What is still absolutely forbidden, and is NOT done here: a weighted average.
+//
+// ── ⚠️ THE SUBTOTAL'S LAB CELLS FILLED IN — BY SQL, NOT BY THIS FILE (2026-09-22) ──
+// They used to be BLANK, and this module's own header said why: *"a kg-weighted MC over a
 // partition SQL never computed would be a second definition of a lab average living in
-// TypeScript — which is the project rule this exception must not be read as widening.
-// A blank cell says "not published"; a computed one would say something untrue.
+// TypeScript."* The owner asked for the figures; so `fn_blocking_price_lens` gained
+// `warehouse_subtotals[]` — one row per (band × warehouse) carrying the seven kg-weighted
+// lab means and the weighted ₱/kg — and the cells are now a LOOKUP of that array
+// (migration `20260922093000`). **The rule did not move: the print may RENDER a figure, it
+// still must not COMPUTE one.** `buildLensGroupFigures` below formats what SQL published
+// and nothing else; there is still no multiplication by a kilogram anywhere in this file,
+// and a group the payload has no row for still prints blank rather than a guess.
 //
 // PURE: no React, no fetch, no server action.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { WAREHOUSES } from '../constants';
-import type { BlockData } from '../types';
+import type { BlockData, BlockingLensLabStats } from '../types';
+import { LENS_EMDASH } from './lens-shared';
 
 /** The seven lab readings, in the Excel-Standard RC IN column order. */
 export const LENS_SUMMARY_LAB_KEYS = [
@@ -70,6 +78,41 @@ export interface LensSummaryBlockRow {
   /** `₱48.50` · `412.7 d` · `Llanto 71%`, preformatted. Never a bare number. */
   figure: string;
   lab: LensSummaryLab;
+  /**
+   * The block's DOMINANT supplier, preformatted (`Ornales 71%` on a mixed block, the plain
+   * name when it is the whole pile, an em dash with no delivery row at all).
+   *
+   * Only the PRICE sheet renders a column for it (2026-09-22, the owner's ask): the
+   * supplier sheet's per-block column already IS the supplier, and the age sheet has no
+   * supplier fact in its payload. Absent ⇒ no column, so those two sheets are unchanged.
+   */
+  supplier?: string;
+}
+
+/**
+ * The seven lab cells + the lens's figure for ONE GROUP — a warehouse subtotal or a band
+ * total — as strings the sheet prints and does not compute.
+ *
+ * Each cell is an em dash when the payload published NULL, **never a zero**: the grid
+ * COALESCEs its lab averages to 0, so `avg_ash = 0` means "the deliveries carry no ASH
+ * figure" and not ash-free charcoal — the L-008 placeholder shape in a lab coat. SQL
+ * excludes those blocks from the mean and publishes a real `0` for the coverage WEIGHT,
+ * because zero measured kilograms is a measurement.
+ */
+export interface LensSummaryGroupFigures {
+  lab: LensSummaryLab;
+  /** The lens's own weighted figure for the group. Em dash on NULL. */
+  figure: string;
+  /**
+   * `ash over 1,203,400 kg` — named ONLY for the stats whose coverage is SHORT of the
+   * group's kilograms, and empty when every stat covers all of them.
+   *
+   * It exists because each stat has its OWN coverage and they genuinely differ: measured
+   * 2026-09-22, all 170 occupied blocks carry MC while 11 read 0 on ash, both BDs, grit,
+   * VM and FC — a 769,731 kg gap. One shared "lab kg" would be wrong for MC or wrong for
+   * the other six on every group in the yard.
+   */
+  coverageNote: string;
 }
 
 export interface LensSummaryWarehouse {
@@ -82,6 +125,13 @@ export interface LensSummaryWarehouse {
   /** `757,293 kg`, preformatted — the ONE sum this module makes. See the header. */
   kg: string;
   rows: LensSummaryBlockRow[];
+  /**
+   * The (band × warehouse) group's PUBLISHED lab means and weighted figure, for the
+   * SUBTOTAL row. **Absent or null ⇒ every lab cell prints blank**, which is what a lens
+   * whose payload carries no such partition (age, supplier) gets — and what a price lens
+   * gets for a group SQL emitted no row for.
+   */
+  figures?: LensSummaryGroupFigures | null;
 }
 
 /**
@@ -127,6 +177,55 @@ export function lensSummaryLab(block: BlockData): LensSummaryLab {
   };
 }
 
+/** Which published mean and which published coverage weight each column reads. */
+const LAB_STAT_KEYS: Record<
+  LensSummaryLabKey,
+  { mean: keyof BlockingLensLabStats; weight: keyof BlockingLensLabStats; decimals: 2 | 3 }
+> = {
+  mc: { mean: 'wMc', weight: 'mcKg', decimals: 2 },
+  ash: { mean: 'wAsh', weight: 'ashKg', decimals: 2 },
+  bdAstm: { mean: 'wBdAstm', weight: 'bdAstmKg', decimals: 3 },
+  bdJis: { mean: 'wBdJis', weight: 'bdJisKg', decimals: 3 },
+  grit: { mean: 'wGrit', weight: 'gritKg', decimals: 2 },
+  vm: { mean: 'wVm', weight: 'vmKg', decimals: 2 },
+  fc: { mean: 'wFc', weight: 'fcKg', decimals: 2 },
+};
+
+/**
+ * Format one group's PUBLISHED seven means, its figure, and a coverage note.
+ *
+ * **It reads. It does not weight.** Every mean is `stats.w<Stat>` verbatim, and the only
+ * arithmetic is a COMPARISON — is this stat's coverage weight short of the group's
+ * kilograms — plus the Excel Standard's decimals. A `<` is not an average, and there is
+ * deliberately no multiplication and no division in this function at all.
+ *
+ * `groupKg` is the group's own kilograms, the same weight the payload's `kgWeighted…`
+ * figures use, so the money column and the seven lab columns on one row describe the same
+ * charcoal.
+ */
+export function buildLensGroupFigures(
+  stats: BlockingLensLabStats,
+  groupKg: number,
+  figure: string,
+  formatKg: (n: number) => string,
+): LensSummaryGroupFigures {
+  const lab = {} as LensSummaryLab;
+  const short: string[] = [];
+  for (const key of LENS_SUMMARY_LAB_KEYS) {
+    const spec = LAB_STAT_KEYS[key];
+    const mean = stats[spec.mean] as number | null;
+    const weight = stats[spec.weight] as number;
+    lab[key] = mean === null ? LENS_EMDASH : (spec.decimals === 3 ? lab3(mean) : lab2(mean));
+    // A stat whose mean exists but covers FEWER kilograms than the group is the case a
+    // reader has to be told about; one with no mean at all already prints an em dash, and
+    // saying "0 kg" beside it would be noise.
+    if (mean !== null && weight < groupKg) {
+      short.push(`${LENS_SUMMARY_LAB_LABELS[key].toLowerCase()} over ${formatKg(weight)}`);
+    }
+  }
+  return { lab, figure, coverageNote: short.join(' · ') };
+}
+
 export interface LensSummaryBucketInput {
   /** The live grid map the lens was handed. */
   data: Record<string, BlockData>;
@@ -142,6 +241,16 @@ export interface LensSummaryBucketInput {
   formatBlocks: (n: number) => string;
   /** What an unplaced block's figure cell reads. An em dash, never a zero. */
   excludedFigure: string;
+  /**
+   * The block's DOMINANT supplier cell, preformatted. Omit for a lens with no supplier
+   * fact in its payload — the sheet then renders no supplier column at all.
+   */
+  supplierOf?: (blockLoc: string, block: BlockData) => string;
+  /**
+   * The PUBLISHED figures for one (band × warehouse) group, or null when the payload has
+   * no row for that pair. A LOOKUP; this module never builds one.
+   */
+  figuresOf?: (bandIndex: number, warehouseKey: string) => LensSummaryGroupFigures | null;
 }
 
 export interface LensSummaryBuckets {
@@ -173,6 +282,7 @@ export function buildLensSummaryBuckets(input: LensSummaryBucketInput): LensSumm
 
   for (const [loc, block] of Object.entries(data)) {
     const lab = lensSummaryLab(block);
+    const supplier = input.supplierOf?.(loc, block);
     const band = bandOf(loc);
     if (band === undefined) {
       excludedRows.push({
@@ -181,6 +291,7 @@ export function buildLensSummaryBuckets(input: LensSummaryBucketInput): LensSumm
         kg: formatKg(block.balance),
         figure: input.excludedFigure,
         lab,
+        supplier,
       });
       continue;
     }
@@ -194,6 +305,7 @@ export function buildLensSummaryBuckets(input: LensSummaryBucketInput): LensSumm
         kg: formatKg(block.balance),
         figure: figureOf(loc, block),
         lab,
+        supplier,
       },
       sortBy: sortKeyOf(loc, block),
       balance: block.balance,
@@ -220,6 +332,8 @@ export function buildLensSummaryBuckets(input: LensSummaryBucketInput): LensSumm
         blocks: formatBlocks(list.length),
         kg: formatKg(kg),
         rows: list.map((d) => d.row),
+        // A LOOKUP of the payload's own (band × warehouse) row. Null ⇒ blank cells.
+        figures: input.figuresOf?.(band, key) ?? null,
       });
     }
     byBand.set(band, groups);

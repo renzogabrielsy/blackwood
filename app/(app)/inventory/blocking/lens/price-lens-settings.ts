@@ -75,23 +75,49 @@ const BASIS_KEYS: readonly PriceLensBasis[] = [
   'this_month',
   'last_month',
   'last_3_months',
+  'this_quarter',
   'trailing_days',
   'manual',
 ];
 
-/** Human labels for the "Market is" select, in the order it offers them. */
+/**
+ * Human labels for the "Market is" select, in the order it offers them.
+ *
+ * **`this_quarter` was added 2026-09-22** (migration `20260922094500`) and **is now what a
+ * FIRST-TIME price lens opens on** — the owner's own ask: *"on first load, default to the
+ * current quarter's average."* `this_month` is noisy in the first days of a month,
+ * `last_3_months` is a rolling three wherever the quarter boundary falls, and
+ * `trailing_days` does not align to a quarter at all.
+ *
+ * ⚠️ **A SAVED PREFERENCE IS UNTOUCHED.** `parsePriceLensSettings` reads `basis` field by
+ * field, so a reader who chose `this_month` keeps it; what changed is the shipped default,
+ * which is also the fallback a CORRUPT or ABSENT stored document lands on. That is the whole
+ * scope of the flip, and `scripts/verify-blocking-lens-ui.ts` pins both halves — the new
+ * default, and the fact that a stored basis still round-trips.
+ */
 export const PRICE_LENS_BASIS_LABELS: Record<PriceLensBasis, string> = {
   this_month: "This month's deliveries",
   last_month: "Last month's deliveries",
   last_3_months: 'Last 3 months',
+  // The SHIPPED DEFAULT since 2026-09-22. Named as a DELIVERIES window like its two
+  // calendar siblings, so the select reads as one list rather than as four windows and an
+  // odd one out.
+  this_quarter: "This quarter's deliveries",
   trailing_days: 'Last N days',
   manual: 'Set a price',
 };
 
+/**
+ * `this_quarter` sits AFTER `last_3_months`, mirroring the SQL function's own row order —
+ * calendar windows widening, then the rolling one, then the typed figure. Note the two read
+ * IDENTICALLY in the third month of a quarter (the quarter to date then *is* the last three
+ * months) and diverge on the 1st of the next, so both belong in the list.
+ */
 export const PRICE_LENS_BASIS_ORDER: readonly PriceLensBasis[] = [
   'this_month',
   'last_month',
   'last_3_months',
+  'this_quarter',
   'trailing_days',
   'manual',
 ];
@@ -110,7 +136,10 @@ export interface PriceLensSettings {
 }
 
 export const DEFAULT_PRICE_LENS_SETTINGS: PriceLensSettings = {
-  basis: 'this_month',
+  // ⚠️ THE CURRENT QUARTER TO DATE, since 2026-09-22 — the owner's *"on first load, default
+  // to the current quarter's average."* A SAVED basis still wins; see the label table above
+  // for what did and did not change.
+  basis: 'this_quarter',
   trailingDays: BLOCKING_TRAILING_DAYS_DEFAULT,
   manualPrice: null,
   edgeOffsets: [...BLOCKING_PRICE_LENS_DEFAULT_EDGES],

@@ -493,9 +493,17 @@ function staticChecks(): void {
       body.includes('kgWeightedPhpKg: lensNumOrNull(b.kg_weighted_php_kg)'),
       'the per-band weighted price is dropped by the mapper',
     );
+    // NOTE the expression moved on 2026-09-22 from `res.total?.…` to `total.…`: the warehouse/
+    // lab migration gave `total` FOURTEEN more keys, so the mapper hoists it into a local
+    // (`const total = res.total ?? {}`) and spreads `mapLensLabStats(total)` beside it rather
+    // than repeating `res.total?.` fifteen times. Same source, same null-preserving read.
     assert.ok(
-      body.includes('kgWeightedPhpKg: lensNumOrNull(res.total?.kg_weighted_php_kg)'),
+      body.includes('kgWeightedPhpKg: lensNumOrNull(total.kg_weighted_php_kg)'),
       'the total weighted price is dropped by the mapper',
+    );
+    assert.ok(
+      body.includes('const total = res.total ?? {}'),
+      'the hoisted `total` local is gone — check what the weighted price is now read from',
     );
     // lensNumOrNull, never `?? 0` — an empty band has no price, and 0 would be a real ₱0.
     assert.ok(!/kgWeightedPhpKg: lensNum\(/.test(body), 'the weighted price is coerced to 0');

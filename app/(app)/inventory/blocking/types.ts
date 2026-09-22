@@ -145,8 +145,30 @@ export interface BlockingSupplierMap {
 // database and return `{ ok: false, reason: 'prices_hidden' }`. Never render this for
 // Production, and never try to salvage part of it.
 
-/** Which window "market" is measured over. `manual` is client-side — it needs no basis row. */
-export type BlockingMarketBasisKey = 'this_month' | 'last_month' | 'last_3_months' | 'trailing_days';
+/**
+ * Which window "market" is measured over. `manual` is client-side — it needs no basis row.
+ *
+ * **`this_quarter` was added 2026-09-22 and is THE DEFAULT a first-time price lens should
+ * open on** (owner's ask): the current Asia/Manila calendar quarter TO DATE. The other four
+ * could not express it — `this_month` is noisy in the first days of a month, `last_3_months`
+ * is a rolling three wherever the quarter boundary falls, and `trailing_days` does not align
+ * to a quarter at all.
+ *
+ * **The SQL function returns the rows in a fixed order and `this_quarter` sits FOURTH**, so
+ * `trailing_days` moved from ordinal 4 to 5. Nothing in this codebase reads that ordinal —
+ * `fetchBlockingMarketBases` maps rows to `basisKey` — and nothing new should.
+ *
+ * NOTE `this_quarter` and `last_3_months` are numerically IDENTICAL in the third month of a
+ * quarter, because the quarter to date then *is* the last three months (measured 2026-09-22,
+ * both ₱39.1816 over 2,479,361 kg). They diverge on the 1st of October. Do not "simplify" one
+ * away on the strength of a September screenshot.
+ */
+export type BlockingMarketBasisKey =
+  | 'this_month'
+  | 'last_month'
+  | 'last_3_months'
+  | 'this_quarter'
+  | 'trailing_days';
 
 /**
  * One way of answering "what does market cost". `marketPhpKg` is the weighted average
@@ -177,7 +199,7 @@ export interface BlockingMarketBasis {
  * (open above). **Null means OPEN, never zero.** Every band is present even when it
  * holds no blocks, so a legend can render the whole scale.
  */
-export interface BlockingPriceBand {
+export interface BlockingPriceBand extends BlockingLensLabStats {
   /** 0-based, ascending by price. */
   index: number;
   lowerPhp: number | null;
@@ -192,6 +214,130 @@ export interface BlockingPriceBand {
    *  never re-weights a band in TypeScript). **Null, never 0, on an EMPTY band** — no
    *  charcoal in the band means no price in the band. */
   kgWeightedPhpKg: number | null;
+}
+
+/**
+ * THE SEVEN KG-WEIGHTED LAB MEANS, each with the weight it was taken over (2026-09-22,
+ * migration `20260922093000`). Shared by a price band, a warehouse subtotal and the yard
+ * total, because they are the same seven figures at three grains.
+ *
+ * **WHY IT EXISTS:** the lens print's warehouse subtotal row printed its blocks and
+ * kilograms beside SEVEN BLANK CELLS, and those blanks were deliberate —
+ * `lens/lens-summary-model.ts` makes exactly ONE sum and refuses to make a weighted average,
+ * because "a kg-weighted MC over a partition SQL never computed would be a second definition
+ * of a lab average living in TypeScript". SQL now computes the partition, so the print can
+ * render a figure. **Do not compute any of these in TypeScript, at any grain.**
+ *
+ * **A LAB READING OF 0 MEANS "NO READING" AND IS EXCLUDED.** `view_blocking_grid` COALESCEs
+ * its seven lab averages to 0, so `avg_ash = 0` means the block's deliveries carry no ASH
+ * figure — not ash-free charcoal. This is the L-008 placeholder shape in a lab coat, and the
+ * predicate is the one `fn_blend_analysis` uses for `unmeasured`: NULL or ≤ 0.
+ *
+ * **EACH STAT HAS ITS OWN COVERAGE AND THEY GENUINELY DIFFER — which is why there are seven
+ * weights and not one.** Measured 2026-09-22: all 170 occupied blocks carry MC, while **11
+ * read 0 on ash, both BDs, grit, VM and FC** (`total.mcKg` 10,575,183 kg against 9,805,452 kg
+ * for the other six — a 769,731 kg gap). A single shared "lab kg" would have been wrong for
+ * MC or wrong for the other six on every group in the yard.
+ *
+ * Weighted by the grid `balance`, the same weight `kgWeightedPhpKg` uses, so the money column
+ * and the seven lab columns on one row describe the same kilograms.
+ */
+export interface BlockingLensLabStats {
+  /** Kg-weighted mean MC. **NULL, never 0**, when no block in the group has a reading. */
+  wMc: number | null;
+  /** The kilograms `wMc` was taken over. A REAL 0 when none — it is a WEIGHT. */
+  mcKg: number;
+  wAsh: number | null;
+  ashKg: number;
+  wBdAstm: number | null;
+  bdAstmKg: number;
+  wBdJis: number | null;
+  bdJisKg: number;
+  wGrit: number | null;
+  gritKg: number;
+  wVm: number | null;
+  vmKg: number;
+  wFc: number | null;
+  fcKg: number;
+}
+
+/**
+ * ONE (band × warehouse) GROUP of the price lens — the row the print's warehouse subtotal
+ * renders (2026-09-22).
+ *
+ * **A PAIR THAT HOLDS NO BLOCK IS ABSENT, not emitted as a zero row.** This is the one place
+ * the price lens does NOT emit an empty group, because the print renders a warehouse heading
+ * only when it has blocks — so the fold below is Σ over the rows PRESENT:
+ *
+ *   Σ (rows with this `bandIndex`) `.blockCount` === `bands[bandIndex].blockCount`  (exact)
+ *   Σ (rows with this `bandIndex`) `.kg`         === `bands[bandIndex].kg`          (exact)
+ *
+ * Both exact, because both are plain sums of counts and balances.
+ */
+export interface BlockingPriceWarehouseSubtotal extends BlockingLensLabStats {
+  /** Which band this group belongs to. Indexes into `bands`. */
+  bandIndex: number;
+  /**
+   * `A`…`D`, `PCA`, `PCB`, or `-`.
+   *
+   * **It is the PAGE's own rule, computed in SQL:** the `block_loc` prefix before the first
+   * dash, upper-cased and trimmed, kept when it is one of the grid's six warehouses
+   * (`WAREHOUSES` in `./constants`) and otherwise the REAL bucket `-`, which **sorts last and
+   * is a real answer** — a block whose prefix is not a warehouse is still a block. Identical
+   * to `lens/lens-summary-model.ts::warehouseOfBlockLoc`, and
+   * `scripts/verify-blocking-price-lens.ts` asserts the two agree on EVERY block returned, so
+   * adding warehouse E to the grid fails that assertion rather than quietly filing blocks
+   * under `-`.
+   *
+   * Rows arrive in the grid's own warehouse order with `-` last, so render them as given.
+   */
+  warehouse: string;
+  blockCount: number;
+  kg: number;
+  /** The group's weighted ₱/kg over its PRICED blocks. **Null, never 0**, when none are. */
+  kgWeightedPhpKg: number | null;
+}
+
+/**
+ * One occupied, PRICED block as the price lens sees it (2026-09-22) — the per-block extras
+ * the print's block table needs beside the balance it already has.
+ *
+ * Present for exactly the blocks in `bandByBlock`; an unpriced block is in neither.
+ */
+export interface BlockingPriceLensBlock {
+  blockLoc: string;
+  /** Indexes into `bands`. The same number `bandByBlock[blockLoc]` carries. */
+  bandIndex: number;
+  /** See `BlockingPriceWarehouseSubtotal.warehouse` — the page's own rule, in SQL. */
+  warehouse: string;
+  /**
+   * The biggest supplier's name **as the delivery sheet spells it** (`Ornales`, not
+   * `ORNALES`) — `view_blocking_block_suppliers.supplier_display`, a `mode()` over the raw
+   * spellings. Use it as a LABEL; it is not a matching key.
+   *
+   * **NULL — never a placeholder — when the block's batch has no delivery row**, so it has no
+   * supplier. Measured 2026-09-22: no such block can reach this list today, because
+   * `avg_php_kg` is derived from the deliveries it does not have, so it would be `unpriced`
+   * and in no band. The null is still real and must be rendered as a blank, not as "UNKNOWN".
+   */
+  dominantSupplierDisplay: string | null;
+  /**
+   * PERCENT 0–100 of the block's **DELIVERED** kilograms held by that supplier — the view's
+   * own `share_pct`, deliberately NOT re-based onto the balance (within one block the balance
+   * is a constant, so the two orderings are identical and re-basing would only create a
+   * second percentage for one fact). Null when there is no supplier.
+   */
+  dominantSharePct: number | null;
+  /**
+   * **THE ALL/SOME RULE, a carried COLUMN — never re-derive it.** False = the whole block is
+   * one supplier; true = only some of it is. It is
+   * `view_blocking_block_suppliers.supplier_count_in_block > 1`, the one place that test
+   * lives — the same value `BlockingSupplierBlock.isMixed` carries.
+   *
+   * **NULL, never false**, when the block has no supplier at all: "nobody has delivered into
+   * this pile" and "one supplier filled it" are different answers.
+   */
+  isMixed: boolean | null;
 }
 
 /**
@@ -227,20 +373,36 @@ export interface BlockingPriceLens {
    * never in the cheapest band. `unpriced` says how many there are.
    */
   bandByBlock: Record<string, number>;
+  /**
+   * `block_loc` → the block's warehouse, supplier and ALL/SOME flag (2026-09-22).
+   * **IDENTICAL key set to `bandByBlock`** — both cover exactly the PRICED blocks.
+   */
+  blockByLoc: Record<string, BlockingPriceLensBlock>;
+  /**
+   * One row per (band × warehouse) THAT HOLDS A BLOCK, in the grid's own warehouse order
+   * with `-` last (2026-09-22). An empty pair is absent — see the interface doc.
+   */
+  warehouseSubtotals: BlockingPriceWarehouseSubtotal[];
   /** Occupied positive-balance blocks with no price — in no band, out of both share
    *  denominators. */
   unpriced: { blockCount: number; kg: number };
   /**
    * Every occupied block with a positive balance — banded plus unpriced.
    *
-   * **`kgWeightedPhpKg` is weighted over the PRICED population only**, while
-   * `blockCount` / `kg` count EVERY occupied block. The asymmetry is deliberate: an
-   * unpriced block's ₱0 is the L-008 placeholder, so averaging it in would drag the
-   * figure down exactly as `batches.avg_cost` once read ₱11.01 against a real ₱39.99.
-   * The counts are a count of the yard; the price is a price of what is priced — the same
-   * population the two share denominators already use. Null when nothing is priced.
+   * **`kgWeightedPhpKg` AND ALL SEVEN `w*` LAB MEANS are weighted over the PRICED population
+   * only**, while `blockCount` / `kg` count EVERY occupied block. The asymmetry is deliberate:
+   * an unpriced block's ₱0 is the L-008 placeholder, so averaging it in would drag the figure
+   * down exactly as `batches.avg_cost` once read ₱11.01 against a real ₱39.99. The counts are
+   * a count of the yard; the price is a price of what is priced — the same population the two
+   * share denominators already use. Null when nothing is priced.
+   *
+   * **The lab means inherit that population so the fold holds**: `Σ bands[].<stat>Kg ===
+   * total.<stat>Kg` exactly, which a total over a different population could not do. The
+   * stated consequence is that **an unpriced block's lab readings are not in `total.wMc`**.
+   * Measured 2026-09-22: 0 of 170 occupied blocks are unpriced, so the two populations
+   * coincide today and the divergence is guarded by the invariant, not by live data.
    */
-  total: { blockCount: number; kg: number; kgWeightedPhpKg: number | null };
+  total: { blockCount: number; kg: number; kgWeightedPhpKg: number | null } & BlockingLensLabStats;
 }
 
 /** Why a lens call came back empty. Each maps to a sentence written for a human. */
@@ -287,6 +449,315 @@ export type BlockingPriceLensResult =
 export const BLOCKING_ROUNDED_UP_MIN_PHP = 1;
 /** int4's ceiling. Not a business rule — the SQL parameter is an `int`. */
 export const BLOCKING_ROUNDED_UP_MAX_PHP = 2_147_483_647;
+
+// ─── Market CONTEXT (the price lens print's context block) ────────────────────
+// `fn_blocking_market_context` (migration `20260922094500`). The lens says what the yard
+// looks like TODAY against ONE number; this says what that number has been doing, so the
+// print can tell a reader whether ₱39.88 is high or low.
+//
+// **EVERY FIGURE IS SELECTed OR SUMMED FROM `view_analytics_rcin_monthly`** (analytics
+// Phase 1), which OWNS "monthly average purchase price", and every aggregate is
+// Σ `market_php_total` ÷ Σ `market_priced_kg` — **never the mean of monthly averages**, which
+// would weight a light month equally with a heavy one. Nothing here is recomputed in TS.
+//
+// **THE WHOLE PAYLOAD IS MONEY.** `fetchBlockingMarketContext` REFUSES a `!canViewPrices()`
+// caller before touching the database — the `fetchBlockingPriceLens` idiom, not the supplier
+// lens's two-key nulling, because there is no price-free half here worth keeping.
+
+/** One month of the market series. `month` is `yyyy-MM-dd`, always the 1st. */
+export interface BlockingMarketMonth {
+  month: string;
+  /** **NULL, never 0**, when the month has no priced market kilos. */
+  marketPhpKg: number | null;
+  marketKg: number;
+  marketPricedKg: number;
+  /** ALL market deliveries that month, priced or not — the price's coverage context. */
+  deliveryCount: number;
+  activeSuppliers: number;
+}
+
+/**
+ * One quarter the returned months span.
+ *
+ * **A QUARTER AT THE WINDOW EDGE IS PARTIAL, and `monthCount` is what says so** — a 12-month
+ * window starting mid-quarter shows a one-month quarter, which without the count would read
+ * as a full one. `isCurrent` flags the quarter containing the Manila month, which is partial
+ * for a different reason (it has not finished yet). Render both facts; do not label a
+ * one-month group "Q2".
+ */
+export interface BlockingMarketQuarter {
+  /** `2026-Q3`. Stable, sortable, and what `label` is built from. */
+  quarterKey: string;
+  /** `Q3 2026` — ready to print. */
+  label: string;
+  /** `yyyy-MM-dd`, the quarter's first day. */
+  quarterStart: string;
+  /** **NULL, never 0**, with no priced kilos in the quarter. */
+  marketPhpKg: number | null;
+  marketKg: number;
+  marketPricedKg: number;
+  deliveryCount: number;
+  /** How many of the quarter's months are IN the window. 1 or 2 means PARTIAL. */
+  monthCount: number;
+  firstMonth: string;
+  lastMonth: string;
+  /** The quarter containing the Manila month. Its figure equals the `this_quarter` BASIS. */
+  isCurrent: boolean;
+}
+
+/**
+ * A DATE-bounded market aggregate — `yearToDate` and `trailing12m`.
+ *
+ * **`toDate` is the END OF THE CURRENT MONTH, not today**, because the rows aggregated are
+ * whole months and a `toDate` of today would misdescribe them. That is the same window-ANCHOR
+ * convention `BlockingMarketBasis` already uses for `this_month`.
+ */
+export interface BlockingMarketSpan {
+  /** **NULL, never 0**, with no priced kilos in the span. */
+  marketPhpKg: number | null;
+  marketKg: number;
+  marketPricedKg: number;
+  deliveryCount: number;
+  /** How many monthly rows fell inside the span. A gap in the history shows up here. */
+  monthCount: number;
+  fromDate: string;
+  toDate: string;
+}
+
+/**
+ * The market's own series, four grains.
+ *
+ * Checkable invariants (`scripts/verify-blocking-price-lens.ts` proves them live):
+ *   every `months[]` entry IS a `view_analytics_rcin_monthly` row, field for field
+ *   `months` is ASCENDING and holds `monthsReturned === min(monthsRequested, monthsAvailable)`
+ *   every `quarters[]` figure === Σ money ÷ Σ priced kg over that quarter's months IN `months`
+ *   `quarters.find(q => q.isCurrent).marketPhpKg` === the `this_quarter` BASIS (gap 0)
+ *   `yearToDate` / `trailing12m` === direct aggregations over the view (gap 0)
+ *   `trailing12m.marketPhpKg` === `BlockingSupplierMarket.windowTotal.marketPhpKg` at N = 12
+ */
+export interface BlockingMarketContext {
+  /** The N asked for. `monthsReturned` is what was available. */
+  monthsRequested: number;
+  /** The Asia/Manila calendar date the windows were anchored to. `yyyy-MM-dd`. */
+  asOf: string;
+  /**
+   * **THE LAST N MONTHS THAT HAVE A ROW, ascending — NOT the last N calendar months.**
+   * `view_analytics_rcin_monthly` has one row per month that had a delivery; a dead month has
+   * no row, and zero-filling it from `view_analytics_flow_monthly` would invent ₱0 months,
+   * which is the L-008 mistake with a calendar instead of a price. Read `monthsAvailable` to
+   * say "12 of 50" rather than silently showing everything.
+   */
+  months: BlockingMarketMonth[];
+  /** The quarters `months` spans, ascending. See the interface doc about partial quarters. */
+  quarters: BlockingMarketQuarter[];
+  /** 1 January → end of the current month. DATE-bounded, so unaffected by `monthsRequested`. */
+  yearToDate: BlockingMarketSpan;
+  /** The 12 CALENDAR months ending with the current one. Not the same as `months` if there
+   *  are gaps in the history. */
+  trailing12m: BlockingMarketSpan;
+  /** The most recent month WITH a row — **not necessarily the current one**. Read
+   *  `isCurrentMonth` before calling it "this month". */
+  latestMonth: BlockingMarketMonth & { isCurrentMonth: boolean };
+  /** How many monthly rows exist in all of history (50 as of 2026-09-22). */
+  monthsAvailable: number;
+  /** How many `months` actually came back. `min(monthsRequested, monthsAvailable)`. */
+  monthsReturned: number;
+}
+
+export type BlockingMarketContextRefusalReason =
+  /** The caller may not see prices. Hide the whole context block; do not retry. */
+  | 'prices_hidden'
+  /** `months` absent, not a whole number, below 1, or above 36. */
+  | 'invalid_months'
+  | 'rpc_error'
+  | 'exception';
+
+export type BlockingMarketContextResult =
+  | { ok: true; context: BlockingMarketContext }
+  | { ok: false; reason: BlockingMarketContextRefusalReason; message: string };
+
+/** `p_months` bounds. Both ends REFUSED by SQL *and* by the action — never clamped. */
+export const BLOCKING_MARKET_CONTEXT_MIN_MONTHS = 1;
+export const BLOCKING_MARKET_CONTEXT_MAX_MONTHS = 36;
+export const BLOCKING_MARKET_CONTEXT_DEFAULT_MONTHS = 12;
+
+// ─── Supplier MARKET (the supplier lens print's context block) ────────────────
+// `fn_blocking_supplier_market` (migration `20260922094500`). The supplier lens says WHOSE
+// charcoal is in the yard; this says what each of them has been charging and how much they
+// have been sending.
+//
+// **EVERY FIGURE IS AGGREGATED FROM `view_analytics_supplier_monthly`** (analytics Phase 3),
+// which owns supplier identity, the per-supplier weighted price, `share_of_month_pct` and
+// `premium_php_kg`, and which joins its month baseline FROM the Phase-1 view — so a share and
+// a premium are structurally incapable of disagreeing with the `/analytics` matrix. MARKET
+// deliveries only: a sundry re-entry and a re-cook fee are never supplier volume.
+//
+// **IDENTITY AGREES WITH THE SUPPLIER LENS, MEASURED.** The lens keys on
+// `canonical_supplier(split_part(supplier, ' - ', 1))` and this on
+// `canonical_supplier(supplier)` — DIFFERENT expressions, so handing the lens's band keys
+// straight in is a claim that is checked every verify run: 16 of the 68 distinct supplier
+// strings DO differ under the strip (the sundry `- <BATCH>` suffixes), **but not one of the
+// 1,683 market deliveries carries any of them**, and all 17 of the yard's keys are suppliers
+// this view knows. So `BlockingSupplierBand.key` is safe to pass as a `supplierKeys` entry.
+//
+// **IT IS MONEY ALMOST END TO END** — including `priceVolumeCorr`, which is DERIVED FROM price
+// and is therefore price information however it is labelled. So
+// `fetchBlockingSupplierMarket` REFUSES a `!canViewPrices()` caller rather than nulling: what
+// a nulled variant would leave is a per-supplier kilogram series with its share and count,
+// which `view_digest_rcin_supplier_daily` and `fn_blocking_supplier_lens` already publish to
+// every role at grains that suit their own screens — a third, half-blank copy is how a payload
+// acquires a second meaning.
+
+/** One month of one supplier's series. `month` is `yyyy-MM-dd`, always the 1st. */
+export interface BlockingSupplierMarketPoint {
+  month: string;
+  /** Purchased kilograms. **May legitimately be 0** on a sundry-only row (the Phase-3 view
+   *  emits those); such a month is NOT counted in `monthsActive`. */
+  kg: number;
+  pricedKg: number;
+  /** The view's own weighted ₱/kg for this supplier that month. **NULL, never 0.** */
+  avgPricePhpKg: number | null;
+  /** ₱/kg above (positive) or below the MONTH's market price. **NULL, never 0** — "we don't
+   *  know" and "exactly at market" are different answers. */
+  premiumPhpKg: number | null;
+  /** PERCENT 0–100 of the month's market kilograms. */
+  shareOfMonthPct: number | null;
+  deliveryCount: number;
+}
+
+/** One supplier's whole-window summary. Every figure reads the ACTIVE months (`kg > 0`). */
+export interface BlockingSupplierMarketSummary {
+  /** Months with a REAL purchase. A sundry-only row is not activity. */
+  monthsActive: number;
+  totalKg: number;
+  totalPricedKg: number;
+  deliveryCount: number;
+  /** Σ ₱ ÷ Σ priced kg over the window — **never the mean of monthly averages**. NULL, never 0. */
+  kgWeightedPhpKg: number | null;
+  /** First / last ACTIVE month. `yyyy-MM-dd`, or null if the supplier never bought. */
+  firstMonth: string | null;
+  lastMonth: string | null;
+  /** The ₱/kg in those months. NULL when that month has no priced kilos. */
+  firstPrice: number | null;
+  lastPrice: number | null;
+  /** `lastPrice − firstPrice`. NULL when either end is NULL. */
+  priceChangePhpKg: number | null;
+  /** PERCENT. NULL when `firstPrice` is NULL or 0 — there is nothing to change FROM. */
+  priceChangePct: number | null;
+  /** PERCENT, last vs first ACTIVE month's kilograms. NULL when the first is 0. */
+  kgChangePct: number | null;
+  /**
+   * Postgres' own Pearson `corr(avgPrice, kg)` over the active months that carry a price.
+   * **POSITIVE means the bigger months came at the HIGHER prices.**
+   *
+   * **NULL below THREE such months** — two points always correlate perfectly, so a two-month
+   * ±1 is arithmetic and not a finding. Read `corrMonthCount` before printing it.
+   *
+   * It is a CORRELATION, not a cause, and it is ₱-DERIVED — so it is inside the price gate.
+   */
+  priceVolumeCorr: number | null;
+  /** How many months `priceVolumeCorr` was taken over. Under 3 ⇒ the figure is null. */
+  corrMonthCount: number;
+  /**
+   * `'up' | 'down' | 'flat'` on `priceChangePct` with a **±2% DEAD BAND** (read it from
+   * `BlockingSupplierMarket.directionDeadBandPct`, never hardcode it): month-to-month noise
+   * on a weighted purchase price is routinely a peso, and calling every wobble a trend is how
+   * a chart starts lying.
+   *
+   * **NULL, never `'flat'`, when `priceChangePct` is NULL** — "flat" is a claim.
+   */
+  direction: 'up' | 'down' | 'flat' | null;
+  /**
+   * The window's premium, **PRICED-KG-WEIGHTED — the only way it may be averaged.** A month's
+   * market price IS the priced-kg-weighted mean of its suppliers' prices, so an UNWEIGHTED
+   * average of the premium column is meaningless (CLAUDE.md's rule). NULL, never 0.
+   */
+  avgPremiumPhpKg: number | null;
+}
+
+export interface BlockingSupplierMarketEntry {
+  /** The canonical supplier key — the same string `BlockingSupplierBand.key` carries. */
+  key: string;
+  /**
+   * **Equal to `key`**, because `view_analytics_supplier_monthly` publishes only the canonical
+   * name. The SUPPLIER LENS has the prettier raw spelling (`Ornales`, not `ORNALES`) in
+   * `BlockingSupplierBand.display` — **take the label from there and join on `key`.** This
+   * payload does not invent a name it does not have.
+   */
+  display: string;
+  /** Only the months this supplier HAS a row in, ascending. Place them against `months`. */
+  series: BlockingSupplierMarketPoint[];
+  summary: BlockingSupplierMarketSummary;
+}
+
+/**
+ * Price vs volume, one series per supplier.
+ *
+ * Checkable invariants (`scripts/verify-blocking-supplier-lens.ts` proves them live):
+ *   every `series[]` row IS a `view_analytics_supplier_monthly` row, field for field
+ *   every `summary` figure === a direct aggregation over those rows (gap 0)
+ *   `priceVolumeCorr` === Postgres `corr()` recomputed independently (bounded, `double`)
+ *   `priceVolumeCorr` is NULL exactly when `corrMonthCount < 3`
+ *   `months` === `BlockingMarketContext.months.map(m => m.month)` at the same N — ONE spine
+ *   with NO `supplierKeys`, `windowTotal` === `selectedTotal` exactly
+ *   every `BlockingSupplierBand.key` the supplier lens produces is a key this view knows
+ */
+export interface BlockingSupplierMarket {
+  monthsRequested: number;
+  /** The Asia/Manila calendar date the window was anchored to. `yyyy-MM-dd`. */
+  asOf: string;
+  /** First / last month of the SPINE. Null when the window holds no rows at all. */
+  fromMonth: string | null;
+  toMonth: string | null;
+  /** The `direction` dead band in PERCENT (2.0). Published so a UI can label it. */
+  directionDeadBandPct: number;
+  /** The de-duplicated key list actually used. **NULL means "every active supplier".** */
+  supplierKeysRequested: string[] | null;
+  /**
+   * **THE WINDOW'S month spine, ascending — NOT the selection's.** A key filter narrows
+   * `suppliers`, never this: asking for a supplier that sold nothing still returns the full
+   * spine, so a chart has an axis to draw the gap on. (That was a real bug, found by testing
+   * an unknown key.)
+   */
+  months: string[];
+  /** Ordered by `summary.totalKg` DESC then `key` ASC — the order a "who matters" list wants. */
+  suppliers: BlockingSupplierMarketEntry[];
+  supplierCount: number;
+  /**
+   * **THE WHOLE WINDOW'S market — UNAFFECTED by `supplierKeysRequested`**, so a supplier row
+   * is comparable to THE MARKET and not merely to its neighbours in a filtered call. Equals
+   * `BlockingMarketContext.trailing12m.marketPhpKg` at N = 12.
+   */
+  windowTotal: { marketKg: number; marketPricedKg: number; marketPhpKg: number | null; deliveryCount: number };
+  /**
+   * The SELECTED suppliers' own total — **equal to `windowTotal` when nothing was filtered**,
+   * a strict subset otherwise. Two names because a selection's share of the market is exactly
+   * the question a filtered call is asking. `marketPhpKg` is NULL when the selection bought
+   * nothing.
+   */
+  selectedTotal: { marketKg: number; marketPricedKg: number; marketPhpKg: number | null; deliveryCount: number };
+}
+
+export type BlockingSupplierMarketRefusalReason =
+  /** The caller may not see prices. Hide the whole context block; do not retry. */
+  | 'prices_hidden'
+  | 'invalid_months'
+  /** A key list that was given but held nothing usable after blanks were stripped. */
+  | 'no_suppliers'
+  | 'too_many_suppliers'
+  | 'rpc_error'
+  | 'exception';
+
+export type BlockingSupplierMarketResult =
+  | { ok: true; market: BlockingSupplierMarket }
+  | { ok: false; reason: BlockingSupplierMarketRefusalReason; message: string };
+
+/** `p_months` bounds — the same as the market context's. REFUSED, never clamped. */
+export const BLOCKING_SUPPLIER_MARKET_MIN_MONTHS = 1;
+export const BLOCKING_SUPPLIER_MARKET_MAX_MONTHS = 36;
+export const BLOCKING_SUPPLIER_MARKET_DEFAULT_MONTHS = 12;
+/** The cap SQL enforces on the DE-DUPLICATED, blank-stripped key list. */
+export const BLOCKING_SUPPLIER_MARKET_MAX_SUPPLIERS = 40;
 
 /** The cap the SQL function enforces on the DE-DUPLICATED edge list. */
 export const BLOCKING_PRICE_LENS_MAX_EDGES = 6;

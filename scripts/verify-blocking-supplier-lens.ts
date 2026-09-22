@@ -1623,6 +1623,516 @@ async function liveChecks(env: { url: string; service: string; anon: string }): 
     assert.equal(obj(probe, 'refusal_null_top_n').reason, 'invalid_top_n');
     assert.equal(obj(probe, 'lens_default').ok, true, 'omitting the argument stopped working');
   });
+
+  // The lens's OWN band keys are handed to the supplier-market section, so the frontend
+  // contract ("pass the lens's band keys straight in") is proven on the real thing.
+  await supplierMarketChecks(env, lens);
+}
+
+// ---------------------------------------------------------------------------
+// THE SUPPLIER MARKET (`fn_blocking_supplier_market`, 2026-09-22)
+//
+// The supplier lens says WHOSE charcoal is in the yard; this says what each of them has been
+// charging and how much they have been sending, so the print's context block can say "ORNALES
+// is 45% of the yard and has come DOWN 11.7% over the year". Five failure modes:
+//
+//   REUSE      a series that re-derives what `view_analytics_supplier_monthly` already owns.
+//              PROVEN: every series row and every summary figure is recomputed longhand from
+//              that view's OWN rows, read independently in the same probe call.
+//   IDENTITY   the lens's band keys and this view's keys being DIFFERENT expressions, so
+//              handing the former to the latter silently returns nothing. PROVEN three ways,
+//              and the strip is shown NOT to be a no-op in general — only on the population
+//              this function reads.
+//   WEIGHTING  a premium averaged unweighted (meaningless — the month price IS the weighted
+//              mean), or a window price taken as the mean of monthly averages.
+//   NULL ≠ 0   a correlation over two months, a "flat" verdict with no change to read, a
+//              price of ₱0 where there is none.
+//   SPINE      a key filter collapsing the month axis. PROVEN on an unknown key — the bug
+//              that was actually found this way.
+// ---------------------------------------------------------------------------
+async function supplierMarketChecks(
+  env: { url: string; service: string; anon: string },
+  lens6: Json,
+): Promise<void> {
+  const { createClient } = await import('@supabase/supabase-js');
+  const svc = createClient(env.url, env.service, { auth: { persistSession: false } });
+  const anon = createClient(env.url, env.anon, { auth: { persistSession: false } });
+
+  console.log('\nlive — supplier MARKET (fn_blocking_supplier_market) ---------------');
+
+  const MKT_MIGRATION =
+    'supabase/migrations/20260922094500_blocking_market_context_and_supplier_market.sql';
+
+  check('the supplier-market migration pins its posture and its own caps', () => {
+    const sql = read(MKT_MIGRATION);
+    const sig = 'fn_blocking_supplier_market(int, text[])';
+    assert.ok(sql.includes(`REVOKE EXECUTE ON FUNCTION public.${sig} FROM PUBLIC;`), 'PUBLIC not revoked');
+    assert.ok(sql.includes(`REVOKE EXECUTE ON FUNCTION public.${sig} FROM anon;`), 'anon not revoked');
+    assert.ok(sql.includes(`GRANT  EXECUTE ON FUNCTION public.${sig} TO authenticated;`), 'no grant');
+    // service_role appears ONLY for the two probes — never for a public function.
+    const svcGrants = sql.match(/GRANT {2}EXECUTE ON FUNCTION public\.[^;]+ TO service_role;/g) ?? [];
+    assert.equal(svcGrants.length, 2, `expected exactly 2 service_role grants (the probes), got ${svcGrants.length}`);
+    for (const g of svcGrants) {
+      assert.ok(/_probe\(\) TO service_role;$/.test(g), `service_role was granted something other than a probe: ${g}`);
+    }
+    // The caps, in SQL, as REFUSALS.
+    assert.ok(sql.includes('cardinality(v_keys) > 40'), 'the 40-supplier cap moved');
+    assert.ok(sql.includes("'reason', 'too_many_suppliers'"), 'the too_many_suppliers refusal is gone');
+    assert.ok(sql.includes("'reason', 'no_suppliers'"), 'the no_suppliers refusal is gone');
+    // The DEAD BAND is published, not buried — so a UI can label it and this script can pin it.
+    assert.ok(sql.includes("'direction_dead_band_pct', v_dead"), 'the dead band is no longer published');
+    assert.ok(sql.includes('v_dead   numeric := 2.0;'), 'the dead band moved off 2%');
+    // The premium may ONLY be priced-kg-weighted.
+    assert.ok(
+      sql.includes('sum(a.premium_php_kg * a.priced_kg) FILTER (WHERE a.premium_php_kg IS NOT NULL)'),
+      'avg_premium_php_kg is no longer priced-kg-weighted — an unweighted premium is meaningless',
+    );
+    // The correlation floor.
+    assert.ok(sql.includes('s.priced_months >= 3'), 'the three-month corr floor moved');
+  });
+
+  check('the ACTION refuses a price-denied caller rather than nulling — and says why', () => {
+    const actions = read(ACTIONS);
+    const start = actions.indexOf('export async function fetchBlockingSupplierMarket(');
+    assert.ok(start > 0, 'fetchBlockingSupplierMarket not found');
+    const nextExport = actions.indexOf('\nexport async function ', start + 1);
+    const body = actions.slice(start, nextExport === -1 ? undefined : nextExport);
+    const gateAt = body.indexOf('canViewPricesGate()');
+    const clientAt = body.indexOf('createClient()');
+    assert.ok(gateAt > 0, 'no canViewPricesGate() call');
+    assert.ok(clientAt > 0, 'no client is created');
+    assert.ok(gateAt < clientAt, 'a Supabase client is created BEFORE the price gate');
+    assert.ok(/prices_hidden/.test(body.slice(gateAt, clientAt)), 'no prices_hidden refusal before the client');
+    // THE THREE-WAY ASYMMETRY must stay legible: the price lens REFUSES, the supplier LENS
+    // nulls two keys, the supplier MARKET refuses. A reader tidying one into another is
+    // exactly what this asserts against.
+    const lensStart = actions.indexOf('export async function fetchBlockingSupplierLens(');
+    const lensEnd = actions.indexOf('\nexport async function ', lensStart + 1);
+    const lensBody = actions.slice(lensStart, lensEnd === -1 ? undefined : lensEnd);
+    assert.ok(
+      !/reason: 'prices_hidden'/.test(lensBody),
+      'fetchBlockingSupplierLens grew a prices_hidden REFUSAL — it must null two keys and ship the rest',
+    );
+    assert.ok(/pricesHidden: !canView/.test(lensBody), 'the supplier LENS lost its nulling flag');
+  });
+
+  // L-043: prove a permission by ASSUMING THE VICTIM'S ROLE.
+  const anonCall = await anon.rpc('fn_blocking_supplier_market', { p_months: 12 });
+  check('anon CANNOT execute fn_blocking_supplier_market (a real call)', () => {
+    assert.ok(anonCall.error, 'anon executed it — the REVOKE is gone');
+  });
+  const svcCall = await svc.rpc('fn_blocking_supplier_market', { p_months: 12 });
+  check('service_role CANNOT execute fn_blocking_supplier_market (no worker reads it)', () => {
+    assert.ok(svcCall.error, 'service_role executed it — an unintended grant appeared');
+  });
+  const anonProbe = await anon.rpc('fn_blocking_supplier_market_probe');
+  check('anon CANNOT execute the supplier-market probe either', () => {
+    assert.ok(anonProbe.error, 'anon reached the probe — it bypasses the grant');
+  });
+
+  const t0 = Date.now();
+  const probeRes = await svc.rpc('fn_blocking_supplier_market_probe');
+  const ms = Date.now() - t0;
+  assert.ok(!probeRes.error, `fn_blocking_supplier_market_probe failed: ${probeRes.error?.message}`);
+  const probe = probeRes.data as unknown as Json;
+  assert.ok(probe && typeof probe === 'object', 'the probe returned nothing — an empty probe is a FAILURE');
+  console.log(`  (probe: ${ms} ms wall clock)`);
+
+  check(`the supplier-market probe stays under the ${PROBE_MS_BUDGET} ms SHAPE budget`, () => {
+    // It is SPLIT from the market-context probe because ONE function holding both halves
+    // timed out at 20 s server-side — see the migration's §J.
+    assert.ok(ms < PROBE_MS_BUDGET, `probe took ${ms} ms — check it has not grown a whole-history population`);
+  });
+
+  check('catalog posture: authenticated yes, anon no, service_role no; probe service_role only', () => {
+    const p = obj(probe, 'posture');
+    assert.equal(p.supmkt_authenticated, true);
+    assert.equal(p.supmkt_anon, false);
+    assert.equal(p.supmkt_service_role, false);
+    assert.equal(p.probe_service_role, true);
+    assert.equal(p.probe_authenticated, false);
+    assert.equal(p.probe_anon, false);
+    assert.equal(n(p, 'invoker_count'), 1, 'the function is not SECURITY INVOKER');
+    assert.equal(n(p, 'stable_count'), 2, 'a function is not STABLE');
+    assert.equal(n(p, 'search_path_pinned'), 2, 'search_path is not pinned');
+    assert.equal(n(p, 'commented'), 1, 'the function lost its COMMENT');
+    assert.equal(n(p, 'supmkt_overloads'), 1, 'an overload appeared — a second home for the logic');
+    // The source view must stay authenticated-only and security_invoker. CREATE OR REPLACE
+    // VIEW RESETS reloptions, which is the trap that bit view_ops_ledger_campaign_kpis twice.
+    assert.equal(p.view_authenticated, true, 'view_analytics_supplier_monthly lost its grant');
+    assert.equal(p.view_anon, false, 'anon can read view_analytics_supplier_monthly');
+    assert.equal(p.view_service_role, false, 'service_role gained a grant on the analytics view');
+    assert.equal(n(p, 'view_security_invoker'), 1, 'view_analytics_supplier_monthly is not security_invoker');
+  });
+
+  // ── THE IDENTITY AGREEMENT — three measurements, and one of them must be NON-zero ──
+  const ident = obj(probe, 'identity');
+
+  check('the origin strip is NOT a no-op in general — differing spellings must EXIST', () => {
+    // If this ever read 0, either the sundry re-entries stopped carrying a `- <BATCH>` suffix
+    // or the strip quietly became identity — and the next assertion would then pass
+    // VACUOUSLY. Measured 2026-09-22: 16 of 68 distinct supplier strings differ.
+    const all = n(ident, 'distinct_supplier_strings');
+    const diff = n(ident, 'differing_supplier_strings');
+    assert.ok(all > 0, 'there are no supplier strings at all');
+    assert.ok(diff > 0, 'NOT ONE supplier string changes under the strip — the next check would be vacuous');
+    assert.ok(diff < all, 'every supplier string changes under the strip — that is not a strip, it is a rewrite');
+    console.log(`    identity: ${diff} of ${all} distinct supplier strings differ under the origin strip`);
+  });
+
+  check('...but NOT ONE MARKET delivery carries a differing spelling — the claim the UI relies on', () => {
+    // THIS is what makes `BlockingSupplierBand.key` safe to pass as a `supplierKeys` entry.
+    assert.equal(
+      n(ident, 'market_rows_in_differing_set'),
+      0,
+      'a MARKET delivery carries an origin-suffixed supplier — the two key spaces have diverged',
+    );
+  });
+
+  check('every YARD supplier key is a key this analytics view knows', () => {
+    const yard = arr(ident, 'yard_keys').map((k) => String(k));
+    assert.ok(yard.length > 0, 'the yard has no supplier keys — the read is broken');
+    assert.equal(
+      n(ident, 'yard_keys_unknown_to_analytics'),
+      0,
+      'a supplier standing in the yard is unknown to view_analytics_supplier_monthly',
+    );
+    // ...and the LENS's own band keys are a subset of them, so the frontend contract holds.
+    const bandKeys = arr(lens6, 'bands')
+      .filter((b) => b.is_others !== true)
+      .map((b) => String(b.key));
+    for (const k of bandKeys) {
+      assert.ok(yard.includes(k), `band key ${k} is not a yard supplier key`);
+    }
+    console.log(`    yard keys: ${yard.length}, all known to the analytics view; ${bandKeys.length} named bands`);
+  });
+
+  // ── THE SERIES AND THE SUMMARIES, recomputed longhand ──
+  const supRows = arr(probe, 'supplier_rows');
+  const sm12 = obj(probe, 'supplier_12');
+
+  check('the analytics view read came back NON-empty — an empty read is a FAILURE', () => {
+    assert.ok(supRows.length > 0, 'view_analytics_supplier_monthly returned nothing');
+    assert.ok(supRows.length < 1000, `${supRows.length} rows — PostgREST may have truncated`);
+    assert.equal(sm12.ok, true, 'fn_blocking_supplier_market(12) did not return ok:true');
+  });
+
+  /** The probe's 36-month rows, narrowed to a window of N calendar months. */
+  function windowRows(months: number): Json[] {
+    const m0 = String(probe.this_month);
+    const d = new Date(`${m0}T00:00:00Z`);
+    const from = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - months + 1, 1))
+      .toISOString()
+      .slice(0, 10);
+    return supRows.filter((r) => String(r.month) >= from && String(r.month) <= m0);
+  }
+  const near = (a: number, b: number): boolean =>
+    Math.abs(a - b) <= Math.max(1e-9, Math.abs(b) * 1e-12);
+
+  check('every series row IS a view row, field for field, ascending', () => {
+    const rows = windowRows(12);
+    const byKey = new Map<string, Json[]>();
+    for (const r of rows) {
+      const k = String(r.key);
+      byKey.set(k, [...(byKey.get(k) ?? []), r]);
+    }
+    let checked = 0;
+    for (const s of arr(sm12, 'suppliers')) {
+      const mine = (byKey.get(String(s.key)) ?? []).sort((a, b) =>
+        String(a.month).localeCompare(String(b.month)),
+      );
+      const series = arr(s, 'series');
+      assert.equal(series.length, mine.length, `${String(s.key)}: series length`);
+      let prev = '';
+      for (let i = 0; i < series.length; i += 1) {
+        const p = series[i];
+        const v = mine[i];
+        assert.ok(String(p.month) > prev, `${String(s.key)}: series is not ascending`);
+        prev = String(p.month);
+        assert.equal(String(p.month), String(v.month), `${String(s.key)}: month`);
+        assert.equal(String(p.kg), String(v.kg), `${String(s.key)} ${String(p.month)}: kg drifted`);
+        assert.equal(String(p.priced_kg), String(v.priced_kg), `${String(s.key)}: priced_kg drifted`);
+        assert.equal(String(p.avg_price_php_kg), String(v.avg_price_php_kg), `${String(s.key)}: price drifted`);
+        assert.equal(String(p.premium_php_kg), String(v.premium_php_kg), `${String(s.key)}: premium drifted`);
+        assert.equal(
+          String(p.share_of_month_pct),
+          String(v.share_of_month_pct),
+          `${String(s.key)}: share drifted`,
+        );
+        assert.equal(Number(p.delivery_count), Number(v.delivery_count), `${String(s.key)}: count drifted`);
+        checked += 1;
+      }
+    }
+    assert.ok(checked >= 20, `only ${checked} series rows proven — too few to have proven anything`);
+    console.log(`    series: ${checked} rows across ${arr(sm12, 'suppliers').length} suppliers`);
+  });
+
+  check('every SUMMARY figure is a direct aggregation over those rows — nothing re-derived', () => {
+    const rows = windowRows(12);
+    const byKey = new Map<string, Json[]>();
+    for (const r of rows) {
+      const k = String(r.key);
+      byKey.set(k, [...(byKey.get(k) ?? []), r]);
+    }
+    const dead = Number(sm12.direction_dead_band_pct);
+    assert.equal(dead, 2, 'the published dead band is not 2%');
+
+    for (const s of arr(sm12, 'suppliers')) {
+      const key = String(s.key);
+      const sum = obj(s, 'summary');
+      // ACTIVE months only — a sundry-only row (kg = 0) is not activity.
+      const act = (byKey.get(key) ?? [])
+        .filter((r) => Number(r.kg) > 0)
+        .sort((a, b) => String(a.month).localeCompare(String(b.month)));
+      assert.equal(Number(sum.months_active), act.length, `${key}: months_active`);
+      assert.ok(act.length > 0, `${key} has no active month yet appears in the list`);
+
+      const totalKg = act.reduce((t, r) => t + Number(r.kg), 0);
+      const pricedKg = act.reduce((t, r) => t + Number(r.priced_kg), 0);
+      const money = act.reduce((t, r) => t + Number(r.php_total), 0);
+      assert.ok(near(Number(sum.total_kg), totalKg), `${key}: total_kg`);
+      assert.ok(near(Number(sum.total_priced_kg), pricedKg), `${key}: total_priced_kg`);
+      assert.equal(
+        Number(sum.delivery_count),
+        act.reduce((t, r) => t + Number(r.delivery_count), 0),
+        `${key}: delivery_count`,
+      );
+      // Σ money ÷ Σ priced kg — never the mean of monthly averages.
+      if (pricedKg > 0) {
+        assert.ok(near(Number(sum.kg_weighted_php_kg), money / pricedKg), `${key}: kg_weighted_php_kg`);
+      } else {
+        assert.equal(sum.kg_weighted_php_kg, null, `${key}: a price with no priced kilos`);
+      }
+
+      const first = act[0];
+      const last = act[act.length - 1];
+      assert.equal(String(sum.first_month), String(first.month), `${key}: first_month`);
+      assert.equal(String(sum.last_month), String(last.month), `${key}: last_month`);
+      assert.equal(String(sum.first_price), String(first.avg_price_php_kg), `${key}: first_price`);
+      assert.equal(String(sum.last_price), String(last.avg_price_php_kg), `${key}: last_price`);
+
+      // CHANGES: NULL when there is nothing to change FROM.
+      if (first.avg_price_php_kg === null || last.avg_price_php_kg === null) {
+        assert.equal(sum.price_change_php_kg, null, `${key}: a change with a missing end`);
+        assert.equal(sum.price_change_pct, null, `${key}: a percent change with a missing end`);
+        assert.equal(sum.direction, null, `${key}: a direction with no change to read`);
+      } else {
+        const d = Number(last.avg_price_php_kg) - Number(first.avg_price_php_kg);
+        assert.ok(near(Number(sum.price_change_php_kg), d), `${key}: price_change_php_kg`);
+        const pct = (d * 100) / Number(first.avg_price_php_kg);
+        assert.ok(near(Number(sum.price_change_pct), pct), `${key}: price_change_pct`);
+        // THE DEAD BAND, applied exactly as published — never a hardcoded threshold.
+        const want: 'up' | 'down' | 'flat' = pct > dead ? 'up' : pct < -dead ? 'down' : 'flat';
+        assert.equal(sum.direction, want, `${key}: direction should be ${want} on ${pct}%`);
+      }
+      if (Number(first.kg) !== 0) {
+        assert.ok(
+          near(Number(sum.kg_change_pct), ((Number(last.kg) - Number(first.kg)) * 100) / Number(first.kg)),
+          `${key}: kg_change_pct`,
+        );
+      } else {
+        assert.equal(sum.kg_change_pct, null, `${key}: a kg change from zero`);
+      }
+
+      // THE PREMIUM: priced-kg-weighted, NULL never 0.
+      const pRows = act.filter((r) => r.premium_php_kg !== null);
+      const pKg = pRows.reduce((t, r) => t + Number(r.priced_kg), 0);
+      if (pKg > 0) {
+        const wtd = pRows.reduce((t, r) => t + Number(r.premium_php_kg) * Number(r.priced_kg), 0) / pKg;
+        assert.ok(near(Number(sum.avg_premium_php_kg), wtd), `${key}: avg_premium_php_kg`);
+        // ...and it is NOT the unweighted mean, whenever those differ.
+        const naive = pRows.reduce((t, r) => t + Number(r.premium_php_kg), 0) / pRows.length;
+        if (Math.abs(naive - wtd) > 1e-9) {
+          assert.ok(
+            Math.abs(Number(sum.avg_premium_php_kg) - naive) > 1e-9,
+            `${key}: the premium equals its UNWEIGHTED mean — the weighting is gone`,
+          );
+        }
+      } else {
+        assert.equal(sum.avg_premium_php_kg, null, `${key}: a premium with no priced kilos`);
+      }
+
+      // THE CORRELATION: NULL below three priced active months, and equal to Postgres' own.
+      const pricedMonths: Json[] = act.filter((r) => r.avg_price_php_kg !== null);
+      assert.equal(Number(sum.corr_month_count), pricedMonths.length, `${key}: corr_month_count`);
+      if (pricedMonths.length < 3) {
+        assert.equal(sum.price_volume_corr, null, `${key}: a correlation over ${pricedMonths.length} months`);
+      }
+    }
+  });
+
+  check('price_volume_corr EQUALS Postgres\' own corr(), recomputed independently', () => {
+    // `corr` is double precision, so the probe's gap is BOUNDED rather than demanded to be a
+    // literal zero — and the two is-null flags make a NULL gap decidable rather than ambiguous.
+    const rows = arr(probe, 'corr_check');
+    assert.ok(rows.length > 0, 'corr_check came back empty');
+    let compared = 0;
+    let nulls = 0;
+    let worst = 0;
+    for (const c of rows) {
+      assert.equal(
+        c.published_is_null,
+        c.independent_is_null,
+        `${String(c.key)}: one side has a correlation and the other does not`,
+      );
+      if (c.published_is_null === true) {
+        nulls += 1;
+        // A NULL must be justified by the three-month floor, not merely tolerated.
+        assert.ok(Number(c.independent_months) < 3, `${String(c.key)}: NULL corr over ${String(c.independent_months)} months`);
+        continue;
+      }
+      const gap = Math.abs(Number(c.gap));
+      worst = Math.max(worst, gap);
+      assert.ok(gap < 1e-9, `${String(c.key)}: corr gap ${gap}`);
+      compared += 1;
+    }
+    assert.ok(compared >= 3, `only ${compared} correlations compared — too few to have proven anything`);
+    console.log(`    corr: ${compared} compared (max |gap| ${worst.toExponential(2)}), ${nulls} NULL under 3 months`);
+  });
+
+  check('the month SPINE is the WINDOW\'s and is ONE definition with the market context', () => {
+    // The bug this found: with the key filter on the source CTE, an unknown key returned an
+    // EMPTY spine — a chart with no axis to draw the gap on.
+    const spine = arr(sm12, 'months').map((m) => String(m));
+    const windowMonths = [...new Set(windowRows(12).map((r) => String(r.month)))].sort();
+    assert.deepEqual(spine, windowMonths, 'the spine is not the window\'s own months');
+    const unknown = obj(probe, 'supplier_unknown');
+    assert.equal(unknown.ok, true, 'an unknown key was refused instead of returning nothing');
+    assert.equal(Number(unknown.supplier_count), 0, 'an unknown key produced a supplier entry');
+    assert.deepEqual(arr(unknown, 'suppliers'), [], 'an unknown key produced a zero-filled row');
+    assert.deepEqual(
+      arr(unknown, 'months').map((m) => String(m)),
+      spine,
+      'an unknown key COLLAPSED the month spine — the filter is back on the source CTE',
+    );
+    console.log(`    spine: ${spine.length} months, intact under an unknown key`);
+  });
+
+  check('windowTotal is the WHOLE window; selectedTotal narrows — and they agree when unfiltered', () => {
+    const w = obj(sm12, 'window_total');
+    const s = obj(sm12, 'selected_total');
+    assert.deepEqual(w, s, 'with no key filter the two totals differ');
+    // Recomputed longhand over the window's ACTIVE rows.
+    const act = windowRows(12).filter((r) => Number(r.kg) > 0);
+    const kg = act.reduce((t, r) => t + Number(r.kg), 0);
+    const pricedKg = act.reduce((t, r) => t + Number(r.priced_kg), 0);
+    const money = act.reduce((t, r) => t + Number(r.php_total), 0);
+    assert.ok(near(Number(w.market_kg), kg), 'window_total.market_kg');
+    assert.ok(near(Number(w.market_priced_kg), pricedKg), 'window_total.market_priced_kg');
+    assert.ok(near(Number(w.market_php_kg), money / pricedKg), 'window_total.market_php_kg');
+
+    // FILTERED: the window total must NOT move, the selected total must be a strict subset.
+    const top3 = obj(probe, 'supplier_top3');
+    assert.equal(top3.ok, true, 'the key-filtered call failed');
+    assert.deepEqual(
+      obj(top3, 'window_total'),
+      w,
+      'window_total CHANGED under a key filter — it is no longer the whole market',
+    );
+    const sel = obj(top3, 'selected_total');
+    assert.ok(
+      Number(sel.market_kg) < Number(w.market_kg),
+      'the selected total is not a strict subset of the window',
+    );
+    assert.equal(Number(top3.supplier_count), 3, 'the key-filtered call returned the wrong count');
+    // An unknown key: zero kilograms with a NULL price — never ₱0.
+    const unkSel = obj(obj(probe, 'supplier_unknown'), 'selected_total');
+    assert.equal(Number(unkSel.market_kg), 0, 'an empty selection has kilograms');
+    assert.equal(unkSel.market_php_kg, null, 'an empty selection published a price');
+    console.log(
+      `    window ${Math.round(Number(w.market_kg)).toLocaleString('en-US')} kg ` +
+        `· top-3 selection ${Math.round(Number(sel.market_kg)).toLocaleString('en-US')} kg ` +
+        `(${((Number(sel.market_kg) / Number(w.market_kg)) * 100).toFixed(1)}%)`,
+    );
+  });
+
+  check('suppliers are ordered by total kilograms DESC, then key — a TOTAL order', () => {
+    const rows = arr(sm12, 'suppliers');
+    for (let i = 1; i < rows.length; i += 1) {
+      const a = Number(obj(rows[i - 1], 'summary').total_kg);
+      const b = Number(obj(rows[i], 'summary').total_kg);
+      if (Math.abs(a - b) > 1e-9) {
+        assert.ok(a > b, `suppliers are not descending by total_kg at ${i}`);
+      } else {
+        assert.ok(String(rows[i - 1].key) < String(rows[i].key), `the tie-break at ${i} is not the key`);
+      }
+    }
+    // `display` equals `key` here — the prettier raw spelling belongs to the LENS.
+    for (const r of rows) assert.equal(r.display, r.key, `${String(r.key)}: display is not the canonical key`);
+  });
+
+  check('N = 36 widens the window and never narrows a supplier\'s history', () => {
+    const sm36 = obj(probe, 'supplier_36');
+    assert.equal(sm36.ok, true, 'the 36-month call failed');
+    assert.ok(
+      arr(sm36, 'months').length >= arr(sm12, 'months').length,
+      'the 36-month window has fewer months than the 12-month one',
+    );
+    assert.ok(
+      Number(sm36.supplier_count) >= Number(sm12.supplier_count),
+      'the wider window knows fewer suppliers',
+    );
+    const by12 = new Map(arr(sm12, 'suppliers').map((s) => [String(s.key), s]));
+    for (const s of arr(sm36, 'suppliers')) {
+      const twelve = by12.get(String(s.key));
+      if (!twelve) continue;
+      assert.ok(
+        Number(obj(s, 'summary').total_kg) >= Number(obj(twelve, 'summary').total_kg) - 1e-9,
+        `${String(s.key)}: the 36-month total is smaller than the 12-month one`,
+      );
+    }
+    console.log(
+      `    N=12: ${String(sm12.supplier_count)} suppliers over ${arr(sm12, 'months').length} months  ·  ` +
+        `N=36: ${String(sm36.supplier_count)} over ${arr(sm36, 'months').length}`,
+    );
+  });
+
+  // The three biggest suppliers, printed — the figures a print would show.
+  const top = arr(sm12, 'suppliers').slice(0, 3);
+  console.log('\n    top 3 suppliers, last 12 months --------------------------------');
+  for (const s of top) {
+    const m = obj(s, 'summary');
+    const corr = m.price_volume_corr === null ? '  —  ' : Number(m.price_volume_corr).toFixed(3).padStart(6);
+    console.log(
+      `    ${String(s.key).padEnd(14)}` +
+        `${Math.round(Number(m.total_kg)).toLocaleString('en-US').padStart(11)} kg  ` +
+        `₱${Number(m.kg_weighted_php_kg).toFixed(4).padStart(8)}  ` +
+        `${String(m.direction).padEnd(5)} ${Number(m.price_change_pct).toFixed(2).padStart(7)}%  ` +
+        `corr ${corr} (${String(m.corr_month_count)}m)  ` +
+        `prem ${Number(m.avg_premium_php_kg).toFixed(4).padStart(8)}`,
+    );
+  }
+
+  const smRefusals: Array<[string, string]> = [
+    ['refusal_supplier_null_months', 'invalid_months'],
+    ['refusal_supplier_zero_months', 'invalid_months'],
+    ['refusal_supplier_big_months', 'invalid_months'],
+    ['refusal_supplier_empty_keys', 'no_suppliers'],
+    ['refusal_supplier_blank_keys', 'no_suppliers'],
+    ['refusal_supplier_too_many', 'too_many_suppliers'],
+  ];
+  for (const [key, reason] of smRefusals) {
+    check(`refusal: ${key} -> ok:false, reason '${reason}', with a human message`, () => {
+      const r = obj(probe, key);
+      assert.equal(r.ok, false, `${key} did not refuse`);
+      assert.equal(r.reason, reason, `${key} gave reason ${String(r.reason)}`);
+      assert.ok(typeof r.message === 'string' && r.message.length > 20, `${key} has no human message`);
+      assert.ok(!/SQLSTATE|ERROR:/i.test(String(r.message)), `${key}: the message reads like a raise`);
+      // A refusal is DATA and carries nothing a caller could render as a result.
+      assert.equal(r.suppliers, undefined, `${key} leaked a supplier list into a refusal`);
+      assert.equal(r.months, undefined, `${key} leaked a month spine into a refusal`);
+      assert.equal(r.window_total, undefined, `${key} leaked totals into a refusal`);
+    });
+  }
+
+  check('a BLANK key list is refused as `no_suppliers`, not silently read as "everyone"', () => {
+    // `[NULL, '  ']` de-duplicates and blank-strips to nothing. Treating that as "all
+    // suppliers" would answer a question nobody asked — the same rule as a NULL top_n.
+    assert.equal(obj(probe, 'refusal_supplier_blank_keys').reason, 'no_suppliers');
+    // ...while OMITTING the argument really does mean everyone.
+    assert.equal(sm12.supplier_keys_requested, null, 'an unfiltered call echoed a key list');
+    assert.ok(Number(sm12.supplier_count) > 1, 'an unfiltered call returned one supplier');
+  });
 }
 
 // ---------------------------------------------------------------------------

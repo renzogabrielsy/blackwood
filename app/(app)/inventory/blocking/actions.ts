@@ -16,7 +16,20 @@ import type {
   BlockingMarketBasesResult,
   BlockingPriceBand,
   BlockingPriceLens,
+  BlockingPriceLensBlock,
   BlockingPriceLensResult,
+  BlockingPriceWarehouseSubtotal,
+  BlockingLensLabStats,
+  BlockingMarketContext,
+  BlockingMarketContextResult,
+  BlockingMarketMonth,
+  BlockingMarketQuarter,
+  BlockingMarketSpan,
+  BlockingSupplierMarket,
+  BlockingSupplierMarketEntry,
+  BlockingSupplierMarketPoint,
+  BlockingSupplierMarketResult,
+  BlockingSupplierMarketSummary,
   BlockingAgeBand,
   BlockingAgeLens,
   BlockingAgeLensResult,
@@ -68,6 +81,13 @@ import {
   BLOCKING_SUPPLIER_LENS_DEFAULT_TOP_N,
   BLOCKING_SUPPLIER_LENS_MIN_TOP_N,
   BLOCKING_SUPPLIER_LENS_MAX_TOP_N,
+  BLOCKING_MARKET_CONTEXT_DEFAULT_MONTHS,
+  BLOCKING_MARKET_CONTEXT_MIN_MONTHS,
+  BLOCKING_MARKET_CONTEXT_MAX_MONTHS,
+  BLOCKING_SUPPLIER_MARKET_DEFAULT_MONTHS,
+  BLOCKING_SUPPLIER_MARKET_MIN_MONTHS,
+  BLOCKING_SUPPLIER_MARKET_MAX_MONTHS,
+  BLOCKING_SUPPLIER_MARKET_MAX_SUPPLIERS,
   BLEND_BLOCK_FACTS_MAX_BATCH_IDS,
   BLEND_ANALYSIS_MAX_BLOCKS,
   BLEND_ANALYSIS_DEFAULT_PRICE_EDGES,
@@ -1159,17 +1179,49 @@ type PriceLensEnvelope = {
   edge_offsets?: number[] | null;
   bands?: Array<Record<string, unknown>> | null;
   blocks?: Array<Record<string, unknown>> | null;
+  warehouse_subtotals?: Array<Record<string, unknown>> | null;
   unpriced?: { block_count?: number | null; kg?: number | string | null } | null;
-  total?: {
-    block_count?: number | null;
-    kg?: number | string | null;
-    kg_weighted_php_kg?: number | string | null;
-  } | null;
+  total?: Record<string, unknown> | null;
 } | null;
 
 const lensNum = (v: unknown): number => Number(v ?? 0);
 const lensNumOrNull = (v: unknown): number | null =>
   v === null || v === undefined ? null : Number(v);
+const lensStrOrNull = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+/** `true`/`false` carried through, but a MISSING or null flag stays NULL — never false. */
+const lensBoolOrNull = (v: unknown): boolean | null =>
+  v === null || v === undefined ? null : v === true;
+
+/**
+ * THE SEVEN KG-WEIGHTED LAB MEANS, mapped once (2026-09-22).
+ *
+ * Used for a price band, a warehouse subtotal and the yard total, because they are the same
+ * seven figures at three grains — three copies of this mapping is how one grain would start
+ * COALESCEing a mean to 0 while the others preserved the null.
+ *
+ * **THE ASYMMETRY IS THE POINT AND IT IS NOT A TYPO:** every `w*` MEAN is null-preserving
+ * (`lensNumOrNull`) because a group with no reading has no mean, while every `*Kg` WEIGHT is
+ * `lensNum` (a real 0) because it is a weight and "zero measured kilograms" is a measurement.
+ * NOTHING here is computed — SQL owns all fourteen numbers.
+ */
+function mapLensLabStats(o: Record<string, unknown>): BlockingLensLabStats {
+  return {
+    wMc: lensNumOrNull(o.w_mc),
+    mcKg: lensNum(o.mc_kg),
+    wAsh: lensNumOrNull(o.w_ash),
+    ashKg: lensNum(o.ash_kg),
+    wBdAstm: lensNumOrNull(o.w_bd_astm),
+    bdAstmKg: lensNum(o.bd_astm_kg),
+    wBdJis: lensNumOrNull(o.w_bd_jis),
+    bdJisKg: lensNum(o.bd_jis_kg),
+    wGrit: lensNumOrNull(o.w_grit),
+    gritKg: lensNum(o.grit_kg),
+    wVm: lensNumOrNull(o.w_vm),
+    vmKg: lensNum(o.vm_kg),
+    wFc: lensNumOrNull(o.w_fc),
+    fcKg: lensNum(o.fc_kg),
+  };
+}
 
 /**
  * NORMALIZE THE EDGE LIST THE WAY SQL DOES — finite whole numbers, de-duplicated,
@@ -1230,14 +1282,26 @@ function normalizeEdgeOffsets(
 }
 
 /**
- * What "market" costs right now, four ways — `this_month` (the default basis),
- * `last_month`, `last_3_months` and `trailing_days`.
+ * What "market" costs right now, FIVE ways — `this_month`, `last_month`, `last_3_months`,
+ * **`this_quarter`** and `trailing_days`.
  *
- * Market is the weighted average ₱/kg of MARKET-class PRICED deliveries, and the three
+ * **`this_quarter` (added 2026-09-22) is the basis a first-time price lens should DEFAULT to**
+ * — the current Asia/Manila calendar quarter to date. The other four could not express it:
+ * `this_month` is noisy in the first days of a month, `last_3_months` is a rolling three
+ * wherever the quarter boundary falls, `trailing_days` does not align to a quarter at all.
+ * Note it is numerically IDENTICAL to `last_3_months` in the third month of a quarter (both
+ * ₱39.1816 on 2026-09-22) and diverges on 1 October — do not conflate them on the strength of
+ * one screenshot.
+ *
+ * Market is the weighted average ₱/kg of MARKET-class PRICED deliveries, and the four
  * calendar bases are SELECTed from `view_analytics_rcin_monthly` inside the RPC so this
- * number can never disagree with the `/analytics` matrix. The fifth basis the UI offers,
+ * number can never disagree with the `/analytics` matrix. The sixth basis the UI offers,
  * `manual`, is a ₱ the operator types: it needs nothing from this action, and it goes
  * through the SAME classifier below.
+ *
+ * **`bases` arrives in the RPC's fixed order and this action preserves it**, keying each row
+ * by `basisKey`. `this_quarter` sits FOURTH, so `trailing_days` moved from ordinal 4 to 5 —
+ * read the key, never the index.
  *
  * `bases[].marketPhpKg` is NULL — never 0 — when that window has no priced market
  * kilos. Offer another basis; do not coerce it to a number.
@@ -1439,17 +1503,48 @@ export async function fetchBlockingPriceLens(
       blockSharePct: lensNumOrNull(b.block_share_pct),
       // Null on an EMPTY band — no charcoal in the band means no price in the band.
       kgWeightedPhpKg: lensNumOrNull(b.kg_weighted_php_kg),
+      // The seven weighted lab means + their weights (2026-09-22). ONE mapper, three grains.
+      ...mapLensLabStats(b),
     }));
 
     // RE-KEY, not aggregate: the grid needs a per-cell lookup, and SQL already decided
     // which band every block is in. Unpriced blocks are absent from `blocks[]` by
     // construction, so they are absent here too — which is the contract.
     const bandByBlock: Record<string, number> = {};
+    const blockByLoc: Record<string, BlockingPriceLensBlock> = {};
     for (const b of res.blocks ?? []) {
       const loc = b.block_loc;
       if (typeof loc !== 'string' || loc.length === 0) continue;
       bandByBlock[loc] = lensNum(b.band_index);
+      blockByLoc[loc] = {
+        blockLoc: loc,
+        bandIndex: lensNum(b.band_index),
+        // The PAGE's own warehouse rule, computed in SQL — see the type doc. Never re-derived
+        // here, and `verify-blocking-price-lens.ts` asserts it equals
+        // `lens-summary-model.ts::warehouseOfBlockLoc` on every block.
+        warehouse: String(b.warehouse ?? '-'),
+        // NULL — never a placeholder string — when the block's batch has no delivery row.
+        dominantSupplierDisplay: lensStrOrNull(b.dominant_supplier_display),
+        dominantSharePct: lensNumOrNull(b.dominant_share_pct),
+        // THE ALL/SOME rule, carried through. NULL (never false) with no supplier at all.
+        isMixed: lensBoolOrNull(b.is_mixed),
+      };
     }
+
+    // One row per (band × warehouse) THAT HOLDS A BLOCK, already in the grid's own warehouse
+    // order with `-` last — mapped in the order SQL returned them, never re-sorted here.
+    const warehouseSubtotals: BlockingPriceWarehouseSubtotal[] = (res.warehouse_subtotals ?? []).map(
+      (w) => ({
+        bandIndex: lensNum(w.band_index),
+        warehouse: String(w.warehouse ?? '-'),
+        blockCount: lensNum(w.block_count),
+        kg: lensNum(w.kg),
+        kgWeightedPhpKg: lensNumOrNull(w.kg_weighted_php_kg),
+        ...mapLensLabStats(w),
+      }),
+    );
+
+    const total = res.total ?? {};
 
     const lens: BlockingPriceLens = {
       marketPhpKg: lensNum(res.market_php_kg),
@@ -1459,13 +1554,17 @@ export async function fetchBlockingPriceLens(
         : normalized.edges,
       bands,
       bandByBlock,
+      blockByLoc,
+      warehouseSubtotals,
       unpriced: { blockCount: lensNum(res.unpriced?.block_count), kg: lensNum(res.unpriced?.kg) },
       total: {
-        blockCount: lensNum(res.total?.block_count),
-        kg: lensNum(res.total?.kg),
+        blockCount: lensNum(total.block_count),
+        kg: lensNum(total.kg),
         // Weighted over the PRICED population only, while the counts cover every block —
-        // see the type doc. Null-preserving: nothing priced means no price.
-        kgWeightedPhpKg: lensNumOrNull(res.total?.kg_weighted_php_kg),
+        // see the type doc. Null-preserving: nothing priced means no price. The seven lab
+        // means inherit that same population, which is what makes the fold hold.
+        kgWeightedPhpKg: lensNumOrNull(total.kg_weighted_php_kg),
+        ...mapLensLabStats(total),
       },
     };
 
@@ -1473,6 +1572,402 @@ export async function fetchBlockingPriceLens(
   } catch (err: unknown) {
     console.error('[Blocking] fetchBlockingPriceLens failed:', err);
     return { ok: false, reason: 'exception', message: LENS_UNREACHABLE_MESSAGE };
+  }
+}
+
+// ─── Market CONTEXT + SUPPLIER MARKET — DATA LAYER ────────────────────────────
+//
+// The two context series behind the lens prints, over `fn_blocking_market_context` and
+// `fn_blocking_supplier_market` (migration `20260922094500`). A lens says what the yard looks
+// like TODAY against one number; these say what that number has been doing and which supplier
+// moved it.
+//
+// FOUR RULES, three shared with the price lens above.
+//
+//   1. THE GATE COMES FIRST, AND IT IS A REFUSAL — NOT A NULLING PASS. Both payloads are
+//      money almost end to end: a price series IS the market context, and the supplier series
+//      carries `avg_price_php_kg`, `premium_php_kg`, the weighted price, both prices, both
+//      changes AND `price_volume_corr`, which is DERIVED FROM price and is therefore price
+//      information however it is labelled.
+//
+//      **A NULLED VARIANT WAS CONSIDERED AND REJECTED, and the reason belongs here rather
+//      than in a commit message:** what would survive nulling is a per-supplier monthly
+//      kilogram series with its share and delivery count — and `view_digest_rcin_supplier_daily`
+//      and `fn_blocking_supplier_lens` already publish exactly that to EVERY role, at grains
+//      that suit their own screens. Keeping a third, half-blank copy alive for a reader who
+//      has two better ones is how a payload acquires a second meaning. So these follow
+//      `fetchBlockingPriceLens` (refuse before `createClient()`), NOT
+//      `fetchBlockingSupplierLens` (null two keys and ship the rest).
+//
+//   2. NOTHING IS COMPUTED HERE. Every price, share, premium, change, correlation and
+//      direction comes out of SQL (CLAUDE.md: never compute a weighted average in
+//      TypeScript). These functions validate their inputs and camelCase the rows.
+//
+//   3. A BUSINESS REFUSAL IS DATA, NEVER A THROW — `{ok:false, reason, message}`, and the
+//      message goes straight to `errorToast()`.
+//
+//   4. NULL IS PRESERVED, in five different places (a price, a premium, a correlation, a
+//      change, a direction). A KILOGRAM or a COUNT is a real 0 in the same situations,
+//      because it is a weight. Never `?? 0` across that line.
+//
+// Read-only: no writes, no audit logs, no `revalidatePath()`.
+
+const MARKET_CONTEXT_PRICES_HIDDEN_MESSAGE =
+  'The market history is not available for your role — it describes what charcoal has cost.';
+const MARKET_CONTEXT_UNREACHABLE_MESSAGE =
+  'Could not reach the database to work out the market history. Nothing changed — try again.';
+const SUPPLIER_MARKET_UNREACHABLE_MESSAGE =
+  'Could not reach the database to work out the supplier history. Nothing changed — try again.';
+
+/** A DATE-bounded market aggregate (`year_to_date`, `trailing_12m`). */
+function mapMarketSpan(o: Record<string, unknown>): BlockingMarketSpan {
+  return {
+    // NULL-preserving: no priced kilos in the span means no price, never ₱0.
+    marketPhpKg: lensNumOrNull(o.market_php_kg),
+    marketKg: lensNum(o.market_kg),
+    marketPricedKg: lensNum(o.market_priced_kg),
+    deliveryCount: lensNum(o.delivery_count),
+    monthCount: lensNum(o.month_count),
+    fromDate: String(o.from_date ?? ''),
+    toDate: String(o.to_date ?? ''),
+  };
+}
+
+function mapMarketMonth(o: Record<string, unknown>): BlockingMarketMonth {
+  return {
+    month: String(o.month ?? ''),
+    marketPhpKg: lensNumOrNull(o.market_php_kg),
+    marketKg: lensNum(o.market_kg),
+    marketPricedKg: lensNum(o.market_priced_kg),
+    deliveryCount: lensNum(o.delivery_count),
+    activeSuppliers: lensNum(o.active_suppliers),
+  };
+}
+
+/**
+ * The market's own series — what market has been costing, monthly, by quarter, year to date
+ * and over the trailing twelve.
+ *
+ * `months` is 1…36 and means **the last N months that HAVE a row, not the last N calendar
+ * months**: `view_analytics_rcin_monthly` has one row per month that had a delivery, and
+ * zero-filling a dead month would invent a ₱0 month. Read `monthsAvailable` / `monthsReturned`
+ * to say "12 of 50".
+ *
+ * PRICE-GATED BY REFUSAL: a `!canViewPrices()` caller gets
+ * `{ ok: false, reason: 'prices_hidden' }` and the database is never queried.
+ */
+export async function fetchBlockingMarketContext(
+  months: number = BLOCKING_MARKET_CONTEXT_DEFAULT_MONTHS,
+): Promise<BlockingMarketContextResult> {
+  // (1) THE GATE, BEFORE ANYTHING ELSE. Fails closed on any error.
+  let canView = false;
+  try {
+    canView = await canViewPricesGate();
+  } catch {
+    canView = false;
+  }
+  if (!canView) {
+    return { ok: false, reason: 'prices_hidden', message: MARKET_CONTEXT_PRICES_HIDDEN_MESSAGE };
+  }
+
+  // (2) Inputs. INTEGRALITY is enforced here rather than in SQL because `p_months` is declared
+  // `int`, so Postgres has already rounded 12.5 to 13 by the time the function body runs and
+  // that refusal is structurally unreachable there — the same asymmetry the lenses record,
+  // reusing the RPC's own `invalid_months` reason rather than inventing a second vocabulary.
+  const n = Number(months);
+  if (
+    typeof months !== 'number' ||
+    !Number.isFinite(n) ||
+    !Number.isInteger(n) ||
+    n < BLOCKING_MARKET_CONTEXT_MIN_MONTHS ||
+    n > BLOCKING_MARKET_CONTEXT_MAX_MONTHS
+  ) {
+    return {
+      ok: false,
+      reason: 'invalid_months',
+      message: `A market history covers between ${BLOCKING_MARKET_CONTEXT_MIN_MONTHS} and ${BLOCKING_MARKET_CONTEXT_MAX_MONTHS} months.`,
+    };
+  }
+
+  try {
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc('fn_blocking_market_context', { p_months: n });
+
+    if (error) {
+      console.error('[Blocking] fn_blocking_market_context error:', error);
+      return {
+        ok: false,
+        reason: 'rpc_error',
+        message: error.message || MARKET_CONTEXT_UNREACHABLE_MESSAGE,
+      };
+    }
+
+    const res = (data ?? null) as {
+      ok?: boolean;
+      reason?: string;
+      message?: string;
+      [k: string]: unknown;
+    } | null;
+
+    if (!res?.ok) {
+      return {
+        ok: false,
+        // The RPC's own vocabulary, passed through; anything unrecognized is reported as an
+        // rpc_error rather than silently widening the union.
+        reason: res?.reason === 'invalid_months' ? 'invalid_months' : 'rpc_error',
+        message: res?.message ?? 'The market history could not be worked out.',
+      };
+    }
+
+    const monthRows = Array.isArray(res.months) ? (res.months as Array<Record<string, unknown>>) : [];
+    const quarterRows = Array.isArray(res.quarters)
+      ? (res.quarters as Array<Record<string, unknown>>)
+      : [];
+    const latest = (res.latest_month ?? {}) as Record<string, unknown>;
+
+    const context: BlockingMarketContext = {
+      monthsRequested: lensNum(res.months_requested),
+      asOf: String(res.as_of ?? ''),
+      // Already ASCENDING from SQL — mapped in the order given, never re-sorted here.
+      months: monthRows.map(mapMarketMonth),
+      quarters: quarterRows.map<BlockingMarketQuarter>((q) => ({
+        quarterKey: String(q.quarter_key ?? ''),
+        label: String(q.label ?? ''),
+        quarterStart: String(q.quarter_start ?? ''),
+        marketPhpKg: lensNumOrNull(q.market_php_kg),
+        marketKg: lensNum(q.market_kg),
+        marketPricedKg: lensNum(q.market_priced_kg),
+        deliveryCount: lensNum(q.delivery_count),
+        // 1 or 2 means the quarter is PARTIAL at the window edge — see the type doc.
+        monthCount: lensNum(q.month_count),
+        firstMonth: String(q.first_month ?? ''),
+        lastMonth: String(q.last_month ?? ''),
+        isCurrent: q.is_current === true,
+      })),
+      yearToDate: mapMarketSpan((res.year_to_date ?? {}) as Record<string, unknown>),
+      trailing12m: mapMarketSpan((res.trailing_12m ?? {}) as Record<string, unknown>),
+      latestMonth: {
+        ...mapMarketMonth(latest),
+        // FALSE means the newest month with data is NOT the current one — a real gap, and the
+        // reason the UI must not label this row "this month" unconditionally.
+        isCurrentMonth: latest.is_current_month === true,
+      },
+      monthsAvailable: lensNum(res.months_available),
+      monthsReturned: lensNum(res.months_returned),
+    };
+
+    return { ok: true, context };
+  } catch (err: unknown) {
+    console.error('[Blocking] fetchBlockingMarketContext failed:', err);
+    return { ok: false, reason: 'exception', message: MARKET_CONTEXT_UNREACHABLE_MESSAGE };
+  }
+}
+
+/** One (supplier × window) total. Shape-shared by `windowTotal` and `selectedTotal`. */
+function mapSupplierMarketTotal(
+  o: Record<string, unknown>,
+): { marketKg: number; marketPricedKg: number; marketPhpKg: number | null; deliveryCount: number } {
+  return {
+    marketKg: lensNum(o.market_kg),
+    marketPricedKg: lensNum(o.market_priced_kg),
+    // NULL-preserving: nothing priced means no price. A selection that bought nothing reads
+    // NULL here beside real 0 kilograms.
+    marketPhpKg: lensNumOrNull(o.market_php_kg),
+    deliveryCount: lensNum(o.delivery_count),
+  };
+}
+
+/**
+ * Price vs volume, one series per supplier — what each of them has been charging and sending.
+ *
+ * `months` is 1…36. `supplierKeys` is optional: **NULL / omitted means every supplier active
+ * in the window**, ordered by total kilograms descending; a list is de-duplicated and
+ * blank-stripped before the 40-entry cap is measured. **Pass `BlockingSupplierBand.key`
+ * values** — the two key spaces are proven to agree every verify run.
+ *
+ * A key that matches nothing returns **no entry**, never a zero-filled row; and the `months`
+ * SPINE is the WINDOW's, so such a call still has an axis. Compare the keys you asked for
+ * against `market.suppliers.map(s => s.key)`.
+ *
+ * PRICE-GATED BY REFUSAL: a `!canViewPrices()` caller gets
+ * `{ ok: false, reason: 'prices_hidden' }` and the database is never queried. See the block
+ * comment above for why this is a refusal and not the supplier lens's nulling.
+ */
+export async function fetchBlockingSupplierMarket(
+  months: number = BLOCKING_SUPPLIER_MARKET_DEFAULT_MONTHS,
+  supplierKeys?: readonly string[] | null,
+): Promise<BlockingSupplierMarketResult> {
+  // (1) THE GATE, BEFORE ANYTHING ELSE. Fails closed on any error.
+  let canView = false;
+  try {
+    canView = await canViewPricesGate();
+  } catch {
+    canView = false;
+  }
+  if (!canView) {
+    return { ok: false, reason: 'prices_hidden', message: MARKET_CONTEXT_PRICES_HIDDEN_MESSAGE };
+  }
+
+  // (2) Inputs. Integrality here, for the same reason as above — `p_months` is an `int`.
+  const n = Number(months);
+  if (
+    typeof months !== 'number' ||
+    !Number.isFinite(n) ||
+    !Number.isInteger(n) ||
+    n < BLOCKING_SUPPLIER_MARKET_MIN_MONTHS ||
+    n > BLOCKING_SUPPLIER_MARKET_MAX_MONTHS
+  ) {
+    return {
+      ok: false,
+      reason: 'invalid_months',
+      message: `A supplier history covers between ${BLOCKING_SUPPLIER_MARKET_MIN_MONTHS} and ${BLOCKING_SUPPLIER_MARKET_MAX_MONTHS} months.`,
+    };
+  }
+
+  // (3) The OPTIONAL key list, normalized the way SQL normalizes it — de-duplicated and
+  // stripped of blanks BEFORE the cap is measured, so the two caps can never disagree. `null`
+  // is not a refusal: it is the "every active supplier" signal.
+  let keys: string[] | null = null;
+  if (supplierKeys !== null && supplierKeys !== undefined) {
+    if (!Array.isArray(supplierKeys)) {
+      return {
+        ok: false,
+        reason: 'no_suppliers',
+        message: 'Name at least one supplier, or ask for all of them by passing none.',
+      };
+    }
+    const cleaned = Array.from(
+      new Set(
+        supplierKeys
+          .filter((k): k is string => typeof k === 'string')
+          .map((k) => k.trim())
+          .filter((k) => k.length > 0),
+      ),
+    );
+    if (cleaned.length === 0) {
+      return {
+        ok: false,
+        reason: 'no_suppliers',
+        message: 'Name at least one supplier, or ask for all of them by passing none.',
+      };
+    }
+    if (cleaned.length > BLOCKING_SUPPLIER_MARKET_MAX_SUPPLIERS) {
+      return {
+        ok: false,
+        reason: 'too_many_suppliers',
+        message: `A supplier comparison takes at most ${BLOCKING_SUPPLIER_MARKET_MAX_SUPPLIERS} suppliers; this one asked for ${cleaned.length}.`,
+      };
+    }
+    keys = cleaned;
+  }
+
+  try {
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc('fn_blocking_supplier_market', {
+      p_months: n,
+      // Sent as an explicit null when absent, which is exactly the SQL default.
+      p_supplier_keys: keys,
+    });
+
+    if (error) {
+      console.error('[Blocking] fn_blocking_supplier_market error:', error);
+      return {
+        ok: false,
+        reason: 'rpc_error',
+        message: error.message || SUPPLIER_MARKET_UNREACHABLE_MESSAGE,
+      };
+    }
+
+    const res = (data ?? null) as {
+      ok?: boolean;
+      reason?: string;
+      message?: string;
+      [k: string]: unknown;
+    } | null;
+
+    if (!res?.ok) {
+      const reason = res?.reason;
+      return {
+        ok: false,
+        reason:
+          reason === 'invalid_months' || reason === 'no_suppliers' || reason === 'too_many_suppliers'
+            ? reason
+            : 'rpc_error',
+        message: res?.message ?? 'The supplier history could not be worked out.',
+      };
+    }
+
+    const supplierRows = Array.isArray(res.suppliers)
+      ? (res.suppliers as Array<Record<string, unknown>>)
+      : [];
+
+    const market: BlockingSupplierMarket = {
+      monthsRequested: lensNum(res.months_requested),
+      asOf: String(res.as_of ?? ''),
+      fromMonth: lensStrOrNull(res.from_month),
+      toMonth: lensStrOrNull(res.to_month),
+      directionDeadBandPct: lensNum(res.direction_dead_band_pct),
+      // NULL means "every active supplier" — NOT an empty selection.
+      supplierKeysRequested: Array.isArray(res.supplier_keys_requested)
+        ? (res.supplier_keys_requested as unknown[]).map((k) => String(k))
+        : null,
+      // THE WINDOW's spine, ascending. A key filter narrows `suppliers`, never this.
+      months: Array.isArray(res.months) ? (res.months as unknown[]).map((m) => String(m)) : [],
+      // Already ordered by total kg DESC then key ASC — mapped as given, never re-sorted.
+      suppliers: supplierRows.map<BlockingSupplierMarketEntry>((s) => {
+        const summary = (s.summary ?? {}) as Record<string, unknown>;
+        const dir = summary.direction;
+        return {
+          key: String(s.key ?? ''),
+          // Equals `key`: the analytics view publishes only the canonical name. The prettier
+          // raw spelling lives on `BlockingSupplierBand.display` — join on the key.
+          display: String(s.display ?? s.key ?? ''),
+          series: (Array.isArray(s.series) ? (s.series as Array<Record<string, unknown>>) : []).map<
+            BlockingSupplierMarketPoint
+          >((p) => ({
+            month: String(p.month ?? ''),
+            // A real 0 is possible on a sundry-only row; it is NOT counted as an active month.
+            kg: lensNum(p.kg),
+            pricedKg: lensNum(p.priced_kg),
+            // NULL-preserving throughout: a missing price and a premium of nothing are not 0.
+            avgPricePhpKg: lensNumOrNull(p.avg_price_php_kg),
+            premiumPhpKg: lensNumOrNull(p.premium_php_kg),
+            shareOfMonthPct: lensNumOrNull(p.share_of_month_pct),
+            deliveryCount: lensNum(p.delivery_count),
+          })),
+          summary: {
+            monthsActive: lensNum(summary.months_active),
+            totalKg: lensNum(summary.total_kg),
+            totalPricedKg: lensNum(summary.total_priced_kg),
+            deliveryCount: lensNum(summary.delivery_count),
+            kgWeightedPhpKg: lensNumOrNull(summary.kg_weighted_php_kg),
+            firstMonth: lensStrOrNull(summary.first_month),
+            lastMonth: lensStrOrNull(summary.last_month),
+            firstPrice: lensNumOrNull(summary.first_price),
+            lastPrice: lensNumOrNull(summary.last_price),
+            priceChangePhpKg: lensNumOrNull(summary.price_change_php_kg),
+            priceChangePct: lensNumOrNull(summary.price_change_pct),
+            kgChangePct: lensNumOrNull(summary.kg_change_pct),
+            // NULL below three active priced months — read `corrMonthCount` before printing.
+            priceVolumeCorr: lensNumOrNull(summary.price_volume_corr),
+            corrMonthCount: lensNum(summary.corr_month_count),
+            // NULL, never 'flat', when the change it reads is NULL. Anything unrecognized is
+            // read as NULL rather than coerced into a verdict the RPC did not give.
+            direction:
+              dir === 'up' || dir === 'down' || dir === 'flat' ? dir : null,
+            avgPremiumPhpKg: lensNumOrNull(summary.avg_premium_php_kg),
+          } satisfies BlockingSupplierMarketSummary,
+        };
+      }),
+      supplierCount: lensNum(res.supplier_count),
+      windowTotal: mapSupplierMarketTotal((res.window_total ?? {}) as Record<string, unknown>),
+      selectedTotal: mapSupplierMarketTotal((res.selected_total ?? {}) as Record<string, unknown>),
+    };
+
+    return { ok: true, market };
+  } catch (err: unknown) {
+    console.error('[Blocking] fetchBlockingSupplierMarket failed:', err);
+    return { ok: false, reason: 'exception', message: SUPPLIER_MARKET_UNREACHABLE_MESSAGE };
   }
 }
 

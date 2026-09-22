@@ -48,6 +48,7 @@ Physical warehouse grid visualization — the digital equivalent of the Excel bl
 | `lens/lens-customize.tsx` | **NEW, EXTRACTED. `LensCustomize`** — the Customize-bands disclosure both lenses put their cut lines behind: the `Collapsible` + its `N/6 cut lines` trigger, the chip row with per-chip removers, an optional **quick-add** row (the age lens's common cuts; Price passes none, so its markup is unchanged), the add box + Add button, the **cap stated as a sentence** rather than a dead button, the per-band rename inputs and the two resets. It owns the SHAPE; every word, number and dimension is passed in by the lens. |
 | `lens/lens-refusal-banner.tsx` | **NEW, EXTRACTED. `RefusalBanner`** — the inline, PERSISTENT, copyable refusal (the project's error HARD RULE, satisfied by a banner because a refusal about a panel's own settings would be homeless as a toast the moment the panel closed). Shared so neither lens can quietly lose its Copy button. |
 | `../../../dev/table-playground/agelens/` | **NEW, KEPT (not deleted).** `page.tsx` + `agelens-fixture.tsx` — the AGE lens's look rig **and the TWO-LENS rig for the frame**, gated exactly like the `pricelens` sibling (`notFound()` unless `TABLE_PLAYGROUND`, plus `middleware.ts`'s `PUBLIC_PATHS` prefix). It mounts the REAL frame with the REAL `AgeLensPanel` **and** `PriceLensPanel` (each through its adapter port) over static contract-shaped payloads, so the questions Node cannot answer can be looked at with no login: does the age ramp read fresh→old, is a lab-highlighted MC still legible on band 4's purple, do the two tabs feel like one tool, does the docked column still let the grid scroll at 375px. `?bands=2\|3\|4\|5\|7` seeds the cut lines **through the same localStorage key a real reader's settings use**; `?undated=1` adds undated blocks; **`?prices=0` simulates a PRICE-DENIED reader** (the lens list is filtered by each definition's own `canShow`, so the tab strip correctly disappears and Age stands alone). Holds no data access of any kind. |
+| `../../../dev/table-playground/lens-fixture-lab.ts` | **NEW (2026-09-22). The THREE price-lens fixtures' warehouse + lab half, in one place.** `FIXTURE_LAB_UNMEASURED`, `fixtureLabStats()`, `fixturePriceBlockByLoc()` and `fixtureWarehouseSubtotals()` — because all three fixtures build a `BlockingPriceLens` **by hand** and the payload gained four per-block keys, a `warehouse_subtotals[]` array and the seven weighted lab means, so three copies is how one of them would start COALESCEing a mean to 0 while the others preserved the null. **The mock cells carry only THREE of the seven readings (`mc`/`ash`/`bdAstm`), so those three are kg-weighted FOR REAL and the other four read `null` with a coverage weight of `0`** — the genuine "no reading in this group" shape, never an invented BD JIS. That mixed coverage is the point: it is the live yard's own shape (all 170 blocks carry MC, 11 read 0 on the other six), so uniform coverage would never exercise the "this column covers less of the band than that one" path. The warehouse comes from `warehouseOfBlockLoc`, never a second prefix parse, and `blockByLoc` is built from the same `bandByBlock` map so the identical-key-set invariant holds in a fixture too. PURE, dev-only. |
 | `../../../dev/table-playground/blockinghead/` | **NEW (2026-09-21), KEPT.** `page.tsx` + `blockinghead-fixture.tsx` — the CONTROL STRIP's and the BLEND TABLE's look rig, gated exactly like the `pricelens` / `agelens` siblings (`notFound()` unless `TABLE_PLAYGROUND`, plus `middleware.ts`'s `PUBLIC_PATHS` prefix). It mounts the REAL `BlockingGrid` over a static `BlockingGridData` and the REAL `BlendProposalDialog` over a static facts record, because Node can assert that the strip is a four-track grid with the documented minimums but cannot tell you whether a SECTION MOVES when a mode is switched on, whether the strip scrolls rather than crushes at 1024px, or whether a supplier pill is legible in dark mode. `?prices=0` gives a price-denied reader; `?blend=1` opens the modal with a GREEN, an ORANGE and an em-dash row. Holds no data access of any kind. **ITS FIGURES ARE THE LIVE PAGE'S OWN SHAPE (2026-09-21), because the strip is MEASURED by them** — it occupies **170 of the real 220 slots** (so `77.3%` falls out of the count rather than being typed) and its last block absorbs the rounding residual on both weight and price so the totals land exactly on `10,543.09 t · 170 / 220 · 77.3% · ₱ 389,587,962 · ₱ 36.95`; a rig printing `1,234.00 t` would answer a narrower question than the one being asked, since a 5-digit tonnage and a 9-digit peso total are what set section 3's width. The Proposals badge reads the real `fetchBlendProposalList`, which degrades to an empty list with no session, so it shows `0` rather than a count — its width is reserved (`w-[26px] tabular-nums`), so a single digit either way is the same measurement. |
 | `../../../dev/table-playground/pricelens/` | **NEW, KEPT (not deleted).** `page.tsx` + `pricelens-fixture.tsx` — the lens's LOOK RIG, gated exactly like the `rcmprint` sibling (`notFound()` unless `TABLE_PLAYGROUND`, plus `middleware.ts`'s `PUBLIC_PATHS` prefix). It mounts the REAL `BlockingLensPanel` + `PriceLensPanel` (through the adapter port) and the REAL cell classes over a static contract-shaped payload, so the questions Node cannot answer — does the ramp read cheap→expensive, is a lab-highlighted MC still legible on band 3's amber, does the docked column still let the grid scroll at 375px — can be looked at in both themes with no login. `?bands=2|3|4|5|7` seeds the edge offsets **through the same localStorage key a real reader's settings use**; `?unpriced=1` adds unpriced blocks. Holds no data access of any kind. |
 | `../_shared/blend-analysis-options.ts` | **NEW (2026-09-21). WHICH ANALYSIS PAGES a proposal carries** — pure. `BlendAnalysisOptions` (`price` · `quality` · `age`), `DEFAULT_BLEND_ANALYSIS_OPTIONS` (**all three ON**), `parseBlendAnalysisOptions` (**untrusted, FIELD BY FIELD, falling back per field** — never "one bad key, everything to defaults"), `serializeBlendAnalysisOptions` (**defaults OMITTED**, so turning everything back on is a REMOVAL), `analysisPages(options, canViewPrices)` — **THE one place the reader's CHOICE meets the reader's PERMISSION** — plus `wantsAnalysis`, `analysisPagesLabel` and `BLEND_ANALYSIS_SETTINGS_MODULE` (`blocking_blend_analysis`). Stored per user in `user_table_settings` through the shape-agnostic pair, so it needs **no migration, no table and no new action**. |
@@ -55,10 +56,14 @@ Physical warehouse grid visualization — the digital equivalent of the Excel bl
 | `../_shared/use-blend-analysis.ts` | **NEW. THE ANALYSIS READ** — one payload per open / version switch / option change, and nothing else. Takes a DISCRIMINATED source (`{kind:'saved', proposalId, versionNo}` or `{kind:'live', blockLocs}`) so it is structurally incapable of sending both (the contract refuses that). **NO DEBOUNCE AT ALL** — its inputs are discrete events, not keystrokes, so a debounce would only be a timer for a remount to destroy (the 2026-09-21 lens stall) — and the guard is the request's own **SIGNATURE**, so a reply for what is still wanted is ALWAYS applied. A stall says so after `LENS_STALL_MS` with Copy and Retry; a refusal KEEPS the previous payload. Exports the `BlendAnalysisAdapter` port, defaulted to the live action and injectable only for the gated dev rig. |
 | `../_shared/blend-analysis-sections.tsx` | **NEW. THE ANALYSIS PAGES ON SCREEN** — `BlendAnalysisSections` (the stack) and `BlendAnalysisIncludePopover` (the header's **Include pages** control). Three pages: **Price groups — natural breaks** (a plain-language method note, then HIGH → AVERAGE → LOW, each group a dense table with a SUBTOTAL row and one grand FOOTER from the payload's `overall`, which is what makes it visibly equal the proposal's own raw blend price) plus **Against market** (the PRICE LENS's bands, labelled with the lens's OWN `priceBandLabel` and the reader's own band names, dearest first); **Quality** (three tables — MC, ASH, and BD ASTM **with BD JIS as a second value column**, not a fourth table — highest reading first, with the reader's own WET / ASHY highlight applied through `getLabHighlightText`); **Age** (the AGE LENS's bands via `ageBandLabel`, oldest first, block · batch · balance · age · first delivery · last delivery). Excel Standard throughout: `table-fixed`, explicit pixel widths whose STATED sum is the table's `minWidth`, `font-mono` right-aligned numerics, accounting ₱. **Every subtotal and footer figure is the payload's own** — there is no `reduce`, no `+=` and no division by a total in the file; the one piece of money arithmetic is a per-ROW `kg × ₱/kg`, which contributes to no total. An unmeasured / undated block is listed in a MUTED group with an em dash, **never in the cheapest, cleanest or freshest group**. |
 | `../_shared/blend-analysis-print.ts` | **NEW. THE ANALYSIS PAGES ON PAPER** — `buildBlendAnalysisPages(input)` returns one `<section class="apage">` per chosen page and `BLEND_ANALYSIS_PRINT_CSS` carries their rules; both are appended to the existing self-contained iframe document by `buildBlendPrintDocument`'s new fifth argument. **An empty analysis leaves that document byte-identical, including its `<style>` block.** Print-specific rules the screen does not need: **no `<tfoot>`** (Chrome repeats one on every page, so a subtotal and the grand total are `<tbody>` rows), **a group is its own `<tbody>`** with `break-inside: avoid` only while it is SMALL (≤ 4 rows — forcing a 24-row group whole would push a page of white space ahead of it), `break-after: avoid` on every heading and caption, a **7pt font floor** with the padding squeezed first, and the group tints written as inline `rgb(r g b / 0.18)` from `lens/lens-ramp.ts` because **an iframe has no `globals.css`, so a `.lens-band-3` class would print white**. |
-| `lens/lens-summary-print.tsx` | **THE PRINTED LENS SUMMARY, REDESIGNED 2026-09-22** — `LensSummaryPrintControl` (the legend bar's **Print** button) + the sheet, over a normalized `LensSummaryPrintModel` each lens builds for itself. The owner's four asks, in his order: the TITLE is **exactly the lens's name** (`Price lens` / `Age lens` / `Supplier lens`) with **no blurb and no subheading**; **ONE terse settings line** under it in the `<fact> · <fact>` style (`Set price ₱46 · ₱46 and up is above set price · cuts −1 · market · by kilograms · printed 2026-09-22 09:04`), the stamp appended by the sheet; the **BAND TABLE** (band · blocks · kg · share · the lens's weighted figure, total as the last `<tbody>` row, its figure cell saying **`avg of priced`** / `avg of dated`) and the **RATIO BAR** kept unchanged, because they are the part he said worked (**the band table's last column grew TWO optional fields later the same day — `bandFigureColumnLabel` and a per-figure `LensPrintAccounting {symbol, amount}` — so the SUPPLIER sheet can head it `₱/kg` in the accounting layout, or `Mixed` for a price-denied reader, while the price and age sheets, which supply neither, stay byte-for-byte what they were**); and the three-column block lists **replaced by ONE FULL-WIDTH TABLE PER BAND, GROUPED BY WAREHOUSE** — `BLOCK · BATCH · BALANCE kg · MC · ASH · BD ASTM · BD JIS · GRIT · VM · FC · <figure>` — with **each band on its own page** (`.lens-print-band { break-before: page }`), a warehouse group per `<tbody>` (`break-inside: avoid` while small, its heading row `break-after: avoid`), a WAREHOUSE SUBTOTAL carrying blocks + kg and **every lab cell BLANK**, and a BAND TOTAL from the payload. Spanning several sheets is the deliberate trade for the lab panel. **Band ISOLATION is respected and SAID** (*"Showing 2 of 4 bands"*). **PAGE TWO is the YARD MAP** (2026-09-22, `lens/lens-yard-map-print.tsx`) — every block location in solid band colour, loc centred and big; it exports `LENS_PRINT_MARGIN_MM` so the map's fit arithmetic and the `@page` rule cannot disagree. It reuses the PLATFORM print kit (`GroupPrintStage` + `printCard` + `buildPrintPageRules`, stage PORTALLED to `<body>`) and adds nothing to it; the sheet is explicitly LIGHT (`bg-white` / `text-zinc-*`) because it lays out in the live DOM, with two deliberate exceptions — the swatch and the bar segments use `lens-band-swatch` + the ramp class, whose solid `rgb(var(--lens-hue))` is identical in both themes and identical to the grid. **It formats nothing**: every figure arrives preformatted. |
+| `lens/lens-summary-print.tsx` | **THE PRINTED LENS SUMMARY, REDESIGNED 2026-09-22** — `LensSummaryPrintControl` (the legend bar's **Print** button) + the sheet, over a normalized `LensSummaryPrintModel` each lens builds for itself. The owner's four asks, in his order: the TITLE is **exactly the lens's name** (`Price lens` / `Age lens` / `Supplier lens`) with **no blurb and no subheading**; **ONE terse settings line** under it in the `<fact> · <fact>` style (`Set price ₱46 · ₱46 and up is above set price · cuts −1 · market · by kilograms · printed 2026-09-22 09:04`), the stamp appended by the sheet; the **BAND TABLE** (band · blocks · kg · share · the lens's weighted figure, total as the last `<tbody>` row, its figure cell saying **`avg of priced`** / `avg of dated`) and the **RATIO BAR** kept unchanged, because they are the part he said worked (**the band table's last column grew TWO optional fields later the same day — `bandFigureColumnLabel` and a per-figure `LensPrintAccounting {symbol, amount}` — so the SUPPLIER sheet can head it `₱/kg` in the accounting layout, or `Mixed` for a price-denied reader, while the price and age sheets, which supply neither, stay byte-for-byte what they were**); and the three-column block lists **replaced by ONE FULL-WIDTH TABLE PER BAND, GROUPED BY WAREHOUSE** — `BLOCK · BATCH · BALANCE kg · MC · ASH · BD ASTM · BD JIS · GRIT · VM · FC · <figure>` — with **each band on its own page** (`.lens-print-band { break-before: page }`), a warehouse group per `<tbody>` (`break-inside: avoid` while small, its heading row `break-after: avoid`), a WAREHOUSE SUBTOTAL carrying blocks + kg, and a BAND TOTAL from the payload. **SECOND PASS 2026-09-22 — three PRICE-SHEET-ONLY additions, each behind an OPTIONAL model field so the age and supplier sheets are provably unchanged:** `warehousePages` puts each `WHSE X` on its OWN SHEET under a repeated band running line (the first warehouse rides the band's own break; the BAND TOTAL rides the LAST warehouse's page; `showWarehouseHeadingRow={false}` stops the heading printing twice); `figures` / `totalFigures` fill the subtotal's and the band total's seven lab cells and ₱/kg from `warehouseSubtotals` — a **LOOKUP**, never a computation, NULL an em dash and never a 0, with a coverage note naming only the stats short of the group; and `blockSupplierColumnLabel` adds a SUPPLIER column between BATCH and BALANCE (`Ornales` / `Paquibot 63%` / an em dash), on a SEPARATE width table that sums to exactly 100%. `page1Extra` is a NODE carrying page one's context block, so this sheet still knows nothing about a market series. Spanning several sheets is the deliberate trade for the lab panel. **Band ISOLATION is respected and SAID** (*"Showing 2 of 4 bands"*). **PAGE TWO is the YARD MAP** (2026-09-22, `lens/lens-yard-map-print.tsx`) — every block location in solid band colour, loc centred and big; it exports `LENS_PRINT_MARGIN_MM` so the map's fit arithmetic and the `@page` rule cannot disagree. It reuses the PLATFORM print kit (`GroupPrintStage` + `printCard` + `buildPrintPageRules`, stage PORTALLED to `<body>`) and adds nothing to it; the sheet is explicitly LIGHT (`bg-white` / `text-zinc-*`) because it lays out in the live DOM, with two deliberate exceptions — the swatch and the bar segments use `lens-band-swatch` + the ramp class, whose solid `rgb(var(--lens-hue))` is identical in both themes and identical to the grid. **It formats nothing**: every figure arrives preformatted. |
 | `lens/lens-yard-map-model.ts` | **NEW (2026-09-22). THE YARD MAP's CELLS — pure, no React.** `buildLensYardMap({ data, bandOf, isMixed? })` turns the grid's OWN geometry (`../constants`'s `WAREHOUSES`, plus `blocking-grid.tsx`'s `<whse>-<col><row>` slot key — **never a literal 220/238**) into one `LensYardMapCell` per SLOT: `{ loc, lines, occupied, band, mixed }`. Also `lensYardMapPaint(cell, ramp, stopByVisibleBand)` (the FOUR cell kinds — `banded` / `muted` / `nodata` / `empty`; a `banded` fill is `printFillRgbAtStop`, **never** the screen ramp), **`lensYardMapInkOn(rgb)` — the ONE luminance rule, which on the print palette now answers near-black for every fill and whose white branch is therefore unreachable on the map** (kept rather than hardcoded, because a cell, a legend swatch border and a mixed block's dash must all reach the same answer) — `lensYardMapLuminance`, `lensYardMapLines(key, loc, force?)` and the paper palette + `LENS_YARD_MAP_MIN_LOC_PT` / `_LINE_HEIGHT` / `_NODATA_PT` / `_INK_CROSSOVER`. It counts SLOTS and nothing else: no kilogram, no ₱, no age, no supplier, no lab reading. |
 | `lens/lens-yard-map-print.tsx` | **NEW (2026-09-22). THE YARD MAP PAGE** — `LensYardMapPage`, page TWO of the lens print. Every warehouse as a labelled block of square cells (column numbers along the top, row letters down the side, both small and muted), each occupied slot in the **SOLID** band fill from **`LENS_PRINT_FILL_RGB`** (the PRINT palette — a pale tint of the screen hue, so the loc is BLACK on every cell; the legend swatches read the same accessor, or the legend would describe a different map) with the BLOCK LOC centred in the largest font the cell allows. Solves its one-page promise with the PLATFORM `fitCellGrid` / `fitMonoLabelPt` (`components/shared/print/print-fit.ts`) against `a4LandscapeBox(LENS_PRINT_MARGIN_MM)` — the sheet's own margin, exported so the `@page` rule and the arithmetic cannot disagree. Carries a one-line legend (every shown band, `other bands (not shown)` when isolated, `— no data (N)`, `empty slot`) and NAMES any occupied block whose code is not a slot on this layout. |
-| `lens/lens-summary-model.ts` | **NEW (2026-09-22). THE ONE BUCKETING behind the printed sheet** — `buildLensSummaryBuckets({ data, bandOf, figureOf, sortKeyOf, formatKg, formatBlocks, excludedFigure })` → `{ byBand: Map<band, LensSummaryWarehouse[]>, excludedRows }`, plus `LENS_SUMMARY_LAB_KEYS` / `_LABELS`, `lensSummaryLab(block)` (**the Excel Standard applied once — BD 3 dp, everything else 2 dp**) and `warehouseOfBlockLoc`. All three lenses call it, because three copies is how the price sheet and the age sheet would order warehouses two different ways. The warehouse order is `Object.keys(WAREHOUSES)` — the grid's own layout, never a second list — with a trailing `-` / `Other` group so a `block_loc` whose prefix is not a warehouse is still counted. **⚠️ IT HOLDS THE ONE SUM IN THE WHOLE LENS DIRECTORY**, the warehouse kilogram subtotal, and it is deliberately ABSENT from `verify-blocking-lens-ui.ts`'s no-sum list: the payload publishes no figure for "band 2's kilograms in warehouse C" at any grain, so that sum has nothing it could disagree with, and the fold is proven to tie back to the band's own published kilograms. **What is still absolutely forbidden and is NOT done: a weighted average.** A subtotal's lab cells stay blank, because a kg-weighted MC over a partition SQL never computed would be a second definition of a lab average living in TypeScript. |
+| `lens/lens-print-chart.tsx` | **NEW (2026-09-22). A CHART FOR PAPER** — `PrintSeriesChart` (one shape, two uses: a bare LINE for the market series, an AREA-plus-LINE for a price-vs-volume panel), `PrintChartLegend`, the explicit `PRINT_CHART_INK` palette and `LENS_PRINT_CHART_LABEL_PX`. **Hand-drawn SVG rather than recharts, and that is a defect list not a preference:** `/analytics`' charts are `<ResponsiveContainer>` and size themselves from a ResizeObserver callback one frame LATER, so they print an EMPTY BOX under `printCard` (which calls `window.print()` as soon as the stage lays out); their series are theme tokens (`var(--chart-2)`), so a dark-mode reader would print a dark chart onto white paper; and importing them would put recharts in the Blocking bundle for a twelve-point print-only series. **Nothing in `app/(app)/analytics/` was moved or shared — that CONTEXT.md is untouched.** It computes no statistic (scaling a value to a y coordinate is geometry) and formats nothing: every label is a string the model already built, and the file contains no `₱` and no `toLocaleString`. **A `null` BREAKS the line and the area** rather than drawing across it — NULL is never 0. Size is stated by the caller in PIXELS; ink is explicit hex with `print-color-adjust: exact`; **every label reads ONE constant (7 px)**, after the first pass shipped 5.5 px month ticks (~4 pt on paper). |
+| `lens/lens-market-model.ts` | **NEW (2026-09-22). BOTH page-one context blocks, as PRINTABLE MODELS** — `buildLensMarketPrintModel()` (the price sheet's MARKET table + chart) and `buildLensSupplierMarketPrintModel()` (the supplier sheet's PRICE vs VOLUME panels + table), plus `printChartDomain()`. **NOT ONE NUMBER IS DERIVED HERE**: every price, kilogram, share, change, direction, correlation and premium is a field of `BlockingMarketContext` / `BlockingSupplierMarket`, rendered verbatim — those functions aggregate as Σ money ÷ Σ priced kg inside `view_analytics_rcin_monthly` / `view_analytics_supplier_monthly`, and a TypeScript copy would be a second definition. What it DOES do is FORMAT (it owns every `₱`, so the two sheets spell none) and work out a CHART DOMAIN, which is an axis range and not a statistic. **`printChartDomain` takes a `floor`** — measured on a real PDF, the 8% pad pushed a VOLUME axis below zero and every panel printed `−41t`; it is a floor, **not** a zero-base, so a price axis still starts near its own minimum. NULL IS NEVER 0 in six places, including `direction` (NULL, never the word *flat*) and `priceVolumeCorr` (`n/a (2 m)` under three priced months). PURE. |
+| `lens/lens-market-print.tsx` | **NEW (2026-09-22). PAGE ONE's `MARKET` SECTION** (price lens) — the 12-month table (`MONTH · PHP/KG · KG · DLV · SUPP`), its quarter rollups with the current one flagged, `YEAR TO DATE` and `TRAILING 12 M`, and a line chart of the same twelve months with **the lens's own basis as a dashed reference level**. Table LEFT, chart RIGHT — measured: stacking them pushes a seven-band lens's page one onto a second sheet. **The BASIS's own row is highlighted**, and an aggregate basis (`last_3_months`, `trailing_days`, a typed price) highlights NOTHING, because this table carries no row for it. It formats nothing and spells no `₱`. |
+| `lens/lens-supplier-market-print.tsx` | **NEW (2026-09-22). PAGE ONE's `PRICE VS VOLUME` SECTION** (supplier lens) — up to six SMALL MULTIPLES (kilograms as an area, ₱/kg as a line, over the window's own month spine so a quiet supplier gets a GAP) and a table of every supplier the payload returned (`SUPPLIER · KG · PHP/KG WTD · FIRST → LAST · CHANGE · DIR · VOL % · CORR · PREM`) with a footer putting `selectedTotal` beside `windowTotal`. **Each panel autoscales and the caption SAYS so** — the yard's suppliers differ by two orders of magnitude, so a shared volume axis would flatten every small one onto the baseline. **`others` has no panel and no row** (it is a fold, not a supplier; aggregating it here would be a TypeScript average of weighted prices), and a named band with no series is NAMED rather than dropped. **The WHOLE section is absent for a price-denied reader** — it is money end to end including the correlation. It formats nothing and spells no `₱`. |
+| `lens/lens-summary-model.ts` | **NEW (2026-09-22). THE ONE BUCKETING behind the printed sheet** — `buildLensSummaryBuckets({ data, bandOf, figureOf, sortKeyOf, formatKg, formatBlocks, excludedFigure })` → `{ byBand: Map<band, LensSummaryWarehouse[]>, excludedRows }`, plus `LENS_SUMMARY_LAB_KEYS` / `_LABELS`, `lensSummaryLab(block)` (**the Excel Standard applied once — BD 3 dp, everything else 2 dp**) and `warehouseOfBlockLoc`. All three lenses call it, because three copies is how the price sheet and the age sheet would order warehouses two different ways. The warehouse order is `Object.keys(WAREHOUSES)` — the grid's own layout, never a second list — with a trailing `-` / `Other` group so a `block_loc` whose prefix is not a warehouse is still counted. **⚠️ IT HOLDS THE ONE SUM IN THE WHOLE LENS DIRECTORY**, the warehouse kilogram subtotal, and it is deliberately ABSENT from `verify-blocking-lens-ui.ts`'s no-sum list: the payload publishes no figure for "band 2's kilograms in warehouse C" at any grain, so that sum has nothing it could disagree with, and the fold is proven to tie back to the band's own published kilograms. **What is still absolutely forbidden and is NOT done: a weighted average.** It gained `buildLensGroupFigures(stats, groupKg, figure, formatKg)` on 2026-09-22 — which RENDERS the seven kg-weighted means `fn_blocking_price_lens` now publishes per (band × warehouse) and per band, and whose only arithmetic is the COMPARISON deciding whether a stat's coverage is short of the group. **The rule did not move: this module may format a figure, it still may not compute one**, and a lens with no such published partition passes no `figuresOf` and prints the blank subtotal row it always did. It also takes an optional `supplierOf` for the price sheet's per-block SUPPLIER cell — omitted, the field is `undefined` and the column does not exist. |
 | `lens/supplier-lens-panel.tsx` | **NEW (2026-09-22). The SUPPLIER lens body + its `SUPPLIER_LENS` registration** — lens #3 on the frame, registered AFTER Age. Legend bar: the headline `17 suppliers · 23 mixed`, one shared chip per band (supplier display names, plus `Others (11)`), the shared ratio bar, the muted `No supplier — N` chip, Print, the kg\|blocks switch and the gear. Settings popover: the yard's supplier count and mixed-block count, ONE line saying which figure the tint uses and which the bar uses, the detailed band rows (`N blocks dominant · X kg apportioned · M mixed`), and a **Top suppliers** number input (1…12, default 6) with Apply and Reset. **`canShow: () => true`** — no ₱ anywhere in the payload, so Production sees it. **IT COMPUTES NO STATISTIC**: no `reduce`, no `+=`, no division by a total, and it never `===`-tests the apportioned fold (the contract records a −1.9e-9 kg residue through JSON). Exports **`SupplierLensAdapter`**, the one-method port onto `fetchBlockingSupplierLens`, defaulted to the live action and injectable only for the gated dev fixture. |
 | `lens/supplier-lens-settings.ts` | **NEW (2026-09-22). Pure settings arithmetic** — `SupplierLensSettings` (**`topN` + `unit`, and nothing else**), `DEFAULT_SUPPLIER_LENS_SETTINGS` (`{ topN: 6, unit: 'kg' }`), `parseSupplierLensSettings` (**untrusted, FIELD BY FIELD** — an out-of-range, fractional or non-finite `topN` falls back rather than being clamped, because a clamp silently answers a question nobody asked), `serializeSupplierLensSettings` (**defaults OMITTED**), `normalizeTopN` / `setTopN` / `parseTopNInput` (both ends refused with a sentence, never a throw), `supplierBandLabel` (**the supplier's own `display`; `Others (11)` is the UI's word — the payload carries `key: null` / `display: null` on the fold and does not name it**), `supplierBandRampStop` / `supplierBandRampClass`, `SUPPLIER_LENS_RAMP` (`'category'`) and `SUPPLIER_LENS_MIXED_CLASS`. **THERE ARE NO BAND NAMES, and that is deliberate**: a supplier band already has a name, and renaming it would let the legend disagree with the yard about whose charcoal it is. |
 | `../../../dev/table-playground/blendanalysis/` | **NEW (2026-09-21), KEPT.** `page.tsx` + `blendanalysis-fixture.tsx` — the ANALYSIS PAGES' look rig, gated exactly like its siblings (`notFound()` unless `TABLE_PLAYGROUND`, plus `middleware.ts`'s `PUBLIC_PATHS` prefix). It mounts the REAL `BlendProposalDialog` — real header actions, real Include-pages popover, real print, real PDF — and swaps only the two data PORTS for static contract-shaped payloads over the owner's own `26 OCT RUN V2` shape (24 blocks, two price clumps, market ₱39.8272 → R 40). **Its adapter answers after a REALISTIC ~300 ms on purpose**: a microtask-resolving stub hid a request race on the lens panels, and a skeleton that never renders cannot be reviewed. `?saved=1` · `?prices=0` (the price-denied reader) · `?pages=quality` (seeded **through the same localStorage key** a real reader's choice uses) · `?unmeasured=1` · `?slow=2000` · `?stall=1` (the watchdog banner). Holds no data access of any kind. |
@@ -908,11 +913,12 @@ The owner's review of the live sheet asked for four changes, and all four landed
 
 **The lab readings are READ, never computed.** They come off the grid payload the page already
 holds (`view_blocking_grid` rows), joined by `block_loc`, formatted once to the Excel Standard
-(BD 3 dp, everything else 2 dp) in `lens-summary-model.ts`. A **WAREHOUSE SUBTOTAL** therefore
-carries its block count and its kilograms and leaves **every lab cell BLANK** — a kg-weighted MC
-over a partition SQL never computed would be a second definition of a lab average living in
-TypeScript, and a blank cell says "not published" where a computed one would say something
-untrue. The **BAND TOTAL** beside it is the payload's own.
+(BD 3 dp, everything else 2 dp) in `lens-summary-model.ts`. A **WAREHOUSE SUBTOTAL** originally
+carried its block count and its kilograms and left **every lab cell BLANK** — a kg-weighted MC over
+a partition SQL never computed would have been a second definition of a lab average living in
+TypeScript, and a blank cell says "not published" where a computed one would say something untrue.
+**Those cells are filled in now, by SQL — see "THE SECOND PASS" below.** The **BAND TOTAL** beside
+it has always been the payload's own.
 
 **The one sum, and its exemption.** `lens-summary-model.ts` holds the only accumulation in the
 whole lens directory — the warehouse kilogram subtotal — and is deliberately absent from
@@ -921,12 +927,80 @@ kilograms in warehouse C" at any grain, so that sum has nothing it could disagre
 is proven to tie back to the band's own published kilograms by a real run of the bucketing over a
 synthetic grid, and a weighted average remains flatly banned.
 
-**Paging.** Page one is the title, the settings line, the band table and the ratio bar; **page
-two is the YARD MAP** (below); then one page per band (`.lens-print-band { break-before: page }`),
-and one more for the excluded population when there is one. A warehouse group is one `<tbody>`
-with `break-inside: avoid` while it is small (≤ 6 rows) and its heading row carries
-`break-after: avoid`, so a big group may split without stranding its title. No `<tfoot>`
-anywhere, landscape A4 at 10mm, 7pt floor.
+**Paging.** Page one is the title, the settings line, the band table, the ratio bar and — since the
+second pass — the lens's own CONTEXT BLOCK; **page two is the YARD MAP** (below); then the BLOCK
+pages (one per band, or one per *(band × warehouse)* on the price sheet — see below), and one more
+for the excluded population when there is one. A warehouse group is one `<tbody>` with
+`break-inside: avoid` while it is small (≤ 6 rows) and its heading row carries `break-after: avoid`,
+so a big group may split without stranding its title. No `<tfoot>` anywhere, landscape A4 at 10mm,
+**and the sheet's own type floor is 7px** (it prints from the LIVE DOM, so its sizes are Tailwind
+`px` rather than the `pt` the iframe prints use — §13 asserts no printed label falls below it).
+
+#### THE SECOND PASS — THE PRICE SHEET'S THREE CHANGES (2026-09-22)
+
+The owner's review of the live sheet asked for three more things. **All three are PRICE-SHEET ONLY,
+and that is asserted rather than hoped** — the age and supplier sheets render the same table
+component with the same columns, the same widths and the same decimals they always did, because the
+model fields that switch these on are OPTIONAL and neither of those two panels passes them.
+
+**1. ONE PAGE PER WAREHOUSE INSIDE A BAND.** Each `WHSE X` heading starts a fresh sheet, with the
+band heading repeating above it as a small running line (`.lens-print-band-run`, `break-after:
+avoid`), because a page whose only heading is `WHSE C` does not say which band's `WHSE C` it is.
+Turned on by `warehousePages: true` on the print model. **The FIRST warehouse of a band rides the
+band's own `break-before: page`** and only the later ones take `.lens-print-whse-page`, or every
+band would open on a blank sheet. The **BAND TOTAL rides the LAST warehouse's page**, so it is
+stated exactly once per band and a reader reaches it by finishing the band rather than turning back.
+The EXCLUDED population is deliberately NOT paged this way — it is one short list of blocks the lens
+cannot place, and a page each would be a page each for a handful of rows.
+
+It is a real trade (a three-band lens over four warehouses prints twelve block pages instead of
+three) and it is the right one HERE because the price sheet now carries a supplier column and seven
+weighted subtotal figures per warehouse, so a warehouse group is a self-contained table a reader
+takes to the yard. **The `countLabel` follows the paging** — `blockPageCount()` counts per
+*(band × warehouse)* when the flag is on — because a count that still said "one page per band"
+would be the first thing to go stale.
+
+**The heading is said ONCE.** Measured on a real PDF: with the `<h2>` above and the table's own
+`lens-print-whse-head` row both rendering, `WHSE A 10 BLOCKS · 1,047,000 KG` printed twice, one line
+apart. The in-table row is what separates one warehouse from the next in the MERGED tables, so it is
+a flag (`showWarehouseHeadingRow`, default **true**) rather than a deletion, and only the paged path
+turns it off.
+
+**2. THE WAREHOUSE SUBTOTAL'S LAB CELLS ARE FILLED IN — BY SQL.** They were blank on purpose (see
+just above); `fn_blocking_price_lens` gained `warehouse_subtotals[]` (migration `20260922093000`),
+so the cells became a **LOOKUP** keyed `(bandIndex, warehouse)` and the BAND TOTAL reads its band
+row the same way. **The rule did not move — the sheet may RENDER a figure, it still must not COMPUTE
+one.** `buildLensGroupFigures` formats what SQL published and the only arithmetic in it is a
+COMPARISON; §13 proves that by running it over two groups with the same means and different
+kilograms and requiring identical strings.
+
+- **NULL prints an EM DASH, never a 0.** `avg_ash = 0` on the grid means "these deliveries carry no
+  ASH figure" — the L-008 placeholder in a lab coat — so SQL excludes the block from the mean and
+  publishes NULL. A 0 in a *coverage weight* is a real 0, because zero measured kilograms is a
+  measurement.
+- **A COVERAGE NOTE names only the stats SHORT of the group**, with their kilograms
+  (`ash over 800,000 kg · bd astm over 800,000 kg`), and is empty when every stat covers all of
+  them. Each stat has its OWN coverage and they genuinely differ — measured 2026-09-22, all 170
+  occupied blocks carry MC while 11 read 0 on ash, both BDs, grit, VM and FC — so one shared "lab
+  kg" would be wrong for MC or wrong for the other six on every group in the yard. A stat with NO
+  mean already prints a dash, so it is never *also* given a note.
+- **A lens with no such published partition passes no `figures` and prints the blank row it always
+  did.** The fallback lives in ONE component (`LabCells`), so a subtotal and a band total can never
+  disagree about what a missing figure looks like. That is exactly what the AGE and SUPPLIER sheets
+  get.
+
+**3. A SUPPLIER COLUMN PER BLOCK, between BATCH and BALANCE.** `Ornales` when the block is the whole
+pile, `Paquibot 63%` when it is MIXED, an **em dash** when the batch has no delivery row at all
+(NULL — never a placeholder and never `false`; the three payload fields move together). It reads
+`blockByLoc[loc].dominantSupplierDisplay` / `.dominantSharePct` / `.isMixed` — **the ALL/SOME rule
+is a carried COLUMN and is never re-derived from a list length.** Switched on by
+`blockSupplierColumnLabel`; **omitted means the column does not EXIST**, not that it is empty, which
+is what keeps the other two tables at their original shape. The table is re-fitted to **exactly
+100%** in that mode (7 + 15 + 13 + 10 + 7 × 6.5 + 9.5) as a SEPARATE width table, so `table-fixed`
+has nothing to redistribute and no column silently crushes — §13 sums both tables and requires 100.
+
+The supplier sheet gets no such column because its per-block column already IS the supplier, and the
+age sheet gets none because its payload carries no supplier fact at all.
 
 #### ⚠️ THE SUPPLIER BAND TABLE'S LAST COLUMN — `₱/KG`, OR `MIXED` (2026-09-22)
 
@@ -1132,6 +1206,131 @@ clears its own marks on `afterprint` and again after 1000 ms, and headless Chrom
 `afterprint` on a no-op `window.print()` — so a harness must stub `window.print` and neutralise
 those timers before clicking, or `page.pdf()` captures the SCREEN instead of the sheet.
 
+#### PAGE ONE'S CONTEXT BLOCKS — ADDED 2026-09-22
+
+Page one held the title, the settings line, the band table and the ratio bar, and then **half a
+sheet of nothing**. The owner, on each lens in turn: *"maybe a deliveries price for the year — an
+indication of what the market price is"* (price) and *"utilize the existing price-to-volume graph /
+area graph; a table that shows the direction of price per supplier and its relationship with the
+volume delivered"* (supplier).
+
+**The shared sheet learns NOTHING about either.** `page1Extra` is a `React.ReactNode`, not a model:
+`lens-summary-print.tsx` still formats nothing, spells no currency glyph and knows no market series,
+and §13 asserts it never learns the words *market*, *quarter*, *correlation* or *premium*. **A lens
+whose context read refused, errored or has not landed passes nothing and page one is exactly what it
+was** — a section of empty cells would say the market has no price, which is a different and untrue
+statement.
+
+**Both reads are PRINT-ONLY and neither is load-bearing.** They sit in no signature and no
+dependency of the classify effect, so they can never delay, cancel or re-trigger a band read; a
+failure is swallowed **silently on purpose** — no spinner, no banner, no toast — because nothing on
+the screen is waiting on them and an `errorToast()` a reader cannot act on is noise. (The project's
+error rule governs errors a user must see; this is a print enrichment that either appears or does
+not.)
+
+##### THE PRICE SHEET — `MARKET` (`lens-market-print.tsx`)
+
+`fetchBlockingMarketContext(12)`, fired **ONCE on mount** (empty dependency list): the series is a
+fact about deliveries and does not move when a reader drags a cut line, so re-reading it per
+settings change would buy nothing and cost a round trip.
+
+A TABLE on the left, a CHART on the right — **measured, not preferred**: the table runs to 19 rows
+and the chart is 132 px, so stacking them pushes a seven-band lens's page one onto a second sheet.
+Side by side, page one holds, and **the map is still page two**.
+
+- **The table** — one row per month the payload HAS a row for (`MONTH · PHP/KG · KG · DLV · SUPP`),
+  then each quarter those months span with the current one flagged `(CURRENT)`, then `YEAR TO DATE`
+  and `TRAILING 12 M`. Quarter and span rows carry no supplier count, so that cell is **empty, not
+  a zero** — the payload publishes it per month only. A PARTIAL quarter at the window edge says
+  `2 of 3 months`, because a one-month group labelled "Q2" reads as a full quarter.
+- **THE BASIS'S OWN ROW IS HIGHLIGHTED, and which row that is comes from the basis's OWN window
+  anchor** — a calendar month's `fromDate` IS that month's first day, so no date arithmetic happens
+  in the panel. `this_quarter` highlights the quarter flagged `isCurrent`. **`last_3_months`,
+  `trailing_days` and a TYPED price highlight NOTHING**: they are aggregates this table carries no
+  row for, and inventing one would put a figure on the sheet that no view publishes. The caption
+  names the basis instead.
+- **The chart** is the same twelve monthly ₱/kg as a line, with the lens's own basis drawn as a
+  **dashed near-black reference level** — which is the comparison the owner actually asked for. A
+  month with kilos but no priced kilos **breaks the line** rather than being drawn at zero.
+
+##### THE SUPPLIER SHEET — `PRICE VS VOLUME` (`lens-supplier-market-print.tsx`)
+
+`fetchBlockingSupplierMarket(12, bandKeys)` — small multiples, one panel per named band supplier
+(kilograms as an AREA, ₱/kg as a LINE, up to six), then a table listing **every** supplier the
+payload returned: `SUPPLIER · KG · PHP/KG WTD · FIRST → LAST · CHANGE · DIR · VOL % · CORR · PREM`,
+with a footer putting the SELECTION's own total beside `windowTotal` so a row is comparable to the
+market and not only to its neighbours.
+
+- **⚠️ EACH PANEL SCALES TO ITS OWN RANGE, and the caption says so.** The live yard's suppliers
+  differ by two orders of magnitude (ORNALES 5.6M kg against LAYUPAN's 2.84% share), so a shared
+  volume axis would flatten every small supplier onto the baseline and answer nothing about its
+  direction — which is the question. Per-panel autoscale with the axis numbers PRINTED is the honest
+  trade.
+- **`others` IS NOT A SUPPLIER**, so it has no panel and no row: the fold has no key, the market
+  view is keyed on real canonical suppliers, and aggregating one here would be a TypeScript average
+  of weighted prices. Its figures are already on the band table above, on the same page. **A named
+  band the payload has no series for is NAMED** in a note, never dropped in silence.
+- **NULL IS NEVER 0 and never "flat"** — `n/a (2 m)` under three priced months (two points always
+  correlate perfectly), an em dash for an unknown premium or direction, because *flat* is a claim.
+- **The MONTH SPINE is the WINDOW's, never the selection's**, so a supplier with a quiet stretch
+  gets a GAP on the axis rather than a shorter chart.
+- **⚠️ THE WHOLE SECTION IS ABSENT for a reader without the effective price flag** — not blank, not
+  zeroed. It is money almost end to end, including `priceVolumeCorr`, which is DERIVED from price
+  and is price information however it is labelled; the action refuses, and **the panel does not even
+  ask** (`if (!caps.canViewPrices || namedKeysSig === '') return;`). The rest of that sheet — the
+  band table with its `MIXED` column, the yard map, every per-band page and the Print button itself
+  — is unconditional, because the rest of the payload is peso-free and Production is the role that
+  walks the yard.
+- **⚠️ THE KEY SIGNATURE'S SEPARATOR IS LOAD-BEARING.** The named band keys are joined into one
+  string so the effect can depend on a primitive, and the effect SPLITS it back apart. `join('')`
+  would hand the action one character per LETTER — a read that succeeds, matches nothing, and prints
+  an empty table naming every band as having no history. It is `SUPPLIER_KEY_SIG_SEP = ''`,
+  **written as an escape**: a literal U+0001 typed into the source works and is invisible in a diff,
+  which is the same bug wearing a disguise. §13 pins the escape and asserts no raw control byte
+  appears in any lens file.
+
+##### THE CHART IS HAND-DRAWN SVG, NOT RECHARTS — and that is a defect list, not a preference
+
+`lens-print-chart.tsx` is one primitive with two uses (a bare line; an area-plus-line).
+`/analytics`' `supplier-expand.tsx` draws this exact shape and **nothing was moved or shared out of
+it** — `app/(app)/analytics/CONTEXT.md` is untouched, because three properties of THIS surface rule
+that component out:
+
+1. **RECHARTS MEASURES, AND THIS SHEET DOES NOT WAIT.** Both analytics charts are
+   `<ResponsiveContainer>`, sized from a ResizeObserver callback one frame LATER; `printCard` calls
+   `window.print()` as soon as the stage has laid out, so a container that has not measured yet
+   prints an empty box.
+2. **ITS COLOURS ARE THEME TOKENS.** Every series there is `var(--chart-2)` / `var(--border)`, and
+   this sheet lays out in the LIVE DOM — a dark-mode reader would print a dark chart onto white
+   paper. The whole sheet is explicit light ink for exactly that reason.
+3. **IT WOULD PUT RECHARTS IN THE BLOCKING BUNDLE** for a print-only twelve-point series. The
+   Blocking page imports none of it today.
+
+So it follows the printed yard map's own precedent: hand-drawn geometry, explicit hex ink,
+`print-color-adjust: exact`, and a size the caller states in **pixels**. It computes no statistic —
+scaling a value to a y coordinate is geometry — and **formats nothing**: every label is a string
+`lens-market-model.ts` already built.
+
+**Two things measured on real PDFs and fixed:**
+
+- **A VOLUME AXIS MAY NOT RUN BELOW ZERO.** The area domain starts at 0 and the 8% pad then pushed
+  its lower bound negative, so every panel printed `548t / 254t / −41t`. `printChartDomain` gained a
+  `floor`, applied AFTER the pad, and every call site passes `0`. It is a FLOOR, **not** a zero-base:
+  a price axis over ₱39–₱48 still starts near ₱38, because forcing it to zero would flatten the very
+  movement the chart exists to show.
+- **THE TYPE FLOOR.** The first pass drew axis numbers at 6 px and month ticks at 5.5 (~4 pt on
+  paper). All four label sites now read ONE constant, `LENS_PRINT_CHART_LABEL_PX = 7`, and the two
+  horizontal pads widened to hold a label at that size (`₱48.50` and `14,145t` are the widest strings
+  either axis can produce). §13 also bans any `text-[<7px]` in the five print files.
+
+**Measured on REAL PDFs** (headless Chromium driving the real Print button, seven cases across the
+three rigs, zero console errors in all seven): **price 7 pages** (`/pricelens`, 3 bands × A/B/C) and
+**9** on the supplier rig with `?pca=1`; **age 6 pages**; **supplier 9 pages**, price-visible and
+`?prices=0` alike. Page 1 is one sheet on every one of them, page 2 is the map, and on the price
+sheet pages 3+ each open with the repeated band line then `WHSE X …` — measured page firsts:
+`WHSE A`, `WHSE B`, `WHSE B`, `WHSE B`, `WHSE C` (and `WHSE D`, `PCA`, `PCB` on the `?pca=1` rig).
+The age sheet's pages 3–6 are one per BAND with merged warehouses and no supplier column, unchanged.
+
 ### Price lens — DATA LAYER (2026-09-19, migration `20260919025729_blocking_price_lens`)
 
 > **BACKEND ONLY so far.** The two SQL functions, the two server actions and the types are LIVE
@@ -1165,7 +1364,10 @@ an empty legend, and do not try to salvage the counts.
 #### Action 1 — `fetchBlockingMarketBases(trailingDays = 30)`
 
 ```ts
-type BlockingMarketBasisKey = 'this_month' | 'last_month' | 'last_3_months' | 'trailing_days';
+type BlockingMarketBasisKey =
+  | 'this_month' | 'last_month' | 'last_3_months'
+  | 'this_quarter'      // ADDED 2026-09-22 (migration 20260922094500)
+  | 'trailing_days';
 
 interface BlockingMarketBasis {
   basisKey: BlockingMarketBasisKey;
@@ -1182,14 +1384,62 @@ type BlockingMarketBasesResult =
       message: string };
 ```
 
-Returns **exactly four rows**, in this order: `this_month` (**the DEFAULT basis**), `last_month`,
-`last_3_months`, `trailing_days`. `trailingDays` must be a whole number **1..400** (default 30);
-outside that the action refuses `invalid_trailing_days` and the SQL additionally clamps, so a
-stale client can never produce a junk window.
+Returns **exactly FIVE rows** (four before 2026-09-22), in this order: `this_month`, `last_month`,
+`last_3_months`, **`this_quarter`**, `trailing_days`. `trailingDays` must be a whole number
+**1..400** (default 30); outside that the action refuses `invalid_trailing_days` and the SQL
+additionally clamps, so a stale client can never produce a junk window.
 
 **`marketPhpKg` is NULL — never 0 — when that window has no priced market kilos** (the 1st of a
 month before anything arrives). Treat NULL as *"cannot measure market this way yet"*, offer another
 basis, and **never coerce it**: a lens built on ₱0 would call every block "above market".
+
+##### `this_quarter` — the basis a FIRST-TIME price lens should DEFAULT to (2026-09-22)
+
+The CURRENT Asia/Manila calendar quarter **to date**. The other four could not express it:
+`this_month` is noisy in the first days of a month, `last_3_months` is a rolling three wherever the
+quarter boundary falls, and `trailing_days` does not align to a quarter at all.
+
+**THE UI STEP IS DONE (2026-09-22).** `DEFAULT_PRICE_LENS_SETTINGS.basis` in
+`lens/price-lens-settings.ts` is now **`'this_quarter'`** — the owner's *"on first load, default to
+the current quarter's average."* The select offers it as **`This quarter's deliveries`** (NOT the
+data layer's first proposal, *"This quarter to date"*: the three calendar bases read as one list
+only if they are all spelled as delivery windows), and `PRICE_LENS_BASIS_ORDER` places it after
+`last_3_months`.
+
+**⚠️ A SAVED PREFERENCE IS UNTOUCHED, AND THAT IS THE WHOLE SCOPE OF THE FLIP.**
+`parsePriceLensSettings` reads `basis` field by field, so a reader who chose `this_month` keeps it;
+what moved is the shipped default, which is also the fallback a CORRUPT or ABSENT stored document
+lands on. `scripts/verify-blocking-lens-ui.ts` §5 pins **both** halves — the new default, and a
+round trip proving every stored basis still survives — and the default is still OMITTED from the
+serialized document, so "reset" stays a removal rather than a value that lingers.
+
+**⚠️ A DEV RIG MUST CARRY THE ROW.** `fn_blocking_market_bases` returns `this_quarter` on the live
+page, but the three fixtures build `BASES` by hand — and a rig without that row opens the price lens
+on a basis it cannot resolve: `activeBasis` is null, no market price is resolved, the classify read
+never fires, **no band chip renders and the Print button stays disabled**. It is silent, and it
+breaks only the surface a reviewer can actually look at. All three rigs now carry it (₱39.1816 over
+2,479,361 kg / 153 deliveries — the live Q3 2026 figure, deliberately distinct from their
+`last_3_months` so the highlighted MARKET row is visibly its own), and §13 asserts every rig can
+resolve every basis the select offers.
+
+**IT COSTS NO EXTRA READ, and that is arithmetic rather than luck.** The quarter to date is month 1,
+2 or 3 of the quarter, so it always spans at most the three months `m2 … m0` the function's existing
+`months` CTE already MATERIALIZES for `last_3_months` — the row is a FILTERed aggregate over a CTE
+that was already there. Measured: `fn_blocking_market_bases(30)` did not move.
+
+**`from_date`/`to_date` are the QUARTER's own bounds**, so `to_date` is in the FUTURE for an
+unfinished quarter — exactly as `this_month`'s already is mid-month. That is the window-ANCHOR
+convention, not a bug.
+
+**⚠️ IT SHIFTS AN ORDINAL.** Placed with the calendar bases at position 4, it pushes
+`trailing_days` from 4 to 5. Every caller keys by `basisKey` (the action maps rows to `basisKey`,
+never to an index) — **read the key, never the index.**
+
+**⚠️ IT IS NUMERICALLY IDENTICAL TO `last_3_months` IN A QUARTER'S THIRD MONTH**, because the
+quarter to date then *is* the last three months. Measured 2026-09-22: both **₱39.1816 over
+2,479,361 kg / 153 deliveries**. They diverge on 1 October. Do not "simplify" one away on the
+strength of a September screenshot — the verify script prints which case is live so a reader of the
+log is never surprised by two rows agreeing.
 
 #### Action 2 — `fetchBlockingPriceLens(marketPhpKg, edgeOffsets = [-1, 0], roundedUpPhp?)`
 
@@ -1204,6 +1454,42 @@ interface BlockingPriceBand {
   blockSharePct: number | null;  // PERCENT 0-100 of the PRICED population; null if nothing priced
   kgWeightedPhpKg: number | null; // ADDED 2026-09-21. Σ(kg × ₱/kg) ÷ Σkg for the band.
                                   // NULL, NEVER 0, on an EMPTY band
+  // ADDED 2026-09-22 — the seven kg-weighted lab means + their coverage weights.
+  // See `BlockingLensLabStats` below; the whole family also rides on `total`
+  // and on every `warehouseSubtotals` row.
+  wMc: number | null;      mcKg: number;
+  wAsh: number | null;     ashKg: number;
+  wBdAstm: number | null;  bdAstmKg: number;
+  wBdJis: number | null;   bdJisKg: number;
+  wGrit: number | null;    gritKg: number;
+  wVm: number | null;      vmKg: number;
+  wFc: number | null;      fcKg: number;
+}
+
+// ADDED 2026-09-22. The same seven figures at three grains — a band, a warehouse
+// subtotal and the yard total — so one shape rather than three copies.
+interface BlockingLensLabStats {
+  wMc: number | null;  mcKg: number;   /* …ash, bdAstm, bdJis, grit, vm, fc… */
+}
+
+// ADDED 2026-09-22. One (band × warehouse) group. A pair that holds NO block is
+// ABSENT — the one place this lens does not emit an empty group.
+interface BlockingPriceWarehouseSubtotal extends BlockingLensLabStats {
+  bandIndex: number;                    // indexes into `bands`
+  warehouse: string;                    // 'A'…'D' | 'PCA' | 'PCB' | '-'  (see below)
+  blockCount: number;
+  kg: number;
+  kgWeightedPhpKg: number | null;       // over the group's PRICED blocks; NULL never 0
+}
+
+// ADDED 2026-09-22. The per-block extras the print's block table needs.
+interface BlockingPriceLensBlock {
+  blockLoc: string;
+  bandIndex: number;                        // same number bandByBlock carries
+  warehouse: string;
+  dominantSupplierDisplay: string | null;   // RAW spelling ('Ornales'). NULL = no delivery row
+  dominantSharePct: number | null;          // % of the block's DELIVERED kilos
+  isMixed: boolean | null;                  // NULL — never false — with no supplier at all
 }
 
 interface BlockingPriceLens {
@@ -1212,9 +1498,12 @@ interface BlockingPriceLens {
   edgeOffsets: number[];         // the offsets ACTUALLY used, de-duplicated + ascending
   bands: BlockingPriceBand[];
   bandByBlock: Record<string, number>;   // block_loc -> band index. THE map a cell colours from
+  blockByLoc: Record<string, BlockingPriceLensBlock>;  // ADDED 2026-09-22. SAME key set
+  warehouseSubtotals: BlockingPriceWarehouseSubtotal[];  // ADDED 2026-09-22
   unpriced: { blockCount: number; kg: number };
   total:    { blockCount: number; kg: number;
-              kgWeightedPhpKg: number | null };  // ADDED 2026-09-21 — see the note below
+              kgWeightedPhpKg: number | null }   // ADDED 2026-09-21 — see the note below
+            & BlockingLensLabStats;              // ADDED 2026-09-22
 }
 
 type BlockingPriceLensResult =
@@ -1253,6 +1542,105 @@ Proven every run by reading `view_blocking_grid` **directly** (service_role hold
 recomputing each band: measured 2026-09-21 on the live grid, **₱23.8801 / ₱39.4000 / ₱45.4434**
 across the three default bands and **₱36.9520** on `total`, 170 of 170 blocks priced, gap 0 in SQL.
 
+##### WAREHOUSE SUBTOTALS, THE SEVEN WEIGHTED LAB MEANS, AND THE SUPPLIER PER BLOCK (2026-09-22, migration `20260922093000`)
+
+The owner, on the print's per-band block tables: the **WAREHOUSE SUBTOTAL** row printed its block
+count and its kilograms and then **SEVEN BLANK LAB CELLS**, and he wants the kg-weighted
+`MC · ASH · BD ASTM · BD JIS · GRIT · VM · FC` and the weighted ₱/kg there — plus a **SUPPLIER
+column** beside each block.
+
+**THOSE CELLS WERE BLANK ON PURPOSE, AND THAT IS WHY THIS IS A MIGRATION AND NOT A PRINT CHANGE.**
+`lens/lens-summary-model.ts` says it in its own header: it makes exactly ONE sum (a band's kilograms
+per warehouse) and **refuses** to make a weighted average, because *"a kg-weighted MC over a
+partition SQL never computed would be a second definition of a lab average living in TypeScript"*.
+So SQL now computes the partition. The print may render a figure; it still must not compute one.
+
+**Additive keys only.** The signature did not change, so grants survived (and were re-stated anyway).
+**PROVEN byte-identical before/after:** the whole payload's md5 was captured for `(40.23)`,
+`(40.23, [-10,-1,0,5])` and `(41, [-1,0], 41)`, then recomputed with the new keys stripped —
+`038ec4e6…`, `471721cd…`, `777ca847…`, all three unchanged. The verify script repeats it
+structurally (key sets, band by band, block by block) rather than leaning on a hash a legitimate
+delivery would move.
+
+**THE WAREHOUSE IS THE PAGE'S OWN RULE, and it is a DUPLICATION that is checked rather than hidden.**
+`warehouse` is the `block_loc` prefix before the first dash, upper-cased and trimmed, kept when it is
+one of the grid's six warehouses (`WAREHOUSES` in `./constants` — A, B, C, D, PCA, PCB) and otherwise
+the **REAL bucket `-`, which sorts last and is a real answer** (a block whose prefix is not a
+warehouse is still a block, and dropping it would make the sheet disagree with the band table about
+how many blocks the band holds). SQL cannot import a TypeScript constant, so
+`scripts/verify-blocking-price-lens.ts` **imports `warehouseOfBlockLoc` and asserts it agrees with
+SQL on EVERY block returned** — add warehouse E to the grid and that assertion fails rather than the
+E blocks quietly landing in `-`. Measured 2026-09-22: **A 50 · B 34 · C 33 · D 53**, no PCA, no PCB,
+no `-`, so those three branches are exercised by the assertion and not by live data.
+
+**THE SUPPLIER IS NOT A NEW DEFINITION — three rules, all READ.** Identity
+(`canonical_supplier(split_part(supplier, ' - ', 1))`) and the ALL/SOME rule
+(`supplier_count_in_block > 1`) come from `view_blocking_block_suppliers`; the DOMINANT supplier uses
+`fn_blend_block_facts`' own order (`kg DESC, supplier_key ASC`) — the **third** consumer of that
+order and still not a third rule, proven equal to that function on every block every run.
+`dominantSharePct` is the view's own share of the block's **DELIVERED** kilos, deliberately not
+re-based onto the balance (within one block the balance is a constant, so the orderings are identical
+and re-basing would only invent a second percentage).
+**`isMixed` is `boolean | null`, and the NULL is load-bearing:** a block whose batch has no delivery
+row has no supplier, so all three fields read NULL — *never* `false`, because "nobody has delivered
+into this pile" and "one supplier filled it" are different answers. Measured: no such block can reach
+`blockByLoc` today (`avg_php_kg` is derived from the deliveries it does not have, so it would be
+`unpriced` and in no band), and the join is a LEFT JOIN anyway.
+
+**A LAB READING OF 0 MEANS "NO READING" AND IS EXCLUDED — never averaged as zero.**
+`view_blocking_grid` COALESCEs its seven lab averages to 0, so `avg_ash = 0` means the block's
+deliveries carry no ASH figure, not ash-free charcoal — the L-008 placeholder shape in a lab coat.
+The predicate is the one `fn_blend_analysis` uses for `unmeasured`: **NULL or ≤ 0.** Therefore
+
+* **`w<Stat>` is NULL — never 0 —** when no block in the group has that reading;
+* **`<stat>Kg` is a REAL 0** in that case, because it is a WEIGHT and "zero measured kilograms" is a
+  measurement (the `pricedDominantKg` asymmetry again);
+* the weight is the grid `balance`, **the same weight `kgWeightedPhpKg` uses**, so the money column
+  and the seven lab columns on one row describe the same kilograms.
+
+**EACH STAT HAS ITS OWN COVERAGE AND THEY GENUINELY DIFFER — which is why there are seven weights
+and not one.** Measured 2026-09-22: all 170 occupied blocks carry MC while **11 read 0 on ash, both
+BDs, grit, VM and FC** — `total.mcKg` **10,575,183 kg** against **9,805,452 kg** for the other six, a
+769,731 kg gap. One shared "lab kg" would have been wrong for MC or wrong for the other six on every
+group in the yard, and the verify script FAILS if the seven ever collapse to one number.
+
+**FOLDS, and what they buy.**
+
+* `Σ warehouseSubtotals[band].blockCount === bands[band].blockCount` — **exactly**
+* `Σ warehouseSubtotals[band].kg === bands[band].kg` — **exactly** (plain sums of balances)
+* `Σ bands[].<stat>Kg === total.<stat>Kg` — **exactly**, and that is *why* `total`'s lab means are
+  weighted over the PRICED population: a total over a different population could not equal the sum of
+  its bands. **The stated consequence: an UNPRICED block's lab readings are not in `total.wMc`.**
+  Measured — 0 of 170 blocks are unpriced today, so the two populations coincide and the divergence is
+  guarded by the invariant rather than by live data.
+* An **EMPTY band contributes NO warehouse rows.** This is the one place the lens does not emit an
+  empty group (the print renders a warehouse heading only when it has blocks), so the fold is Σ over
+  the rows PRESENT — asserted per band, not merely in total, because a total can tie while two bands
+  swap blocks.
+
+Rows arrive in the grid's own warehouse order with `-` last. **Render them as given** — the order is
+asserted.
+
+**Live sample, 2026-09-22 (default edges, market 40.23):** 3 bands → **9 warehouse rows**; band 2 /
+warehouse D reads **36 blocks · 2,165,218 kg · ₱46.3809** with `wMc` 11.1441 · `wAsh` 4.1789 ·
+`wBdAstm` 0.56585 · `wBdJis` 0.58585 · `wGrit` 2.9170 · `wVm` 12.7490 · `wFc` 83.0721, each over the
+full 2,165,218 kg. Yard total: `wMc` 11.0242 · `wAsh` 3.7218 · `wBdAstm` 0.58115 · `wBdJis` 0.59158 ·
+`wGrit` 2.8345 · `wVm` 12.8341 · `wFc` 83.4461.
+
+**COST, measured before any proof was written.** `fn_blocking_price_lens(40.23)` went
+**28.2 ms / 2,013 buffers → 52.2 ms / 2,414**. The new CORE QUERY is **41.6 ms / 661 buffers = 456
+(ONE `view_blocking_grid` scan) + 202 (ONE `view_blocking_block_suppliers` scan) + 3**, so the data
+read grew by exactly one relation — the same scan the supplier lens already pays, whose ~29 ms is
+`canonical_supplier()` per delivery row paid INSIDE that view. The rest of the function's +401 is
+plpgsql PLANNING of a materially larger statement, reported rather than rounded away.
+
+**THE GATE DOES NOT MOVE.** The seven lab stats are not money, but they arrive inside a payload that
+is, and band membership alone still pins a block's ₱/kg to within a peso — so
+`fetchBlockingPriceLens` still REFUSES a `!canViewPrices()` caller. The **supplier lens** is where a
+price-denied reader gets a warehouse picture, and it nulls its two ₱ keys instead. That three-way
+asymmetry (refuse / null two keys / no gate at all on Age) is asserted in both verify scripts
+precisely so nobody flattens it.
+
 ##### `roundedUpPhp` — A TYPED PRICE IS THE LINE ITSELF (2026-09-21, migration `20260921034512`)
 
 The R rule above is right for a **MEASURED** market and **wrong for the `manual` basis**. The
@@ -1262,8 +1650,8 @@ be whole — **it IS the cut line.**
 
 > ### THE UI RULE — the only thing a caller has to remember
 > * **`manual` basis → pass `roundedUpPhp = Math.ceil(typedPrice)`** (41 → 41, 40.5 → 41).
-> * **EVERY measured basis** (`this_month`, `last_month`, `last_3_months`, `trailing_days`) **→
->   pass nothing.** R stays computed in exactly one place, in SQL.
+> * **EVERY measured basis** (`this_month`, `last_month`, `last_3_months`, **`this_quarter`**,
+>   `trailing_days`) **→ pass nothing.** R stays computed in exactly one place, in SQL.
 >
 > The `ceil` belongs to the UI (a lens-settings module), **not** to `actions.ts` — the action does
 > no arithmetic and `verify-blocking-price-lens.ts` asserts that no `floor`/`Math.ceil` exists in
@@ -1404,6 +1792,119 @@ no schema change. **No table was added for it.** (Shipped 2026-09-19 through
 `getUserModuleSettings`/`saveUserModuleSettings` under `module = 'blocking_lens_price'` rather than
 through `useTableSettings()` itself — same column, and the reason for the difference is recorded in
 `lens/use-lens-settings.ts`'s header and in the Files table above.)
+
+### Market CONTEXT — DATA LAYER (2026-09-22, migration `20260922094500_blocking_market_context_and_supplier_market`)
+
+**What it is for.** The price lens says what the yard looks like TODAY against ONE number. It cannot
+say whether that number is high or low — and a print that wanted to would have to average a price in
+TypeScript. So the series is computed where every other market figure already is.
+
+#### The action — `fetchBlockingMarketContext(months = 12)`
+
+```ts
+interface BlockingMarketMonth {
+  month: string;                 // 'yyyy-MM-01'
+  marketPhpKg: number | null;    // NULL, NEVER 0, with no priced market kilos
+  marketKg: number;
+  marketPricedKg: number;
+  deliveryCount: number;         // ALL market deliveries that month, priced or not
+  activeSuppliers: number;
+}
+
+interface BlockingMarketQuarter {
+  quarterKey: string;            // '2026-Q3' — stable + sortable
+  label: string;                 // 'Q3 2026' — ready to print
+  quarterStart: string;
+  marketPhpKg: number | null;
+  marketKg: number;
+  marketPricedKg: number;
+  deliveryCount: number;
+  monthCount: number;            // 1 or 2 ⇒ PARTIAL at the window edge. RENDER THIS.
+  firstMonth: string;
+  lastMonth: string;
+  isCurrent: boolean;            // its figure EQUALS the `this_quarter` BASIS
+}
+
+interface BlockingMarketSpan {    // yearToDate + trailing12m
+  marketPhpKg: number | null;  marketKg: number;  marketPricedKg: number;
+  deliveryCount: number;  monthCount: number;
+  fromDate: string;  toDate: string;   // toDate is the END OF THE CURRENT MONTH, not today
+}
+
+interface BlockingMarketContext {
+  monthsRequested: number;
+  asOf: string;                              // the Asia/Manila anchor date
+  months: BlockingMarketMonth[];             // ASCENDING. See the spine rule below.
+  quarters: BlockingMarketQuarter[];         // the quarters `months` spans, ascending
+  yearToDate: BlockingMarketSpan;
+  trailing12m: BlockingMarketSpan;
+  latestMonth: BlockingMarketMonth & { isCurrentMonth: boolean };
+  monthsAvailable: number;                   // rows in ALL of history (50 today)
+  monthsReturned: number;                    // min(monthsRequested, monthsAvailable)
+}
+
+type BlockingMarketContextResult =
+  | { ok: true; context: BlockingMarketContext }
+  | { ok: false; reason: 'prices_hidden' | 'invalid_months' | 'rpc_error' | 'exception';
+      message: string };
+```
+
+**NOTHING IS A SECOND DEFINITION.** Every figure is SELECTed or summed from
+`view_analytics_rcin_monthly` (analytics Phase 1), which OWNS "monthly average purchase price", and
+every aggregate is **Σ `market_php_total` ÷ Σ `market_priced_kg`** — *never* the mean of monthly
+averages, which would weight a light month equally with a heavy one. The verify script proves each
+month row field-for-field against that view read independently, and asserts each quarter is NOT the
+naive mean of its months whenever those differ.
+
+**THE SPINE IS ROWS, NOT A CALENDAR.** `months` is **the last N months that HAVE a row**, ascending —
+not the last N calendar months. That view has one row per month that had a delivery, so zero-filling
+a dead month from `view_analytics_flow_monthly` would invent **₱0 months**: the L-008 mistake with a
+calendar instead of a price. Read `monthsAvailable` / `monthsReturned` to say *"12 of 50"*.
+
+**A QUARTER AT THE WINDOW EDGE IS PARTIAL.** `monthCount` is what says so — a 12-month window
+starting mid-quarter shows a one-month quarter, which without the count reads as a full one. Print it.
+`isCurrent` flags the quarter that has not finished, which is partial for a different reason.
+
+**`yearToDate` / `trailing12m` are DATE-bounded, not row-bounded**, because "this year" and "the last
+12 calendar months" are date questions — so they are unaffected by `monthsRequested`. Their `toDate`
+is the **END of the current month**, the same window-ANCHOR convention `this_month` already uses,
+because the rows aggregated are whole months and a `toDate` of today would misdescribe them.
+
+**`latestMonth` is the most recent month WITH a row and is not necessarily the current one.** Read
+`isCurrentMonth` before labelling it "this month".
+
+**`months` is 1…36, REFUSED not clamped** (`invalid_months`; NULL is refused rather than defaulted,
+because a caller that passed NULL meant something). The bases function *clamps* its `trailingDays`
+because it `RETURNS TABLE` and has no channel for a readable refusal; this returns jsonb, so it
+refuses the way every lens does.
+
+**THE WHOLE PAYLOAD IS MONEY, so the gate is a REFUSAL** — `canViewPrices()` FIRST, before
+`createClient()`, returning `{ ok:false, reason:'prices_hidden' }` without touching the database.
+There is no price-free half worth keeping.
+
+**Live sample, 2026-09-22 (N = 12):** months **12 of 50**, 2025-10 → 2026-09
+(**₱44.9159 → ₱39.8805**); quarters **Q4 2025 ₱45.3439 · Q1 2026 ₱47.7866 · Q2 2026 ₱43.2958 ·
+Q3 2026 ₱39.1816 (current)**; YTD **₱44.5762** over 9 months; trailing 12m **₱44.8002** over 12.
+**`quarters.find(isCurrent).marketPhpKg` === the `this_quarter` basis, and
+`trailing12m.marketPhpKg` === `BlockingSupplierMarket.windowTotal.marketPhpKg` at N = 12** — both
+asserted, so three surfaces can never publish three versions of one number.
+
+**COST: ~240 ms / 1,039 buffers**, and the analytics view is read **exactly once**
+(`src AS MATERIALIZED`, six CTEs reference it). The milliseconds are that view's own
+`Seq Scan on deliveries` with `fn_delivery_class` per row. **The window does NOT reduce it and
+cannot** — the date bound filters already-grouped output — and making it cheaper would mean
+re-deriving "market" against the raw table, which is the second definition this function exists to
+avoid. Bounded by construction: ~1 row per calendar month, forever.
+
+**THE PROBE IS SPLIT FROM THE SUPPLIER ONE, AND THAT IS A STRUCTURAL RULE NOW.**
+`fn_blocking_market_context_probe()` (SECURITY DEFINER, `service_role` only) covers the market half;
+`fn_blocking_supplier_market_probe()` covers the supplier half. **One function holding both TIMED OUT
+AT 20 s** — not because any figure is slow (the identity block 87 ms, a context call 240 ms, a
+supplier call 290 ms) but because fourteen references to two expensive `security_invoker` views
+inside ONE `jsonb_build_object` are fourteen executions the planner interleaves. That is the
+2026-09-14 `fn_ops_ledger_verify()` shape arriving a second time, and it got the same answer: **split
+by concern, and assign every forwarded call to a VARIABLE so it is its own statement.** Measured
+after the split: **2.93 s and 2.77 s**.
 
 ### Price lens — UI (2026-09-19)
 
@@ -1773,6 +2274,25 @@ kg|blocks unit switch), a `BlockingLensDefinition` with **`canShow: () => true`*
 the price lens does. `normalizeEdgeDays` could **not** be exported from `actions.ts` for the UI to
 share: that file carries `'use server'`, so every export must be an async server function — hence
 the pure twin in `lens/age-lens-settings.ts`, which is also what the price lens does.
+
+#### ⚠️ THE AGE LENS GAINED NOTHING ON 2026-09-22, AND ITS PRINT'S LAB CELLS STAY BLANK
+
+`fn_blocking_price_lens` now publishes `warehouseSubtotals[]` with the seven **kg-weighted** lab means
+and a `warehouse` / supplier trio per block (migration `20260922093000`). **`fn_blocking_age_lens` did
+not, and that is a real asymmetry rather than an oversight** — nobody asked the age print for a lab
+subtotal, and the figures are not free: they cost one extra scan of
+`view_blocking_block_suppliers` for the supplier half and a per-stat FILTER set for the lab half.
+
+So on the AGE (and SUPPLIER) print, `lens/lens-summary-model.ts`'s original rule is **still binding in
+full**: it makes exactly ONE sum (a band's kilograms per warehouse) and a warehouse subtotal's seven
+lab cells are left **BLANK**, because *"a kg-weighted MC over a partition SQL never computed would be a
+second definition of a lab average living in TypeScript"*. **A blank cell says "not published"; a
+computed one would say something untrue.**
+
+If the age print ever wants those figures, the fix is the one the price lens took — **add the keys to
+`fn_blocking_age_lens` and read them** — not to compute them in the print because the price sheet has
+them. `scripts/verify-blocking-lens-ui.ts` still asserts that no lens file sums a kilogram or derives
+a share, with `lens-summary-model.ts`'s one warehouse subtotal as the single stated exception.
 
 
 ### Age lens — UI (2026-09-19)
@@ -2222,6 +2742,152 @@ as the other two lenses do. Note the panel needs a **colour per supplier**, not 
 unlike price and age bands, these bands are nominal categories with no order that a gradient could
 mean — and the existing supplier spotlight's green/orange already means ALL/SOME, so reusing those
 two hues for band identity would collide.
+
+### Supplier MARKET — DATA LAYER (2026-09-22, migration `20260922094500_blocking_market_context_and_supplier_market`)
+
+**What it is for.** The supplier lens says *whose* charcoal is in the yard. This says what each of
+them has been **charging** and how much they have been **sending**, so the supplier print's context
+block can state *"ORNALES is 40% of the yard and has come DOWN 11.7% over the year"* without a
+TypeScript average anywhere.
+
+#### The action — `fetchBlockingSupplierMarket(months = 12, supplierKeys?)`
+
+```ts
+interface BlockingSupplierMarketPoint {
+  month: string;                     // 'yyyy-MM-01'
+  kg: number;                        // may legitimately be 0 on a sundry-only row
+  pricedKg: number;
+  avgPricePhpKg: number | null;      // the view's own column. NULL, NEVER 0
+  premiumPhpKg: number | null;       // + = paid ABOVE the month's market. NULL, NEVER 0
+  shareOfMonthPct: number | null;    // PERCENT 0-100 of the month's market kilograms
+  deliveryCount: number;
+}
+
+interface BlockingSupplierMarketSummary {
+  monthsActive: number;              // months with a REAL purchase (kg > 0)
+  totalKg: number;  totalPricedKg: number;  deliveryCount: number;
+  kgWeightedPhpKg: number | null;    // Σ₱ ÷ Σ priced kg — NEVER the mean of monthly averages
+  firstMonth: string | null;  lastMonth: string | null;   // first/last ACTIVE month
+  firstPrice: number | null;  lastPrice: number | null;
+  priceChangePhpKg: number | null;
+  priceChangePct: number | null;     // NULL when firstPrice is NULL or 0
+  kgChangePct: number | null;        // last vs first ACTIVE month
+  priceVolumeCorr: number | null;    // Pearson corr(price, kg). NULL under 3 priced months
+  corrMonthCount: number;            // read this BEFORE printing the correlation
+  direction: 'up' | 'down' | 'flat' | null;   // ±2% dead band. NULL, never 'flat', with no change
+  avgPremiumPhpKg: number | null;    // PRICED-KG-WEIGHTED. The only legal way to average it
+}
+
+interface BlockingSupplierMarket {
+  monthsRequested: number;  asOf: string;
+  fromMonth: string | null;  toMonth: string | null;
+  directionDeadBandPct: number;               // 2.0 — READ IT, never hardcode the threshold
+  supplierKeysRequested: string[] | null;     // NULL = every active supplier
+  months: string[];                           // THE WINDOW'S spine — see below
+  suppliers: Array<{ key: string; display: string;
+                     series: BlockingSupplierMarketPoint[];
+                     summary: BlockingSupplierMarketSummary }>;   // total kg DESC, then key
+  supplierCount: number;
+  windowTotal:   { marketKg: number; marketPricedKg: number;
+                   marketPhpKg: number | null; deliveryCount: number };  // the WHOLE window
+  selectedTotal: { /* same shape */ };                                    // the SELECTION
+}
+
+type BlockingSupplierMarketResult =
+  | { ok: true; market: BlockingSupplierMarket }
+  | { ok: false; reason: 'prices_hidden' | 'invalid_months' | 'no_suppliers'
+              | 'too_many_suppliers' | 'rpc_error' | 'exception';
+      message: string };
+```
+
+**NOTHING IS A SECOND DEFINITION.** Every figure is aggregated from
+`view_analytics_supplier_monthly` (analytics Phase 3), which owns supplier identity, the per-supplier
+weighted price, `share_of_month_pct` and `premium_php_kg`, and which joins its month baseline **FROM**
+the Phase-1 view — which is exactly what makes a share and a premium structurally incapable of
+disagreeing with the `/analytics` matrix. **MARKET deliveries only:** a sundry re-entry and a re-cook
+fee are never supplier volume.
+
+**IDENTITY AGREES WITH THE LENS — MEASURED, NOT ASSUMED, and the interesting half is the non-zero.**
+The lens keys on `canonical_supplier(split_part(supplier, ' - ', 1))` and this on
+`canonical_supplier(supplier)` — **different expressions**, so handing `BlockingSupplierBand.key`
+straight in is a claim that needs proving. Three measurements, all 2026-09-22, all asserted every run:
+
+* **16 of the 68 distinct supplier strings DO change under the strip** (the sundry re-entries carrying
+  a `- <BATCH>` suffix). This is asserted to be **> 0** on purpose — if the strip ever became a no-op
+  the next assertion would pass **vacuously**.
+* **NOT ONE of the 1,683 MARKET deliveries carries any of those 16 strings.** That is the claim the
+  frontend relies on, and it is checked as *"no market delivery is in the differing set"*, which needs
+  no class call at all while the set stays disjoint.
+* **All 17 of the yard's supplier keys are keys this view knows — 0 unknown** (27 canonical suppliers
+  in all history), and every non-`others` band key is one of them.
+
+**ONE HONEST NAMING DIFFERENCE:** the analytics view publishes only the CANONICAL name, so
+`display === key` here (`ORNALES`). The prettier raw spelling (`Ornales`) lives on
+`BlockingSupplierBand.display`. **Take the label from the lens and join on `key`** — this payload does
+not invent a name it does not have.
+
+**THE MONTH SPINE IS THE WINDOW'S, NOT THE SELECTION'S — and that was found by TESTING.** With the
+key filter applied to the source CTE, asking for a supplier that sold nothing returned an **EMPTY
+`months[]`**: a chart with no axis to draw the gap on. The filter moved downstream (which costs
+nothing — it never reduced the view scan, only the rows the CTE carried), and for the same reason
+there are **TWO totals**: `windowTotal` is the whole window's market, *unaffected* by
+`supplierKeysRequested`, so a supplier row is comparable to **the market** rather than to its
+neighbours in a filtered call; `selectedTotal` is the selection's own. **Asserted: they are equal
+when nothing is filtered, and `windowTotal` does NOT move under a filter.** Live: window
+**14,112,678 kg**, a top-3 selection **11,161,270 kg (79.1%)**.
+
+**A KEY THAT MATCHES NOTHING RETURNS NO ENTRY, never a zero-filled row** — inventing one would put a
+supplier on a chart it is absent from. Compare what you asked for against
+`market.suppliers.map(s => s.key)`. `supplierKeys` is de-duplicated and blank-stripped **before** the
+40-entry cap is measured, and a list that strips to nothing is refused `no_suppliers` (never silently
+read as "everyone"); omitting the argument entirely *is* "everyone".
+
+**NULL IS NEVER 0, in five places.** A price, a premium, a correlation, a change and a **direction**
+are each NULL rather than zero when the thing they describe does not exist — and `direction` is NULL
+rather than `'flat'`, because *flat is a claim*. Kilograms and counts are real 0s, because they are
+weights.
+
+* **`priceVolumeCorr` is NULL below THREE priced active months** — two points always correlate
+  perfectly, so a two-month ±1 is arithmetic and not a finding. Read `corrMonthCount`. It is proven
+  equal to Postgres' own `corr()` recomputed independently (max |gap| **1.9e-15** across 18
+  suppliers, 0 null-disagreements). **It is ₱-DERIVED**, so it sits inside the price gate however it
+  is labelled.
+* **`direction` reads `priceChangePct` with a ±2% DEAD BAND**, published as
+  `directionDeadBandPct` so a UI can label it and the verify script can pin it: month-to-month noise
+  on a weighted purchase price is routinely a peso, and calling every wobble a trend is how a chart
+  starts lying.
+* **`avgPremiumPhpKg` is PRICED-KG-WEIGHTED and may only ever be** — CLAUDE.md's rule, load-bearing
+  here: a month's market price *is* the priced-kg-weighted mean of its suppliers' prices, so an
+  unweighted average of the premium column is meaningless. The verify script asserts it is NOT the
+  unweighted mean whenever the two differ.
+
+**THE GATE IS A REFUSAL, AND THE ALTERNATIVE WAS CONSIDERED.** A nulled variant would leave a
+per-supplier monthly kilogram series with its share and count — and
+`view_digest_rcin_supplier_daily` and `fn_blocking_supplier_lens` **already publish exactly that to
+every role**, at grains that suit their own screens. A third, half-blank copy buys a denied reader
+nothing and costs the payload a second meaning. So this follows `fetchBlockingPriceLens` (refuse
+before `createClient()`), **not** `fetchBlockingSupplierLens` (null two keys, ship the rest). The
+three-way asymmetry is asserted in both verify scripts.
+
+**Live sample, 2026-09-22 (N = 12, 18 suppliers over 12 months; N = 36 → 25 over 36):**
+
+| supplier | total kg | ₱/kg (wtd) | direction | Δ price | corr | premium |
+|---|---|---|---|---|---|---|
+| ORNALES | 5,620,744 | ₱44.9225 | down | −11.67% | 0.264 (12m) | +0.4968 |
+| PAQUIBOT | 4,026,404 | ₱45.5444 | down | −10.07% | 0.597 (12m) | +0.8267 |
+| TAG-AT | 1,514,122 | ₱44.3977 | down | −12.36% | 0.735 (12m) | −0.3792 |
+
+**COST: ~290 ms / 1,521 buffers**, analytics view read **exactly once**. Bounded by construction:
+**267 (supplier × month) rows inside the 36-month maximum** against 281 for all of history — three
+orders of magnitude under PostgREST's 1,000-row cap. The window filters already-grouped output, so
+narrowing it saves nothing; making it cheaper would mean re-deriving "market".
+
+**Probe:** `fn_blocking_supplier_market_probe()` (SECURITY DEFINER, `service_role` only). It asserts
+nothing — it forwards four calls (including a key-filtered one on the three REAL biggest suppliers
+and a key that matches nothing), reads the view's own 36-month rows, recomputes `corr()` and the
+identity agreement independently, and hands everything back. It is **separate** from
+`fn_blocking_market_context_probe()` because one function holding both halves timed out at 20 s — see
+that section for the rule.
 
 ### Supplier lens — UI (2026-09-22)
 

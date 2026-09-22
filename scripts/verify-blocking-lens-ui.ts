@@ -67,6 +67,8 @@ import {
   normalizeEdgeOffsets,
   parseManualPriceInput,
   parsePriceLensSettings,
+  PRICE_LENS_BASIS_LABELS,
+  PRICE_LENS_BASIS_ORDER,
   PRICE_LENS_ID,
   PRICE_LENS_RAMP,
   PRICE_LENS_RAMP_STOPS,
@@ -125,6 +127,22 @@ import {
   fitMonoLabelPt,
   PX_PER_PT,
 } from '../components/shared/print/print-fit';
+import {
+  buildLensGroupFigures,
+  buildLensSummaryBuckets,
+} from '../app/(app)/inventory/blocking/lens/lens-summary-model';
+import {
+  buildLensMarketPrintModel,
+  buildLensSupplierMarketPrintModel,
+  printChartDomain,
+} from '../app/(app)/inventory/blocking/lens/lens-market-model';
+import { LENS_PRINT_CHART_LABEL_PX } from '../app/(app)/inventory/blocking/lens/lens-print-chart';
+import type {
+  BlockingLensLabStats,
+  BlockingMarketContext,
+  BlockingSupplierMarket,
+  BlockingSupplierMarketEntry,
+} from '../app/(app)/inventory/blocking/types';
 
 /**
  * One occupied slot, with every figure at a value the YARD MAP must never read.
@@ -201,6 +219,12 @@ const BANNER = `${LENS_DIR}/lens-refusal-banner.tsx`;
 /** The YARD MAP page (2026-09-22) — its model and its sheet. */
 const YARD_MAP_MODEL = `${LENS_DIR}/lens-yard-map-model.ts`;
 const YARD_MAP_PRINT = `${LENS_DIR}/lens-yard-map-print.tsx`;
+/** PAGE ONE's context blocks (2026-09-22) — the chart primitive, the model, the two sheets. */
+const PRINT_CHART = `${LENS_DIR}/lens-print-chart.tsx`;
+const MARKET_MODEL = `${LENS_DIR}/lens-market-model.ts`;
+const MARKET_PRINT = `${LENS_DIR}/lens-market-print.tsx`;
+const SUPPLIER_MARKET_PRINT = `${LENS_DIR}/lens-supplier-market-print.tsx`;
+const SUMMARY_PRINT = `${LENS_DIR}/lens-summary-print.tsx`;
 /** The PLATFORM fit module both the map and RC Movement solve against. */
 const PRINT_FIT = 'components/shared/print/print-fit.ts';
 const ALL_LENS_FILES = [
@@ -211,6 +235,11 @@ const ALL_LENS_FILES = [
   // loc and a fill — so it belongs under the no-maths rule rather than beside
   // `lens-summary-model.ts`'s one stated exception.
   YARD_MAP_MODEL, YARD_MAP_PRINT,
+  // PAGE ONE's context blocks. Every figure on them is a field of the two market payloads,
+  // so they belong squarely under the no-maths rule: a `reduce` or a `+=` in any of them
+  // would be a market average living in TypeScript, which is the whole thing
+  // `view_analytics_rcin_monthly` / `view_analytics_supplier_monthly` exist to own.
+  PRINT_CHART, MARKET_MODEL, MARKET_PRINT, SUPPLIER_MARKET_PRINT,
 ];
 const CONTEXT = 'app/(app)/inventory/blocking/CONTEXT.md';
 
@@ -405,7 +434,15 @@ console.log('\n2. NO STATISTIC IS COMPUTED IN A LENS FILE');
   // scoped to ONE file, `lens-summary-model.ts`, which is deliberately absent from
   // `ALL_LENS_FILES`; the fold is proven to tie back to the band's own published kilograms
   // in `scripts/verify-blend-analysis-ui.ts`. What is still absolutely banned, and is
-  // asserted here, is a WEIGHTED AVERAGE: a subtotal's lab cells stay blank.
+  // asserted here, is a WEIGHTED AVERAGE.
+  //
+  // ⚠️ COMMENT RESTATED 2026-09-22 (the assertions below did not move). It used to end
+  // *"…a WEIGHTED AVERAGE: a subtotal's lab cells stay blank."* The cells are no longer
+  // blank — `fn_blocking_price_lens` publishes the seven kg-weighted means per
+  // (band × warehouse) since migration `20260922093000`, and the print RENDERS them. That
+  // changes nothing here: this module still may not COMPUTE one, which is exactly what the
+  // three assertions in the body test (no division by a total, no reading multiplied by a
+  // balance, decimals only). §13 proves the render side is a lookup.
   check('the ONE exception is `lens-summary-model.ts`, and it averages NOTHING', () => {
     const model = code(SUMMARY_MODEL);
     assert.ok(
@@ -804,13 +841,55 @@ console.log('\n5. THE STORED SETTINGS ARE UNTRUSTED — proven by running the pa
     assert.equal(parsed.unit, DEFAULT_PRICE_LENS_SETTINGS.unit);
   });
 
+  // RESTATED 2026-09-22, and the change is one word. The shipped default basis moved from
+  // `this_month` to `this_quarter` — the owner's *"on first load, default to the current
+  // quarter's average"* — so a CORRUPT or ABSENT stored document now lands there. The
+  // assertion is pinned to the constant rather than to a literal precisely so a future flip
+  // has to be a deliberate edit of the default and not of six scattered strings; the literal
+  // below it is what makes the constant itself checkable.
   check('a non-object, an array and null all parse to the shipped defaults', () => {
     for (const junk of [null, undefined, 42, 'nope', ['a'], true]) {
       const p = parsePriceLensSettings(junk);
       assert.deepEqual(p.edgeOffsets, [-1, 0]);
-      assert.equal(p.basis, 'this_month');
+      assert.equal(p.basis, DEFAULT_PRICE_LENS_SETTINGS.basis);
       assert.equal(p.unit, 'kg');
     }
+  });
+
+  check('the SHIPPED DEFAULT basis is `this_quarter` (2026-09-22)', () => {
+    assert.equal(
+      DEFAULT_PRICE_LENS_SETTINGS.basis,
+      'this_quarter',
+      'a first-time price lens no longer opens on the current quarter to date',
+    );
+    // It must be a basis the select actually OFFERS, and one the market-bases function
+    // returns — otherwise a first-time reader opens on a row that does not exist.
+    assert.ok(
+      PRICE_LENS_BASIS_ORDER.includes('this_quarter'),
+      'the shipped default is not in the select\'s own order',
+    );
+    assert.equal(PRICE_LENS_BASIS_LABELS.this_quarter, "This quarter's deliveries");
+    // ⚠️ A SAVED PREFERENCE IS UNTOUCHED — the flip changes the DEFAULT and the corrupt
+    // fallback, nothing else. Proven by round-tripping a stored basis through the parser.
+    for (const stored of ['this_month', 'last_month', 'last_3_months', 'trailing_days', 'manual']) {
+      assert.equal(
+        parsePriceLensSettings({ basis: stored }).basis,
+        stored,
+        `a stored basis \`${stored}\` was overwritten by the new default`,
+      );
+    }
+    // And a non-default basis is still SERIALIZED, so it survives a save/load round trip.
+    assert.equal(
+      serializePriceLensSettings({ ...DEFAULT_PRICE_LENS_SETTINGS, basis: 'this_month' }).basis,
+      'this_month',
+      'a reader who chose this month would stop being stored',
+    );
+    // The default itself is OMITTED from the stored document, which is what makes "reset"
+    // an actual removal rather than a value that lingers.
+    assert.ok(
+      !('basis' in serializePriceLensSettings(DEFAULT_PRICE_LENS_SETTINGS)),
+      'the default basis is written into the stored document',
+    );
   });
 
   check('an edge list that survives validation EMPTY falls back to the default pair', () => {
@@ -2825,9 +2904,39 @@ console.log('\n12. THE YARD MAP PAGE (2026-09-22)');
       /isMixed: \(loc\) => lens\.blockByLoc\[loc\]\?\.isMixed === true/.test(code(SUPPLIER_PANEL)),
       'the supplier lens does not hand the map the VIEW\'s own ALL/SOME column',
     );
-    for (const panel of [PANEL, AGE_PANEL]) {
-      assert.ok(!/isMixed/.test(code(panel)), `${panel} claims to know whether a block is mixed`);
-    }
+
+    // ── RESTATED 2026-09-22, NOT WEAKENED ───────────────────────────────────
+    // This used to ban the WORD `isMixed` from the price panel outright, which was the
+    // right shape of guard while `fn_blocking_price_lens` had no supplier fact in it at
+    // all. Migration `20260922093000` gave it one — `blockByLoc[loc].isMixed`, the VIEW's
+    // own `supplier_count_in_block > 1` column — and the printed price sheet's new SUPPLIER
+    // column legitimately reads it, to decide whether a block's dominant supplier is the
+    // WHOLE pile or only part of it.
+    //
+    // So the ban moves onto the property it was always protecting: **the price lens must
+    // not tell the YARD MAP about mixedness.** The map's dashed inset outline is the
+    // supplier lens's marker, and a price map drawing it would be describing a filter it
+    // is not applying. The AGE panel keeps the blanket ban — its payload carries no
+    // supplier fact of any kind, so the word appearing there at all would be an invention.
+    const priceYardMapCall = code(PANEL).slice(
+      code(PANEL).indexOf('buildLensYardMap('),
+      code(PANEL).indexOf('buildLensYardMap(') + 240,
+    );
+    assert.ok(priceYardMapCall.startsWith('buildLensYardMap('), 'the price lens stopped drawing a yard map');
+    assert.ok(
+      !/isMixed/.test(priceYardMapCall),
+      'the PRICE lens hands the yard map a mixed flag — that marker belongs to the supplier lens',
+    );
+    // And where it DOES read it, it reads the carried column rather than a list length.
+    assert.ok(
+      /b\.isMixed !== true/.test(code(PANEL)),
+      'the price sheet\'s supplier column does not read the VIEW\'s own ALL/SOME column',
+    );
+    assert.ok(
+      !/suppliers\.length/.test(code(PANEL)),
+      'the price panel re-derives mixedness from a list length',
+    );
+    assert.ok(!/isMixed/.test(code(AGE_PANEL)), `${AGE_PANEL} claims to know whether a block is mixed`);
   });
 
   // ── The FIT is the PLATFORM solver ────────────────────────────────────────
@@ -2967,6 +3076,860 @@ console.log('\n12. THE YARD MAP PAGE (2026-09-22)');
     assert.ok(/params\.get\('pca'\) === '1'/.test(fixture), 'the rig has no ?pca= switch');
     assert.ok(/'PCA-/.test(fixture) && /'PCB-/.test(fixture), 'the rig names neither prepared area');
   });
+}
+
+// ===========================================================================
+console.log("\n13. PAGE ONE'S CONTEXT BLOCKS, AND THE PRICE SHEET'S SECOND PASS (2026-09-22)");
+// ===========================================================================
+//
+// The owner's review of the live lens prints asked for four more things, and this section
+// is where the three that are about the LENSES live (the fourth, the shipped default basis,
+// is pinned in §5 where the settings parser is proven):
+//
+//   PRICE SHEET   each `WHSE X` heading starts a FRESH PAGE, the band heading repeating
+//                 above it as a small running line; the warehouse SUBTOTAL's seven lab
+//                 cells and its ₱/kg FILLED IN from `warehouseSubtotals`; and a SUPPLIER
+//                 column per block between BATCH and BALANCE.
+//   PAGE ONE      a MARKET table + chart on the price sheet, and PRICE vs VOLUME panels +
+//                 table on the supplier sheet, under the ratio bar.
+//
+// ── WHAT THIS SECTION IS GUARDING ───────────────────────────────────────────
+// Every one of those figures is a field of a payload, and the temptation each time is to
+// fold one in TypeScript instead — a subtotal's MC is a weighted mean, a supplier's share
+// is a ratio, a market average is Σ money ÷ Σ priced kg. §2 already bans `reduce` and `+=`
+// in the four new files outright. What is asserted HERE is the half a source scan cannot
+// see: that the figures are LOOKUPS with the right blank fallback, proven by RUNNING the
+// two models; that the price sheet's three additions are absent from the other two sheets,
+// so their pages are provably unchanged; and that both context reads are print-only and
+// take their SECTION AWAY rather than emptying it when they refuse.
+{
+  const panel = code(PANEL);
+  const agePanel = code(AGE_PANEL);
+  const supplierPanel = code(SUPPLIER_PANEL);
+  const sheet = code(SUMMARY_PRINT);
+  const model = code(SUMMARY_MODEL);
+  const marketModel = code(MARKET_MODEL);
+  const marketPrint = code(MARKET_PRINT);
+  const supplierMarketPrint = code(SUPPLIER_MARKET_PRINT);
+  const chart = code(PRINT_CHART);
+  const EM = '—';
+
+  // ── (a) ONE PAGE PER WAREHOUSE — the PRICE sheet only ─────────────────────
+
+  check('the PRICE sheet pages per WAREHOUSE, and the other two sheets keep MERGED groups', () => {
+    assert.ok(/warehousePages: true,/.test(panel), 'the price sheet no longer pages per warehouse');
+    for (const [body, label] of [[agePanel, 'age'], [supplierPanel, 'supplier']] as const) {
+      assert.ok(
+        !/warehousePages/.test(body),
+        `the ${label} sheet started paging per warehouse — its tables were byte-for-byte unchanged and must stay so`,
+      );
+    }
+    // The flag is OPTIONAL on the shared model, so "absent" is the age/supplier shape
+    // rather than an explicit `false` somebody could invert by accident.
+    assert.ok(/warehousePages\?: boolean;/.test(sheet), 'the paging flag became mandatory');
+    assert.ok(
+      /model\.warehousePages \? \(/.test(sheet.replace(/\s+/g, ' ')),
+      'the sheet no longer branches on the paging flag',
+    );
+  });
+
+  check('the break rules exist, and the FIRST warehouse rides the BAND\'s own page break', () => {
+    // A fresh sheet per later warehouse…
+    assert.ok(
+      /\[data-lens-print\] \.lens-print-whse-page \{ break-before: page; page-break-before: always; \}/.test(sheet),
+      'a warehouse no longer starts a fresh sheet',
+    );
+    // …and the band's own break still exists, unchanged.
+    assert.ok(
+      /\[data-lens-print\] \.lens-print-band \{ break-before: page; page-break-before: always; \}/.test(sheet),
+      'a band no longer starts a fresh sheet',
+    );
+    // THE FIRST warehouse must NOT take a second break, or every band opens on a blank page.
+    assert.ok(
+      /i === 0 \? 'lens-print-band' : 'lens-print-whse-page'/.test(sheet),
+      'the first warehouse of a band takes its own break — every band would open on a blank sheet',
+    );
+    // The repeated band line and each warehouse heading must not be stranded at a page foot.
+    assert.ok(
+      /\[data-lens-print\] \.lens-print-band-run \{ break-after: avoid; \}/.test(sheet),
+      'the repeated band line can be stranded above a page boundary',
+    );
+    assert.ok(
+      /\[data-lens-print\] \.lens-print-whse-page h2 \{ break-after: avoid; \}/.test(sheet),
+      'a warehouse heading can be stranded at a page foot',
+    );
+    assert.ok(/lens-print-band-run/.test(sheet), 'the running band line lost its class');
+    // ⚠️ THE HEADING IS SAID ONCE. Measured on a real PDF (2026-09-22): the paged sheet
+    // printed `WHSE A 10 BLOCKS · 1,047,000 KG` as an `<h2>` and AGAIN as the table's own
+    // first row, one line below it. The merged sheets keep the in-table row — it is what
+    // separates one warehouse from the next inside a single table — so this is a flag, not
+    // a deletion, and its default is the merged behaviour.
+    assert.ok(
+      /showWarehouseHeadingRow = true/.test(sheet),
+      'the in-table warehouse heading stopped defaulting on — the merged sheets would lose their group separators',
+    );
+    assert.ok(
+      /showWarehouseHeadingRow=\{false\}/.test(sheet),
+      'the paged sheet prints its warehouse heading twice',
+    );
+    assert.ok(/\{showWarehouseHeadingRow && \(/.test(sheet), 'the in-table heading row is unconditional again');
+  });
+
+  check('the BAND TOTAL is stated exactly ONCE per band — on its LAST warehouse', () => {
+    assert.ok(
+      /showBandTotal=\{i === band\.warehouses\.length - 1\}/.test(sheet),
+      'the band total is no longer pinned to the last warehouse page',
+    );
+    // And the merged (age / supplier) path still states it, unconditionally.
+    assert.ok(/showBandTotal$/m.test(sheet) || /showBandTotal\s*$/m.test(sheet), 'the merged path lost its band total');
+    // The EXCLUDED page has no band, so it must have no band total either.
+    assert.ok(
+      /showBandTotal=\{false\}/.test(sheet),
+      'the excluded-population table prints a band total for a band that does not exist',
+    );
+  });
+
+  check('the printed PAGE COUNT follows the paging, per (band × warehouse)', () => {
+    // A count that still said "one page per band" would be the first thing to go stale, and
+    // it is the only place the sheet states its own shape out loud.
+    assert.ok(/function blockPageCount\(/.test(sheet), 'the page count is no longer a named function');
+    assert.ok(
+      /if \(!model\.warehousePages\) return model\.bands\.length;/.test(sheet),
+      'the merged sheets no longer count one page per band',
+    );
+    assert.ok(
+      /Math\.max\(1, b\.warehouses\.length\)/.test(sheet),
+      'a band with no warehouse group counts zero pages — it still prints the sentence that says so',
+    );
+    assert.ok(/blockPageCount\(model\) \+/.test(sheet.replace(/\s+/g, ' ')), 'the count label does not use it');
+  });
+
+  // ── (b) THE SUBTOTAL AND BAND-TOTAL FIGURES — a lookup, run for real ──────
+
+  check('the subtotal figures are a LOOKUP of `warehouseSubtotals`, keyed by (band × warehouse)', () => {
+    assert.ok(
+      /lens\.warehouseSubtotals\.map\(\(s\) => \[`\$\{s\.bandIndex\}\|\$\{s\.warehouse\}`, s\]\)/.test(panel),
+      'the price panel no longer indexes the published (band × warehouse) rows',
+    );
+    assert.ok(/figuresOf: \(bandIndex, warehouse\) =>/.test(panel), 'the panel passes no figures lookup');
+    // A pair SQL emitted no row for gets NULL, and NULL is what prints the blank row.
+    assert.ok(/if \(!s\) return null;/.test(panel), 'a missing (band × warehouse) row is invented rather than left blank');
+    // OPTIONAL on the shared bucketing, so "absent" is the age/supplier shape rather than
+    // an explicit value somebody could invert.
+    assert.ok(
+      /figures\?: LensSummaryGroupFigures \| null;/.test(model),
+      'the group figures became mandatory on the shared bucketing',
+    );
+    assert.ok(
+      /totalFigures\?: LensSummaryGroupFigures \| null;/.test(sheet),
+      'the band-total figures became mandatory on the shared sheet',
+    );
+    // And the BAND TOTAL reads the band row the same way its warehouse children do.
+    assert.ok(/totalFigures: buildLensGroupFigures\(/.test(panel), 'the band total no longer reads the payload row');
+    // The two sheets with no such published partition must pass NEITHER.
+    for (const [body, label] of [[agePanel, 'age'], [supplierPanel, 'supplier']] as const) {
+      assert.ok(!/figuresOf/.test(body), `the ${label} panel passes a group-figures lookup it has no payload for`);
+      assert.ok(!/totalFigures/.test(body), `the ${label} panel passes band-total figures it has no payload for`);
+    }
+  });
+
+  check('`buildLensGroupFigures` RENDERS the published means and WEIGHTS nothing — run it', () => {
+    // Two groups, same seven means, DIFFERENT group kilograms. If the function weighted
+    // anything at all, the lab strings would move between them. They must be identical.
+    const stats: BlockingLensLabStats = {
+      wMc: 11.234, mcKg: 500_000,
+      wAsh: 3.456, ashKg: 500_000,
+      wBdAstm: 0.41234, bdAstmKg: 500_000,
+      wBdJis: 0.42678, bdJisKg: 500_000,
+      wGrit: 1.5, gritKg: 500_000,
+      wVm: 18.049, vmKg: 500_000,
+      wFc: 78.951, fcKg: 500_000,
+    };
+    const a = buildLensGroupFigures(stats, 500_000, '₱48.50', (n) => `${n} kg`);
+    const b = buildLensGroupFigures(stats, 9_000_000, '₱48.50', (n) => `${n} kg`);
+    // The Excel Standard: BD → 3 dp, the other five → 2 dp. The payload's own digits.
+    assert.equal(a.lab.mc, '11.23');
+    assert.equal(a.lab.ash, '3.46');
+    assert.equal(a.lab.bdAstm, '0.412');
+    assert.equal(a.lab.bdJis, '0.427');
+    assert.equal(a.lab.grit, '1.50');
+    assert.equal(a.lab.vm, '18.05');
+    assert.equal(a.lab.fc, '78.95');
+    assert.equal(a.figure, '₱48.50', 'the figure is not the caller\'s own preformatted string');
+    assert.deepEqual(b.lab, a.lab, 'the lab strings moved with the GROUP kilograms — something is being weighted');
+  });
+
+  check('a NULL mean is an EM DASH, never a 0 — and a 0 coverage weight is a real 0', () => {
+    // The live shape: MC measured over the whole group, the other six not measured at all.
+    // `avg_ash = 0` on the grid means "no ASH figure", so SQL excludes it and publishes NULL.
+    const stats: BlockingLensLabStats = {
+      wMc: 11.5, mcKg: 400_000,
+      wAsh: null, ashKg: 0,
+      wBdAstm: null, bdAstmKg: 0,
+      wBdJis: null, bdJisKg: 0,
+      wGrit: null, gritKg: 0,
+      wVm: null, vmKg: 0,
+      wFc: null, fcKg: 0,
+    };
+    const f = buildLensGroupFigures(stats, 400_000, EM, (n) => `${n} kg`);
+    assert.equal(f.lab.mc, '11.50');
+    for (const k of ['ash', 'bdAstm', 'bdJis', 'grit', 'vm', 'fc'] as const) {
+      assert.equal(f.lab[k], EM, `a NULL ${k} did not print an em dash`);
+      assert.notEqual(f.lab[k], '0.00', `a NULL ${k} printed as zero — the L-008 placeholder in a lab coat`);
+    }
+    // A stat with NO mean already prints an em dash, so "over 0 kg" beside it would be noise.
+    assert.equal(f.coverageNote, '', 'an unmeasured stat was given a coverage note as well as a dash');
+  });
+
+  check('the COVERAGE NOTE names ONLY the stats short of the group, and names their kilograms', () => {
+    // The live shape, measured 2026-09-22: every block carries MC, eleven read 0 on the
+    // other six. One shared "lab kg" would be wrong for MC or wrong for the rest.
+    const stats: BlockingLensLabStats = {
+      wMc: 11.5, mcKg: 1_000_000,
+      wAsh: 3.2, ashKg: 800_000,
+      wBdAstm: 0.41, bdAstmKg: 800_000,
+      wBdJis: null, bdJisKg: 0,
+      wGrit: 1.1, gritKg: 1_000_000,
+      wVm: 18.0, vmKg: 1_000_000,
+      wFc: 78.0, fcKg: 1_000_000,
+    };
+    const f = buildLensGroupFigures(stats, 1_000_000, '₱40.00', (n) => `${n.toLocaleString()} kg`);
+    assert.equal(f.coverageNote, 'ash over 800,000 kg · bd astm over 800,000 kg');
+    assert.ok(!f.coverageNote.includes('mc'), 'a stat covering the WHOLE group was reported as short');
+    assert.ok(!f.coverageNote.includes('bd jis'), 'an UNMEASURED stat was reported as short rather than dashed');
+    // The note is the SHEET's to render conditionally; it must never be printed empty.
+    assert.ok(
+      /coverageNote !== ''/.test(sheet),
+      'the sheet prints the coverage note unconditionally — an empty note would add a blank annotation',
+    );
+  });
+
+  check('a lens with NO published partition prints the BLANK subtotal row it always did', () => {
+    // The fallback lives in ONE component, so the subtotal and the band total can never
+    // disagree about what a missing figure looks like.
+    const flat = sheet.replace(/\s+/g, ' ');
+    assert.ok(/function LabCells\(/.test(sheet), 'the seven subtotal cells are no longer one component');
+    assert.ok(/figures \? figures\.lab\[k\] : null/.test(flat), 'a missing figure no longer prints an empty cell');
+    assert.ok(
+      /<LabCells figures=\{w\.figures\} className=\{TD_SMALL\} \/>/.test(flat),
+      'the warehouse subtotal does not render the shared cells',
+    );
+    assert.ok(
+      /<LabCells figures=\{band\.totalFigures\} className=\{TD\} \/>/.test(flat),
+      'the band total does not render the shared cells',
+    );
+    // And the figure cell beside them follows the same fallback.
+    assert.ok(/w\.figures \? w\.figures\.figure : null/.test(flat), 'a missing subtotal figure prints something');
+  });
+
+  // ── (c) THE SUPPLIER COLUMN — price sheet only ────────────────────────────
+
+  check('the SUPPLIER column is bound to `dominantSupplierDisplay`, and is PRICE-SHEET only', () => {
+    assert.ok(/blockSupplierColumnLabel: 'Supplier',/.test(panel), 'the price sheet lost its supplier column');
+    assert.ok(/supplierOf: \(loc\) =>/.test(panel), 'the price panel passes no per-block supplier');
+    assert.ok(
+      /b\.dominantSupplierDisplay/.test(panel),
+      'the supplier cell is not the payload\'s own RAW spelling',
+    );
+    assert.ok(/b\.dominantSharePct/.test(panel), 'a mixed block\'s share is not the payload\'s own');
+    // ⚠️ NEVER re-derived from a list length — the ALL/SOME rule is a carried COLUMN.
+    assert.ok(!/suppliers\.length/.test(panel), 'the price panel re-derives mixedness from a list length');
+    // Absent means the column does not EXIST — not an empty column.
+    assert.ok(
+      /blockSupplierColumnLabel\?: string;/.test(sheet),
+      'the supplier heading became mandatory, so the age and supplier tables would grow an empty column',
+    );
+    assert.ok(
+      /const withSupplier = supplierColumnLabel !== undefined;/.test(sheet),
+      'the sheet no longer decides the column from the heading\'s presence',
+    );
+    for (const [body, label] of [[agePanel, 'age'], [supplierPanel, 'supplier']] as const) {
+      assert.ok(
+        !/blockSupplierColumnLabel/.test(body),
+        `the ${label} sheet grew a per-block supplier column — its table widths were unchanged and must stay so`,
+      );
+      assert.ok(!/supplierOf:/.test(body), `the ${label} panel passes a per-block supplier it has no payload for`);
+    }
+  });
+
+  check('BOTH column-width tables sum to EXACTLY 100%, so no `table-fixed` column crushes', () => {
+    // "Never crush, always scroll" on paper: `table-fixed` redistributes whatever does not
+    // add up, and the column that absorbs it is the one that silently crushes.
+    const widthsOf = (name: string): number[] => {
+      const m = sheet.match(new RegExp(`${name} = \\[([^\\]]+)\\]`));
+      assert.ok(m, `${name} is gone from the sheet`);
+      return [...m![1].matchAll(/'([\d.]+)%'/g)].map((x) => Number(x[1]));
+    };
+    const oneOf = (name: string): number => {
+      const m = sheet.match(new RegExp(`${name} = '([\\d.]+)%'`));
+      assert.ok(m, `${name} is gone from the sheet`);
+      return Number(m![1]);
+    };
+    const plain =
+      widthsOf('BLOCK_COL_WIDTHS').reduce((a, b) => a + b, 0) +
+      7 * oneOf('LAB_COL_WIDTH') +
+      oneOf('FIGURE_COL_WIDTH');
+    const withSupplier =
+      widthsOf('BLOCK_COL_WIDTHS_WITH_SUPPLIER').reduce((a, b) => a + b, 0) +
+      7 * oneOf('LAB_COL_WIDTH_WITH_SUPPLIER') +
+      oneOf('FIGURE_COL_WIDTH_WITH_SUPPLIER');
+    assert.equal(plain, 100, `the age/supplier table sums to ${plain}%, not 100%`);
+    assert.equal(withSupplier, 100, `the price table sums to ${withSupplier}%, not 100%`);
+    // Three lead columns without the supplier, four with it — and the label cell of a
+    // subtotal row must span everything LEFT of the balance, whichever shape it is.
+    assert.equal(widthsOf('BLOCK_COL_WIDTHS').length, 3);
+    assert.equal(widthsOf('BLOCK_COL_WIDTHS_WITH_SUPPLIER').length, 4);
+    assert.ok(/const labelSpan = leadCols - 1;/.test(sheet), 'the subtotal label span is no longer derived from the columns');
+  });
+
+  check('a block with NO delivery row reads an EM DASH — proven by running the bucketing', () => {
+    const lab = { bd_astm: 0.4, bd_jis: 0.42, ash: 3, mc: 11, grit: 1, vm: 18, fc: 78 };
+    const data: Record<string, BlockData> = {
+      'A-1A': { batch_code: 'X1', batch_id: 'x1', status: 'STORED', balance: 100, total_in: 100, php: 40, ...lab },
+      'A-2A': { batch_code: 'X2', batch_id: 'x2', status: 'STORED', balance: 90, total_in: 90, php: 40, ...lab },
+      'B-1A': { batch_code: 'X3', batch_id: 'x3', status: 'STORED', balance: 80, total_in: 80, php: 40, ...lab },
+    };
+    // The panel's own three cases: whole pile · mixed · no supplier at all.
+    const supplierOf = (loc: string) =>
+      loc === 'A-1A' ? 'Ornales' : loc === 'A-2A' ? 'Llanto 71%' : EM;
+    const { byBand } = buildLensSummaryBuckets({
+      data,
+      bandOf: () => 0,
+      figureOf: () => '₱40.00',
+      sortKeyOf: (_l, b) => b.balance,
+      formatKg: (n) => String(n),
+      formatBlocks: (n) => String(n),
+      excludedFigure: EM,
+      supplierOf,
+      figuresOf: () => null,
+    });
+    const rows = (byBand.get(0) ?? []).flatMap((g) => g.rows);
+    assert.deepEqual(
+      rows.map((r) => r.supplier),
+      ['Ornales', 'Llanto 71%', EM],
+      'the bucketing does not carry the supplier cell through verbatim',
+    );
+    // And WITHOUT a `supplierOf` the field is absent, which is what removes the column.
+    const bare = buildLensSummaryBuckets({
+      data,
+      bandOf: () => 0,
+      figureOf: () => '₱40.00',
+      sortKeyOf: (_l, b) => b.balance,
+      formatKg: (n) => String(n),
+      formatBlocks: (n) => String(n),
+      excludedFigure: EM,
+    });
+    for (const g of bare.byBand.get(0) ?? []) {
+      for (const r of g.rows) {
+        assert.equal(r.supplier, undefined, 'a lens that passes no supplier still gets a supplier cell');
+      }
+      assert.equal(g.figures, null, 'a lens that passes no figures lookup still gets group figures');
+    }
+  });
+
+  // ── (d) PAGE ONE'S TWO CONTEXT BLOCKS, AND THEIR GATE ─────────────────────
+
+  check('page one\'s context is a NODE — the shared sheet learns no market vocabulary', () => {
+    assert.ok(/page1Extra\?: React\.ReactNode;/.test(sheet), 'the context block became a model the sheet must understand');
+    assert.ok(/\{model\.page1Extra\}/.test(sheet), 'the sheet does not render the context block');
+    for (const word of ['market', 'quarter', 'correlation', 'premium', 'supplierMarket']) {
+      assert.ok(
+        !new RegExp(`\\b${word}`, 'i').test(sheet),
+        `the shared sheet reaches for \`${word}\` — page one's context must stay a node it cannot read`,
+      );
+    }
+    // It still formats nothing and still spells no currency glyph.
+    assert.ok(!/toFixed\(/.test(sheet) && !/toLocaleString\(/.test(sheet), 'the sheet formats a number itself');
+    assert.ok(!/₱/.test(sheet), 'the shared sheet spells a peso');
+  });
+
+  check('the MARKET read is PRINT-ONLY, fired ONCE, and takes its SECTION away on a refusal', () => {
+    assert.ok(/fetchMarketContext: \(months: number\)/.test(panel), 'the market read is not on the adapter port');
+    assert.ok(
+      /fetchMarketContext\(BLOCKING_MARKET_CONTEXT_DEFAULT_MONTHS\)/.test(panel),
+      'the panel does not ask for the shipped twelve months',
+    );
+    // Fired ONCE per mount: an EMPTY dependency list. A settings-shaped dependency would
+    // re-read a series that cannot move when a reader drags a cut line.
+    assert.ok(
+      /setMarketContext\(res\.ok \? res\.context : null\);/.test(panel),
+      'a refusal no longer clears the market context',
+    );
+    assert.ok(/setMarketContext\(null\);/.test(panel), 'a thrown error no longer clears the market context');
+    assert.ok(
+      /\}, \[\]\);/.test(panel.slice(panel.indexOf('fetchMarketContext'))),
+      'the market read is no longer fired exactly once on mount',
+    );
+    // ABSENT, never blank.
+    assert.ok(
+      /marketSection === null \? null : <LensMarketContextSection/.test(panel.replace(/\s+/g, ' ')),
+      'a missing market context renders an empty section instead of none',
+    );
+    // And it must be nowhere near the classify read — the bar, chips and tint work without it.
+    assert.ok(
+      !/fetchMarketContext[\s\S]{0,400}?fetchLens\(/.test(panel),
+      'the market read got entangled with the band read',
+    );
+    // No spinner, no banner, no toast: it is not an operational fact anyone is waiting on.
+    assert.ok(
+      !/errorToast[\s\S]{0,120}?[Mm]arket[Cc]ontext/.test(panel),
+      'the print-only market read raises a toast a reader cannot act on',
+    );
+  });
+
+  check('the SUPPLIER MARKET read is gated BEFORE the request, and its section is ABSENT not empty', () => {
+    assert.ok(
+      /if \(!caps\.canViewPrices \|\| namedKeysSig === ''\) \{/.test(supplierPanel),
+      'the supplier market read is no longer gated before the request',
+    );
+    // The two halves, both of them: the EFFECTIVE cap AND the payload's own statement.
+    assert.ok(
+      /!priced \|\| market === null/.test(supplierPanel),
+      'the printed section no longer requires BOTH the effective price flag and a landed read',
+    );
+    assert.ok(
+      /marketSection === null \? null : <LensSupplierMarketSection/.test(supplierPanel.replace(/\s+/g, ' ')),
+      'a price-denied or failed supplier market renders an empty section instead of none',
+    );
+    // `others` IS NOT A SUPPLIER: only the NAMED bands' keys are ever asked about.
+    assert.ok(/!b\.isOthers && b\.key !== null/.test(supplierPanel), 'the fold band is asked about as if it were a supplier');
+    // And the rest of that sheet stays unconditional — Production walks the yard.
+    assert.ok(
+      !/market[\s\S]{0,80}<LensYardMapPage/.test(supplierPanel),
+      'the yard map became conditional on the market read',
+    );
+  });
+
+  check('the supplier key signature uses a VISIBLE separator, and the file holds no raw control byte', () => {
+    // The effect SPLITS the signature back apart, so `join('')` would hand the action one
+    // character per LETTER — a read that succeeds, matches nothing, and prints an empty
+    // table naming every band as having no history. A literal U+0001 typed into the source
+    // works and is INVISIBLE in a diff, which is the same bug wearing a disguise.
+    assert.ok(
+      /const SUPPLIER_KEY_SIG_SEP = '\\u0001';/.test(supplierPanel),
+      'the key separator is not a named constant written as an escape',
+    );
+    assert.ok(/namedKeys\.join\(SUPPLIER_KEY_SIG_SEP\)/.test(supplierPanel), 'the signature joins on something else');
+    assert.ok(/namedKeysSig\.split\(SUPPLIER_KEY_SIG_SEP\)/.test(supplierPanel), 'the keys are split on something else');
+    assert.ok(!/\.join\(''\)/.test(supplierPanel), 'the signature joins on the empty string');
+    for (const rel of [SUPPLIER_PANEL, PANEL, AGE_PANEL, MARKET_MODEL, MARKET_PRINT, SUPPLIER_MARKET_PRINT, PRINT_CHART]) {
+      assert.ok(
+        !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(read(rel)),
+        `${rel} contains a RAW control character — invisible in a diff, and a formatter may eat it`,
+      );
+    }
+  });
+
+  check('the MARKET print model COMPUTES NOTHING — run it and read the strings back', () => {
+    const ctx = fixtureMarketContext();
+    const m = buildLensMarketPrintModel({
+      context: ctx,
+      basisPhpKg: 39.1816,
+      basisLabel: "This quarter's deliveries",
+      highlight: { kind: 'currentQuarter' },
+    });
+    // 3 months + 2 quarters + YTD + trailing-12m.
+    assert.equal(m.rows.length, 7, `the market table has ${m.rows.length} rows, not 7`);
+    assert.deepEqual(
+      m.rows.map((r) => r.kind),
+      ['month', 'month', 'month', 'quarter', 'quarter', 'span', 'span'],
+    );
+    // Every figure is the payload's, at the price sheet's own two decimals.
+    assert.equal(m.rows[0].price, '₱44.92');
+    assert.equal(m.rows[0].kg, '1,284,500 kg');
+    assert.equal(m.rows[0].deliveries, '78');
+    assert.equal(m.rows[0].suppliers, '9');
+    // NULL IS NEVER 0 — a month with kilos but no priced ones reads an em dash.
+    assert.equal(m.rows[1].price, EM, 'an unpriced month printed a price');
+    // A quarter/span row publishes no supplier count, so the cell is EMPTY, not a zero.
+    assert.equal(m.rows[3].suppliers, '');
+    // The CURRENT quarter is flagged, named and highlighted — and it is the only highlight.
+    assert.ok(m.rows[4].label.includes('(current)'), 'the current quarter is not flagged');
+    assert.equal(m.rows.filter((r) => r.highlighted).length, 1, 'more than one row claims to be the basis');
+    assert.equal(m.rows[4].highlighted, true, 'the current quarter is not the highlighted row');
+    // A PARTIAL quarter at the window edge says so rather than reading as a full one.
+    assert.equal(m.rows[3].note, '2 of 3 months');
+    // The chart's twelve… here three points, one of them a genuine GAP.
+    assert.equal(m.chart.points.length, 3);
+    assert.equal(m.chart.points[1].line, null, 'an unpriced month was drawn at zero instead of left as a gap');
+    assert.deepEqual(m.chart.points.map((p) => p.tick), ['Oct', 'Nov', 'Dec']);
+    // The reference line IS the lens's own basis.
+    assert.equal(m.chart.refLine?.label, '₱39.18');
+    // And the domain covers the basis, so the dashed line cannot fall off the plot.
+    assert.ok(
+      m.chart.lineDomain[0] <= 39.1816 && m.chart.lineDomain[1] >= 39.1816,
+      'the chart domain excludes the reference level',
+    );
+    // A CAPTION IS A LIST OF FACTS, and it names the basis rather than inventing a row.
+    assert.ok(m.caption.includes('3 of 50 months'), 'the caption does not state its coverage');
+    assert.ok(m.caption.includes("this quarter's deliveries"), 'the caption does not name the basis');
+    assert.ok(m.caption.includes('as of 2026-09-22'), 'the caption does not state the as-of date');
+  });
+
+  check('the basis HIGHLIGHT is decided from the basis\'s OWN anchor — an aggregate highlights NOTHING', () => {
+    const ctx = fixtureMarketContext();
+    const run = (highlight: Parameters<typeof buildLensMarketPrintModel>[0]['highlight']) =>
+      buildLensMarketPrintModel({ context: ctx, basisPhpKg: 40, basisLabel: 'x', highlight }).rows.filter(
+        (r) => r.highlighted,
+      );
+    // A calendar month's `fromDate` IS that month's first day, so no date arithmetic happens.
+    const month = run({ kind: 'month', month: '2025-12-01' });
+    assert.equal(month.length, 1);
+    assert.equal(month[0].key, 'm-2025-12-01');
+    // `last_3_months`, `trailing_days` and a TYPED price are aggregates this table carries no
+    // row for. Inventing one would put a figure on the sheet that no view publishes.
+    assert.equal(run(null).length, 0, 'an aggregate basis highlighted a row the payload does not publish');
+    // A month the window does not contain highlights nothing rather than the nearest row.
+    assert.equal(run({ kind: 'month', month: '2024-01-01' }).length, 0, 'an out-of-window month matched a row');
+    // The panel's own mapping: only the two calendar months read `fromDate`, only
+    // `this_quarter` reads the current quarter, everything else highlights nothing.
+    assert.ok(
+      /settings\.basis === 'this_month' \|\| settings\.basis === 'last_month'/.test(panel),
+      'the panel no longer decides a month highlight from the two calendar bases',
+    );
+    assert.ok(/kind: 'month', month: activeBasis\.fromDate/.test(panel), 'the month highlight is not the window anchor');
+    assert.ok(/kind: 'currentQuarter'/.test(panel), 'the quarter basis highlights nothing');
+  });
+
+  check('the SUPPLIER MARKET model computes nothing, and NAMES a band it has no series for', () => {
+    const market = fixtureSupplierMarket();
+    const m = buildLensSupplierMarketPrintModel({
+      market,
+      displayByKey: new Map([['ORNALES', 'Ornales'], ['LAYUPAN', 'Layupan']]),
+      // A third band was asked about and the payload has no series for it.
+      requestedKeys: ['ORNALES', 'LAYUPAN', 'SEVILLA'],
+      maxPanels: 1,
+    });
+    // Every row is a supplier; the PANEL count is capped but the TABLE lists them all.
+    assert.equal(m.rows.length, 2, 'the table dropped a supplier the payload published');
+    assert.equal(m.panels.length, 1, 'the panel cap was ignored');
+    // The LENS's pretty spelling, joined on `key` — the view publishes only the canonical.
+    assert.equal(m.rows[0].supplier, 'Ornales');
+    assert.equal(m.panels[0].title, 'Ornales');
+    // The payload's own figures, verbatim: four decimals on ₱/kg, two on the pair.
+    assert.equal(m.rows[0].kg, '5,620,744 kg');
+    assert.equal(m.rows[0].phpKg, '₱44.9225');
+    assert.equal(m.rows[0].firstLast, '₱50.86 → ₱44.92');
+    assert.equal(m.rows[0].changePct, '-11.7%', 'a change figure lost its sign');
+    assert.equal(m.rows[0].direction, '↓ down');
+    assert.equal(m.rows[0].corr, '0.26', 'the correlation is not two decimals');
+    assert.equal(m.rows[0].premium, '+₱0.4968', 'a premium above market lost its plus sign');
+    // ⚠️ NULL IS NEVER 0 and never "flat": under three priced months there is no correlation,
+    // and a direction is a CLAIM.
+    assert.equal(m.rows[1].corr, 'n/a (2 m)', 'a two-month correlation printed a number');
+    assert.equal(m.rows[1].direction, EM, 'a NULL direction printed "flat"');
+    assert.equal(m.rows[1].premium, EM, 'an unknown premium printed zero');
+    assert.equal(m.rows[1].firstLast, EM, 'an unpriced end printed a pair');
+    // The SPINE is the WINDOW's, so a quiet supplier gets a GAP, not a shorter chart.
+    assert.equal(m.panels[0].points.length, market.months.length);
+    // The footer: the SELECTION beside the WHOLE market.
+    assert.equal(m.footer.label, '2 suppliers shown');
+    assert.equal(m.footer.kg, '5,720,744 kg');
+    assert.ok(m.footer.note.includes('whole market 14,144,848 kg'), 'the footer does not state the whole market');
+    // A band with no series is NAMED, never dropped in silence.
+    assert.ok(m.omittedNote.includes('SEVILLA'), 'a requested band with no history vanished silently');
+    assert.ok(m.caption.includes('direction dead band 2%'), 'the caption does not state the dead band');
+    // EACH INK SAYS WHAT IT MEANS. Measured on a real PDF: the line's swatch used to carry
+    // the whole caption, so the legend stated the AREA's meaning twice and the line's never.
+    assert.equal(m.areaLegend, 'kilograms delivered (area, left)');
+    assert.equal(m.lineLegend, '₱/kg (line, right)');
+    assert.ok(!m.chartCaption.includes('kilograms'), 'the caption repeats the legend it sits under');
+    assert.ok(m.chartCaption.includes('scales to its own range'), 'the caption stopped saying panels are autoscaled');
+    assert.ok(m.chartCaption.includes('a gap is a month'), 'the caption stopped explaining a gap');
+  });
+
+  check('`printChartDomain` is an AXIS RANGE, not a statistic — and it never hides a level', () => {
+    // It is `Math.min`/`Math.max` over values the payload published, which is geometry.
+    const [lo, hi] = printChartDomain([10, 20]);
+    assert.ok(lo < 10 && hi > 20, 'the domain does not pad, so a series runs along the frame');
+    assert.equal(lo, 10 - 0.8);
+    assert.equal(hi, 20 + 0.8);
+    // A reference level is INCLUDED, or the dashed line draws off the plot.
+    const withRef = printChartDomain([10, 20], 99);
+    assert.ok(withRef[1] >= 99, 'the domain excludes a reference level above the series');
+    // Twelve identical prices is a real answer: a ZERO span, which the chart draws down the
+    // middle rather than on an edge.
+    assert.deepEqual(printChartDomain([7, 7, 7]), [7, 7]);
+    // Nulls are skipped, not read as zero — and an all-null series is not a crash.
+    assert.deepEqual(printChartDomain([null, undefined]), [0, 1]);
+    assert.deepEqual(printChartDomain([5, null], null), printChartDomain([5]));
+
+    // ⚠️ THE FLOOR — measured on a real PDF (2026-09-22): the volume axis of every
+    // price-vs-volume panel read `548t / 254t / −41t`, because an area domain starts at 0 and
+    // the 8% pad then pushed its lower bound BELOW zero. A negative tonne is not a quantity.
+    const unfloored = printChartDomain([0, 500_000]);
+    assert.ok(unfloored[0] < 0, 'the pad no longer reaches below a zero minimum — re-check this guard');
+    assert.deepEqual(printChartDomain([0, 500_000], null, 0), [0, 540_000]);
+    // It is a FLOOR, not a zero-base: a price axis keeps its own bottom and does not collapse
+    // onto zero, or the movement the chart exists to show would flatten out.
+    assert.deepEqual(printChartDomain([39, 48], null, 0), [39 - 0.72, 48 + 0.72]);
+    // And every call site in the model passes it, on BOTH axes.
+    assert.ok(
+      /printChartDomain\(prices, basisPhpKg, 0\)/.test(marketModel),
+      'the market line domain is no longer floored at zero',
+    );
+    assert.ok(
+      /printChartDomain\(points\.map\(\(p\) => p\.line\), null, 0\)/.test(marketModel),
+      'a panel\'s price axis is no longer floored at zero',
+    );
+    assert.ok(
+      /printChartDomain\(\[0, \.\.\.points\.map\(\(p\) => p\.area\)\], null, 0\)/.test(marketModel),
+      'a panel\'s VOLUME axis is no longer floored at zero — it will print a negative tonne',
+    );
+  });
+
+  check('every DEV RIG offers the SHIPPED DEFAULT basis — a rig that does not shows no bands', () => {
+    // MEASURED, not hypothetical (2026-09-22): the default moved to `this_quarter` and the
+    // three rigs' `BASES` mocks were not given that row, so the price lens opened on a basis
+    // that does not exist — `activeBasis` null → no market price → the classify read never
+    // fires → no band chip, and a DISABLED Print button. The live page is fine (SQL returns
+    // the row), so the only surface that breaks is the only surface a reviewer can look at.
+    for (const rig of [
+      'app/dev/table-playground/pricelens/pricelens-fixture.tsx',
+      'app/dev/table-playground/agelens/agelens-fixture.tsx',
+      'app/dev/table-playground/supplierlens/supplierlens-fixture.tsx',
+    ]) {
+      const body = read(rig);
+      assert.ok(
+        new RegExp(`basisKey: '${DEFAULT_PRICE_LENS_SETTINGS.basis}'`).test(body),
+        `${rig} has no \`${DEFAULT_PRICE_LENS_SETTINGS.basis}\` basis row — its price lens opens on a basis it cannot resolve`,
+      );
+      // And every basis the select OFFERS should be resolvable on the rig, so switching the
+      // dropdown on a fixture can never land on a silent blank.
+      for (const key of PRICE_LENS_BASIS_ORDER) {
+        if (key === 'manual') continue; // client-side — it needs no basis row
+        assert.ok(
+          new RegExp(`basisKey: '${key}'`).test(body),
+          `${rig} cannot resolve the \`${key}\` basis the select offers`,
+        );
+      }
+    }
+  });
+
+  check('the two context SHEETS format NOTHING — one model owns every string on them', () => {
+    // The same discipline as the shared summary sheet: if a peso is ever written differently
+    // on page one it will be because ONE function changed.
+    for (const [rel, body] of [[MARKET_PRINT, marketPrint], [SUPPLIER_MARKET_PRINT, supplierMarketPrint]] as const) {
+      assert.ok(!/toFixed\(/.test(body), `${rel} rounds a number itself`);
+      assert.ok(!/toLocaleString\(/.test(body), `${rel} groups a number itself`);
+      assert.ok(!/₱/.test(body), `${rel} spells a peso — the model owns the glyph`);
+      // Explicitly light, like the rest of the sheet: it lays out in the LIVE DOM.
+      assert.ok(
+        !/bg-background|bg-card|bg-muted|text-foreground|text-muted-foreground|border-border/.test(body),
+        `${rel} uses a theme token and will print dark for a dark-mode reader`,
+      );
+      assert.ok(/text-zinc-/.test(body), `${rel} lost its explicit light inks`);
+    }
+    // And the MODEL is where the formatting lives — so the split is real, not a coincidence.
+    assert.ok(/₱/.test(marketModel), 'the market model no longer owns the peso glyph');
+    assert.ok(/toLocaleString\(/.test(marketModel), 'the market model no longer formats');
+    // It still does no ARITHMETIC about charcoal: no reduce, no `+=` (§2 bans both), and no
+    // division by a total. `Math.min`/`Math.max` over published values is an AXIS RANGE.
+    assert.ok(
+      !/\/\s*(total|totalKg|marketKg|pricedKg|monthCount)\b/.test(marketModel),
+      'the market model divides by a total — every average it prints is SQL\'s',
+    );
+  });
+
+  check('the printed chart is HAND-DRAWN: no recharts, no theme token, no measurement', () => {
+    // Comments stripped: the file's own header EXPLAINS at length why recharts was ruled
+    // out, so a scan of the raw source would fail on its own reasoning.
+    assert.ok(!/recharts/.test(chart), 'the print chart imports recharts — it measures a frame later');
+    assert.ok(!/ResponsiveContainer/.test(chart), 'the print chart sizes itself from a callback');
+    assert.ok(!/useState|useEffect|useRef|ResizeObserver/.test(chart), 'the print chart measures or holds state');
+    // Explicit ink only: a theme token would print dark for a dark-mode reader.
+    assert.ok(!/var\(--/.test(chart), 'the print chart reaches for a CSS variable');
+    assert.ok(
+      !/bg-background|bg-card|bg-muted|text-foreground|text-muted-foreground|border-border/.test(chart),
+      'the print chart uses a theme token and will print dark for a dark-mode reader',
+    );
+    assert.ok(/printColorAdjust: 'exact'/.test(chart), 'the chart does not force its ink onto paper');
+    // Both sheets state their box in PIXELS, for the same reason.
+    assert.ok(/const CHART_W_PX = \d+;/.test(marketPrint), 'the market chart has no explicit width');
+    assert.ok(/const PANEL_W_PX = \d+;/.test(supplierMarketPrint), 'the supplier panels have no explicit width');
+    // A GAP is a gap: a null breaks the run rather than joining across it.
+    assert.ok(/current = null;/.test(chart), 'a null no longer breaks the series into runs');
+    assert.ok(/v === null \|\| v === undefined \|\| !Number\.isFinite\(v\)/.test(chart), 'the gap test moved');
+    // And no currency glyph or number formatting lives in the primitive.
+    assert.ok(!/₱/.test(chart), 'the print chart spells a peso');
+    assert.ok(!/toLocaleString\(/.test(chart), 'the print chart formats a number');
+  });
+
+  check('CONTEXT.md documents all three of the second pass\'s changes, and both context blocks', () => {
+    const doc = read(CONTEXT);
+    for (const phrase of [
+      // The four new files, in Files.
+      'lens/lens-print-chart.tsx',
+      'lens/lens-market-model.ts',
+      'lens/lens-market-print.tsx',
+      'lens/lens-supplier-market-print.tsx',
+      // JOB 1 — the price sheet's three changes.
+      'THE SECOND PASS',
+      'ONE PAGE PER WAREHOUSE INSIDE A BAND',
+      'warehousePages',
+      'showWarehouseHeadingRow',
+      'COVERAGE NOTE names only the stats SHORT of the group',
+      'A SUPPLIER COLUMN PER BLOCK',
+      'blockSupplierColumnLabel',
+      // JOB 2 + JOB 3 — page one.
+      "PAGE ONE'S CONTEXT BLOCKS",
+      'page1Extra',
+      'fetchBlockingMarketContext(12)',
+      'fetchBlockingSupplierMarket(12, bandKeys)',
+      'THE BASIS',
+      'THE WHOLE SECTION IS ABSENT',
+      'SUPPLIER_KEY_SIG_SEP',
+      // The chart decision, and the explicit statement that analytics was not touched.
+      'HAND-DRAWN SVG, NOT RECHARTS',
+      'that CONTEXT.md is untouched',
+      'A VOLUME AXIS MAY NOT RUN BELOW ZERO',
+      'LENS_PRINT_CHART_LABEL_PX',
+      // The default basis, and the trap that comes with it.
+      "This quarter's deliveries",
+      'A DEV RIG MUST CARRY THE ROW',
+    ]) {
+      assert.ok(doc.includes(phrase), `CONTEXT.md does not mention "${phrase}"`);
+    }
+    // And the claims the second pass RETIRED must be gone, or the doc states two rules.
+    assert.ok(
+      !/leaves \*\*every lab cell BLANK\*\*/.test(doc),
+      'CONTEXT.md still says a warehouse subtotal leaves every lab cell blank',
+    );
+    assert.ok(
+      !/THE UI STEP THAT IS NOT DONE/.test(doc),
+      'CONTEXT.md still calls the default-basis flip an outstanding UI step',
+    );
+  });
+
+  check('every printed label sits at or above the sheet\'s own 7px floor', () => {
+    // The lens sheet prints from the LIVE DOM, so its sizes are Tailwind px rather than the
+    // `pt` the iframe prints use — the floor is the same idea and 7px is where this sheet
+    // has always sat. The first pass drew chart ticks at 5.5 (~4pt on paper).
+    assert.equal(LENS_PRINT_CHART_LABEL_PX, 7, 'the chart label size left the floor');
+    const files = [SUMMARY_PRINT, MARKET_PRINT, SUPPLIER_MARKET_PRINT, PRINT_CHART, YARD_MAP_PRINT];
+    for (const rel of files) {
+      const body = read(rel);
+      for (const m of body.matchAll(/text-\[([\d.]+)px\]/g)) {
+        assert.ok(Number(m[1]) >= 7, `${rel} prints text at ${m[1]}px, below the 7px floor`);
+      }
+      // A bare numeric `fontSize={n}` on an SVG label must go through the constant, so one
+      // axis cannot be shrunk while the others stay put.
+      for (const m of body.matchAll(/fontSize=\{([\d.]+)\}/g)) {
+        assert.fail(`${rel} hardcodes fontSize=${m[1]} — it must read LENS_PRINT_CHART_LABEL_PX`);
+      }
+    }
+  });
+}
+
+// ── The two payload fixtures this section runs the models over ──────────────
+//
+// Built HERE rather than imported from `app/dev/table-playground/lens-fixture-lab.ts`:
+// that module is a dev RIG and reaches for the `@/` alias, and a verify script must not
+// depend on a playground staying wired the way it is today. Three months rather than twelve
+// keeps the expected strings readable; the SHAPES are the live ones — a month with kilos and
+// no priced kilos, a partial quarter at the window edge, a supplier with two priced months.
+
+function fixtureMarketContext(): BlockingMarketContext {
+  return {
+    monthsRequested: 3,
+    asOf: '2026-09-22',
+    months: [
+      { month: '2025-10-01', marketPhpKg: 44.9159, marketKg: 1_284_500, marketPricedKg: 1_284_500, deliveryCount: 78, activeSuppliers: 9 },
+      // ⚠️ KILOS, NO PRICED KILOS — the gap the chart and the table must both respect.
+      { month: '2025-11-01', marketPhpKg: null, marketKg: 1_101_300, marketPricedKg: 0, deliveryCount: 66, activeSuppliers: 8 },
+      { month: '2025-12-01', marketPhpKg: 45.7412, marketKg: 1_342_880, marketPricedKg: 1_342_880, deliveryCount: 81, activeSuppliers: 10 },
+    ],
+    quarters: [
+      // A PARTIAL quarter at the window edge — `monthCount` is what says so.
+      { quarterKey: '2025-Q3', label: 'Q3 2025', quarterStart: '2025-07-01', marketPhpKg: 44.1, marketKg: 900_000, marketPricedKg: 900_000, deliveryCount: 55, monthCount: 2, firstMonth: '2025-08-01', lastMonth: '2025-09-01', isCurrent: false },
+      { quarterKey: '2025-Q4', label: 'Q4 2025', quarterStart: '2025-10-01', marketPhpKg: 39.1816, marketKg: 3_728_680, marketPricedKg: 2_627_380, deliveryCount: 225, monthCount: 3, firstMonth: '2025-10-01', lastMonth: '2025-12-01', isCurrent: true },
+    ],
+    yearToDate: { marketPhpKg: 44.5762, marketKg: 10_416_168, marketPricedKg: 10_304_901, deliveryCount: 628, monthCount: 9, fromDate: '2026-01-01', toDate: '2026-09-30' },
+    trailing12m: { marketPhpKg: 44.8002, marketKg: 14_144_848, marketPricedKg: 12_932_281, deliveryCount: 853, monthCount: 12, fromDate: '2025-10-01', toDate: '2026-09-30' },
+    latestMonth: { month: '2025-12-01', marketPhpKg: 45.7412, marketKg: 1_342_880, marketPricedKg: 1_342_880, deliveryCount: 81, activeSuppliers: 10, isCurrentMonth: false },
+    monthsAvailable: 50,
+    monthsReturned: 3,
+  };
+}
+
+function fixtureSupplierMarket(): BlockingSupplierMarket {
+  const months = ['2025-10-01', '2025-11-01', '2025-12-01'];
+  const entry = (
+    key: string,
+    summary: Partial<BlockingSupplierMarketEntry['summary']>,
+    series: BlockingSupplierMarketEntry['series'],
+  ): BlockingSupplierMarketEntry => ({
+    key,
+    // The analytics view publishes only the CANONICAL name — the pretty spelling is the
+    // LENS's and is joined on `key`, which is what `displayByKey` proves.
+    display: key,
+    series,
+    summary: {
+      monthsActive: series.length,
+      totalKg: 0,
+      totalPricedKg: 0,
+      deliveryCount: 0,
+      kgWeightedPhpKg: null,
+      firstMonth: series[0]?.month ?? null,
+      lastMonth: series[series.length - 1]?.month ?? null,
+      firstPrice: null,
+      lastPrice: null,
+      priceChangePhpKg: null,
+      priceChangePct: null,
+      kgChangePct: null,
+      priceVolumeCorr: null,
+      corrMonthCount: 0,
+      direction: null,
+      avgPremiumPhpKg: null,
+      ...summary,
+    },
+  });
+  const point = (month: string, kg: number, price: number | null) => ({
+    month,
+    kg,
+    pricedKg: price === null ? 0 : kg,
+    avgPricePhpKg: price,
+    premiumPhpKg: null,
+    shareOfMonthPct: null,
+    deliveryCount: 3,
+  });
+  return {
+    monthsRequested: 3,
+    asOf: '2026-09-22',
+    fromMonth: months[0],
+    toMonth: months[months.length - 1],
+    directionDeadBandPct: 2,
+    supplierKeysRequested: ['ORNALES', 'LAYUPAN', 'SEVILLA'],
+    // THE WINDOW'S spine, never the selection's.
+    months,
+    suppliers: [
+      entry(
+        'ORNALES',
+        {
+          totalKg: 5_620_744,
+          totalPricedKg: 5_620_744,
+          kgWeightedPhpKg: 44.9225,
+          firstPrice: 50.86,
+          lastPrice: 44.92,
+          priceChangePct: -11.67,
+          kgChangePct: 18.2,
+          priceVolumeCorr: 0.264,
+          corrMonthCount: 12,
+          direction: 'down',
+          avgPremiumPhpKg: 0.4968,
+        },
+        [point(months[0], 1_800_000, 50.86), point(months[1], 1_900_000, 47.9), point(months[2], 1_920_744, 44.92)],
+      ),
+      // ⚠️ TWO priced months, a quiet first month, and every judgement NULL rather than 0.
+      entry('LAYUPAN', { totalKg: 100_000, totalPricedKg: 0, corrMonthCount: 2 }, [
+        point(months[1], 40_000, null),
+        point(months[2], 60_000, null),
+      ]),
+    ],
+    supplierCount: 2,
+    windowTotal: { marketKg: 14_144_848, marketPricedKg: 12_932_281, marketPhpKg: 44.8002, deliveryCount: 853 },
+    selectedTotal: { marketKg: 5_720_744, marketPricedKg: 5_620_744, marketPhpKg: 44.9225, deliveryCount: 40 },
+  };
 }
 
 console.log(`\n${passed} assertions passed.`);

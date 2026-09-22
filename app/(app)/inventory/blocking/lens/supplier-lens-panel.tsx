@@ -25,6 +25,12 @@
 // different things and only `pricesHidden` tells them apart, so both halves are read; see
 // `showPrice`'s own note.
 //
+// The SECOND read, added the same day, is PRINT-ONLY and is gated the same way — see
+// `SupplierLensAdapter.fetchMarket`. It fills page one's PRICE vs VOLUME panels and table
+// (the owner's *"utilize the existing price-to-volume graph / area graph"*), is asked for
+// only when the effective flag is true, and its whole section is ABSENT — not blank, not
+// zeroed — otherwise. The band table, the yard map and the per-band pages are unaffected.
+//
 // ── 2. ⚠️ THERE ARE TWO KILOGRAM ATTRIBUTIONS AND THIS PANEL MUST NOT MIX THEM ──
 // A block belongs to ONE band, but a MIXED block's kilos belong to SEVERAL suppliers, so
 // "how many blocks does ORNALES own" and "what share of the yard is ORNALES" are
@@ -65,13 +71,16 @@ import { AlertTriangle, Loader2, Users } from 'lucide-react';
 
 import { errorToast } from '@/lib/toast';
 
-import { fetchBlockingSupplierLens } from '../actions';
+import { fetchBlockingSupplierLens, fetchBlockingSupplierMarket } from '../actions';
 import {
   BLOCKING_SUPPLIER_LENS_MAX_TOP_N,
   BLOCKING_SUPPLIER_LENS_MIN_TOP_N,
+  BLOCKING_SUPPLIER_MARKET_DEFAULT_MONTHS,
   type BlockingSupplierBand,
   type BlockingSupplierLens,
   type BlockingSupplierLensResult,
+  type BlockingSupplierMarket,
+  type BlockingSupplierMarketResult,
 } from '../types';
 import type {
   BlockingLensClassifier,
@@ -94,6 +103,11 @@ import {
   type LensSummaryPrintModel,
 } from './lens-summary-print';
 import { buildLensSummaryBuckets } from './lens-summary-model';
+import { buildLensSupplierMarketPrintModel } from './lens-market-model';
+import {
+  LENS_SUPPLIER_MARKET_PANEL_COLS,
+  LensSupplierMarketSection,
+} from './lens-supplier-market-print';
 import { buildLensYardMap } from './lens-yard-map-model';
 import {
   formatLensBlocks,
@@ -131,11 +145,47 @@ import {
  */
 export interface SupplierLensAdapter {
   fetchLens: (topN: number) => Promise<BlockingSupplierLensResult>;
+  /**
+   * The PRINT-ONLY second read (2026-09-22) — the per-supplier price-and-volume history
+   * page one's PRICE vs VOLUME panels and table are built from.
+   *
+   * ⚠️ **IT IS MONEY ALMOST END TO END** (including `priceVolumeCorr`, which is DERIVED from
+   * price and is price information however it is labelled), so the action REFUSES a
+   * `!canViewPrices()` caller — and this panel does not even ASK when the effective flag is
+   * false. It is in no signature and no dependency of the band read, so it can never delay
+   * or re-trigger the tint; a refusal or an error leaves the section out of the printed
+   * model, and the sheet then prints page one exactly as it did before.
+   */
+  fetchMarket: (
+    months: number,
+    supplierKeys: readonly string[],
+  ) => Promise<BlockingSupplierMarketResult>;
 }
 
 const LIVE_ADAPTER: SupplierLensAdapter = {
   fetchLens: (topN) => fetchBlockingSupplierLens(topN),
+  fetchMarket: (months, supplierKeys) => fetchBlockingSupplierMarket(months, supplierKeys),
 };
+
+/**
+ * The separator that joins the named band keys into ONE primitive an effect can depend on,
+ * and splits them back out again.
+ *
+ * ⚠️ **IT MUST NOT BE THE EMPTY STRING, AND IT MUST NOT BE A RAW CONTROL BYTE.**
+ *
+ *   - `''` would make `split` return ONE CHARACTER PER LETTER — `['O','R','N',…]` — which
+ *     matches no `canonical_supplier()` name, so the read would succeed, return no entry,
+ *     and the printed section would render an empty table NAMING every band as having no
+ *     purchase history. A silent failure that looks like data.
+ *   - A literal `U+0001` typed into the source works at runtime and is **invisible in a
+ *     diff, in a review and in most editors** — it renders as `join('')`, i.e. exactly the
+ *     bug above. Written as an ESCAPE it is the same byte and a reader can see it.
+ *
+ * `U+0001` can never occur inside a canonical supplier name, so it can never split one in
+ * half. `scripts/verify-blocking-lens-ui.ts` pins both halves: the escape is used, and no
+ * raw control byte appears anywhere in the file.
+ */
+const SUPPLIER_KEY_SIG_SEP = '\u0001';
 
 /** `₱43.5690` split for the printed sheet's ACCOUNTING column. Four decimals, as SQL gives. */
 const PESO = '₱';
@@ -258,6 +308,61 @@ export function SupplierLensPanel({
   React.useEffect(() => {
     setPicked(new Set());
   }, [topN]);
+
+  // ── THE PRICE-vs-VOLUME READ — print only, and price-gated BEFORE it is made ──
+  //
+  // The owner, on page one's barren lower half: *"utilize the existing price-to-volume
+  // graph / area graph; a table that shows the direction of price per supplier and its
+  // relationship with the volume delivered."*
+  //
+  // ⚠️ **`others` IS NOT A SUPPLIER**, so only the NAMED bands' keys are asked about. The
+  // fold has no key (`key: null`, `isOthers: true`) and the market view is keyed on real
+  // canonical suppliers; aggregating a fold here would be a TypeScript average of weighted
+  // prices, which is the one thing this directory may not do.
+  //
+  // The two identities AGREE — the lens keys on
+  // `canonical_supplier(split_part(supplier,' - ',1))` and the market view on
+  // `canonical_supplier(supplier)` — and that is MEASURED every verify run rather than
+  // assumed, which is what makes handing these keys straight in legal.
+  const namedKeys = React.useMemo(
+    () =>
+      (lens?.bands ?? [])
+        .filter((b): b is BlockingSupplierBand & { key: string } => !b.isOthers && b.key !== null)
+        .map((b) => b.key),
+    [lens],
+  );
+  /**
+   * A string, so an array rebuilt on every render cannot re-fire the read. The effect
+   * SPLITS it back apart to recover the keys — which is what lets its dependency be a
+   * primitive — so the separator is load-bearing. See `SUPPLIER_KEY_SIG_SEP`.
+   */
+  const namedKeysSig = namedKeys.join(SUPPLIER_KEY_SIG_SEP);
+
+  const [market, setMarket] = React.useState<BlockingSupplierMarket | null>(null);
+  React.useEffect(() => {
+    // THE GATE IS BEFORE THE REQUEST. The action refuses a price-denied caller anyway; not
+    // asking at all is what keeps a Production reader's sheet free of a pointless round
+    // trip and this panel free of a refusal it would have to ignore.
+    if (!caps.canViewPrices || namedKeysSig === '') {
+      setMarket(null);
+      return;
+    }
+    let cancelled = false;
+    const keys = namedKeysSig.split(SUPPLIER_KEY_SIG_SEP);
+    void adapterRef.current
+      .fetchMarket(BLOCKING_SUPPLIER_MARKET_DEFAULT_MONTHS, keys)
+      .then((res) => {
+        if (!cancelled) setMarket(res.ok ? res.market : null);
+      })
+      .catch(() => {
+        // Quietly: this read is not on the screen's critical path, so a failure takes the
+        // printed section away and says nothing. See the adapter's doc.
+        if (!cancelled) setMarket(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [caps.canViewPrices, namedKeysSig]);
 
   // ── Publish the classifier ────────────────────────────────────────────────
   //
@@ -471,6 +576,25 @@ export function SupplierLensPanel({
 
     const visible = lens.bands.filter((b) => picked.size === 0 || picked.has(b.index));
 
+    // ── PAGE ONE'S PRICE vs VOLUME ───────────────────────────────────────────
+    // Present only when the reader may see prices AND the read landed. The LABEL comes from
+    // the LENS's own `display` (`Ornales`) joined on `key`: the analytics view publishes
+    // only the CANONICAL name, so its own `display` equals its `key` (`ORNALES`) — the data
+    // layer's contract says to take the label from here.
+    const marketSection =
+      !priced || market === null
+        ? null
+        : buildLensSupplierMarketPrintModel({
+            market,
+            displayByKey: new Map(
+              lens.bands
+                .filter((b) => !b.isOthers && b.key !== null)
+                .map((b) => [b.key as string, b.display ?? (b.key as string)]),
+            ),
+            requestedKeys: namedKeys,
+            maxPanels: LENS_SUPPLIER_MARKET_PANEL_COLS * 2,
+          });
+
     return {
       // THE TITLE IS THE LENS'S NAME. The settings line says what it is set to.
       title: 'Supplier lens',
@@ -486,6 +610,10 @@ export function SupplierLensPanel({
       // BAND table heads its own column, because a band row already IS a supplier.
       figureColumnLabel: 'Supplier',
       bandFigureColumnLabel: priced ? '₱/kg' : 'Mixed',
+      // ⚠️ THE WHOLE SECTION IS ABSENT for a price-denied reader — no chart, no table, not
+      // an empty one. The lens itself still prints in full.
+      page1Extra:
+        marketSection === null ? null : <LensSupplierMarketSection model={marketSection} />,
       bands: visible.map((b) => ({
         index: b.index,
         label: supplierBandLabel(b),
@@ -537,7 +665,7 @@ export function SupplierLensPanel({
             }
           : null,
     };
-  }, [lens, data, picked, settings.unit, share, caps.canViewPrices]);
+  }, [lens, data, picked, settings.unit, share, caps.canViewPrices, market, namedKeys]);
 
   /** THE BAR'S HEADLINE — `17 suppliers · 23 mixed`. The payload's own figures. */
   const headline = lens
