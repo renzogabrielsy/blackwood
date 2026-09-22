@@ -25,6 +25,8 @@ import { SupplierLensFixture } from './supplierlens-fixture';
 //   ?top=1|3|6|12       — how many suppliers to name (6 is the shipped default)
 //   ?unattributed=1     — include blocks whose batch has NO delivery, to see them stay un-lensed
 //   ?prices=0           — simulate a PRICE-DENIED reader: Age + Supplier, no Price tab
+//   ?pca=1              — put stock in PCA/PCB, so the PRINTED YARD MAP includes them
+//                         (14 cell rows instead of 11 — its worst-case cell size)
 //
 // It is gated TWICE, and the two locks are independent:
 //   1. here — `notFound()` in production unless `TABLE_PLAYGROUND` is set;

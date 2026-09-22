@@ -52,3 +52,10 @@ suppliers) 5 / 5.0%. 170 blocks / 10,515,408 kg / 17 suppliers / 23 mixed / 0 un
 ## 6. Git state
 `main` = `origin/main` after the merge. Branch kept. Merged worktrees under `.claude/worktrees/`
 can be removed. Fly worker unchanged (**v31**).
+
+## 7. ADDENDUM (same day) — yard map page in the lens print
+Renzo asked for the block arrangement printed in solid colours, loc centred and big, all blocks on one
+landscape page. Shipped on `feat/lens-print-yard-map`: page 2 of every lens print. Cells 13.6 mm / 11 pt
+(10.4 mm / 10 pt with PCA/PCB), locs wrap at the hyphen rather than shrink, bold mono advance 0.63 em,
+ink chosen by luminance. Lesson: **a map that shares a data-sized page is legible only by luck** — give it
+its own page. Unverified on the live 170-block yard.

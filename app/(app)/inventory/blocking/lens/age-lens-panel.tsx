@@ -72,6 +72,7 @@ import {
   type LensSummaryPrintModel,
 } from './lens-summary-print';
 import { buildLensSummaryBuckets } from './lens-summary-model';
+import { buildLensYardMap } from './lens-yard-map-model';
 import {
   formatLensBlocks,
   formatLensDays,
@@ -449,6 +450,11 @@ export function AgeLensPanel({
       excludedFigure: LENS_EMDASH,
     });
 
+    // THE YARD MAP page — the SAME `bandOf` lookup the buckets above use, so the map and
+    // the per-band tables can never place a block in two different bands. An UNDATED pile
+    // is in no band there exactly as it is here, and the map draws it grey with a dash.
+    const yardMap = buildLensYardMap({ data, bandOf: (loc) => lens.bandByBlock[loc] });
+
     const visible = lens.bands.filter((b) => picked.size === 0 || picked.has(b.index));
 
     return {
@@ -487,6 +493,7 @@ export function AgeLensPanel({
         // cover every occupied block, the average covers the DATED ones.
         figureNote: 'avg of dated',
       },
+      yardMap,
       excluded:
         lens.undated.blockCount > 0
           ? {
