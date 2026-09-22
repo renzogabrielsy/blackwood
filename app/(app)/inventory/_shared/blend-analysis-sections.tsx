@@ -68,6 +68,7 @@ import {
   type BlendAnalysisPageId,
 } from './blend-analysis-options';
 import {
+  ageMethodNote,
   blocksWord,
   EMDASH,
   fmtDays,
@@ -75,15 +76,16 @@ import {
   fmtPesoNum,
   fmtQuality,
   fmtSharePct,
-  fmtWholeDays,
   groupWord,
   naturalMethodNote,
   QUALITY_METRIC_LABELS,
   QUALITY_METRIC_UNITS,
   qualityDecimals,
   snapshotGapNote,
+  undatedNote,
   unmeasuredNote,
   vsMarketCaption,
+  vsMarketHeading,
   vsMarketUnavailableNote,
   fmtPeso,
 } from './blend-analysis-text';
@@ -540,23 +542,25 @@ function PriceGroupsTable({ analysis }: { analysis: BlendAnalysis }) {
         <Accounting key="p" value={o.kgWeightedPhpKg} />,
         <Accounting key="v" value={o.valuePhp} decimals={0} />,
       ]}
-      caption={naturalMethodNote({
-        subject: 'prices',
-        groupCount: nat.groupCount,
-        cuts: nat.cuts,
-        gvf: nat.gvf,
-        formatCut: (v) => fmtPeso(v),
-      })}
+      caption={[
+        naturalMethodNote({
+          groupCount: nat.groupCount,
+          cuts: nat.cuts,
+          gvf: nat.gvf,
+          formatCut: (v) => fmtPeso(v),
+        }),
+        unmeasuredNote(nat.unmeasured, 'No price'),
+      ]
+        .filter((t) => t !== '')
+        .join(' · ')}
       note={
         gap
           ? snapshotGapNote({
               snapshot: fmtPeso(o.snapshotPhpKg as number),
               measured: fmtPeso(o.kgWeightedPhpKg as number),
-              excluded: 'unpriced blocks',
+              excluded: 'unpriced',
             })
-          : nat.unmeasured.blockCount > 0
-            ? unmeasuredNote(nat.unmeasured, 'price yet')
-            : undefined
+          : undefined
       }
     />
   );
@@ -577,7 +581,7 @@ function VsMarketTable({
       <p className="text-[10px] leading-snug text-muted-foreground">
         {price.vsMarketUnavailable
           ? vsMarketUnavailableNote(price.vsMarketUnavailable)
-          : 'No market comparison is available for this blend.'}
+          : 'No comparison available'}
       </p>
     );
   }
@@ -623,7 +627,7 @@ function VsMarketTable({
         <Accounting key="p" value={vm.overall.kgWeightedPhpKg} />,
         <Accounting key="v" value={vm.overall.valuePhp} decimals={0} />,
       ]}
-      caption={`${vsMarketCaption(vm)} Dearest band first.`}
+      caption={vsMarketCaption(vm)}
     />
   );
 }
@@ -769,23 +773,25 @@ function QualityTable({
               ]
             : [`${fmtKg(o.kg)} kg`, fmtQuality(metric, o.kgWeightedValue)]
         }
-        caption={naturalMethodNote({
-          subject: `${QUALITY_METRIC_LABELS[metric]} readings`,
-          groupCount: nat.groupCount,
-          cuts: nat.cuts,
-          gvf: nat.gvf,
-          formatCut: (v) => v.toFixed(qualityDecimals(metric)),
-        })}
+        caption={[
+          naturalMethodNote({
+            groupCount: nat.groupCount,
+            cuts: nat.cuts,
+            gvf: nat.gvf,
+            formatCut: (v) => v.toFixed(qualityDecimals(metric)),
+          }),
+          unmeasuredNote(nat.unmeasured, 'No reading'),
+        ]
+          .filter((t) => t !== '')
+          .join(' · ')}
         note={
           gap
             ? snapshotGapNote({
                 snapshot: fmtQuality(metric, o.snapshotValue),
                 measured: fmtQuality(metric, o.kgWeightedValue),
-                excluded: 'blocks with no reading',
+                excluded: 'no-reading',
               })
-            : nat.unmeasured.blockCount > 0
-              ? unmeasuredNote(nat.unmeasured, 'reading')
-              : undefined
+            : undefined
         }
       />
     </div>
@@ -856,20 +862,18 @@ function AgeTable({
       groups={groups}
       footerLabel={`Whole blend · ${blocksWord(o.blockCount)}`}
       footerCells={[`${fmtKg(o.kg)} kg`, fmtDays(o.kgWeightedAgeDays), EMDASH, EMDASH]}
-      caption={`Ages as of ${age.asOf}, weighted by the kilograms still in each pile, from its deliveries’ average date. Oldest band first.${
-        o.oldestAgeDays !== null
-          ? ` Oldest pile ${fmtWholeDays(o.oldestAgeDays)}${
-              o.oldestBlockLoc ? ` at ${o.oldestBlockLoc}` : ''
-            }${o.oldestBatchCode ? ` (${o.oldestBatchCode})` : ''}.`
-          : ''
-      }`}
-      note={
-        age.undated.blockCount > 0
-          ? `${blocksWord(age.undated.blockCount)}, ${fmtKg(
-              age.undated.kg,
-            )} kg, have no delivery at or before ${age.asOf} — they have no age, which is not the same as being new. In no band and out of every average.`
-          : undefined
-      }
+      caption={[
+        ageMethodNote({
+          asOf: age.asOf,
+          // The bands' OWN published lower bounds — a read, never a decision made here.
+          cutDays: age.bands.map((b) => b.lowerDays).filter((d) => d > 0),
+          oldestDays: o.oldestAgeDays,
+          oldestBlockLoc: o.oldestBlockLoc,
+        }),
+        undatedNote(age.undated.blockCount),
+      ]
+        .filter((t) => t !== '')
+        .join(' · ')}
     />
   );
 }
@@ -891,6 +895,21 @@ export interface BlendAnalysisSectionsProps {
   ageBandNames: Record<string, string>;
   /** The reader's WET / ASHY lab-highlight thresholds, from `useTableSettings()`. */
   labHighlights: Record<LabMetric, LabHighlightSpec>;
+}
+
+/**
+ * Is the comparison against a price somebody TYPED, rather than a measured market?
+ *
+ * Read off the payload's own `marketBasis` — `'given'` is what SQL calls a figure that
+ * came in as an argument. Both the available and the unavailable shapes carry it, so a
+ * blend whose market could not be measured still gets the right heading. Nothing here
+ * decides anything; it is the switch `vsMarketHeading` needs.
+ */
+function typedPriceBasis(analysis: BlendAnalysis | null): boolean {
+  const price = analysis?.price;
+  if (!price) return false;
+  if (price.vsMarket) return price.vsMarket.marketBasis === 'given';
+  return price.vsMarketUnavailable?.marketBasis === 'given';
 }
 
 /** A layout-matched placeholder, so nothing jumps when the payload lands. */
@@ -944,18 +963,16 @@ export function BlendAnalysisSections({
         <section key={id} className="space-y-2">
           {id === 'price' && (
             <>
-              <PageHeading
-                icon={Coins}
-                title="Price groups — natural breaks"
-                sub={loading && !analysis ? undefined : 'high → average → low'}
-              />
+              <PageHeading icon={Coins} title="Price groups — natural breaks" />
               {analysis?.price ? (
                 <PriceGroupsTable analysis={analysis} />
               ) : (
                 <SectionSkeleton rows={8} />
               )}
               <div className="pt-1">
-                <PageHeading icon={Coins} title="Against market" />
+                {/* THE ONE definition of this heading. A figure the operator TYPED is a
+                    SET PRICE, and the word "market" must not appear anywhere for it. */}
+                <PageHeading icon={Coins} title={vsMarketHeading(typedPriceBasis(analysis))} />
               </div>
               {analysis?.price ? (
                 <VsMarketTable analysis={analysis} bandNames={priceBandNames} />
@@ -967,11 +984,7 @@ export function BlendAnalysisSections({
 
           {id === 'quality' && (
             <>
-              <PageHeading
-                icon={FlaskConical}
-                title="Quality — MC · ASH · BD"
-                sub="highest reading first"
-              />
+              <PageHeading icon={FlaskConical} title="Quality — MC · ASH · BD" />
               {analysis ? (
                 <div className="space-y-3">
                   {QUALITY_TABLES.map(({ metric, companion }) => (
@@ -992,7 +1005,7 @@ export function BlendAnalysisSections({
 
           {id === 'age' && (
             <>
-              <PageHeading icon={Hourglass} title="Age" sub="oldest first" />
+              <PageHeading icon={Hourglass} title="Age" />
               {analysis ? <AgeTable analysis={analysis} bandNames={ageBandNames} /> : <SectionSkeleton rows={8} />}
             </>
           )}

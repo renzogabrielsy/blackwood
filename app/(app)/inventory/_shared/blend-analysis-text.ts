@@ -21,6 +21,31 @@
 // group is called AVERAGE, because that is the word the owner used ("high priced and
 // low priced and average priced"). A two-group blend has no middle, and a one-group
 // blend is not "average" — it is one group, and it says so.
+//
+// ── EVERY CAPTION IS A LIST OF FACTS, NOT A SENTENCE (2026-09-22) ───────────
+// The owner, on the live pages: *"I don't want descriptions like this, straight to the
+// point, not wordy. Apply to all sections, not just price."* So a caption is now
+// `<fact> · <fact> · <fact>` and nothing else — `Cut lines ₱38.97 · ₱44.50 · fit 97.6%`,
+// not a paragraph explaining what a natural break is. Three consequences, each of which
+// `scripts/verify-blend-analysis-ui.ts` asserts:
+//
+//   • NO EXPLANATION OF THE METHOD. The cut lines and the fit ARE the method; a reader
+//     who wants the reasoning has CONTEXT.md, and a reader looking at a table wants the
+//     numbers. The banned words are checked by name — `naturally`, `minimise`,
+//     `dearest`, `spread` — as is the arrow `→`.
+//   • NO ORDERING PROSE. "Dearest band first" / "Oldest band first" described what the
+//     rows already show; the first row of a table is not a fact that needs a sentence.
+//   • A NOTE THAT IS ABSENT WHEN IT HAS NOTHING TO SAY. The no-reading line is emitted
+//     only when the count is non-zero, and the snapshot-gap line only when the two
+//     figures actually disagree — the same NULL-≠-0 discipline the payload carries.
+//
+// ── "MARKET" IS A MEASUREMENT. A TYPED PRICE IS NOT (2026-09-22) ────────────
+// `vsMarketHeading` / `priceBasisNoun` are the ONE definition of what that section is
+// called, and the word **market must not appear anywhere for a price the operator typed**
+// — on the analysis pages, on the lens legend, in the lens's settings or on either
+// printout. A figure somebody typed in is a SET PRICE; calling it market would claim a
+// measurement nobody made. Both surfaces and the lens read these two functions, so the
+// label cannot be spelled two ways.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type {
@@ -119,60 +144,47 @@ export function groupWord(label: BlendNaturalGroupLabel, groupCount: number): st
 }
 
 /**
- * The one-line METHOD NOTE, in plain language, built from the payload's own cuts and
- * its `gvf`.
+ * The METHOD LINE — the cut lines and the fit, and nothing else.
  *
- * *"Grouped where the prices naturally separate: cut lines at ₱38.97 and ₱44.50
- * minimise the spread inside each group. Fit 97.6%."*
+ * `Cut lines ₱38.97 · ₱44.50 · fit 97.6%` · `Cut line 11.23 · fit 89.6%` · `One group`.
  *
  * The degenerate cases are said honestly rather than dressed up: a blend whose blocks
- * all cost the same has ONE group and no cut line, and claiming a fit of 0% for it
- * would be a lie (the payload's `gvf` is NULL there — there is no variance to
- * explain).
+ * all read the same has ONE group and no cut line, and the payload's `gvf` is NULL
+ * there — there is no variance to explain — so the line is the two words `One group`
+ * and claims no fit.
  *
  * ⚠️ `cut.value` is the MIDPOINT of the gap and is a LABEL. The membership test is
  * `cut.above`, and neither surface may re-derive a group from the midpoint.
  */
 export function naturalMethodNote(args: {
-  /** What is being grouped, in the reader's words: `prices`, `MC readings`. */
-  subject: string;
   groupCount: number;
   cuts: readonly BlendNaturalCut[];
   gvf: number | null;
   /** How to print one cut line — pesos for price, a reading for a lab stat. */
   formatCut: (v: number) => string;
 }): string {
-  const { subject, groupCount, cuts, gvf } = args;
-  const fit = gvf === null ? null : `Fit ${(gvf * 100).toFixed(1)}%.`;
-
-  if (groupCount <= 1) {
-    return [
-      `All one group: every measured block reads the same ${subject.replace(/s$/, '')}, so there is nothing to separate.`,
-      fit,
-    ]
-      .filter(Boolean)
-      .join(' ');
-  }
-
+  const { groupCount, cuts, gvf } = args;
+  const fit = gvf === null ? null : `fit ${(gvf * 100).toFixed(1)}%`;
   const lines = cuts.map((c) => args.formatCut(c.value));
-  const cutText =
-    lines.length === 0
-      ? ''
-      : lines.length === 1
-        ? `cut line at ${lines[0]}`
-        : `cut lines at ${lines.slice(0, -1).join(', ')} and ${lines[lines.length - 1]}`;
 
-  const groupsWord = groupCount === 2 ? 'two groups' : `${groupCount} groups`;
-  return [
-    `Grouped where the ${subject} naturally separate into ${groupsWord}: ${cutText} minimise the spread inside each group.`,
-    fit,
-  ]
-    .filter(Boolean)
-    .join(' ');
+  if (groupCount <= 1 || lines.length === 0) {
+    return ['One group', fit].filter(Boolean).join(' · ');
+  }
+  const head = lines.length === 1 ? 'Cut line' : 'Cut lines';
+  return [`${head} ${lines.join(' · ')}`, fit].filter(Boolean).join(' · ');
 }
 
 /** `September 2026` from a `yyyy-MM-01`. Falls back to the raw string if unparseable. */
 export function monthName(month: string | null): string | null {
+  return monthLabel(month, false);
+}
+
+/** `Sep 2026` — the short form a caption uses, because a caption is a list of facts. */
+export function monthAbbr(month: string | null): string | null {
+  return monthLabel(month, true);
+}
+
+function monthLabel(month: string | null, abbr: boolean): string | null {
   if (!month) return null;
   const m = /^(\d{4})-(\d{2})/.exec(month);
   if (!m) return month;
@@ -181,35 +193,57 @@ export function monthName(month: string | null): string | null {
     'July', 'August', 'September', 'October', 'November', 'December',
   ];
   const idx = Number(m[2]) - 1;
-  return idx >= 0 && idx < 12 ? `${names[idx]} ${m[1]}` : month;
+  if (idx < 0 || idx > 11) return month;
+  const name = names[idx];
+  return `${abbr ? name.slice(0, 3) : name} ${m[1]}`;
 }
 
 /**
- * *"Market ₱39.83 (September 2026 deliveries) rounds up to ₱40"* — or, for a price the
- * operator typed, *"Market ₱41 (typed) — ₱41 and up is above market"*.
+ * The NOUN for whatever the blocks are being compared against — THE one definition.
  *
- * TWO SENTENCES BECAUSE THERE ARE TWO RULES, exactly as the price lens says them: a
+ * A figure the operator TYPED is a **set price**, never "market": market is something
+ * measured from deliveries, and calling a typed number by its name would claim a
+ * measurement nobody made. Every surface that labels this comparison — the analysis
+ * pages, their two printouts, the lens legend, the lens's settings and the lens
+ * printout — reads this function or `vsMarketHeading` below, so the two words cannot
+ * drift apart.
+ */
+export function priceBasisNoun(typed: boolean): string {
+  return typed ? 'set price' : 'market';
+}
+
+/** `Against set price` / `Against market` — the section heading, one definition. */
+export function vsMarketHeading(typed: boolean): string {
+  return typed ? 'Against set price' : 'Against market';
+}
+
+/**
+ * `Market ₱39.83 (Sep 2026) · ₱40 and up is above` — or, for a typed figure,
+ * `Set price ₱45 · ₱45 and up is above`.
+ *
+ * TWO FORMS BECAUSE THERE ARE TWO RULES, exactly as the price lens states them: a
  * MEASURED market rounds up to the next whole peso in SQL, while a price a human
- * TYPED **is** the cut line. Saying "rounds up to ₱42" about a typed ₱41 would
- * describe a lens one peso looser than the one they asked for.
+ * TYPED **is** the cut line — so a typed ₱45 reads back as ₱45 and never as ₱46. The
+ * word *market* is absent from the typed form on purpose; see `priceBasisNoun`.
  */
 export function vsMarketCaption(v: BlendVsMarket): string {
   if (v.marketBasis === 'given') {
-    return `Market ${fmtPeso(v.marketPhpKg)} (typed) ${EMDASH} ${fmtWholePeso(
-      v.roundedUpPhp,
-    )} and up is above market.`;
+    return `Set price ${fmtPeso(v.marketPhpKg)} · ${fmtWholePeso(v.roundedUpPhp)} and up is above`;
   }
-  const month = monthName(v.marketBasisMonth);
-  const where = month ? ` (${month} deliveries)` : '';
-  return `Market ${fmtPeso(v.marketPhpKg)}${where} rounds up to ${fmtWholePeso(v.roundedUpPhp)}.`;
+  const month = monthAbbr(v.marketBasisMonth);
+  const where = month ? ` (${month})` : '';
+  return `Market ${fmtPeso(v.marketPhpKg)}${where} · ${fmtWholePeso(
+    v.roundedUpPhp,
+  )} and up is above`;
 }
 
-/** Why there is no market comparison — the payload's own reason, never a ₱0. */
+/** Why there is no comparison — the payload's own reason, never a ₱0. */
 export function vsMarketUnavailableNote(u: BlendVsMarketUnavailable): string {
-  const month = monthName(u.marketBasisMonth);
-  const where =
-    u.marketBasis === 'as_of_month' && month ? ` for ${month}` : '';
-  return `${u.message} No market price could be measured${where}, and a market of ${PESO}0 would put every block above market — so nothing is assumed here. Set a market price on the Price lens to compare.`;
+  const month = monthAbbr(u.marketBasisMonth);
+  const where = u.marketBasis === 'as_of_month' && month ? ` for ${month}` : '';
+  // A ₱0 market would put every block above it, so nothing is assumed — said as two
+  // facts rather than a paragraph.
+  return `No market price${where} · set one on the Price lens`;
 }
 
 /** `7 blocks` / `1 block`. */
@@ -218,40 +252,75 @@ export function blocksWord(n: number): string {
 }
 
 /**
- * The muted line under a table for the blocks that have NO reading.
+ * The muted line for the blocks that have NO reading — `No reading: 2 blocks`.
  *
  * A metric value that is NULL **or ≤ 0** is the not-recorded placeholder, never a
  * measurement: `view_blocking_grid` COALESCEs ash and both BDs to 0, and charcoal with
  * 0.000% ash does not exist. Such a block is in NO group and out of every average —
  * calling it the cleanest block in the blend is the ₱11.01-vs-₱39.99 `avg_cost` bug in
- * a new costume.
+ * a new costume, which is why it is listed at all.
+ *
+ * It returns the EMPTY STRING when the count is zero, so every caller can emit it
+ * unconditionally and a page never carries a line saying nothing is missing.
  */
-export function unmeasuredNote(u: BlendAnalysisUnmeasured, subject: string): string {
-  const parts = [`${blocksWord(u.blockCount)}, ${fmtKg(u.kg)} kg, with no ${subject}`];
-  if (u.noWeightCount > 0) {
-    parts.push(
-      `${u.noWeightCount} of them ${u.noWeightCount === 1 ? 'has' : 'have'} a reading but nothing in the pile to weight it with`,
-    );
-  }
-  return `${parts.join(' · ')}. In no group and out of every average and both percentages.`;
+export function unmeasuredNote(u: BlendAnalysisUnmeasured, label: string): string {
+  if (u.blockCount <= 0) return '';
+  const parts = [`${label}: ${blocksWord(u.blockCount)}`];
+  // A reading with nothing in the pile to weight it with is a second, different gap —
+  // one token, not a clause.
+  if (u.noWeightCount > 0) parts.push(`${u.noWeightCount} unweighted`);
+  return parts.join(' · ');
 }
 
 /**
- * The FOOTER reconciliation sentence, when the honest figure and the blend's own
- * stored figure disagree.
+ * The footer line when the honest figure and the blend's own stored figure disagree —
+ * `Blend avg 2.13 · excl. no-reading 3.13`.
  *
- * They are equal (gap exactly 0) whenever nothing is unmeasured. When something IS,
- * the SNAPSHOT's figure is the one dragged down by a placeholder zero — so the page
- * prints both numbers and says which population each one covers, rather than picking a
- * winner.
+ * They are equal (gap exactly 0) whenever nothing is unmeasured. When something IS, the
+ * SNAPSHOT's figure is the one dragged down by a placeholder zero — so BOTH numbers are
+ * printed, labelled by the population each covers, rather than one of them being picked
+ * as the winner.
  */
 export function snapshotGapNote(args: {
   /** The blend's own stored weighted figure, formatted. */
   snapshot: string;
   /** The figure over the MEASURED blocks, formatted. */
   measured: string;
-  /** `blocks with no reading` / `unpriced blocks`. */
+  /** What was left out: `no-reading` / `unpriced`. */
   excluded: string;
 }): string {
-  return `The blend's own weighted average is ${args.snapshot}; leaving out the ${args.excluded} gives ${args.measured}. Both are shown because the difference IS those blocks.`;
+  return `Blend avg ${args.snapshot} · excl. ${args.excluded} ${args.measured}`;
+}
+
+/**
+ * The AGE page's method line — `As of 2026-09-21 · cuts 60 · 120 · 365 d`, plus the
+ * oldest pile when the payload names one.
+ *
+ * The cut days are the BANDS' OWN published lower bounds, read off the payload; nothing
+ * here decides where a band starts. The oldest pile rides as one more `·` token because
+ * it is a bare fact and the page has no other place to say it.
+ */
+export function ageMethodNote(args: {
+  asOf: string;
+  /** The bands' lower bounds above zero, ascending — the cut lines, as published. */
+  cutDays: readonly number[];
+  oldestDays: number | null;
+  oldestBlockLoc: string | null;
+}): string {
+  const parts = [`As of ${args.asOf}`];
+  if (args.cutDays.length > 0) {
+    parts.push(`cuts ${args.cutDays.map((d) => d.toLocaleString()).join(' · ')} d`);
+  }
+  if (args.oldestDays !== null) {
+    parts.push(
+      `oldest ${fmtDays(args.oldestDays)} d${args.oldestBlockLoc ? ` ${args.oldestBlockLoc}` : ''}`,
+    );
+  }
+  return parts.join(' · ');
+}
+
+/** `No delivery dates: 2 blocks` — the age page's own twin of `unmeasuredNote`. */
+export function undatedNote(blockCount: number): string {
+  if (blockCount <= 0) return '';
+  return `No delivery dates: ${blocksWord(blockCount)}`;
 }

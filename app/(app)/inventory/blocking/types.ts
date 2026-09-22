@@ -415,6 +415,190 @@ export const BLOCKING_AGE_LENS_DEFAULT_EDGES: readonly number[] = [60, 120, 365]
 export const BLOCKING_AGE_EDGE_MIN_DAYS = 1;
 export const BLOCKING_AGE_EDGE_MAX_DAYS = 5000;
 
+// ─── Supplier lens ───────────────────────────────────────────────────────────
+// "Whose charcoal is in my yard." The THIRD lens on the frame the price lens built, over
+// `fn_blocking_supplier_lens` (migration `20260922011759_blocking_supplier_lens`).
+//
+// It shares the AGE lens's posture, not the price lens's: **no ₱ figure exists in this
+// payload and none is derivable from it**, so `fetchBlockingSupplierLens` has NO
+// `canViewPrices()` call and the lens is shown to EVERY role INCLUDING Production. A
+// supplier's name beside a kilogram total says nothing about what it cost.
+// `scripts/verify-blocking-supplier-lens.ts` asserts the gate's ABSENCE.
+//
+// NOTHING HERE IS A NEW DEFINITION. Supplier identity (`canonical_supplier` over the
+// origin-stripped spelling) and the ALL/SOME rule (`supplier_count_in_block > 1`) are
+// owned by `view_blocking_block_suppliers`; the DOMINANT supplier uses
+// `fn_blend_block_facts`' own tie rule and is proven equal to it every verify run.
+
+/**
+ * One supplier's contribution to ONE block, for a cell tooltip.
+ *
+ * **`kg` and `balanceKg` are two different numbers and the names are load-bearing.**
+ * `kg` is what was DELIVERED (the view's own column, verbatim — it sums to the block's
+ * `total_in`); `balanceKg` is that supplier's pro-rata slice of what is STILL in the
+ * block, and it is the one that sums to the block's `kg`. `sharePct` is the view's own
+ * 0–100 percent of delivered kilograms.
+ */
+export interface BlockingSupplierSlice {
+  key: string;
+  display: string;
+  /** DELIVERED kilograms — sums to the block's `total_in`, NOT to its balance. */
+  kg: number;
+  /** PERCENT 0–100 of the block's delivered kilograms. Sums to 100 across the block. */
+  sharePct: number;
+  /** This supplier's pro-rata slice of the block's remaining balance. Sums to `kg`. */
+  balanceKg: number;
+}
+
+/**
+ * One band of the lens — ONE named supplier, or the single `others` fold.
+ *
+ * **THERE ARE TWO KILOGRAM FAMILIES AND THE UI MUST NOT MIX THEM.**
+ *   `dominantBlockCount` / `dominantKg` — the blocks where this supplier is the biggest,
+ *     and their WHOLE balance. **This is what the grid TINT shows.**
+ *   `apportionedKg` — this supplier's own slice of every block it appears in.
+ *     **This is what the yard-share RATIO BAR must use.**
+ * They are different questions, not two spellings of one: a supplier can appear in many
+ * blocks and dominate none (measured 2026-09-22 — MERCADO, 11 blocks, 0 dominated), so it
+ * has real `apportionedKg` beside a `dominantKg` of **0**, which is a true zero and not a
+ * missing value.
+ *
+ * `kgSharePct` is computed on apportioned kg and `blockSharePct` on dominant blocks —
+ * each over the ATTRIBUTED population — and each family sums to 100 across all bands,
+ * `others` included.
+ *
+ * Every band is present even when it dominates no block, so a legend can render the whole
+ * scale without inventing rows.
+ */
+export interface BlockingSupplierBand {
+  /** 0-based, descending by `apportionedKg`. The `others` band is always LAST. */
+  index: number;
+  /** The canonical supplier key. **Null on the `others` band** — read `isOthers`. */
+  key: string | null;
+  /** A representative raw spelling, for display only, never for matching. Null on `others`. */
+  display: string | null;
+  /** True on the single fold band. The UI owns its label; the payload does not name it. */
+  isOthers: boolean;
+  /** 1 on a named band; how many suppliers were folded on the `others` band. */
+  supplierCount: number;
+  /** Only populated on the `others` band, so the UI can name its members. Else null. */
+  supplierKeys: string[] | null;
+  /** Blocks this supplier DOMINATES — what the grid tint shows. May legitimately be 0. */
+  dominantBlockCount: number;
+  /** The WHOLE balance of those blocks. May legitimately be 0. */
+  dominantKg: number;
+  /** This supplier's own slice of every block it appears in — USE THIS FOR THE RATIO BAR. */
+  apportionedKg: number;
+  /** The same population's DELIVERED kilograms. Sums to `total_in`, NOT to `total.kg`. */
+  apportionedDeliveredKg: number;
+  /** PERCENT 0–100 on APPORTIONED kg, over the attributed population. Null if none attributed. */
+  kgSharePct: number | null;
+  /** PERCENT 0–100 on DOMINANT blocks, over the attributed population. Null if none attributed. */
+  blockSharePct: number | null;
+  /** How many of this band's dominated blocks are mixed (`supplierCount > 1`). */
+  mixedBlockCount: number;
+}
+
+/** One occupied block, as the supplier lens sees it. */
+export interface BlockingSupplierBlock {
+  blockLoc: string;
+  batchId: string;
+  batchCode: string;
+  /** The band of its DOMINANT supplier. Indexes into `bands`. */
+  bandIndex: number;
+  dominantSupplierKey: string;
+  dominantSupplierDisplay: string;
+  /** PERCENT 0–100 of the block's delivered kilograms held by the dominant supplier. */
+  dominantSharePct: number | null;
+  /**
+   * **THE ALL/SOME RULE, and it is a carried COLUMN — never re-derive it.** False = the
+   * whole block is one supplier (green); true = only some of it is (orange). It is
+   * `view_blocking_block_suppliers.supplier_count_in_block > 1`, the one place that test
+   * lives. Do NOT compute it from `suppliers.length`.
+   */
+  isMixed: boolean;
+  /** Distinct suppliers in this block. `isMixed` is exactly `supplierCount > 1`. */
+  supplierCount: number;
+  /** The block's BALANCE in kg — the number the Blocking cell renders. */
+  kg: number;
+  /** Every supplier in the block, biggest delivered first. For tooltips. */
+  suppliers: BlockingSupplierSlice[];
+}
+
+/**
+ * The whole lens, for one `topN`.
+ *
+ * Checkable invariants the data layer guarantees (and
+ * `scripts/verify-blocking-supplier-lens.ts` proves against the live database every run):
+ *   Σ `bands[].dominantBlockCount` + `unattributed.blockCount` === `total.blockCount` (exact)
+ *   Σ `bands[].dominantKg`         + `unattributed.kg`         === `total.kg`          (exact)
+ *   Σ `bands[].apportionedKg`      + `unattributed.kg`         === `total.kg`   (see below)
+ *   Σ `bands[].apportionedDeliveredKg` === the grid's `total_in` — a DIFFERENT number (exact)
+ *   Σ `kgSharePct` === 100  and  Σ `blockSharePct` === 100  (over the ATTRIBUTED population)
+ *   `Object.keys(bandByBlock).length + unattributed.blockCount === total.blockCount`
+ *   `bandByBlock` and `blockByLoc` have IDENTICAL key sets
+ *   an `others` band exists **iff** `total.supplierCount > topN`
+ *   the population is the PRICE and AGE lenses' — one yard, same blocks, same kg
+ *
+ * **THE APPORTIONED FOLD IS NOT BIT-EXACT, and the difference is worth knowing before you
+ * write an equality test.** `dominantKg` is a plain sum of balances, so it folds to
+ * `total.kg` exactly. `apportionedKg` multiplies by `sharePct`, itself a `numeric` division
+ * truncated at a finite scale, so the slices carry that residue — MEASURED in SQL at
+ * **5.9e-14 kg against a 10,515,408 kg yard** (about six parts in 10²¹), and rather larger
+ * once the payload has been through JSON and JavaScript doubles (**−1.9e-9 kg**). Compare it
+ * with a tolerance, never with `===`, and never "correct" a band to make a total tie.
+ */
+export interface BlockingSupplierLens {
+  /** The N actually used — how many suppliers are named before `others`. */
+  topN: number;
+  bands: BlockingSupplierBand[];
+  /**
+   * `block_loc` → band index. THE map the grid colours a cell from.
+   *
+   * A block is ABSENT when its batch has NO delivery at all, so it has no supplier. That
+   * is deliberate and is not a gap to patch: render it in its normal un-lensed style, and
+   * **never fold it into `others`** — that would assert a supplier we do not have.
+   * `unattributed` says how many there are.
+   */
+  bandByBlock: Record<string, number>;
+  /** `block_loc` → the full block record. Same key set as `bandByBlock`. */
+  blockByLoc: Record<string, BlockingSupplierBlock>;
+  /** Occupied positive-balance blocks with no supplier at all — in NO band, out of both
+   *  share denominators. NOT "Others". */
+  unattributed: { blockCount: number; kg: number };
+  total: {
+    /** Every occupied block with a positive balance — attributed plus unattributed. */
+    blockCount: number;
+    /** Σ balance over those blocks. Includes unattributed kg, so the folds add up. */
+    kg: number;
+    /** DISTINCT suppliers in the yard. An `others` band exists iff this exceeds `topN`. */
+    supplierCount: number;
+    /** Blocks with more than one supplier, yard-wide. */
+    mixedBlockCount: number;
+    attributedBlockCount: number;
+    attributedKg: number;
+  };
+}
+
+/** Why a supplier-lens call came back empty. Each maps to a sentence written for a human. */
+export type BlockingSupplierLensRefusalReason =
+  /** No signed-in user. The page itself is behind auth, so this is a session problem. */
+  | 'not_signed_in'
+  /** `topN` absent, not a whole number, below 1, or above 12. */
+  | 'invalid_top_n'
+  | 'rpc_error'
+  | 'exception';
+
+export type BlockingSupplierLensResult =
+  | { ok: true; lens: BlockingSupplierLens }
+  | { ok: false; reason: BlockingSupplierLensRefusalReason; message: string };
+
+/** How many suppliers are named before `others`. Both ends refused by SQL *and* the action. */
+export const BLOCKING_SUPPLIER_LENS_MIN_TOP_N = 1;
+export const BLOCKING_SUPPLIER_LENS_MAX_TOP_N = 12;
+/** `p_top_n`'s own default — six named suppliers plus `others`. */
+export const BLOCKING_SUPPLIER_LENS_DEFAULT_TOP_N = 6;
+
 // Blend Proposal types (`BlendProposal`, `BlendProposalBlock`) live in `actions.ts`
 // alongside the `buildBlendProposal` server action that produces them — import them
 // from there. They are co-located with the action because the action is their sole

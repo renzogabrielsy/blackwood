@@ -6055,6 +6055,7 @@ export type Database = {
         Args: { p_proposal_id: string; p_version_no: number }
         Returns: Json
       }
+      fn_blend_analysis_probe_cases: { Args: never; Returns: Json }
       fn_blend_block_facts: {
         Args: { p_as_of?: string; p_batch_ids: string[] }
         Returns: {
@@ -6121,6 +6122,8 @@ export type Database = {
         Args: { p_trailing_days?: number }
         Returns: Json
       }
+      fn_blocking_supplier_lens: { Args: { p_top_n?: number }; Returns: Json }
+      fn_blocking_supplier_lens_probe: { Args: never; Returns: Json }
       fn_bulk_update_deliveries: { Args: { rows: Json }; Returns: undefined }
       fn_bulk_update_usage: { Args: { rows: Json }; Returns: undefined }
       fn_close_batch: { Args: { p_batch_id: string }; Returns: boolean }

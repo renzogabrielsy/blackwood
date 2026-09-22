@@ -20,6 +20,11 @@ import type {
   BlockingAgeBand,
   BlockingAgeLens,
   BlockingAgeLensResult,
+  BlockingSupplierBand,
+  BlockingSupplierBlock,
+  BlockingSupplierLens,
+  BlockingSupplierLensResult,
+  BlockingSupplierSlice,
   BlendBlockFacts,
   BlendBlockFactsResult,
   BlendBlockSupplierShare,
@@ -60,6 +65,9 @@ import {
   BLOCKING_AGE_LENS_MAX_EDGES,
   BLOCKING_AGE_EDGE_MIN_DAYS,
   BLOCKING_AGE_EDGE_MAX_DAYS,
+  BLOCKING_SUPPLIER_LENS_DEFAULT_TOP_N,
+  BLOCKING_SUPPLIER_LENS_MIN_TOP_N,
+  BLOCKING_SUPPLIER_LENS_MAX_TOP_N,
   BLEND_BLOCK_FACTS_MAX_BATCH_IDS,
   BLEND_ANALYSIS_MAX_BLOCKS,
   BLEND_ANALYSIS_DEFAULT_PRICE_EDGES,
@@ -1706,6 +1714,223 @@ export async function fetchBlockingAgeLens(
   } catch (err: unknown) {
     console.error('[Blocking] fetchBlockingAgeLens failed:', err);
     return { ok: false, reason: 'exception', message: AGE_LENS_UNREACHABLE_MESSAGE };
+  }
+}
+
+// ─── Supplier lens — DATA LAYER ────────────────────────────────────────────────
+//
+// "Whose charcoal is in my yard." The THIRD lens on the frame the price lens built, over
+// `fn_blocking_supplier_lens` (migration `20260922011759_blocking_supplier_lens`). It is
+// the AGE lens's sibling in posture, not the price lens's:
+//
+//   ***  THERE IS NO PRICE GATE HERE, AND THAT IS DELIBERATE. DO NOT ADD ONE.  ***
+//
+//      Nothing in this payload is money and nothing in it is derivable back into money:
+//      the RPC publishes supplier names, kilograms, counts and percentages, `cost_basis`
+//      is never read and `avg_php_kg` is never selected. A supplier's name beside a
+//      kilogram total says nothing about what it cost. So the Supplier lens is visible to
+//      EVERY role INCLUDING Production — the same posture as
+//      `view_blocking_block_suppliers` (which this lens reads) and
+//      `fn_blocking_age_lens`. The PRICE lens must REFUSE a `!canViewPrices()` caller
+//      because band membership pins a block's ₱/kg to within a peso; that argument has no
+//      analogue here. `scripts/verify-blocking-supplier-lens.ts` asserts that this
+//      function contains NO `canViewPrices` call, so the asymmetry cannot be "tidied up"
+//      by accident.
+//
+// What it DOES require is a signed-in user, exactly as `fetchBlockingAgeLens` does.
+//
+// Three rules it shares with its siblings.
+//
+//   1. NOTHING IS COMPUTED HERE. The apportionment, the dominance, the bands and both
+//      share families are arithmetic over the yard, so all of it lives in SQL
+//      (CLAUDE.md: never aggregate in TypeScript). This function validates its input,
+//      camelCases the rows, and folds `blocks[]` into the two per-cell lookups the grid
+//      needs. That fold is a RE-KEYING, not an aggregation.
+//
+//   2. A BUSINESS REFUSAL IS DATA, NEVER A THROW. The RPC returns
+//      `{ok:false, reason, message}` written for a human; this action passes the message
+//      straight through so the UI can hand it to `errorToast()`.
+//
+//   3. NULL IS PRESERVED. A band's share percentages are null — never 0 — when nothing in
+//      the yard has a supplier at all. But `dominantKg` and `dominantBlockCount` are
+//      REAL ZEROES on a supplier that dominates no block (MERCADO today), so they are not
+//      null-preserving: "dominates nothing" is a measurement, not a missing value.
+//
+// Read-only: no writes, no audit logs, no `revalidatePath()`.
+
+const SUPPLIER_LENS_UNREACHABLE_MESSAGE =
+  'Could not reach the database to work out the supplier lens. Nothing changed — try again.';
+const SUPPLIER_LENS_TOP_N_MESSAGE =
+  `Choose how many suppliers to show by name — a whole number between ${BLOCKING_SUPPLIER_LENS_MIN_TOP_N} and ${BLOCKING_SUPPLIER_LENS_MAX_TOP_N}. Everyone else is grouped as Others.`;
+
+/** The `{ok, ...}` envelope `fn_blocking_supplier_lens` returns. */
+type SupplierLensEnvelope = {
+  ok?: boolean;
+  reason?: string;
+  message?: string;
+  top_n?: number | null;
+  bands?: Array<Record<string, unknown>> | null;
+  blocks?: Array<Record<string, unknown>> | null;
+  unattributed?: { block_count?: number | null; kg?: number | string | null } | null;
+  total?: {
+    block_count?: number | null;
+    kg?: number | string | null;
+    supplier_count?: number | null;
+    mixed_block_count?: number | null;
+    attributed_block_count?: number | null;
+    attributed_kg?: number | string | null;
+  } | null;
+} | null;
+
+/**
+ * Classify every occupied block by WHOSE charcoal is in it — the supplier lens itself.
+ *
+ * `topN` is how many suppliers are named before the single `others` fold: a whole number
+ * in 1…12, default 6. INTEGRALITY is enforced here rather than in SQL because `p_top_n` is
+ * declared `int`, so Postgres has already rounded `6.5` to `7` by the time the function
+ * body runs and that refusal is structurally unreachable there — the same deliberate
+ * asymmetry the price and age lenses record, reusing the SQL's own `invalid_top_n` reason
+ * rather than inventing a second vocabulary.
+ *
+ * NEITHER SUPPLIER IDENTITY NOR DOMINANCE IS DEFINED HERE. Identity and the ALL/SOME rule
+ * come from `view_blocking_block_suppliers` inside the RPC; the dominant supplier uses
+ * `fn_blend_block_facts`' own tie rule and is proven equal to it every verify run.
+ *
+ * **The two kilogram families are NOT interchangeable** — tint a cell from
+ * `bandByBlock`, size a ratio bar from `bands[].apportionedKg`, and count blocks from
+ * `bands[].dominantBlockCount`. See the `BlockingSupplierBand` doc comment.
+ *
+ * A block whose batch has NO delivery is ABSENT from both maps and counted in
+ * `lens.unattributed` — render it un-lensed, and never fold it into `others`.
+ *
+ * NOT price-gated, on purpose — see the block comment above. Every role, Production
+ * included, may read this.
+ */
+export async function fetchBlockingSupplierLens(
+  topN: number = BLOCKING_SUPPLIER_LENS_DEFAULT_TOP_N,
+): Promise<BlockingSupplierLensResult> {
+  // (1) Inputs first — a refusal that needs no database costs no round trip. Same refusal
+  // the RPC would give, under the same reason.
+  if (
+    typeof topN !== 'number' ||
+    !Number.isFinite(topN) ||
+    !Number.isInteger(topN) ||
+    topN < BLOCKING_SUPPLIER_LENS_MIN_TOP_N ||
+    topN > BLOCKING_SUPPLIER_LENS_MAX_TOP_N
+  ) {
+    return { ok: false, reason: 'invalid_top_n', message: SUPPLIER_LENS_TOP_N_MESSAGE };
+  }
+
+  try {
+    const supabase = await createClient();
+
+    // (2) A signed-in user, the way the other non-price reads in this file require one.
+    // NOTE this is NOT a price gate and must not become one.
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError || !user) {
+      return {
+        ok: false,
+        reason: 'not_signed_in',
+        message: 'Your session has expired — reload the page and sign in again.',
+      };
+    }
+
+    const { data, error } = await supabase.rpc('fn_blocking_supplier_lens', { p_top_n: topN });
+
+    if (error) {
+      console.error('[Blocking] fn_blocking_supplier_lens error:', error);
+      return { ok: false, reason: 'rpc_error', message: error.message || SUPPLIER_LENS_UNREACHABLE_MESSAGE };
+    }
+
+    const res = data as SupplierLensEnvelope;
+    if (!res?.ok) {
+      const reason = res?.reason;
+      return {
+        ok: false,
+        // The RPC's own vocabulary, passed through; anything unrecognized is reported as
+        // an rpc_error rather than silently widening the union.
+        reason: reason === 'invalid_top_n' ? reason : 'rpc_error',
+        message: res?.message ?? 'The supplier lens could not be worked out.',
+      };
+    }
+
+    const bands: BlockingSupplierBand[] = (res.bands ?? []).map((b) => ({
+      index: lensNum(b.index),
+      // Null on the `others` band — read `isOthers`, never a null name.
+      key: typeof b.key === 'string' ? b.key : null,
+      display: typeof b.display === 'string' ? b.display : null,
+      isOthers: b.is_others === true,
+      supplierCount: lensNum(b.supplier_count),
+      supplierKeys: Array.isArray(b.supplier_keys) ? b.supplier_keys.map((k) => String(k)) : null,
+      // REAL ZEROES, not null-preserving: a supplier that dominates no block has measured
+      // 0 dominated blocks and 0 dominated kg. That is an answer, not a gap.
+      dominantBlockCount: lensNum(b.dominant_block_count),
+      dominantKg: lensNum(b.dominant_kg),
+      apportionedKg: lensNum(b.apportioned_kg),
+      apportionedDeliveredKg: lensNum(b.apportioned_delivered_kg),
+      // Null when nothing in the yard has a supplier at all — never 0 ÷ 0 read as 0%.
+      kgSharePct: lensNumOrNull(b.kg_share_pct),
+      blockSharePct: lensNumOrNull(b.block_share_pct),
+      mixedBlockCount: lensNum(b.mixed_block_count),
+    }));
+
+    // RE-KEY, not aggregate: the grid needs per-cell lookups, and SQL already decided which
+    // band every block is in. Unattributed blocks are absent from `blocks[]` by
+    // construction, so they are absent from both maps — the contract.
+    const bandByBlock: Record<string, number> = {};
+    const blockByLoc: Record<string, BlockingSupplierBlock> = {};
+    for (const b of res.blocks ?? []) {
+      const loc = b.block_loc;
+      if (typeof loc !== 'string' || loc.length === 0) continue;
+      const suppliers: BlockingSupplierSlice[] = Array.isArray(b.suppliers)
+        ? (b.suppliers as Array<Record<string, unknown>>).map((s) => ({
+            key: String(s.key ?? ''),
+            display: String(s.display ?? ''),
+            kg: lensNum(s.kg),
+            sharePct: lensNum(s.share_pct),
+            balanceKg: lensNum(s.balance_kg),
+          }))
+        : [];
+      bandByBlock[loc] = lensNum(b.band_index);
+      blockByLoc[loc] = {
+        blockLoc: loc,
+        batchId: String(b.batch_id ?? ''),
+        batchCode: String(b.batch_code ?? ''),
+        bandIndex: lensNum(b.band_index),
+        dominantSupplierKey: String(b.dominant_supplier_key ?? ''),
+        dominantSupplierDisplay: String(b.dominant_supplier_display ?? ''),
+        dominantSharePct: lensNumOrNull(b.dominant_share_pct),
+        // THE ALL/SOME rule, carried through — never re-derived from suppliers.length.
+        isMixed: b.is_mixed === true,
+        supplierCount: lensNum(b.supplier_count),
+        kg: lensNum(b.kg),
+        suppliers,
+      };
+    }
+
+    const lens: BlockingSupplierLens = {
+      topN: lensNum(res.top_n),
+      bands,
+      bandByBlock,
+      blockByLoc,
+      unattributed: {
+        blockCount: lensNum(res.unattributed?.block_count),
+        kg: lensNum(res.unattributed?.kg),
+      },
+      total: {
+        blockCount: lensNum(res.total?.block_count),
+        kg: lensNum(res.total?.kg),
+        supplierCount: lensNum(res.total?.supplier_count),
+        mixedBlockCount: lensNum(res.total?.mixed_block_count),
+        attributedBlockCount: lensNum(res.total?.attributed_block_count),
+        attributedKg: lensNum(res.total?.attributed_kg),
+      },
+    };
+
+    return { ok: true, lens };
+  } catch (err: unknown) {
+    console.error('[Blocking] fetchBlockingSupplierLens failed:', err);
+    return { ok: false, reason: 'exception', message: SUPPLIER_LENS_UNREACHABLE_MESSAGE };
   }
 }
 
