@@ -868,6 +868,36 @@ input[type=number] {
 .lens-age-5 { --lens-hue: 192 38 211; }    /* fuchsia */
 .lens-age-6 { --lens-hue: 162 28 175; }    /* deep fuchsia — oldest */
 
+/* ─── The SUPPLIER ramp — a set of NAMES, not a gradient ─────────────────────
+   The THIRD ramp, and the first NOMINAL one. Price and age bands are ORDERED, so a
+   gradient means something there; supplier bands are CATEGORIES — ORNALES is not
+   "more" than PAQUIBOT — so a gradient would invite a reading that does not exist,
+   and a POSITIONAL mapping would move a supplier's colour the moment the reader
+   changed how many are named. So there are TWELVE distinguishable hues, a band takes
+   the stop matching its own RANK (`lens/lens-ramp.ts::categoryStop`), and
+   `.lens-cat-12` is a reserved NEUTRAL grey that ONLY the `others` fold wears — a
+   fold of everyone the reader did not name must not look like one supplier's identity.
+
+   TWO HUES ARE DELIBERATELY ABSENT: emerald `16 185 129` and orange `249 115 22` are
+   `.spotlight-supplier-all` / `.spotlight-supplier-some` above, which already mean
+   "the whole block is this supplier" and "only some of it is". Reusing either for
+   band IDENTITY would collide with a meaning this page has.
+   `scripts/verify-blocking-lens-ui.ts` asserts both triples stay out of this list and
+   that it matches `LENS_RAMP_RGB.category` exactly. */
+.lens-cat-0  { --lens-hue: 56 189 248; }   /* sky */
+.lens-cat-1  { --lens-hue: 139 92 246; }   /* violet */
+.lens-cat-2  { --lens-hue: 244 63 94; }    /* rose */
+.lens-cat-3  { --lens-hue: 245 158 11; }   /* amber */
+.lens-cat-4  { --lens-hue: 20 184 166; }   /* teal */
+.lens-cat-5  { --lens-hue: 217 70 239; }   /* fuchsia */
+.lens-cat-6  { --lens-hue: 132 204 22; }   /* lime */
+.lens-cat-7  { --lens-hue: 99 102 241; }   /* indigo */
+.lens-cat-8  { --lens-hue: 6 182 212; }    /* cyan */
+.lens-cat-9  { --lens-hue: 236 72 153; }   /* pink */
+.lens-cat-10 { --lens-hue: 234 179 8; }    /* yellow */
+.lens-cat-11 { --lens-hue: 59 130 246; }   /* blue */
+.lens-cat-12 { --lens-hue: 161 161 170; }  /* zinc — the NEUTRAL, `others` only */
+
 .lens-band-0,
 .lens-band-1,
 .lens-band-2,
@@ -881,7 +911,20 @@ input[type=number] {
 .lens-age-3,
 .lens-age-4,
 .lens-age-5,
-.lens-age-6 {
+.lens-age-6,
+.lens-cat-0,
+.lens-cat-1,
+.lens-cat-2,
+.lens-cat-3,
+.lens-cat-4,
+.lens-cat-5,
+.lens-cat-6,
+.lens-cat-7,
+.lens-cat-8,
+.lens-cat-9,
+.lens-cat-10,
+.lens-cat-11,
+.lens-cat-12 {
   background-image:
     linear-gradient(
       135deg,
@@ -909,7 +952,20 @@ input[type=number] {
 :is(.dark) .lens-age-3,
 :is(.dark) .lens-age-4,
 :is(.dark) .lens-age-5,
-:is(.dark) .lens-age-6 {
+:is(.dark) .lens-age-6,
+:is(.dark) .lens-cat-0,
+:is(.dark) .lens-cat-1,
+:is(.dark) .lens-cat-2,
+:is(.dark) .lens-cat-3,
+:is(.dark) .lens-cat-4,
+:is(.dark) .lens-cat-5,
+:is(.dark) .lens-cat-6,
+:is(.dark) .lens-cat-7,
+:is(.dark) .lens-cat-8,
+:is(.dark) .lens-cat-9,
+:is(.dark) .lens-cat-10,
+:is(.dark) .lens-cat-11,
+:is(.dark) .lens-cat-12 {
   background-image:
     linear-gradient(
       135deg,
@@ -931,6 +987,29 @@ input[type=number] {
     0 0 0 2px rgb(var(--lens-hue) / 0.85),
     0 0 14px rgb(var(--lens-hue) / 0.45);
   z-index: 20;
+}
+
+/* ─── The SUPPLIER lens's MIXED marker ───────────────────────────────────────
+   A block whose charcoal came from MORE THAN ONE supplier. The tint says whose pile it
+   mostly is; this says "mostly, not entirely", which is the one thing a single colour
+   cannot carry.
+
+   IT IS A DASHED INSET OUTLINE, and each of those three words is a choice:
+   • DASHED, because every other marking on this grid is solid — the two supplier-search
+     glows, the status glows, the lens tint's own inset ring and `.lens-band-picked` — so
+     "broken line" is a shape nothing else on the page uses.
+   • an OUTLINE rather than a box-shadow, so it cannot fight the tint rule's `box-shadow`
+     or the picked band's louder one; a mixed block that is ALSO isolated wears both and
+     neither is lost.
+   • INSET (`outline-offset: -3px`), so it sits inside the cell and cannot be confused
+     with the BLEND-SELECTION marking, which is a solid `ring-2 ring-primary` plus a
+     filled primary circle carrying a checkmark at the TOP-RIGHT. Different shape,
+     different colour (the band's own hue, never `--primary`), different position.
+
+   No animation, like every other cell marking: this lands on up to 238 cells at once. */
+.lens-cat-mixed {
+  outline: 1.5px dashed rgb(var(--lens-hue) / 0.95);
+  outline-offset: -3px;
 }
 
 /* The LEGEND swatch and the ratio bar's segments: a solid fill, because a 12px chip

@@ -64,13 +64,18 @@ import {
   wantsAnalysis,
 } from '../app/(app)/inventory/_shared/blend-analysis-options';
 import {
+  ageMethodNote,
   groupWord,
+  monthAbbr,
   monthName,
   naturalMethodNote,
+  priceBasisNoun,
   qualityDecimals,
   snapshotGapNote,
+  undatedNote,
   unmeasuredNote,
   vsMarketCaption,
+  vsMarketHeading,
   vsMarketUnavailableNote,
   fmtDays,
   fmtKg,
@@ -78,8 +83,11 @@ import {
   fmtSharePct,
 } from '../app/(app)/inventory/_shared/blend-analysis-text';
 import {
+  LENS_CATEGORY_NEUTRAL_STOP,
+  LENS_CATEGORY_STOPS,
   LENS_RAMP_RGB,
   LENS_RAMP_STOPS,
+  categoryStop,
   rampRgb,
   rampStop,
 } from '../app/(app)/inventory/blocking/lens/lens-ramp';
@@ -87,7 +95,14 @@ import {
   BLEND_ANALYSIS_DEFAULT_AGE_EDGES,
   BLEND_ANALYSIS_DEFAULT_PRICE_EDGES,
   BLEND_ANALYSIS_QUALITY_METRICS,
+  type BlendAnalysis,
+  type BlendQualityMetric,
+  type BlendQualityNatural,
 } from '../app/(app)/inventory/blocking/types';
+import { buildBlendAnalysisPages } from '../app/(app)/inventory/_shared/blend-analysis-print';
+import { buildLensSummaryBuckets } from '../app/(app)/inventory/blocking/lens/lens-summary-model';
+import type { BlockData } from '../app/(app)/inventory/blocking/types';
+import { DEFAULT_LAB_HIGHLIGHTS } from '../types/table-settings';
 import { BLOCKING_AGE_LENS_DEFAULT_EDGES, BLOCKING_PRICE_LENS_DEFAULT_EDGES } from '../app/(app)/inventory/blocking/types';
 
 let passed = 0;
@@ -109,6 +124,7 @@ const PDF = `${SHARED}/blend-proposal-pdf.ts`;
 const LENS_PRINT = `${LENS}/lens-summary-print.tsx`;
 const PRICE_PANEL = `${LENS}/price-lens-panel.tsx`;
 const AGE_PANEL = `${LENS}/age-lens-panel.tsx`;
+const SUPPLIER_PANEL = `${LENS}/supplier-lens-panel.tsx`;
 const GLOBALS = 'app/globals.css';
 const CONTEXT = 'app/(app)/inventory/blocking/CONTEXT.md';
 const FIXTURE = 'app/dev/table-playground/blendanalysis/blendanalysis-fixture.tsx';
@@ -117,6 +133,7 @@ const FIXTURE_PAGE = 'app/dev/table-playground/blendanalysis/page.tsx';
 /** Every file this script reasons about. A missing one is a failure, not a pass. */
 const ALL_FILES = [
   OPTIONS, TEXT, SECTIONS, PRINT, HOOK, DIALOG, PDF, LENS_PRINT, PRICE_PANEL, AGE_PANEL,
+  SUPPLIER_PANEL, `${LENS}/lens-summary-model.ts`,
 ];
 
 const cache = new Map<string, string>();
@@ -461,42 +478,49 @@ console.log('\n5. THE WORDS — the method note, the captions and the NULL cases
     { index: 1, below: 42, above: 47, value: 44.5 },
   ];
 
-  check('the method note names both cut lines and the fit, in plain language', () => {
+  check('the method line is CUT LINES and FIT, and nothing else', () => {
     const note = naturalMethodNote({
-      subject: 'prices',
       groupCount: 3,
       cuts,
       gvf: 0.9761,
       formatCut: (v) => `₱${v.toFixed(2)}`,
     });
-    assert.ok(note.includes('₱38.97'), `the first cut line is missing: ${note}`);
-    assert.ok(note.includes('₱44.50'), `the second cut line is missing: ${note}`);
-    assert.ok(note.includes('3 groups'), 'the group count is not stated');
-    assert.ok(note.includes('Fit 97.6%'), `the fit is not stated: ${note}`);
+    // The owner's own target, to the character: `Cut lines ₱38.97 · ₱44.50 · fit 97.6%`.
+    assert.equal(note, 'Cut lines ₱38.97 · ₱44.50 · fit 97.6%', note);
   });
 
-  check('TWO groups say "two groups"; ONE group says so honestly and claims no fit', () => {
-    const two = naturalMethodNote({
-      subject: 'prices',
+  check('ONE cut line is singular; ONE GROUP says so and claims no fit', () => {
+    const one = naturalMethodNote({
       groupCount: 2,
       cuts: [cuts[0]],
       gvf: 0.81,
       formatCut: (v) => `₱${v.toFixed(2)}`,
     });
-    assert.ok(two.includes('two groups') && two.includes('cut line at'), two);
-    assert.ok(!two.includes('cut lines at'), 'a single cut line is described in the plural');
+    assert.equal(one, 'Cut line ₱38.97 · fit 81.0%', one);
 
     // A blend whose blocks all cost the same has NO variance, so `gvf` is NULL — and a
-    // "Fit 0.0%" would be a lie about a population there is nothing to explain in.
-    const one = naturalMethodNote({
-      subject: 'prices',
+    // "fit 0.0%" would be a lie about a population there is nothing to explain in.
+    const none = naturalMethodNote({
       groupCount: 1,
       cuts: [],
       gvf: null,
       formatCut: (v) => String(v),
     });
-    assert.ok(one.startsWith('All one group'), one);
-    assert.ok(!one.includes('Fit'), 'a degenerate split claims a fit');
+    assert.equal(none, 'One group', none);
+    assert.ok(!none.includes('fit'), 'a degenerate split claims a fit');
+  });
+
+  check('a QUALITY method line reads in the metric\'s own decimals, still terse', () => {
+    const note = naturalMethodNote({
+      groupCount: 3,
+      cuts: [
+        { index: 0, below: 9.1, above: 10.6, value: 9.84 },
+        { index: 1, below: 10.9, above: 11.6, value: 11.23 },
+      ],
+      gvf: 0.896,
+      formatCut: (v) => v.toFixed(2),
+    });
+    assert.equal(note, 'Cut lines 9.84 · 11.23 · fit 89.6%', note);
   });
 
   check('the group WORDS are the owner’s: HIGH / AVERAGE / LOW, and never "average" alone', () => {
@@ -509,7 +533,7 @@ console.log('\n5. THE WORDS — the method note, the captions and the NULL cases
     assert.equal(groupWord('mid', 1), 'ALL ONE GROUP');
   });
 
-  check('the market caption says ROUNDS UP for a measured basis and IS THE LINE for a typed one', () => {
+  check('the caption says MARKET for a measurement and SET PRICE for a typed figure', () => {
     const measured = vsMarketCaption({
       marketPhpKg: 39.8272,
       marketBasis: 'as_of_month',
@@ -520,34 +544,54 @@ console.log('\n5. THE WORDS — the method note, the captions and the NULL cases
       unmeasured: { blockCount: 0, kg: 0, blocks: [] },
       overall: { blockCount: 0, kg: 0, kgWeightedPhpKg: null, valuePhp: 0 },
     });
-    assert.ok(measured.includes('September 2026 deliveries'), measured);
-    assert.ok(measured.includes('rounds up to ₱40'), measured);
+    assert.equal(measured, 'Market ₱39.83 (Sep 2026) · ₱40 and up is above', measured);
 
     const typed = vsMarketCaption({
-      marketPhpKg: 41,
+      marketPhpKg: 45,
       marketBasis: 'given',
       marketBasisMonth: null,
-      roundedUpPhp: 41,
+      roundedUpPhp: 45,
       edgeOffsets: [-1, 0],
       bands: [],
       unmeasured: { blockCount: 0, kg: 0, blocks: [] },
       overall: { blockCount: 0, kg: 0, kgWeightedPhpKg: null, valuePhp: 0 },
     });
-    assert.ok(typed.includes('(typed)'), typed);
-    assert.ok(typed.includes('₱41 and up is above market'), typed);
+    assert.equal(typed, 'Set price ₱45.00 · ₱45 and up is above', typed);
+    // ⚠️ THE WHOLE POINT of the rename: a typed figure is never called market.
+    assert.ok(!/market/i.test(typed), `a TYPED price was called market: ${typed}`);
     assert.ok(!typed.includes('rounds up'), 'a typed price is described as rounding up');
     assert.equal(monthName('2026-09-01'), 'September 2026');
+    assert.equal(monthAbbr('2026-09-01'), 'Sep 2026');
   });
 
-  check('a market that cannot be measured is EXPLAINED, and never treated as ₱0', () => {
+  check('`vsMarketHeading` is the ONE definition, and every surface reads it', () => {
+    assert.equal(vsMarketHeading(false), 'Against market');
+    assert.equal(vsMarketHeading(true), 'Against set price');
+    assert.equal(priceBasisNoun(false), 'market');
+    assert.equal(priceBasisNoun(true), 'set price');
+    // All FOUR surfaces — screen, HTML print, PDF and the lens legend — take the label
+    // from the shared function rather than spelling "Against market" themselves.
+    for (const f of [SECTIONS, PRINT, PDF]) {
+      const body = code(f);
+      assert.ok(/vsMarketHeading\(/.test(body), `${f} does not read the shared heading`);
+      assert.ok(
+        !/'Against market'/.test(body) && !/>Against market</.test(body),
+        `${f} hardcodes "Against market", so a typed price would be mislabelled`,
+      );
+    }
+    // And the price LENS itself never says "market" about a typed figure.
+    const lens = code(PRICE_PANEL);
+    assert.ok(/priceBasisNoun\(/.test(lens), 'the price lens does not read the shared noun');
+  });
+
+  check('a market that cannot be measured is SAID, terse, and never treated as ₱0', () => {
     const note = vsMarketUnavailableNote({
       reason: 'no_market_price',
       message: 'No market price for this month.',
       marketBasis: 'as_of_month',
       marketBasisMonth: '2026-09-01',
     });
-    assert.ok(note.includes('September 2026'), note);
-    assert.ok(note.includes('₱0 would put every block above market'), note);
+    assert.equal(note, 'No market price for Sep 2026 · set one on the Price lens', note);
     for (const f of [SECTIONS, PRINT]) {
       assert.ok(
         code(f).includes('vsMarketUnavailable'),
@@ -556,21 +600,110 @@ console.log('\n5. THE WORDS — the method note, the captions and the NULL cases
     }
   });
 
-  check('an unmeasured block is explained, and NULL reads as an em dash everywhere', () => {
+  check('the no-reading note is `No reading: N blocks`, and ABSENT when the count is 0', () => {
     const note = unmeasuredNote(
-      { blockCount: 2, kg: 30_115, noValueCount: 1, noWeightCount: 1, blocks: [] },
-      'reading',
+      { blockCount: 2, kg: 30_115, noValueCount: 1, noWeightCount: 0, blocks: [] },
+      'No reading',
     );
-    assert.ok(note.includes('2 blocks'), note);
-    assert.ok(note.includes('In no group'), note);
-    assert.ok(note.includes('nothing in the pile to weight it with'), note);
+    assert.equal(note, 'No reading: 2 blocks', note);
+    // A reading with nothing to weight it is a SECOND gap — one token, not a clause.
+    const weighted = unmeasuredNote(
+      { blockCount: 2, kg: 30_115, noValueCount: 1, noWeightCount: 1, blocks: [] },
+      'No reading',
+    );
+    assert.equal(weighted, 'No reading: 2 blocks · 1 unweighted', weighted);
+    // ⚠️ EMPTY, not a sentence saying nothing is missing.
+    assert.equal(
+      unmeasuredNote({ blockCount: 0, kg: 0, noValueCount: 0, noWeightCount: 0, blocks: [] }, 'No reading'),
+      '',
+    );
+    assert.equal(undatedNote(2), 'No delivery dates: 2 blocks');
+    assert.equal(undatedNote(0), '');
+  });
+
+  check('NULL reads as an em dash everywhere, and a snapshot gap shows BOTH figures', () => {
     assert.equal(fmtSharePct(null), '—');
     assert.equal(fmtDays(null), '—');
     assert.equal(fmtQuality('ash', null), '—');
     assert.equal(fmtKg(74_590.4), '74,590');
-    // And a snapshot gap is reconciled by SHOWING BOTH, never by picking a winner.
-    const gap = snapshotGapNote({ snapshot: '2.13', measured: '3.13', excluded: 'blocks with no reading' });
-    assert.ok(gap.includes('2.13') && gap.includes('3.13'), gap);
+    const gap = snapshotGapNote({ snapshot: '2.13', measured: '3.13', excluded: 'no-reading' });
+    assert.equal(gap, 'Blend avg 2.13 · excl. no-reading 3.13', gap);
+  });
+
+  check('the AGE method line is the as-of date, the cuts and the oldest pile', () => {
+    const note = ageMethodNote({
+      asOf: '2026-09-21',
+      cutDays: [60, 120, 365],
+      oldestDays: null,
+      oldestBlockLoc: null,
+    });
+    assert.equal(note, 'As of 2026-09-21 · cuts 60 · 120 · 365 d', note);
+    const withOldest = ageMethodNote({
+      asOf: '2026-09-21',
+      cutDays: [60, 120, 365],
+      oldestDays: 444.5,
+      oldestBlockLoc: 'C-5B',
+    });
+    assert.equal(withOldest, 'As of 2026-09-21 · cuts 60 · 120 · 365 d · oldest 444.5 d C-5B', withOldest);
+  });
+
+  check('⚠️ NO CAPTION CARRIES PROSE — proven on the STRINGS the words module emits', () => {
+    // The owner: *"I don't want descriptions like this, straight to the point, not
+    // wordy. Apply to all sections, not just price."* The strongest form of this check is
+    // over the OUTPUT, not the source: every caption either surface can print comes out
+    // of one of these six functions, so a matrix over them is exhaustive by construction.
+    const banned = ['naturally', 'minimise', 'dearest', 'spread', '→', 'first inside'];
+    const emitted: string[] = [
+      naturalMethodNote({ groupCount: 3, cuts, gvf: 0.9761, formatCut: (v) => `₱${v.toFixed(2)}` }),
+      naturalMethodNote({ groupCount: 1, cuts: [], gvf: null, formatCut: String }),
+      naturalMethodNote({ groupCount: 2, cuts: [cuts[0]], gvf: 0.5, formatCut: (v) => v.toFixed(3) }),
+      vsMarketCaption({
+        marketPhpKg: 39.8272, marketBasis: 'as_of_month', marketBasisMonth: '2026-09-01',
+        roundedUpPhp: 40, edgeOffsets: [-1, 0], bands: [],
+        unmeasured: { blockCount: 0, kg: 0, blocks: [] },
+        overall: { blockCount: 0, kg: 0, kgWeightedPhpKg: null, valuePhp: 0 },
+      }),
+      vsMarketCaption({
+        marketPhpKg: 45, marketBasis: 'given', marketBasisMonth: null,
+        roundedUpPhp: 45, edgeOffsets: [-1, 0], bands: [],
+        unmeasured: { blockCount: 0, kg: 0, blocks: [] },
+        overall: { blockCount: 0, kg: 0, kgWeightedPhpKg: null, valuePhp: 0 },
+      }),
+      vsMarketUnavailableNote({
+        reason: 'no_market_price', message: 'x', marketBasis: 'as_of_month',
+        marketBasisMonth: '2026-09-01',
+      }),
+      unmeasuredNote({ blockCount: 3, kg: 1, noValueCount: 1, noWeightCount: 2, blocks: [] }, 'No price'),
+      undatedNote(4),
+      snapshotGapNote({ snapshot: 'a', measured: 'b', excluded: 'unpriced' }),
+      ageMethodNote({ asOf: '2026-09-21', cutDays: [60], oldestDays: 9, oldestBlockLoc: 'A-1A' }),
+      vsMarketHeading(true),
+      vsMarketHeading(false),
+    ];
+    for (const text of emitted) {
+      for (const word of banned) {
+        assert.ok(!text.toLowerCase().includes(word), `an emitted caption carries "${word}": ${text}`);
+      }
+      // A caption is a LIST OF FACTS, so it never ends in a full stop.
+      assert.ok(!/\.$/.test(text), `a caption ends in a full stop, so it is a sentence: ${text}`);
+    }
+  });
+
+  check('and the three SURFACES do not re-introduce prose of their own', () => {
+    // The literals each surface adds AROUND a caption were where "Dearest band first"
+    // and "high → average → low" lived. Comment-stripped, so a header note explaining
+    // the rule cannot trip it.
+    for (const f of [SECTIONS, PRINT, PDF]) {
+      // The PDF legitimately transliterates `→` for WinAnsi; that one occurrence is its
+      // CHARACTER FILTER, not a caption, so it is excluded by name rather than ignored.
+      const body = code(f).replace(/\.replace\(\/→\/g, 'to'\)/, '');
+      for (const word of ['naturally', 'minimise', 'dearest', 'spread', '→']) {
+        assert.ok(!body.includes(word), `${f} still carries the banned caption word "${word}"`);
+      }
+      for (const phrase of ['band first', 'block first', 'reading first', 'High to low']) {
+        assert.ok(!body.includes(phrase), `${f} still explains its own row order ("${phrase}")`);
+      }
+    }
   });
 }
 
@@ -649,6 +782,96 @@ console.log('\n6. THE READ — one source, a mount-frame first request, a signat
   });
 }
 
+// ── A MINIMAL, TYPE-CORRECT PAYLOAD, so the page COUNT can be measured ──────
+//
+// The sheets are counted rather than read out of the source, because "one table per
+// sheet" is a property of the OUTPUT and a regression would be a structural change the
+// source could still look right after. Empty group arrays are deliberate: a table with no
+// rows still emits its heading, its `thead` and its total `tbody`, which is exactly the
+// six-section shape being counted.
+
+const SAMPLE_HIGHLIGHTS = DEFAULT_LAB_HIGHLIGHTS;
+
+const EMPTY_STATS = {
+  n: 0, distinctCount: 0, totalWeight: 0, weightedMean: null,
+  totalSs: null, withinSs: null, betweenSs: null, candidatesConsidered: 0,
+};
+const EMPTY_UNMEASURED = { blockCount: 0, kg: 0, noValueCount: 0, noWeightCount: 0, blocks: [] };
+
+function sampleQuality(metric: BlendQualityMetric): BlendQualityNatural {
+  return {
+    metric,
+    groupCount: 1,
+    gvf: null,
+    cuts: [],
+    stats: EMPTY_STATS,
+    groups: [],
+    unmeasured: EMPTY_UNMEASURED,
+    overall: {
+      blockCount: 0, kg: 0, kgWeightedValue: null,
+      snapshotValue: null, snapshotGap: null, equalsSnapshot: null,
+    },
+  };
+}
+
+const SAMPLE_ANALYSIS: BlendAnalysis = {
+  source: 'live',
+  asOf: '2026-09-22',
+  proposalId: null,
+  versionNo: null,
+  title: null,
+  snapshotComputedAt: null,
+  computedAt: '2026-09-22T01:00:00Z',
+  blockCount: 0,
+  totalKg: 0,
+  pricesHidden: false,
+  price: {
+    natural: {
+      metric: 'php_kg',
+      groupCount: 1,
+      gvf: null,
+      cuts: [],
+      stats: EMPTY_STATS,
+      groups: [],
+      unmeasured: EMPTY_UNMEASURED,
+      overall: {
+        blockCount: 0, kg: 0, kgWeightedPhpKg: null, valuePhp: 0,
+        snapshotPhpKg: null, snapshotGap: null, equalsSnapshot: null,
+      },
+    },
+    vsMarket: {
+      marketPhpKg: 39.8272,
+      marketBasis: 'as_of_month',
+      marketBasisMonth: '2026-09-01',
+      roundedUpPhp: 40,
+      edgeOffsets: [-1, 0],
+      bands: [],
+      unmeasured: { blockCount: 0, kg: 0, blocks: [] },
+      overall: { blockCount: 0, kg: 0, kgWeightedPhpKg: null, valuePhp: 0 },
+    },
+    vsMarketUnavailable: null,
+  },
+  quality: {
+    metrics: ['mc', 'ash', 'bd_astm', 'bd_jis'],
+    byMetric: {
+      mc: sampleQuality('mc'),
+      ash: sampleQuality('ash'),
+      bd_astm: sampleQuality('bd_astm'),
+      bd_jis: sampleQuality('bd_jis'),
+    },
+  },
+  age: {
+    asOf: '2026-09-22',
+    edgeDays: [60, 120, 365],
+    bands: [],
+    undated: { blockCount: 0, kg: 0, blocks: [] },
+    overall: {
+      blockCount: 0, kg: 0, kgWeightedAgeDays: null,
+      oldestAgeDays: null, oldestBlockLoc: null, oldestBatchCode: null,
+    },
+  },
+};
+
 // ===========================================================================
 console.log('\n7. THE PRINTED SHEETS — tbody totals, page breaks, a 7pt floor');
 // ===========================================================================
@@ -671,12 +894,68 @@ console.log('\n7. THE PRINTED SHEETS — tbody totals, page breaks, a 7pt floor'
     );
   });
 
-  check('each page starts on its own sheet, and a heading never ends one', () => {
+  check('⚠️ EVERY TABLE starts on a fresh sheet — the HTML path', () => {
+    // The owner's screenshot had a heading sitting at the bottom of a page above the TAIL
+    // of the table before it. The fix is structural rather than a nudge: each analysis
+    // TABLE is its own `<section class="apage">`, and `.apage` breaks before.
     const css = code(PRINT);
-    assert.ok(/\.apage \{ break-before: page; page-break-before: always; \}/.test(css));
+    assert.ok(
+      /\.apage \{ break-before: page; page-break-before: always; \}/.test(css),
+      'the page-break rule is gone from the HTML print path',
+    );
     assert.ok(/\.apage h2 \{[\s\S]*?break-after: avoid;/.test(css), 'an h2 can be orphaned');
-    assert.ok(/\.apage h3 \{[\s\S]*?break-after: avoid;/.test(css), 'an h3 can be orphaned');
     assert.ok(/\.apage \.anote \{[\s\S]*?break-after: avoid;/.test(css), 'a caption can be orphaned');
+    // THE STRUCTURAL HALF, and the one that actually fixes the bug: there is no `h3`
+    // left, because a sub-heading INSIDE a page was precisely the thing that could be
+    // stranded above somebody else's rows.
+    assert.ok(!/<h3>/.test(css), 'a table is introduced by an h3 inside another table\'s page');
+  });
+
+  check('⚠️ and the count of sheets EQUALS the count of tables — measured on a payload', () => {
+    // The strongest form: build the real pages from a real-shaped analysis and count.
+    const html = buildBlendAnalysisPages({
+      analysis: SAMPLE_ANALYSIS,
+      options: { price: true, quality: true, age: true },
+      canViewPrices: true,
+      labHighlights: SAMPLE_HIGHLIGHTS,
+    });
+    const sheets = (html.match(/<section class="apage">/g) ?? []).length;
+    const tables = (html.match(/<table class="atab">/g) ?? []).length;
+    assert.ok(sheets > 0, 'no analysis sheet was emitted at all');
+    assert.equal(
+      sheets,
+      tables,
+      `${tables} tables landed on ${sheets} sheets — a table is sharing a page`,
+    );
+    // Six tables: price groups, against market/set price, MC, ASH, BD, age.
+    assert.equal(sheets, 6, `expected six sheets, got ${sheets}`);
+    // And a HEADING is the first thing on each of them.
+    for (const chunk of html.split('<section class="apage">').slice(1)) {
+      assert.ok(/^\s*<h2>/.test(chunk), `a sheet does not open with its heading: ${chunk.slice(0, 60)}`);
+    }
+  });
+
+  check('⚠️ EVERY TABLE starts on a fresh page — the PDF path', () => {
+    const pdf = code(PDF);
+    // `analysisHeading` is the ONE place a page is added, and it adds one EVERY time.
+    assert.ok(
+      /function analysisHeading\([\s\S]{0,200}?doc\.addPage\(\);/.test(pdf),
+      'the PDF heading helper no longer adds a page',
+    );
+    // Six call sites — one per table — and NO other `addPage` in the analysis builder.
+    const builder = pdf.slice(pdf.indexOf('function appendAnalysisPages'));
+    const headings = (builder.match(/analysisHeading\(/g) ?? []).length;
+    assert.ok(headings >= 4, `only ${headings} PDF tables add a page of their own`);
+    assert.ok(
+      !/doc\.addPage\(\)/.test(builder),
+      'the PDF analysis builder adds a page outside the heading helper — two rules for one thing',
+    );
+    // The quality metrics each get their own heading INSIDE the loop, which is what turns
+    // one "Quality" page into three.
+    assert.ok(
+      /for \(const \{ metric, companion \} of QUALITY_PDF_TABLES\) \{[\s\S]*?analysisHeading\(/.test(builder),
+      'the PDF quality metrics still share one page',
+    );
   });
 
   check('a SMALL group travels whole; a big one may split', () => {
@@ -742,14 +1021,18 @@ console.log('\n7. THE PRINTED SHEETS — tbody totals, page breaks, a 7pt floor'
 console.log('\n8. THE PRINTED RAMP IS THE SCREEN’S RAMP — proven against globals.css');
 // ===========================================================================
 {
-  check('all fourteen hues match `globals.css` exactly', () => {
+  check('all twenty-seven hues match `globals.css` exactly', () => {
+    // Fourteen ORDINAL stops plus the NOMINAL ramp's thirteen (2026-09-22). The category
+    // ramp is duplicated for the same reason the other two are — the blend proposal's
+    // iframe cannot reach `globals.css` — so it is proven equal, never assumed.
     const css = read(GLOBALS);
-    for (const [ramp, prefix] of [
-      ['cost', 'lens-band'],
-      ['age', 'lens-age'],
+    for (const [ramp, prefix, stops] of [
+      ['cost', 'lens-band', LENS_RAMP_STOPS],
+      ['age', 'lens-age', LENS_RAMP_STOPS],
+      ['category', 'lens-cat', LENS_CATEGORY_STOPS],
     ] as const) {
-      for (let i = 0; i < LENS_RAMP_STOPS; i++) {
-        const m = new RegExp(`\\.${prefix}-${i} \\{ --lens-hue: ([\\d ]+); \\}`).exec(css);
+      for (let i = 0; i < stops; i++) {
+        const m = new RegExp(`\\.${prefix}-${i}\\s+\\{ --lens-hue: ([\\d ]+); \\}`).exec(css);
         assert.ok(m, `globals.css has no .${prefix}-${i} hue`);
         assert.equal(
           LENS_RAMP_RGB[ramp][i],
@@ -774,6 +1057,46 @@ console.log('\n8. THE PRINTED RAMP IS THE SCREEN’S RAMP — proven against glo
     assert.ok(/rampRgb\(ramp,/.test(print), 'the printed tint does not come from the shared ramp table');
     assert.ok(/ramp: 'cost'/.test(print) && /ramp: 'age'/.test(print), 'a ramp is missing from the print');
     assert.ok(!/lens-band-\d/.test(print), 'the iframe print spells a CSS class that cannot reach it');
+  });
+
+  check('the NOMINAL ramp is IDENTITY-mapped, and `others` always takes the neutral', () => {
+    // A supplier is not "further along" a scale, so spreading N supplier bands across the
+    // ramp would be meaningless — and worse, it would MOVE a supplier's colour the moment
+    // the reader changed how many are named.
+    assert.equal(categoryStop(0, false), 0);
+    assert.equal(categoryStop(5, false), 5);
+    assert.equal(categoryStop(11, false), 11);
+    // Clamped short of the reserved slot, whatever index arrives.
+    assert.equal(categoryStop(99, false), LENS_CATEGORY_NEUTRAL_STOP - 1);
+    // ⚠️ `others` is the NEUTRAL, at every N — never one supplier's hue.
+    for (const i of [0, 3, 6, 12, 99]) assert.equal(categoryStop(i, true), LENS_CATEGORY_NEUTRAL_STOP);
+    // And the ORDINAL ramps did not move: 3 bands → 0 · 3 · 6, exactly as before.
+    assert.equal(rampStop(0, 3), 0);
+    assert.equal(rampStop(1, 3), 3);
+    assert.equal(rampStop(2, 3), 6);
+  });
+
+  check('⚠️ no categorical hue is one of the supplier SEARCH\'s two meanings', () => {
+    // `.spotlight-supplier-all` is emerald and `-some` is orange; both already mean
+    // something on this grid ("the whole block is this supplier" / "only some of it").
+    // A band wearing either would collide with a meaning the page has.
+    const css = read(GLOBALS);
+    const emerald = /\.spotlight-supplier-all \{[\s\S]*?rgba\((\d+), (\d+), (\d+)/.exec(css);
+    const orange = /\.spotlight-supplier-some \{[\s\S]*?rgba\((\d+), (\d+), (\d+)/.exec(css);
+    assert.ok(emerald && orange, 'the supplier spotlight hues could not be read from globals.css');
+    const taken = [
+      `${emerald[1]} ${emerald[2]} ${emerald[3]}`,
+      `${orange[1]} ${orange[2]} ${orange[3]}`,
+    ];
+    for (const triple of LENS_RAMP_RGB.category) {
+      assert.ok(
+        !taken.includes(triple),
+        `the categorical ramp reuses a supplier-spotlight hue (${triple})`,
+      );
+    }
+    // Thirteen slots: twelve hues plus one neutral, and they are all distinct.
+    assert.equal(LENS_RAMP_RGB.category.length, LENS_CATEGORY_STOPS);
+    assert.equal(new Set(LENS_RAMP_RGB.category).size, LENS_CATEGORY_STOPS);
   });
 
   check('QUALITY is painted on the AGE ramp, never the COST one', () => {
@@ -880,8 +1203,14 @@ console.log('\n9. THE LENS SUMMARY PRINT — the platform kit, the filter, the a
     const sheet = code(LENS_PRINT);
     assert.ok(/border-dashed/.test(sheet), 'the excluded list is not visually separated');
     assert.ok(/model\.excluded/.test(sheet));
-    assert.ok(code(PRICE_PANEL).includes('unpricedRows'), 'the price lens does not list its unpriced blocks');
-    assert.ok(code(AGE_PANEL).includes('undatedRows'), 'the age lens does not list its undated blocks');
+    for (const panel of [PRICE_PANEL, AGE_PANEL, SUPPLIER_PANEL]) {
+      const body = code(panel);
+      assert.ok(/excludedRows/.test(body), `${panel} does not list the blocks it cannot place`);
+      assert.ok(
+        /excludedFigure: (EMDASH|LENS_EMDASH)/.test(body),
+        `${panel} gives an unplaced block a figure other than an em dash`,
+      );
+    }
   });
 
   check('the sheet is handed PREFORMATTED strings — it formats no figure of its own', () => {
@@ -891,6 +1220,161 @@ console.log('\n9. THE LENS SUMMARY PRINT — the platform kit, the filter, the a
     assert.ok(!/formatLens/.test(body), 'the sheet reaches for a formatter instead of taking a string');
     // The widths ARE the published shares — the same property the on-screen bar has.
     assert.ok(/sharePct: b\.sharePct/.test(body), 'the bar re-derives its widths');
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // THE 2026-09-22 REDESIGN — the owner's four asks, each as an assertion.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  check('⚠️ THE TITLE IS THE LENS\'S NAME — exactly, on all three lenses', () => {
+    // *"It should just be called price lens."* Not a sentence about the yard.
+    assert.ok(code(PRICE_PANEL).includes("title: 'Price lens'"), 'the price sheet is not called "Price lens"');
+    assert.ok(code(AGE_PANEL).includes("title: 'Age lens'"), 'the age sheet is not called "Age lens"');
+    assert.ok(
+      code(SUPPLIER_PANEL).includes("title: 'Supplier lens'"),
+      'the supplier sheet is not called "Supplier lens"',
+    );
+    // The old title, and the old blurb slot, are gone from the model entirely.
+    const sheet = code(LENS_PRINT);
+    assert.ok(!/settingsLines/.test(sheet), 'the sheet still takes a LIST of settings lines');
+    assert.ok(/settingsLine: string;/.test(sheet), 'the sheet has no single terse settings line');
+    assert.ok(!/cutLine/.test(sheet), 'the sheet still carries a separate cut-line line');
+    assert.ok(!/subtitle=\{model\.settingsLines/.test(sheet));
+  });
+
+  check('⚠️ ONE TERSE SETTINGS LINE — `·`-joined facts, and no AI-slop subheading', () => {
+    for (const panel of [PRICE_PANEL, AGE_PANEL, SUPPLIER_PANEL]) {
+      const body = code(panel);
+      assert.ok(
+        /settingsLine: \[[\s\S]*?\]\.join\(' · '\)/.test(body),
+        `${panel} does not build its settings line as ·-joined facts`,
+      );
+    }
+    // The sheet appends the stamp itself, so a lens never has to know the clock.
+    assert.ok(
+      /\{model\.settingsLine\} · printed \{printedAt\}/.test(code(LENS_PRINT)),
+      'the printed-at stamp is not appended to the one settings line',
+    );
+    // And the stage header stays OFF — a second heading restating the title is wordiness.
+    assert.ok(/showHeader=\{false\}/.test(code(LENS_PRINT)), 'the stage header came back');
+  });
+
+  check('⚠️ THE RATIO BAR IS KEPT — the owner said he liked it', () => {
+    const sheet = code(LENS_PRINT);
+    assert.ok(/<LensRatioBar/.test(sheet), 'the ratio bar was dropped from the sheet');
+    assert.ok(/trackClassName="border-zinc-400 bg-zinc-100"/.test(sheet), 'the bar track is not re-skinned');
+  });
+
+  check('⚠️ THE THREE-COLUMN LISTS ARE GONE — blocks are grouped by WAREHOUSE', () => {
+    const sheet = code(LENS_PRINT);
+    assert.ok(!/column-count/.test(sheet), 'the sheet still lays blocks out in newspaper columns');
+    assert.ok(!/lens-print-cols/.test(sheet), 'the three-column class survived');
+    assert.ok(/band\.warehouses\.map/.test(sheet), 'the sheet does not render warehouse groups');
+    // ONE bucketing, shared — three copies would order warehouses three ways.
+    const model = code(`${LENS}/lens-summary-model.ts`);
+    assert.ok(
+      /WAREHOUSE_ORDER: readonly string\[\] = \[\.\.\.Object\.keys\(WAREHOUSES\)/.test(model),
+      'the warehouse order is re-listed instead of read from the grid layout',
+    );
+    for (const panel of [PRICE_PANEL, AGE_PANEL, SUPPLIER_PANEL]) {
+      assert.ok(
+        /buildLensSummaryBuckets\(\{/.test(code(panel)),
+        `${panel} buckets its print rows itself instead of sharing the one bucketing`,
+      );
+    }
+  });
+
+  check('⚠️ EACH BAND STARTS A NEW PAGE, and a warehouse keeps its heading', () => {
+    const sheet = code(LENS_PRINT);
+    assert.ok(
+      /\[data-lens-print\] \.lens-print-band \{ break-before: page; page-break-before: always; \}/.test(sheet),
+      'a band no longer starts on a fresh sheet',
+    );
+    assert.ok(
+      /tbody\.lens-print-whse-small \{ break-inside: avoid; \}/.test(sheet),
+      'a small warehouse group can be split across sheets',
+    );
+    assert.ok(
+      /tr\.lens-print-whse-head \{ break-after: avoid; \}/.test(sheet),
+      'a warehouse heading can be stranded at a page foot',
+    );
+    assert.ok(/const SMALL_WAREHOUSE_ROWS = 6;/.test(sheet), 'the small-group threshold moved');
+  });
+
+  check('⚠️ THE LAB COLUMNS ARE READ, and a SUBTOTAL\'s lab cells stay BLANK', () => {
+    const sheet = code(LENS_PRINT);
+    // Seven readings, in the RC IN column order, spelled in ONE place.
+    const model = code(`${LENS}/lens-summary-model.ts`);
+    assert.ok(
+      /LENS_SUMMARY_LAB_KEYS = \[\s*'mc',\s*'ash',\s*'bdAstm',\s*'bdJis',\s*'grit',\s*'vm',\s*'fc',\s*\] as const/.test(model),
+      'the seven lab columns are not declared in the RC IN order, in one place',
+    );
+    // The Excel Standard: BD → 3 decimals, everything else → 2.
+    assert.ok(/bdAstm: lab3\(/.test(model) && /bdJis: lab3\(/.test(model), 'a BD reading is not 3 dp');
+    assert.ok(/mc: lab2\(/.test(model) && /ash: lab2\(/.test(model), 'MC or ASH is not 2 dp');
+    // ⚠️ NEVER a weighted average in TypeScript: the subtotal's lab cells are EMPTY.
+    assert.ok(
+      /\{LENS_SUMMARY_LAB_KEYS\.map\(\(k\) => \(\s*<td key=\{k\} className=\{TD_SMALL\} \/>/.test(
+        sheet.replace(/\s+/g, ' ').replace(/ /g, ' '),
+      ) || /<td key=\{k\} className=\{TD_SMALL\} \/>/.test(sheet),
+      'a warehouse subtotal prints a lab value — that would be a TS-computed weighted average',
+    );
+    assert.ok(
+      !/weighted/i.test(model) || /never/i.test(model),
+      'the bucketing module claims to weight something',
+    );
+    // The readings come off the grid payload, joined by block_loc — read, not computed.
+    assert.ok(/lensSummaryLab\(block\)/.test(model), 'the lab row is not read from the grid payload');
+  });
+
+  check('⚠️ THE ONE SUM is a warehouse partition, and it FOLDS BACK to the band', () => {
+    // The stated exception to "no lens file sums a kilogram": the payload publishes no
+    // figure for "band 2's kilograms in warehouse C", so there is nothing this can
+    // disagree with. Proven by running the real bucketing over a synthetic grid.
+    const data: Record<string, BlockData> = {};
+    const lab = { bd_astm: 0.4, bd_jis: 0.42, ash: 3, mc: 11, grit: 1, vm: 18, fc: 78 };
+    // Two warehouses, five blocks, all in band 0.
+    for (const [loc, balance] of [
+      ['A-1A', 100_000], ['A-2A', 50_000], ['B-1A', 25_000], ['B-2A', 12_500], ['PCA-15A', 6_250],
+    ] as const) {
+      data[loc] = { batch_code: `X-${loc}`, batch_id: loc, status: 'STORED', balance, total_in: balance, php: 40, ...lab };
+    }
+    const { byBand, excludedRows } = buildLensSummaryBuckets({
+      data,
+      bandOf: () => 0,
+      figureOf: () => 'x',
+      sortKeyOf: (_l, b) => b.balance,
+      formatKg: (n) => String(n),
+      formatBlocks: (n) => String(n),
+      excludedFigure: '-',
+    });
+    const groups = byBand.get(0) ?? [];
+    assert.equal(groups.length, 3, 'the blocks did not split into three warehouses');
+    // The page's OWN order: A, B, …, then PCA / PCB.
+    assert.deepEqual(groups.map((g) => g.key), ['A', 'B', 'PCA']);
+    assert.deepEqual(groups.map((g) => g.label), ['WHSE A', 'WHSE B', 'PCA']);
+    // Biggest pile first inside a warehouse.
+    assert.deepEqual(groups[0].rows.map((r) => r.blockLoc), ['A-1A', 'A-2A']);
+    // ⚠️ THE FOLD: the warehouse subtotals add up to the band's own kilograms.
+    const folded = groups.map((g) => Number(g.kg)).reduce((a, b) => a + b, 0);
+    assert.equal(folded, 193_750, `the warehouse subtotals do not fold to the band (${folded})`);
+    assert.equal(excludedRows.length, 0);
+    // And a block the lens cannot place lands OUTSIDE every band.
+    const unplaced = buildLensSummaryBuckets({
+      data,
+      bandOf: (loc) => (loc === 'A-1A' ? undefined : 0),
+      figureOf: () => 'x',
+      sortKeyOf: () => 0,
+      formatKg: (n) => String(n),
+      formatBlocks: (n) => String(n),
+      excludedFigure: '-',
+    });
+    assert.equal(unplaced.excludedRows.length, 1);
+    assert.equal(unplaced.excludedRows[0].blockLoc, 'A-1A');
+    assert.equal(unplaced.excludedRows[0].figure, '-');
+    for (const g of unplaced.byBand.get(0) ?? []) {
+      assert.ok(!g.rows.some((r) => r.blockLoc === 'A-1A'), 'an unplaced block was folded into a band');
+    }
   });
 }
 
@@ -935,7 +1419,20 @@ console.log('\n10. THE DEV FIXTURE, AND THE DOCS');
       'Include pages',
       'natural breaks',
       'Against market',
+      'Against set price',
       'avg of priced',
+      // The 2026-09-22 pass: the three lenses, the bucketing, the categorical palette,
+      // the mixed marker, the two attributions, and the two new print rules.
+      'lens/supplier-lens-panel.tsx',
+      'lens/supplier-lens-settings.ts',
+      'lens/lens-summary-model.ts',
+      'blocking_lens_supplier',
+      'lens-cat-mixed',
+      'ONE TABLE, ONE SHEET',
+      'A CAPTION IS A LIST OF FACTS',
+      'A TYPED FIGURE IS A SET PRICE',
+      'apportioned',
+      'Supplier lens — UI',
     ]) {
       assert.ok(doc.includes(phrase), `CONTEXT.md does not mention "${phrase}"`);
     }

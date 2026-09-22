@@ -23,7 +23,7 @@
 import * as React from 'react';
 
 import { cn } from '@/lib/utils';
-import { rampClass, type LensRampId } from './lens-ramp';
+import { rampClass, rampClassAtStop, type LensRampId } from './lens-ramp';
 import { formatLensSharePct, type LensUnit } from './lens-shared';
 
 // ── kg | blocks ─────────────────────────────────────────────────────────────
@@ -71,6 +71,14 @@ export function LensUnitSwitch({ unit, onChange, ariaLabel = 'Measure bands by' 
 export interface LensBandRow {
   /** The value handed back to `onToggle` — the band's own index in the payload. */
   index: number;
+  /**
+   * The ramp stop this band wears, when the LENS decides it rather than its position.
+   *
+   * Ordinal lenses (price, age) omit it and are spread across the scale by position.
+   * A NOMINAL lens (supplier) states it, because a category has no position and the
+   * `others` fold must always take the reserved neutral — see `lens-ramp.ts`.
+   */
+  rampStop?: number;
   /** What this band is called: the reader's name, or the lens's generated label. */
   label: string;
   /** PERCENT 0–100 as published, in whatever unit the switch is on. Null = unknown. */
@@ -109,7 +117,9 @@ export function LensBandRows({ rows, ramp, picked, onToggle }: LensBandRowsProps
                 aria-hidden
                 className={cn(
                   'mt-[3px] h-3 w-3 shrink-0 rounded-sm border border-border/60',
-                  rampClass(ramp, i, rows.length),
+                  row.rampStop === undefined
+                    ? rampClass(ramp, i, rows.length)
+                    : rampClassAtStop(ramp, row.rampStop),
                   'lens-band-swatch',
                 )}
               />
@@ -183,7 +193,9 @@ export function LensBandChips({
               aria-hidden
               className={cn(
                 'h-2.5 w-2.5 shrink-0 rounded-sm border border-border/60',
-                rampClass(ramp, i, rows.length),
+                row.rampStop === undefined
+                  ? rampClass(ramp, i, rows.length)
+                  : rampClassAtStop(ramp, row.rampStop),
                 'lens-band-swatch',
               )}
             />

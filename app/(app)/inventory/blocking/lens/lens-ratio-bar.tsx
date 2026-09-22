@@ -21,12 +21,17 @@
 import * as React from 'react';
 
 import { cn } from '@/lib/utils';
-import { rampClass, type LensRampId } from './lens-ramp';
+import { rampClass, rampClassAtStop, type LensRampId } from './lens-ramp';
 
 export interface LensRatioSegment {
   key: React.Key;
   /** PERCENT 0–100, exactly as the server published it. Null = nothing to draw. */
   sharePct: number | null;
+  /**
+   * The ramp stop this segment wears, when the LENS decides it rather than its position.
+   * Ordinal lenses omit it; a NOMINAL one states it. See `lens-ramp.ts`.
+   */
+  rampStop?: number;
 }
 
 export interface LensRatioBarProps {
@@ -62,7 +67,13 @@ export function LensRatioBar({ segments, ramp, ariaLabel, trackClassName }: Lens
         return (
           <div
             key={seg.key}
-            className={cn('h-full', rampClass(ramp, i, segments.length), 'lens-band-swatch')}
+            className={cn(
+              'h-full',
+              seg.rampStop === undefined
+                ? rampClass(ramp, i, segments.length)
+                : rampClassAtStop(ramp, seg.rampStop),
+              'lens-band-swatch',
+            )}
             style={{ width: `${s}%` }}
           />
         );

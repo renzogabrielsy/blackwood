@@ -34,16 +34,19 @@ import { sanitizeLabel, composeBlendPdfFilename } from './blend-proposal-filenam
 import { blendVersionLine, type BlendDocMeta } from './print-utils';
 import { analysisPages, type BlendAnalysisOptions } from './blend-analysis-options';
 import {
+  ageMethodNote,
   blocksWord,
   fmtDays,
   fmtQuality,
   fmtSharePct,
-  fmtWholeDays,
   groupWord,
   naturalMethodNote,
   QUALITY_METRIC_LABELS,
   QUALITY_METRIC_UNITS,
+  undatedNote,
+  unmeasuredNote,
   vsMarketCaption,
+  vsMarketHeading,
   vsMarketUnavailableNote,
 } from './blend-analysis-text';
 import { rampRgb } from '../blocking/lens/lens-ramp';
@@ -388,6 +391,15 @@ function tintFill(triple: string): [number, number, number] {
   return [mix(r), mix(g), mix(b)];
 }
 
+/**
+ * ONE TABLE, ONE PAGE — it calls `addPage()` FIRST, every time.
+ *
+ * The HTML sheets get this from `.apage { break-before: page }`; here it has to be the
+ * explicit `addPage()`, and it has to happen for EVERY table rather than once per
+ * chosen page, or a heading lands at the bottom of a sheet above the tail of the table
+ * before it — which is exactly what the owner photographed. Six tables therefore mean
+ * six added pages, and the page count is the honest consequence.
+ */
 function analysisHeading(doc: jsPDF, marginX: number, title: string, note: string): number {
   doc.addPage();
   doc.setFont('helvetica', 'bold');
@@ -469,19 +481,23 @@ function appendAnalysisPages(doc: jsPDF, marginX: number, input: BlendPdfAnalysi
       const price = analysis.price;
       if (!price) continue;
       const nat = price.natural;
-      let y = analysisHeading(
+      const y = analysisHeading(
         doc,
         marginX,
         'Price groups - natural breaks',
-        `${pdfText(
-          naturalMethodNote({
-            subject: 'prices',
-            groupCount: nat.groupCount,
-            cuts: nat.cuts,
-            gvf: nat.gvf,
-            formatCut: (v) => pdfPhp(v),
-          }),
-        )} High to low; dearest block first inside each group.`,
+        pdfText(
+          [
+            naturalMethodNote({
+              groupCount: nat.groupCount,
+              cuts: nat.cuts,
+              gvf: nat.gvf,
+              formatCut: (v) => pdfPhp(v),
+            }),
+            unmeasuredNote(nat.unmeasured, 'No price'),
+          ]
+            .filter((s) => s !== '')
+            .join(' · '),
+        ),
       );
 
       const priceHead = ['Block', 'Batch', 'Balance (kg)', 'PHP/KG', 'Value'];
@@ -534,26 +550,25 @@ function appendAnalysisPages(doc: jsPDF, marginX: number, input: BlendPdfAnalysi
           pdfPhp(nat.overall.valuePhp, 0),
         ],
       });
-      y = analysisTable(doc, marginX, y, priceHead, rows, 2);
+      analysisTable(doc, marginX, y, priceHead, rows, 2);
 
-      // ── Against market ──
+      // ── Against market / set price — ITS OWN PAGE ──
       const vm = price.vsMarket;
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(10);
-      doc.text('Against market', marginX, y + 18);
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(8);
-      doc.setTextColor(80, 80, 80);
-      const caption = vm
-        ? `${pdfText(vsMarketCaption(vm))} Dearest band first.`
-        : pdfText(
-            price.vsMarketUnavailable
-              ? vsMarketUnavailableNote(price.vsMarketUnavailable)
-              : 'No market comparison is available for this blend.',
-          );
-      const capLines = doc.splitTextToSize(caption, 760) as string[];
-      doc.text(capLines, marginX, y + 30);
-      doc.setTextColor(20, 20, 20);
+      const typed = vm
+        ? vm.marketBasis === 'given'
+        : price.vsMarketUnavailable?.marketBasis === 'given';
+      const vmY = analysisHeading(
+        doc,
+        marginX,
+        vsMarketHeading(!!typed),
+        vm
+          ? pdfText(vsMarketCaption(vm))
+          : pdfText(
+              price.vsMarketUnavailable
+                ? vsMarketUnavailableNote(price.vsMarketUnavailable)
+                : 'No comparison available',
+            ),
+      );
       if (vm) {
         const vmRows: AnalysisPdfRow[] = [];
         for (const b of [...vm.bands].sort((a, x) => x.index - a.index)) {
@@ -596,17 +611,11 @@ function appendAnalysisPages(doc: jsPDF, marginX: number, input: BlendPdfAnalysi
             pdfPhp(vm.overall.valuePhp, 0),
           ],
         });
-        analysisTable(doc, marginX, y + 30 + capLines.length * 10 + 4, priceHead, vmRows, 2);
+        analysisTable(doc, marginX, vmY, priceHead, vmRows, 2);
       }
     }
 
     if (page === 'quality') {
-      let y = analysisHeading(
-        doc,
-        marginX,
-        'Quality - MC / ASH / BD',
-        'Highest reading first. A reading past your own WET / ASHY limit is coloured, exactly as it is on the grid. BD JIS rides beside BD ASTM rather than in a fourth table - its group averages are cut in different places, so only the blend’s own weighted JIS is shown, in the footer.',
-      );
       for (const { metric, companion } of QUALITY_PDF_TABLES) {
         const nat = analysis.quality.byMetric[metric];
         const comp = companion ? analysis.quality.byMetric[companion] : null;
@@ -660,16 +669,28 @@ function appendAnalysisPages(doc: jsPDF, marginX: number, input: BlendPdfAnalysi
         if (companion && comp) total.push(fmtQuality(companion, comp.overall.kgWeightedValue));
         rows.push({ kind: 'total', cells: total });
 
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(9);
-        doc.text(
-          `${QUALITY_METRIC_LABELS[metric]}${
+        // ONE PAGE PER METRIC — `analysisHeading` adds the page itself.
+        const y = analysisHeading(
+          doc,
+          marginX,
+          `Quality - ${QUALITY_METRIC_LABELS[metric]}${
             companion ? ` + ${QUALITY_METRIC_LABELS[companion]}` : ''
           } - ${QUALITY_METRIC_UNITS[metric]}`,
-          marginX,
-          y + 12,
+          pdfText(
+            [
+              naturalMethodNote({
+                groupCount: nat.groupCount,
+                cuts: nat.cuts,
+                gvf: nat.gvf,
+                formatCut: (v) => v.toFixed(metric === 'bd_astm' || metric === 'bd_jis' ? 3 : 2),
+              }),
+              unmeasuredNote(nat.unmeasured, 'No reading'),
+            ]
+              .filter((s) => s !== '')
+              .join(' · '),
+          ),
         );
-        y = analysisTable(doc, marginX, y + 18, head, rows, 2) + 14;
+        analysisTable(doc, marginX, y, head, rows, 2);
       }
       // The thresholds are the reader's own; naming them keeps the colour honest even
       // in a PDF a printer renders in grey.
@@ -683,13 +704,19 @@ function appendAnalysisPages(doc: jsPDF, marginX: number, input: BlendPdfAnalysi
         doc,
         marginX,
         'Age',
-        `Ages as of ${age.asOf}, weighted by the kilograms still in each pile, from its deliveries’ average date. Oldest band first.${
-          o.oldestAgeDays !== null
-            ? ` Oldest pile ${fmtWholeDays(o.oldestAgeDays)}${
-                o.oldestBlockLoc ? ` at ${o.oldestBlockLoc}` : ''
-              }.`
-            : ''
-        }`,
+        pdfText(
+          [
+            ageMethodNote({
+              asOf: age.asOf,
+              cutDays: age.bands.map((b) => b.lowerDays).filter((d) => d > 0),
+              oldestDays: o.oldestAgeDays,
+              oldestBlockLoc: o.oldestBlockLoc,
+            }),
+            undatedNote(age.undated.blockCount),
+          ]
+            .filter((s) => s !== '')
+            .join(' · '),
+        ),
       );
       const head = ['Block', 'Batch', 'Balance (kg)', 'Age (d)', 'First delivery', 'Last delivery'];
       const rows: AnalysisPdfRow[] = [];

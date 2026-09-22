@@ -24,6 +24,10 @@
 // role, Production included, and only the Price TAB is absent. That is exactly why
 // the predicate lives per lens and not as one flag on the frame.
 //
+// THREE lenses are registered (2026-09-22): Price, Age, Supplier — the last two both
+// read `canShow: () => true`, so a Production reader gets a two-tab strip and a
+// price-viewer a three-tab one.
+//
 // ── ORDER IS TAB ORDER, AND PRICE IS FIRST ──────────────────────────────────
 // A price-viewer's default lens (the one the Highlight button opens) is the first
 // entry this reader may see, so Price stays first for them and Age is the first —
@@ -35,10 +39,15 @@
 
 import { AGE_LENS } from './age-lens-panel';
 import { PRICE_LENS } from './price-lens-panel';
+import { SUPPLIER_LENS } from './supplier-lens-panel';
 import type { BlockingLensCapabilities, BlockingLensDefinition, BlockingLensId } from './types';
 
 /** Every lens the Blocking page knows about, in tab order. */
-export const BLOCKING_LENSES: readonly BlockingLensDefinition[] = [PRICE_LENS, AGE_LENS];
+export const BLOCKING_LENSES: readonly BlockingLensDefinition[] = [
+  PRICE_LENS,
+  AGE_LENS,
+  SUPPLIER_LENS,
+];
 
 /** The lenses this reader may be offered. Order is preserved. */
 export function visibleLenses(caps: BlockingLensCapabilities): BlockingLensDefinition[] {

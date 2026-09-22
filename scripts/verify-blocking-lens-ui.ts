@@ -92,10 +92,31 @@ import {
   yearWord,
 } from '../app/(app)/inventory/blocking/lens/age-lens-settings';
 import {
+  LENS_CATEGORY_NEUTRAL_STOP,
+  LENS_CATEGORY_STOPS,
   LENS_RAMP_CLASS_PREFIX,
+  LENS_RAMP_IS_ORDINAL,
+  LENS_RAMP_RGB,
   LENS_RAMP_STOPS,
+  categoryStop,
   rampClass,
+  rampClassAtStop,
 } from '../app/(app)/inventory/blocking/lens/lens-ramp';
+import {
+  DEFAULT_SUPPLIER_LENS_SETTINGS,
+  isDefaultSupplierLensSettings,
+  normalizeTopN,
+  parseSupplierLensSettings,
+  parseTopNInput,
+  serializeSupplierLensSettings,
+  setTopN,
+  supplierBandLabel,
+  supplierBandRampClass,
+  supplierBandRampStop,
+  SUPPLIER_LENS_ID,
+  SUPPLIER_LENS_MIXED_CLASS,
+  SUPPLIER_LENS_RAMP,
+} from '../app/(app)/inventory/blocking/lens/supplier-lens-settings';
 import {
   resolveLensCellClass,
   resolveLensCellTitle,
@@ -115,6 +136,9 @@ const ROUTE = 'app/(app)/inventory/blocking/blocking-route-view.tsx';
 const PANEL = `${LENS_DIR}/price-lens-panel.tsx`;
 const AGE_PANEL = `${LENS_DIR}/age-lens-panel.tsx`;
 const AGE_SETTINGS = `${LENS_DIR}/age-lens-settings.ts`;
+const SUPPLIER_PANEL = `${LENS_DIR}/supplier-lens-panel.tsx`;
+const SUPPLIER_SETTINGS = `${LENS_DIR}/supplier-lens-settings.ts`;
+const SUMMARY_MODEL = `${LENS_DIR}/lens-summary-model.ts`;
 const FRAME = `${LENS_DIR}/lens-panel.tsx`;
 const REGISTRY = `${LENS_DIR}/registry.ts`;
 const SETTINGS = `${LENS_DIR}/price-lens-settings.ts`;
@@ -129,7 +153,8 @@ const CUSTOMIZE = `${LENS_DIR}/lens-customize.tsx`;
 const BANNER = `${LENS_DIR}/lens-refusal-banner.tsx`;
 /** Every lens file, for the rules that must hold across ALL of them. */
 const ALL_LENS_FILES = [
-  PANEL, AGE_PANEL, SETTINGS, AGE_SETTINGS, FRAME, TYPES, STORE, REGISTRY,
+  PANEL, AGE_PANEL, SUPPLIER_PANEL, SETTINGS, AGE_SETTINGS, SUPPLIER_SETTINGS,
+  FRAME, TYPES, STORE, REGISTRY,
   RAMP, SHARED, ROWS, BAR, CUSTOMIZE, BANNER,
 ];
 const CONTEXT = 'app/(app)/inventory/blocking/CONTEXT.md';
@@ -316,6 +341,35 @@ console.log('\n2. NO STATISTIC IS COMPUTED IN A LENS FILE');
       assert.ok(!/\+=/.test(body), `${rel} accumulates with +=`);
     });
   }
+
+  // RESTATED 2026-09-22, with the reason written down. The rule used to be "no lens file
+  // sums a kilogram", full stop. The printed lens summary now groups a band's blocks BY
+  // WAREHOUSE (the owner's own ask), and the payload publishes no figure for "band 2's
+  // kilograms in warehouse C" at ANY grain — so that one subtotal has nothing it could
+  // disagree with, and every number beside it is still SQL's. The exception is therefore
+  // scoped to ONE file, `lens-summary-model.ts`, which is deliberately absent from
+  // `ALL_LENS_FILES`; the fold is proven to tie back to the band's own published kilograms
+  // in `scripts/verify-blend-analysis-ui.ts`. What is still absolutely banned, and is
+  // asserted here, is a WEIGHTED AVERAGE: a subtotal's lab cells stay blank.
+  check('the ONE exception is `lens-summary-model.ts`, and it averages NOTHING', () => {
+    const model = code(SUMMARY_MODEL);
+    assert.ok(
+      !ALL_LENS_FILES.includes(SUMMARY_MODEL),
+      'the bucketing module joined the no-sum list, so its stated exception is now a lie',
+    );
+    // Exactly ONE accumulation, and it is a plain sum of balances.
+    const sums = [...model.matchAll(/kg = kg \+ d\.balance/g)].length;
+    assert.equal(sums, 1, `the bucketing module makes ${sums} sums, not one`);
+    assert.ok(!/\.reduce\s*\(/.test(model), 'the bucketing module folds with reduce');
+    // NO weighted average, no division by a total, no lab arithmetic at all.
+    assert.ok(!/\/\s*(kg|total|weight)/i.test(model), 'the bucketing module divides by a total');
+    assert.ok(
+      !/mc \* |ash \* |\* block\.balance/.test(model),
+      'the bucketing module weights a lab reading by kilograms',
+    );
+    // The lab readings are READ off the payload and only FORMATTED.
+    assert.ok(/toFixed\(2\)/.test(model) && /toFixed\(3\)/.test(model), 'the lab decimals moved');
+  });
 
   check('the panel renders the SERVER\'s shares — it never divides by a total', () => {
     const body = code(PANEL);
@@ -1052,26 +1106,57 @@ console.log('\n7. THE FRAME — registry shape, Escape, and the classifier seam'
     }
   });
 
-  check('TWO lenses are registered — Price FIRST, Age SECOND — and their ids are the `?lens=` values', () => {
+  // RESTATED 2026-09-22: a THIRD lens joined the registry, so this no longer pins a
+  // two-element list. Same three rules: the order is TAB order, Price stays FIRST (it is
+  // a price-viewer's default), and every id is its own `?lens=` value.
+  check('THREE lenses are registered — Price, Age, Supplier IN THAT ORDER', () => {
     assert.equal(PRICE_LENS_ID, 'price');
     assert.equal(AGE_LENS_ID, 'age');
+    assert.equal(SUPPLIER_LENS_ID, 'supplier');
     const reg = code(REGISTRY);
     assert.ok(
-      /BLOCKING_LENSES[^=]*=\s*\[PRICE_LENS,\s*AGE_LENS\]/.test(reg),
-      'the registry is not exactly [PRICE_LENS, AGE_LENS] — order is TAB order, and Price is a price-viewer\'s default',
+      /BLOCKING_LENSES[^=]*=\s*\[\s*PRICE_LENS,\s*AGE_LENS,\s*SUPPLIER_LENS,?\s*\]/.test(reg),
+      'the registry is not exactly [PRICE_LENS, AGE_LENS, SUPPLIER_LENS] — Supplier registers AFTER Age',
     );
     assert.ok(reg.includes("from './age-lens-panel'"), 'the age lens is not imported from its own panel file');
+    assert.ok(
+      reg.includes("from './supplier-lens-panel'"),
+      'the supplier lens is not imported from its own panel file',
+    );
   });
 
-  check('each lens declares its OWN ramp, and the two differ', () => {
+  check('⚠️ the SUPPLIER lens reads `canShow: () => true`, like Age and unlike Price', () => {
+    // There is no money in its payload and none is derivable from it, so Production —
+    // the role that actually walks the yard and knows whose truck came in — sees it.
+    const body = code(SUPPLIER_PANEL);
+    assert.ok(
+      /canShow: \(\) => true,/.test(body),
+      'the supplier lens grew a capability gate — its payload carries no ₱',
+    );
+    assert.ok(
+      !/canViewPrices/.test(body),
+      'the supplier panel mentions canViewPrices — there is no money in it to gate',
+    );
+    assert.ok(
+      !/canViewPrices/.test(code(SUPPLIER_SETTINGS)),
+      'the supplier settings module mentions canViewPrices',
+    );
+    // And the PRICE lens still gates, so the asymmetry is deliberate in both directions.
+    assert.ok(/canShow: \(caps\) => caps\.canViewPrices,/.test(code(PANEL)), 'the price gate is gone');
+  });
+
+  check('each lens declares its OWN ramp, and all three differ', () => {
     assert.equal(PRICE_LENS_RAMP, 'cost');
     assert.equal(AGE_LENS_RAMP, 'age');
-    assert.notEqual(PRICE_LENS_RAMP, AGE_LENS_RAMP, 'both lenses paint on the same scale');
+    assert.equal(SUPPLIER_LENS_RAMP, 'category');
+    assert.equal(new Set([PRICE_LENS_RAMP, AGE_LENS_RAMP, SUPPLIER_LENS_RAMP]).size, 3,
+      'two lenses paint on the same scale');
     assert.ok(/ramp:\s*PRICE_LENS_RAMP/.test(code(PANEL)), 'PRICE_LENS does not declare its ramp');
     assert.ok(/ramp:\s*AGE_LENS_RAMP/.test(code(AGE_PANEL)), 'AGE_LENS does not declare its ramp');
-    // The frame and the grid must know nothing about either scale.
-    assert.ok(!/lens-band|lens-age/.test(code(FRAME)), 'the frame hardcodes a ramp class');
-    assert.ok(!/lens-band-|lens-age-/.test(code(GRID)), 'the grid hardcodes a ramp class');
+    assert.ok(/ramp:\s*SUPPLIER_LENS_RAMP/.test(code(SUPPLIER_PANEL)), 'SUPPLIER_LENS does not declare its ramp');
+    // The frame and the grid must know nothing about any scale.
+    assert.ok(!/lens-band|lens-age|lens-cat/.test(code(FRAME)), 'the frame hardcodes a ramp class');
+    assert.ok(!/lens-band-|lens-age-|lens-cat-/.test(code(GRID)), 'the grid hardcodes a ramp class');
   });
 
   check('a ramp class is a STOP on its own scale — both ramps use both ends', () => {
@@ -1802,21 +1887,23 @@ console.log('\n9. THE BLEND TABLE — SUPPLIER DOMINANCE + THE TWO AGES (job D)'
 
 
 // ===========================================================================
-console.log('\n10. THE PRINTED LENS SUMMARY (2026-09-21)');
+console.log('\n10. THE PRINTED LENS SUMMARY (2026-09-21, REDESIGNED 2026-09-22)');
 // ===========================================================================
 //
 // The owner: *"In the lens section, would be nice to also print some kind of summary
 // based on the filter we set."* The sheet itself is proven in
 // `scripts/verify-blend-analysis-ui.ts` (the platform kit, the light surfaces, the
-// isolation line, the labelled footer). What belongs HERE is the part that is about the
-// two LENSES rather than about the sheet: that each one builds its own model, that
-// neither computes a statistic to do it, and that the price gate sits on the price
-// lens's button and nowhere near the age lens's.
+// warehouse grouping, the blank subtotal lab cells, the isolation line, the labelled
+// footer). What belongs HERE is the part that is about the three LENSES rather than about
+// the sheet: that each one builds its own model, that none of them computes a statistic to
+// do it, and that the price gate sits on the price lens's button and nowhere near the
+// other two.
 {
   const PRINT = `${LENS_DIR}/lens-summary-print.tsx`;
+  const PRINT_PANELS = [PANEL, AGE_PANEL, SUPPLIER_PANEL];
 
-  check('each lens builds its OWN model — the sheet knows nothing about either', () => {
-    for (const panel of [PANEL, AGE_PANEL]) {
+  check('each lens builds its OWN model — the sheet knows nothing about any of them', () => {
+    for (const panel of PRINT_PANELS) {
       const body = code(panel);
       assert.ok(/printModel: LensSummaryPrintModel \| null/.test(body), `${panel} builds no print model`);
       assert.ok(/<LensSummaryPrintControl/.test(body), `${panel} has no Print button`);
@@ -1829,42 +1916,52 @@ console.log('\n10. THE PRINTED LENS SUMMARY (2026-09-21)');
   });
 
   check('the print models COMPUTE NOTHING — they bucket a published map and format', () => {
-    for (const panel of [PANEL, AGE_PANEL]) {
+    for (const panel of PRINT_PANELS) {
       const body = code(panel);
       // A bucketing of `bandByBlock` is a LOOKUP; a sum of its kilograms would not be.
-      assert.ok(/bandByBlock\[loc\]/.test(body), `${panel} does not read the published band map`);
+      assert.ok(/lens\.bandByBlock\[loc\]/.test(body), `${panel} does not read the published band map`);
       assert.ok(!/\breduce\s*\(/.test(body), `${panel} folds its print rows`);
       assert.ok(!/[^+]\+=[^=]/.test(body), `${panel} accumulates a print total`);
     }
     // And the figures on the sheet are the payload's own.
     assert.ok(/b\.kgWeightedPhpKg === null \? EMDASH/.test(code(PANEL)), 'the price band figure is derived');
     assert.ok(/formatLensDays\(b\.kgWeightedAgeDays\)/.test(code(AGE_PANEL)), 'the age band figure is derived');
+    assert.ok(/formatLensKg\(b\.dominantKg\)/.test(code(SUPPLIER_PANEL)), 'the supplier band figure is derived');
   });
 
   check('a block the lens cannot place is listed SEPARATELY, never inside a band', () => {
-    assert.ok(/unpricedRows\.push/.test(code(PANEL)), 'the price print folds unpriced blocks into a band');
-    assert.ok(/undatedRows\.push/.test(code(AGE_PANEL)), 'the age print folds undated blocks into a band');
-    for (const panel of [PANEL, AGE_PANEL]) {
+    // ONE bucketing owns the rule now, so it is asserted once, where it lives.
+    const model = code(SUMMARY_MODEL);
+    assert.ok(/if \(band === undefined\) \{/.test(model), 'the bucketing does not test for the ABSENCE of a band');
+    assert.ok(/excludedRows\.push\(/.test(model), 'the bucketing folds unplaced blocks into a band');
+    assert.ok(/continue;/.test(model), 'an unplaced block falls through into a warehouse group');
+    for (const panel of PRINT_PANELS) {
       assert.ok(
-        /if \(band === undefined\) \{/.test(code(panel)),
-        `${panel} does not test for the ABSENCE of a band before bucketing`,
+        /rows: excludedRows,/.test(code(panel)),
+        `${panel} does not list the blocks it cannot place on its own row`,
       );
     }
   });
 
-  check('the PRICE print is behind the price flag; the AGE print is not, and must not be', () => {
+  check('the PRICE print is behind the price flag; the other two are not, and must not be', () => {
     const price = code(PANEL).replace(/\s+/g, ' ');
     assert.ok(
       /caps\.canViewPrices && \( <LensSummaryPrintControl/.test(price),
       'the price lens print button is not behind the effective price flag',
     );
-    const age = code(AGE_PANEL);
-    assert.ok(/<LensSummaryPrintControl model=\{printModel\} lensLabel="age"/.test(age));
-    assert.ok(
-      !/canViewPrices/.test(age),
-      'the AGE panel grew a price flag — there is no money in its payload and Production must keep it',
-    );
+    for (const [panel, label] of [[AGE_PANEL, 'age'], [SUPPLIER_PANEL, 'supplier']] as const) {
+      const body = code(panel);
+      assert.ok(
+        new RegExp(`<LensSummaryPrintControl model=\\{printModel\\} lensLabel="${label}"`).test(body),
+        `${panel} lost its unconditional Print button`,
+      );
+      assert.ok(
+        !/canViewPrices/.test(body),
+        `${panel} grew a price flag — there is no money in its payload and Production must keep it`,
+      );
+    }
     assert.ok(!/canViewPrices/.test(code(PRINT)), 'the shared sheet grew a price concern');
+    assert.ok(!/canViewPrices/.test(code(SUMMARY_MODEL)), 'the shared bucketing grew a price concern');
   });
 
   check('the ratio bar can be re-skinned for paper WITHOUT a second implementation', () => {
@@ -1875,9 +1972,300 @@ console.log('\n10. THE PRINTED LENS SUMMARY (2026-09-21)');
       'the default track changed — every on-screen bar would move with it',
     );
     // The segments must NOT be re-skinnable: their fill is the ramp, and the ramp is the
-    // one thing the sheet and the grid must agree on exactly.
-    assert.ok(/rampClass\(ramp, i, segments\.length\), 'lens-band-swatch'/.test(bar));
+    // one thing the sheet and the grid must agree on exactly. A NOMINAL lens may name its
+    // STOP (2026-09-22) — that is still the ramp deciding the colour, not the caller.
+    assert.ok(/rampClassAtStop\(ramp, seg\.rampStop\)/.test(bar), 'a nominal lens cannot name its stop');
     assert.ok(!/segmentClassName/.test(bar), 'a segment colour became a caller concern');
+  });
+}
+
+// ===========================================================================
+console.log('\n11. THE SUPPLIER LENS (2026-09-22)');
+// ===========================================================================
+//
+// The third lens. What a data-layer test cannot see and a type-checker will not catch:
+// that the two KILOGRAM ATTRIBUTIONS stay apart on screen, that the NOMINAL ramp is
+// identity-mapped, that the MIXED marker is not the blend-selection marking, and that the
+// ALL/SOME rule is a carried column rather than a length.
+{
+  check('the SUPPLIER panel renders the SERVER\'s figures — no sum, no share, no average', () => {
+    const body = code(SUPPLIER_PANEL);
+    assert.ok(body.includes('kgSharePct'), 'the panel does not read the published kg share');
+    assert.ok(body.includes('blockSharePct'), 'the panel does not read the published block share');
+    assert.ok(body.includes('apportionedKg'), 'the panel does not read the published apportioned kg');
+    assert.ok(body.includes('dominantBlockCount'), 'the panel does not read the published dominant count');
+    assert.ok(!/\.reduce\s*\(/.test(body), 'the supplier panel folds a figure');
+    assert.ok(!/\+=/.test(body), 'the supplier panel accumulates');
+    assert.ok(
+      !/\/\s*(lens\.total|total\.kg|attributedKg)/.test(body),
+      'the supplier panel divides by a total — a share must come out of SQL',
+    );
+    // ⚠️ AND IT MUST NOT COMPARE THE APPORTIONED FOLD WITH `===`: the contract records a
+    // −1.9e-9 kg residue once the payload has been through JSON and JS doubles.
+    assert.ok(
+      !/apportionedKg ===/.test(body) && !/=== lens\.total\.kg/.test(body),
+      'the panel equality-tests the apportioned fold, which is not bit-exact',
+    );
+  });
+
+  check('⚠️ THE TINT IS DOMINANCE AND THE RATIO BAR IS APPORTIONED — never mixed up', () => {
+    const body = code(SUPPLIER_PANEL);
+    // The TINT: the classifier reads the block's own band, which is its DOMINANT
+    // supplier's — `bandByBlock` / `bandIndex`, and nothing apportioned.
+    const classifier = body.slice(body.indexOf('const classifier'), body.indexOf('React.useEffect(() => {\n    onClassifierChange'));
+    assert.ok(/byBlock\[locKey\]/.test(classifier), 'the tint does not read the published band map');
+    assert.ok(
+      !/apportioned/i.test(classifier),
+      'the grid TINT reads an apportioned figure — a cell can only be one colour, and that colour is dominance',
+    );
+    // The RATIO BAR: `share()` on the kg unit is `kgSharePct`, which the contract defines
+    // ON APPORTIONED kilograms.
+    assert.ok(
+      /settings\.unit === 'kg' \? band\.kgSharePct : band\.blockSharePct/.test(body),
+      'the share is not the apportioned kg share / dominant block share pair',
+    );
+    assert.ok(
+      /segments=\{lens\.bands\.map\(\(b\) => \(\{[\s\S]{0,120}sharePct: share\(b\)/.test(body),
+      'the ratio bar does not take the published share',
+    );
+    // A COUNT is always dominance.
+    assert.ok(
+      /blocks: formatLensBlocks\(b\.dominantBlockCount\)/.test(body),
+      'a printed block count is not the dominant count',
+    );
+    // And the panel SAYS which is which, once, rather than leaving a reader to assume.
+    assert.ok(
+      /DOMINANCE/.test(read(SUPPLIER_PANEL)) && /APPORTIONED/.test(read(SUPPLIER_PANEL)),
+      'the panel never tells the reader which figure is which',
+    );
+  });
+
+  check('⚠️ a TYPED price is never called "market" — legend, popover and sheet', () => {
+    const body = code(PANEL);
+    // ONE noun, derived once from the basis and read by every string that names it.
+    assert.ok(
+      /const basisNoun = priceBasisNoun\(settings\.basis === 'manual'\);/.test(body),
+      'the price lens does not derive the basis noun from the shared definition',
+    );
+    // THE BAR HEADLINE.
+    assert.ok(
+      /\$\{typed \? 'Set price' : 'Market'\} \$\{peso\(marketPhpKg, 2\)\}/.test(body),
+      'the legend headline still says "market" about a typed figure',
+    );
+    assert.ok(
+      !/' \(typed\)'/.test(body),
+      'a label still annotates a typed price with "(typed)" instead of NAMING it a set price',
+    );
+    // THE SETTINGS POPOVER's own label.
+    assert.ok(
+      /settings\.basis === 'manual' \? 'Set price' : 'Market is'/.test(body),
+      'the popover label still says "Market is" over a typed figure',
+    );
+    assert.ok(
+      /aria-label="Set price per kilogram"/.test(body),
+      'the typed-price input is still labelled a market price for a screen reader',
+    );
+    // THE CUSTOMIZE DISCLOSURE — its cut lines are measured FROM the basis.
+    assert.ok(/from \$\{basisNoun\}/.test(body), 'a cut-line message still hardcodes "market"');
+    assert.ok(/rounded \{basisNoun\}/.test(body), 'the disclosure intro still hardcodes "market"');
+    // THE PRINTED SHEET.
+    assert.ok(
+      /`Set price \$\{peso\(marketPhpKg, 2\)\}`/.test(body),
+      'the printed settings line still says "market" about a typed figure',
+    );
+    assert.ok(
+      /and up is above \$\{priceBasisNoun\(typed\)\}/.test(body),
+      'the printed cut-line sentence hardcodes "market"',
+    );
+  });
+
+  check('⚠️ `isMixed` is the CARRIED column, never `suppliers.length`', () => {
+    const body = code(SUPPLIER_PANEL);
+    assert.ok(/block\?\.isMixed/.test(body), 'the panel does not read the carried ALL/SOME column');
+    assert.ok(
+      !/suppliers\.length/.test(body),
+      'the panel re-derives the ALL/SOME rule from a list length — that rule is a column on the view',
+    );
+  });
+
+  check('⚠️ the MIXED marker is NOT the blend-selection marking', () => {
+    const css = read(GLOBALS);
+    const at = css.indexOf('.lens-cat-mixed {');
+    assert.ok(at > 0, '.lens-cat-mixed is missing from globals.css');
+    const rule = css.slice(at, css.indexOf('}', at));
+    // A DASHED INSET OUTLINE in the band's own hue. The blend selection is a solid
+    // `ring-2 ring-primary` plus a filled primary circle with a check at the TOP-RIGHT,
+    // so the two differ in shape, in colour and in position.
+    assert.ok(/outline:.*dashed/.test(rule), 'the mixed marker is not a dashed outline');
+    assert.ok(/var\(--lens-hue\)/.test(rule), 'the mixed marker does not wear the band hue');
+    assert.ok(/outline-offset: -/.test(rule), 'the mixed marker is not INSET, so it reads as a selection ring');
+    assert.ok(!/--primary/.test(rule), 'the mixed marker borrowed the blend selection colour');
+    assert.ok(!/ring-2/.test(rule) && !/box-shadow/.test(rule), 'the mixed marker fights the tint or the picked ring');
+    assert.ok(!/animation/.test(rule), 'a cell marking was animated');
+    // It is SPELLED once, and the panel reads the constant.
+    assert.equal(SUPPLIER_LENS_MIXED_CLASS, 'lens-cat-mixed');
+    assert.ok(
+      /SUPPLIER_LENS_MIXED_CLASS/.test(code(SUPPLIER_PANEL)),
+      'the panel spells the mixed class by hand',
+    );
+  });
+
+  check('the THIRTEEN categorical classes exist AFTER `.blocking-cell-occupied`', () => {
+    const css = read(GLOBALS);
+    const occupied = css.indexOf('.blocking-cell-occupied {');
+    assert.ok(occupied > 0);
+    for (let i = 0; i < LENS_CATEGORY_STOPS; i += 1) {
+      const at = css.search(new RegExp(`\\.lens-cat-${i}\\s+\\{`));
+      assert.ok(at > 0, `.lens-cat-${i} is missing from globals.css`);
+      assert.ok(
+        at > occupied,
+        `.lens-cat-${i} is declared BEFORE .blocking-cell-occupied — same specificity, so the cell's own background wins and the lens paints nothing`,
+      );
+      // It JOINS the shared tint rule rather than declaring its own alpha.
+      assert.ok(css.includes(`.lens-cat-${i},`) || css.includes(`.lens-cat-${i} {`), `.lens-cat-${i} unreadable`);
+      assert.ok(css.includes(`:is(.dark) .lens-cat-${i}`), `.lens-cat-${i} has no :is(.dark) variant`);
+    }
+    // The ONE shared tint rule carries them, so the measured 22% / 30% alpha is inherited.
+    const rule = css.slice(css.indexOf('.lens-band-0,'), css.indexOf('}', css.indexOf('.lens-band-0,')));
+    for (let i = 0; i < LENS_CATEGORY_STOPS; i += 1) {
+      assert.ok(rule.includes(`.lens-cat-${i}`), `.lens-cat-${i} is not in the shared tint rule`);
+    }
+  });
+
+  check('the NOMINAL ramp is identity-mapped and `others` takes the reserved neutral', () => {
+    assert.equal(LENS_RAMP_IS_ORDINAL.cost, true);
+    assert.equal(LENS_RAMP_IS_ORDINAL.age, true);
+    assert.equal(LENS_RAMP_IS_ORDINAL.category, false);
+    assert.equal(LENS_RAMP_CLASS_PREFIX.category, 'lens-cat-');
+    assert.equal(LENS_RAMP_RGB.category.length, LENS_CATEGORY_STOPS);
+    // A band's slot is its RANK — it does not move when N changes.
+    assert.equal(supplierBandRampStop({ index: 0, isOthers: false }), 0);
+    assert.equal(supplierBandRampStop({ index: 5, isOthers: false }), 5);
+    assert.equal(supplierBandRampClass({ index: 5, isOthers: false }), 'lens-cat-5');
+    // `others` is the neutral at EVERY N, so the fold never wears a supplier's identity.
+    for (const i of [1, 6, 12]) {
+      assert.equal(supplierBandRampStop({ index: i, isOthers: true }), LENS_CATEGORY_NEUTRAL_STOP);
+      assert.equal(supplierBandRampClass({ index: i, isOthers: true }), 'lens-cat-12');
+    }
+    assert.equal(categoryStop(99, false), LENS_CATEGORY_NEUTRAL_STOP - 1, 'a stale index reached the neutral');
+    assert.equal(rampClassAtStop('category', 99), 'lens-cat-12', 'a stop is not clamped to the ramp');
+    // AND the ordinal ramps are byte-identical to what they were.
+    assert.equal(rampClass('cost', 0, 4), 'lens-band-0');
+    assert.equal(rampClass('cost', 3, 4), 'lens-band-6');
+    assert.equal(rampClass('age', 1, 4), 'lens-age-2');
+  });
+
+  check('⚠️ no categorical hue is one of the supplier SEARCH\'s two meanings', () => {
+    const css = read(GLOBALS);
+    const all = /\.spotlight-supplier-all \{[\s\S]*?rgba\((\d+), (\d+), (\d+)/.exec(css);
+    const some = /\.spotlight-supplier-some \{[\s\S]*?rgba\((\d+), (\d+), (\d+)/.exec(css);
+    assert.ok(all && some, 'the supplier spotlight hues could not be read');
+    const taken = [`${all[1]} ${all[2]} ${all[3]}`, `${some[1]} ${some[2]} ${some[3]}`];
+    for (const triple of LENS_RAMP_RGB.category) {
+      assert.ok(!taken.includes(triple), `the categorical ramp reuses a spotlight hue (${triple})`);
+    }
+    // Every slot distinct — twelve hues have to be TELLABLE APART, and a repeat would
+    // silently merge two suppliers.
+    assert.equal(new Set(LENS_RAMP_RGB.category).size, LENS_CATEGORY_STOPS);
+  });
+
+  check('the band label is the SUPPLIER, and `Others (N)` is the UI\'s word', () => {
+    assert.equal(
+      supplierBandLabel({ isOthers: false, display: 'Ornales', key: 'ORNALES', supplierCount: 1 }),
+      'Ornales',
+    );
+    // The payload carries key: null / display: null on the fold and does NOT name it.
+    assert.equal(
+      supplierBandLabel({ isOthers: true, display: null, key: null, supplierCount: 11 }),
+      'Others (11)',
+    );
+    // A band with neither is still labelled something a reader can act on.
+    assert.equal(
+      supplierBandLabel({ isOthers: false, display: null, key: null, supplierCount: 1 }),
+      'Unnamed supplier',
+    );
+  });
+
+  check('the stored settings are UNTRUSTED — proven by running the parser', () => {
+    // Same discipline as the other two lenses: FIELD BY FIELD, falling back per field.
+    assert.deepEqual(parseSupplierLensSettings(null), DEFAULT_SUPPLIER_LENS_SETTINGS);
+    assert.deepEqual(parseSupplierLensSettings('nope'), DEFAULT_SUPPLIER_LENS_SETTINGS);
+    assert.deepEqual(parseSupplierLensSettings([1, 2]), DEFAULT_SUPPLIER_LENS_SETTINGS);
+    // One bad key must not cost the other its value.
+    assert.deepEqual(parseSupplierLensSettings({ topN: 'x', unit: 'blocks' }), { topN: 6, unit: 'blocks' });
+    assert.deepEqual(parseSupplierLensSettings({ topN: 3, unit: 'nope' }), { topN: 3, unit: 'kg' });
+    // Out of range, non-integer and non-finite all fall back rather than being clamped —
+    // a clamp would silently answer a question the reader did not ask.
+    for (const bad of [0, 13, -1, 6.5, NaN, Infinity]) {
+      assert.equal(parseSupplierLensSettings({ topN: bad }).topN, 6, `topN ${bad} was accepted`);
+      assert.equal(normalizeTopN(bad), null, `normalizeTopN accepted ${bad}`);
+    }
+    assert.equal(normalizeTopN(1), 1);
+    assert.equal(normalizeTopN(12), 12);
+  });
+
+  check('the stored document OMITS defaults, so Reset is a removal', () => {
+    assert.deepEqual(serializeSupplierLensSettings(DEFAULT_SUPPLIER_LENS_SETTINGS), {});
+    assert.ok(isDefaultSupplierLensSettings(DEFAULT_SUPPLIER_LENS_SETTINGS));
+    assert.deepEqual(serializeSupplierLensSettings({ topN: 3, unit: 'kg' }), { topN: 3 });
+    assert.deepEqual(serializeSupplierLensSettings({ topN: 6, unit: 'blocks' }), { unit: 'blocks' });
+    assert.ok(!isDefaultSupplierLensSettings({ topN: 6, unit: 'blocks' }));
+    // Settings live under their OWN module row, so one lens's save cannot erase another's.
+    assert.ok(
+      code(SUPPLIER_PANEL).includes('SUPPLIER_LENS_ID'),
+      'the panel does not key its settings on the lens id',
+    );
+  });
+
+  check('a rejected top-N is a SENTENCE, never a throw — and both ends are refused', () => {
+    const low = setTopN(0);
+    assert.equal(low.ok, false);
+    if (!low.ok) assert.ok(/at least 1/.test(low.message), low.message);
+    const high = setTopN(13);
+    assert.equal(high.ok, false);
+    if (!high.ok) assert.ok(/12/.test(high.message), high.message);
+    const frac = setTopN(6.5);
+    assert.equal(frac.ok, false);
+    const ok = setTopN(4);
+    assert.equal(ok.ok, true);
+    if (ok.ok) assert.equal(ok.topN, 4);
+    // The typed input is parsed, not coerced.
+    assert.equal(parseTopNInput('  ').ok, false);
+    assert.equal(parseTopNInput('abc').ok, false);
+    assert.equal(parseTopNInput('6.5').ok, false);
+    const parsed = parseTopNInput(' 8 ');
+    assert.ok(parsed.ok && parsed.value === 8);
+  });
+
+  check('there are NO band names, and that is deliberate', () => {
+    // A supplier band already has a name — the supplier's. Renaming it would let the
+    // legend disagree with the yard about whose charcoal it is.
+    const body = code(SUPPLIER_SETTINGS);
+    assert.ok(!/bandNames/.test(body), 'the supplier lens grew a band-name document');
+    assert.ok(!/bandNames/.test(code(SUPPLIER_PANEL)), 'the supplier panel renames a band');
+  });
+
+  check('the FIXTURE drives the REAL three-lens frame, with a REAL delay', () => {
+    const fixture = 'app/dev/table-playground/supplierlens/supplierlens-fixture.tsx';
+    const page = 'app/dev/table-playground/supplierlens/page.tsx';
+    const body = read(fixture);
+    assert.ok(/<BlockingLensPanel/.test(body), 'the fixture does not mount the real frame');
+    for (const lens of ['PRICE_LENS', 'AGE_LENS', 'SUPPLIER_LENS']) {
+      assert.ok(body.includes(lens), `the fixture does not offer ${lens}`);
+    }
+    assert.ok(/adapter=\{supplierAdapter\}/.test(body), 'the supplier port is not injected');
+    // A microtask-resolving stub hides the spinner, the placeholder chip and every race.
+    assert.ok(/const FIXTURE_LATENCY_MS = 300;/.test(body), 'the fixture adapter has no realistic delay');
+    assert.ok(/await sleep\(FIXTURE_LATENCY_MS\)/.test(body), 'a fixture read resolves in a microtask');
+    assert.ok(/l\.canShow\(caps\)/.test(body), 'the fixture does not filter by each lens\'s own canShow');
+    // Gated twice, and no data access of any kind.
+    assert.ok(
+      /process\.env\.NODE_ENV === 'production' && !process\.env\.TABLE_PLAYGROUND/.test(read(page)),
+      'the fixture is not gated in production',
+    );
+    for (const f of ['createClient', '@/lib/supabase', 'getUserRole', 'canViewPrices()']) {
+      assert.ok(!body.includes(f), `the fixture reaches for ${f}`);
+    }
   });
 }
 

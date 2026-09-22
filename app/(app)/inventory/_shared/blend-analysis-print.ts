@@ -7,6 +7,15 @@
 // SHEET per chosen page after the existing proposal sheet, from the SAME payload the
 // screen renders and through the SAME words and formats (`blend-analysis-text.ts`).
 //
+// ── ONE TABLE, ONE SHEET (2026-09-22) ───────────────────────────────────────
+// The owner's print showed a heading sitting at the bottom of a page above the tail of
+// the table before it. **Every analysis TABLE is now its own `<section class="apage">`**
+// — Price groups, Against market/set price, MC, ASH, BD, Age — so the `.apage` rule
+// (`break-before: page`) puts each one on a fresh sheet and a heading can never be
+// orphaned above somebody else's rows. There is no `<h3>` left: a sub-heading inside a
+// page was precisely the thing that could be stranded, and the page count is the honest
+// consequence of the six tables rather than something to be squeezed.
+//
 // ── WHAT PRINT NEEDS THAT THE SCREEN DOES NOT ───────────────────────────────
 // 1. **NO `<tfoot>`.** Chrome REPEATS a `<tfoot>` on every printed page, so a totals
 //    row in one reads as a duplicated total — `components/shared/print/
@@ -45,6 +54,7 @@ import type {
 } from '../blocking/types';
 import { analysisPages, type BlendAnalysisOptions } from './blend-analysis-options';
 import {
+  ageMethodNote,
   blocksWord,
   EMDASH,
   fmtDays,
@@ -53,15 +63,16 @@ import {
   fmtPesoNum,
   fmtQuality,
   fmtSharePct,
-  fmtWholeDays,
   groupWord,
   naturalMethodNote,
   QUALITY_METRIC_LABELS,
   QUALITY_METRIC_UNITS,
   qualityDecimals,
   snapshotGapNote,
+  undatedNote,
   unmeasuredNote,
   vsMarketCaption,
+  vsMarketHeading,
   vsMarketUnavailableNote,
 } from './blend-analysis-text';
 import { escapeHtml } from './print-utils';
@@ -74,16 +85,14 @@ import { escapeHtml } from './print-utils';
  * 10mm margin and one document has one page box.
  */
 export const BLEND_ANALYSIS_PRINT_CSS = `
-  /* Each analysis page starts on its own sheet, and may run onto more than one. */
+  /* ONE TABLE, ONE SHEET. Every analysis table is its own \`.apage\`, so each starts on
+     a fresh page and no heading can sit above another table's tail. A page may still
+     RUN ON to more than one sheet when its own rows do not fit. */
   .apage { break-before: page; page-break-before: always; }
   .apage h2 {
     font-size: 12px; margin: 0 0 2px; padding-bottom: 2px;
     border-bottom: 1px solid #000; text-transform: uppercase; letter-spacing: 0.04em;
     break-after: avoid;
-  }
-  .apage h3 {
-    font-size: 9.5pt; font-weight: 700; margin: 10px 0 2px; text-transform: uppercase;
-    letter-spacing: 0.03em; break-after: avoid;
   }
   .apage .anote { font-size: 8pt; color: #444; margin: 0 0 5px; line-height: 1.35; break-after: avoid; }
   .apage .afoot-note { font-size: 7.5pt; color: #555; margin: 3px 0 0; line-height: 1.3; }
@@ -334,20 +343,19 @@ function pricePage(analysis: BlendAnalysis, priceBandNames: Record<string, strin
       ? snapshotGapNote({
           snapshot: fmtPeso(o.snapshotPhpKg),
           measured: fmtPeso(o.kgWeightedPhpKg),
-          excluded: 'unpriced blocks',
+          excluded: 'unpriced',
         })
-      : nat.unmeasured.blockCount > 0
-        ? unmeasuredNote(nat.unmeasured, 'price yet')
-        : '';
+      : unmeasuredNote(nat.unmeasured, 'No price');
 
-  // ── (b) Against market ──
+  // ── (b) Against market / set price — ITS OWN SHEET ──
   let marketSection: string;
   const vm = price.vsMarket;
+  const typed = vm ? vm.marketBasis === 'given' : price.vsMarketUnavailable?.marketBasis === 'given';
   if (!vm) {
     marketSection = `<p class="anote">${escapeHtml(
       price.vsMarketUnavailable
         ? vsMarketUnavailableNote(price.vsMarketUnavailable)
-        : 'No market comparison is available for this blend.',
+        : 'No comparison available',
     )}</p>`;
   } else {
     const bands: PrintGroup[] = [...vm.bands]
@@ -370,7 +378,7 @@ function pricePage(analysis: BlendAnalysis, priceBandNames: Record<string, strin
     if (vmNoPrice) bands.push(vmNoPrice);
 
     marketSection =
-      `<p class="anote">${escapeHtml(`${vsMarketCaption(vm)} Dearest band first.`)}</p>` +
+      `<p class="anote">${escapeHtml(vsMarketCaption(vm))}</p>` +
       printTable({
         cols: PRICE_COLS,
         groups: bands,
@@ -383,21 +391,23 @@ function pricePage(analysis: BlendAnalysis, priceBandNames: Record<string, strin
       });
   }
 
+  // TWO SHEETS, not one section with a sub-heading — see the header note.
   return `
 <section class="apage">
   <h2>Price groups — natural breaks</h2>
   <p class="anote">${escapeHtml(
     naturalMethodNote({
-      subject: 'prices',
       groupCount: nat.groupCount,
       cuts: nat.cuts,
       gvf: nat.gvf,
       formatCut: (v) => fmtPeso(v),
     }),
-  )} High → average → low; dearest block first inside each group.</p>
+  )}</p>
   ${naturalTable}
   ${gapNote ? `<p class="afoot-note">${escapeHtml(gapNote)}</p>` : ''}
-  <h3>Against market</h3>
+</section>
+<section class="apage">
+  <h2>${escapeHtml(vsMarketHeading(!!typed))}</h2>
   ${marketSection}
 </section>`;
 }
@@ -486,45 +496,45 @@ function qualityPage(
           : [`${fmtKg(o.kg)} kg`, fmtQuality(metric, o.kgWeightedValue)],
     });
 
+    // Both notes are emitted; each is EMPTY when it has nothing to say.
     const gapNote =
       o.equalsSnapshot === false && o.snapshotValue !== null && o.kgWeightedValue !== null
         ? snapshotGapNote({
             snapshot: fmtQuality(metric, o.snapshotValue),
             measured: fmtQuality(metric, o.kgWeightedValue),
-            excluded: 'blocks with no reading',
+            excluded: 'no-reading',
           })
-        : nat.unmeasured.blockCount > 0
-          ? unmeasuredNote(nat.unmeasured, 'reading')
-          : '';
+        : '';
+    const missing = unmeasuredNote(nat.unmeasured, 'No reading');
 
-    const heading = `${QUALITY_METRIC_LABELS[metric]}${
+    // ONE SHEET PER METRIC. `Quality — BD ASTM + BD JIS` names the companion column in
+    // the heading, so nothing has to explain why there is no fourth table.
+    const heading = `Quality — ${QUALITY_METRIC_LABELS[metric]}${
       companion ? ` + ${QUALITY_METRIC_LABELS[companion]}` : ''
     } · ${QUALITY_METRIC_UNITS[metric]}`;
 
     return `
-  <h3>${escapeHtml(heading)}</h3>
+<section class="apage">
+  <h2>${escapeHtml(heading)}</h2>
   <p class="anote">${escapeHtml(
-    naturalMethodNote({
-      subject: `${QUALITY_METRIC_LABELS[metric]} readings`,
-      groupCount: nat.groupCount,
-      cuts: nat.cuts,
-      gvf: nat.gvf,
-      formatCut: (v) => v.toFixed(qualityDecimals(metric)),
-    }),
+    [
+      naturalMethodNote({
+        groupCount: nat.groupCount,
+        cuts: nat.cuts,
+        gvf: nat.gvf,
+        formatCut: (v) => v.toFixed(qualityDecimals(metric)),
+      }),
+      missing,
+    ]
+      .filter((s) => s !== '')
+      .join(' · '),
   )}</p>
   ${table}
-  ${gapNote ? `<p class="afoot-note">${escapeHtml(gapNote)}</p>` : ''}`;
-  }).join('');
-
-  return `
-<section class="apage">
-  <h2>Quality — MC · ASH · BD</h2>
-  <p class="anote">Highest reading first. A reading past your own WET / ASHY limit is
-  coloured, exactly as it is on the grid. BD JIS rides beside BD ASTM rather than in a
-  fourth table — its group averages are cut in different places, so only the blend's
-  own weighted JIS is shown, in the footer.</p>
-  ${blocks}
+  ${gapNote ? `<p class="afoot-note">${escapeHtml(gapNote)}</p>` : ''}
 </section>`;
+  }).join('\n');
+
+  return blocks;
 }
 
 // ── AGE ─────────────────────────────────────────────────────────────────────
@@ -570,21 +580,18 @@ function agePage(analysis: BlendAnalysis, ageBandNames: Record<string, string>):
   if (undated) groups.push(undated);
 
   const o = age.overall;
-  const caption =
-    `Ages as of ${age.asOf}, weighted by the kilograms still in each pile, from its ` +
-    `deliveries’ average date. Oldest band first.` +
-    (o.oldestAgeDays !== null
-      ? ` Oldest pile ${fmtWholeDays(o.oldestAgeDays)}${
-          o.oldestBlockLoc ? ` at ${o.oldestBlockLoc}` : ''
-        }${o.oldestBatchCode ? ` (${o.oldestBatchCode})` : ''}.`
-      : '');
-
-  const undatedNote =
-    age.undated.blockCount > 0
-      ? `${blocksWord(age.undated.blockCount)}, ${fmtKg(age.undated.kg)} kg, have no delivery at or before ${
-          age.asOf
-        } — they have no age, which is not the same as being new. In no band and out of every average.`
-      : '';
+  const caption = [
+    ageMethodNote({
+      asOf: age.asOf,
+      // The bands' OWN published lower bounds — a read, never a decision made here.
+      cutDays: age.bands.map((b) => b.lowerDays).filter((d) => d > 0),
+      oldestDays: o.oldestAgeDays,
+      oldestBlockLoc: o.oldestBlockLoc,
+    }),
+    undatedNote(age.undated.blockCount),
+  ]
+    .filter((s) => s !== '')
+    .join(' · ');
 
   return `
 <section class="apage">
@@ -596,7 +603,6 @@ function agePage(analysis: BlendAnalysis, ageBandNames: Record<string, string>):
     footerLabel: `Whole blend · ${blocksWord(o.blockCount)}`,
     footerCells: [`${fmtKg(o.kg)} kg`, fmtDays(o.kgWeightedAgeDays), EMDASH, EMDASH],
   })}
-  ${undatedNote ? `<p class="afoot-note">${escapeHtml(undatedNote)}</p>` : ''}
 </section>`;
 }
 

@@ -95,7 +95,10 @@ import {
   LensSummaryPrintControl,
   type LensSummaryPrintModel,
 } from './lens-summary-print';
+import { buildLensSummaryBuckets } from './lens-summary-model';
+import { priceBasisNoun } from '../../_shared/blend-analysis-text';
 import {
+  formatLensBlocks,
   formatLensKg,
   formatLensSharePct,
   LENS_DEBOUNCE_MS,
@@ -193,6 +196,15 @@ export function PriceLensPanel({
     parsePriceLensSettings,
     serializePriceLensSettings,
   );
+
+  /**
+   * WHAT the bands are cut against, in one word — `market` or `set price`.
+   *
+   * Derived once from the basis and read by every string in this panel that names it, so
+   * the bar, the popover, the Customize disclosure and the printed sheet cannot disagree.
+   * `priceBasisNoun` is shared with the analysis pages for the same reason.
+   */
+  const basisNoun = priceBasisNoun(settings.basis === 'manual');
 
   const [bases, setBases] = React.useState<BlockingMarketBasis[] | null>(null);
   const [basesRefusal, setBasesRefusal] = React.useState<string | null>(null);
@@ -464,7 +476,7 @@ export function PriceLensPanel({
     const trimmed = edgeDraft.trim();
     if (!/^[+-]?\d{1,3}$/.test(trimmed)) {
       setEdgeError(
-        `A cut line is a whole number of pesos from market, between ${PRICE_LENS_EDGE_MIN} and +${PRICE_LENS_EDGE_MAX}.`,
+        `A cut line is a whole number of pesos from ${basisNoun}, between ${PRICE_LENS_EDGE_MIN} and +${PRICE_LENS_EDGE_MAX}.`,
       );
       return;
     }
@@ -476,7 +488,7 @@ export function PriceLensPanel({
     setEdgeError(null);
     setEdgeDraft('');
     patch({ edgeOffsets: res.edgeOffsets });
-  }, [edgeDraft, patch, settings.edgeOffsets]);
+  }, [basisNoun, edgeDraft, patch, settings.edgeOffsets]);
 
   const dropEdge = React.useCallback(
     (offset: number) => {
@@ -538,10 +550,10 @@ export function PriceLensPanel({
         return {
           value: e,
           text: signed,
-          removeLabel: `Remove the cut line ${signed} from market`,
+          removeLabel: `Remove the cut line ${signed} from ${basisNoun}`,
         };
       }),
-    [settings.edgeOffsets],
+    [basisNoun, settings.edgeOffsets],
   );
 
   // Keyed on the band's OFFSETS from R, so a name follows its own interval instead
@@ -563,6 +575,7 @@ export function PriceLensPanel({
   const atEdgeCap = settings.edgeOffsets.length >= BLOCKING_PRICE_LENS_MAX_EDGES;
   const customised = !isDefaultPriceLensSettings(settings);
 
+
   /**
    * THE PRINTED SUMMARY's model — this lens as it is configured RIGHT NOW.
    *
@@ -578,50 +591,38 @@ export function PriceLensPanel({
   const printModel: LensSummaryPrintModel | null = React.useMemo(() => {
     if (!lens || marketPhpKg === null) return null;
     const bandCount = lens.bands.length;
-
-    // One bucket per band, filled by walking the published map.
-    const buckets = new Map<number, { blockLoc: string; batchCode: string; kg: string; figure: string; sortBy: number }[]>();
-    const unpricedRows: { blockLoc: string; batchCode: string; kg: string; figure: string }[] = [];
-    for (const [loc, block] of Object.entries(data)) {
-      const band = lens.bandByBlock[loc];
-      if (band === undefined) {
-        // In NO band: no price at all (the L-008 placeholder). Listed separately and
-        // never as the cheapest band.
-        unpricedRows.push({
-          blockLoc: loc,
-          batchCode: block.batch_code,
-          kg: formatLensKg(block.balance),
-          figure: EMDASH,
-        });
-        continue;
-      }
-      const list = buckets.get(band) ?? [];
-      list.push({
-        blockLoc: loc,
-        batchCode: block.batch_code,
-        kg: formatLensKg(block.balance),
-        figure: block.php === null ? EMDASH : peso(block.php, 2),
-        sortBy: block.php ?? 0,
-      });
-      buckets.set(band, list);
-    }
-
-    const visible = lens.bands.filter((b) => picked.size === 0 || picked.has(b.index));
     const typed = settings.basis === 'manual';
 
+    // ONE bucketing, shared by all three lenses: band → warehouse → rows, with the
+    // grid's own lab readings joined in. A LOOKUP of `bandByBlock`, never a sum of it.
+    const { byBand, excludedRows } = buildLensSummaryBuckets({
+      data,
+      bandOf: (loc) => lens.bandByBlock[loc],
+      figureOf: (_loc, block) => (block.php === null ? EMDASH : peso(block.php, 2)),
+      sortKeyOf: (_loc, block) => block.php ?? 0,
+      formatKg: formatLensKg,
+      formatBlocks: formatLensBlocks,
+      excludedFigure: EMDASH,
+    });
+
+    const visible = lens.bands.filter((b) => picked.size === 0 || picked.has(b.index));
+
     return {
-      title: 'Yard by price against market',
-      settingsLines: [
-        `Market is ${PRICE_LENS_BASIS_LABELS[settings.basis].toLowerCase()}`,
-        `${peso(marketPhpKg, 2)}${typed ? ' (typed)' : ''}`,
+      // THE TITLE IS THE LENS'S NAME. The settings line says what it is set to.
+      title: 'Price lens',
+      // ONE TERSE LINE — and for a TYPED figure the word "market" is absent, because a
+      // number somebody typed in is a SET PRICE and calling it market would claim a
+      // measurement nobody made (`priceBasisNoun`, the one definition).
+      settingsLine: [
         typed
-          ? `${peso(lens.roundedUpPhp, 0)} and up is above market`
-          : `rounds up to ${peso(lens.roundedUpPhp, 0)}`,
-        activeBasis ? basisCoverage(activeBasis) : 'Typed in by hand — not measured from deliveries.',
-      ],
-      cutLine: `Cut lines ${settings.edgeOffsets
-        .map((o) => (o === 0 ? 'market' : `${o > 0 ? '+' : ''}${o}`))
-        .join(', ')} from ${peso(lens.roundedUpPhp, 0)}`,
+          ? `Set price ${peso(marketPhpKg, 2)}`
+          : `Market ${peso(marketPhpKg, 2)} (${PRICE_LENS_BASIS_LABELS[settings.basis].toLowerCase()})`,
+        `${peso(lens.roundedUpPhp, 0)} and up is above ${priceBasisNoun(typed)}`,
+        `cuts ${settings.edgeOffsets
+          .map((o) => (o === 0 ? priceBasisNoun(typed) : `${o > 0 ? '+' : ''}${o}`))
+          .join(' · ')}`,
+        `by ${settings.unit === 'kg' ? 'kilograms' : 'block count'}`,
+      ].join(' · '),
       unit: settings.unit,
       ramp: PRICE_LENS_RAMP,
       bandCount,
@@ -629,19 +630,15 @@ export function PriceLensPanel({
       bands: visible.map((b) => ({
         index: b.index,
         label: priceBandLabel(b, lens.roundedUpPhp, settings.bandNames),
-        blocks: `${b.blockCount} block${b.blockCount === 1 ? '' : 's'}`,
+        blocks: formatLensBlocks(b.blockCount),
         kg: formatLensKg(b.kg),
         sharePct: share(b),
         share: formatLensSharePct(share(b)),
         figure: b.kgWeightedPhpKg === null ? EMDASH : peso(b.kgWeightedPhpKg, 2),
-        rows: (buckets.get(b.index) ?? [])
-          .sort((x, y) => y.sortBy - x.sortBy)
-          // The sort key is dropped explicitly rather than rest-destructured, so the
-          // printed row shape is the one the model declares and nothing else.
-          .map((r) => ({ blockLoc: r.blockLoc, batchCode: r.batchCode, kg: r.kg, figure: r.figure })),
+        warehouses: byBand.get(b.index) ?? [],
       })),
       total: {
-        blocks: `${lens.total.blockCount} block${lens.total.blockCount === 1 ? '' : 's'}`,
+        blocks: formatLensBlocks(lens.total.blockCount),
         kg: formatLensKg(lens.total.kg),
         figure: lens.total.kgWeightedPhpKg === null ? EMDASH : peso(lens.total.kgWeightedPhpKg, 2),
         // THE DOCUMENTED ASYMMETRY, said on the sheet: the counts cover every occupied
@@ -651,31 +648,38 @@ export function PriceLensPanel({
       excluded:
         lens.unpriced.blockCount > 0
           ? {
-              title: `No price yet — ${lens.unpriced.blockCount} block${
-                lens.unpriced.blockCount === 1 ? '' : 's'
-              }, ${formatLensKg(lens.unpriced.kg)}`,
+              title: `No price yet ${EMDASH} ${formatLensBlocks(
+                lens.unpriced.blockCount,
+              )}, ${formatLensKg(lens.unpriced.kg)}`,
               note: 'In no band and out of both percentages. Those cells keep their normal look on the grid.',
-              rows: unpricedRows,
+              rows: excludedRows,
             }
           : null,
     };
-  }, [lens, marketPhpKg, data, picked, settings.basis, settings.bandNames, settings.edgeOffsets, settings.unit, activeBasis, share]);
+  }, [lens, marketPhpKg, data, picked, settings.basis, settings.bandNames, settings.edgeOffsets, settings.unit, share]);
 
   /**
    * THE BAR'S HEADLINE — the whole lens in a few words.
    *
-   * `Market ₱39.86 → ₱40+ above`, or for a TYPED market `Market ₱41 (typed) → ₱41+
-   * above`, which is the visible half of the 2026-09-21 rule: a price the operator
-   * types IS the cut line, so 41 reads back as 41 and never as 42.
+   * `Market ₱39.86 · ₱40+ above`, or for a typed figure `Set price ₱41 · ₱41+ above`.
+   *
+   * TWO things are visible here. The 2026-09-21 rule: a price the operator TYPES is the
+   * cut line, so 41 reads back as 41 and never as 42. And the 2026-09-22 one: a typed
+   * figure is a SET PRICE, so the word "market" is absent from it — `priceBasisNoun` is
+   * the one definition, shared with the analysis pages.
    */
   const headline = React.useMemo(() => {
+    const typed = settings.basis === 'manual';
     if (marketPhpKg === null) {
+      if (typed) return 'No price set yet';
       return basesLoading ? 'Working out market…' : 'No market price yet';
     }
-    const typed = settings.basis === 'manual';
-    const base = `Market ${peso(marketPhpKg, 2)}${typed ? ' (typed)' : ''}`;
+    // ⚠️ A TYPED FIGURE IS A SET PRICE, NEVER "MARKET" — one noun, one definition
+    // (`priceBasisNoun`), so the bar, the popover, both printouts and the analysis
+    // pages cannot call it two different things.
+    const base = `${typed ? 'Set price' : 'Market'} ${peso(marketPhpKg, 2)}`;
     if (!lens) return base;
-    return `${base} → ${peso(lens.roundedUpPhp, 0)}+ above`;
+    return `${base} · ${peso(lens.roundedUpPhp, 0)}+ above`;
   }, [marketPhpKg, basesLoading, settings.basis, lens]);
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -781,7 +785,9 @@ export function PriceLensPanel({
           htmlFor="price-lens-basis"
           className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
         >
-          Market is
+          {/* A typed figure is a SET PRICE, so the label follows the basis rather than
+              calling a number somebody typed in "market". */}
+          {settings.basis === 'manual' ? 'Set price' : 'Market is'}
         </label>
         <Select
           value={settings.basis}
@@ -835,7 +841,7 @@ export function PriceLensPanel({
               <Input
                 inputMode="decimal"
                 value={manualDraft}
-                aria-label="Market price per kilogram"
+                aria-label="Set price per kilogram"
                 placeholder="40.25"
                 onChange={(e) => {
                   setManualDraft(e.target.value);
@@ -906,10 +912,10 @@ export function PriceLensPanel({
           ) : (
             <div className="flex flex-col gap-1">
               <p className="text-[11px] leading-snug text-foreground">
-                {basesLoading
-                  ? 'Working out what market costs…'
-                  : settings.basis === 'manual'
-                    ? 'Type a market price above to draw the bands.'
+                {settings.basis === 'manual'
+                  ? 'Type a price above to draw the bands.'
+                  : basesLoading
+                    ? 'Working out what market costs…'
                     : `No priced market deliveries in ${PRICE_LENS_BASIS_LABELS[settings.basis].toLowerCase()} yet, so market cannot be measured that way.`}
               </p>
               {!basesLoading && settings.basis !== 'manual' && (
@@ -1013,7 +1019,7 @@ export function PriceLensPanel({
         maxEdges={BLOCKING_PRICE_LENS_MAX_EDGES}
         intro={
           <>
-            A cut line is a whole number of pesos above or below the rounded market price
+            A cut line is a whole number of pesos above or below the rounded {basisNoun}
             {lens ? ` (${peso(lens.roundedUpPhp, 0)})` : ''}. {settings.edgeOffsets.length} line
             {settings.edgeOffsets.length === 1 ? '' : 's'} give {settings.edgeOffsets.length + 1}{' '}
             bands.
@@ -1028,7 +1034,7 @@ export function PriceLensPanel({
         }}
         onAdd={addEdge}
         addPlaceholder="+5"
-        addAriaLabel="New cut line, pesos from market"
+        addAriaLabel={`New cut line, pesos from ${basisNoun}`}
         atCap={atEdgeCap}
         capNote={`${BLOCKING_PRICE_LENS_MAX_EDGES} is the most a lens takes — remove one to add another.`}
         error={edgeError}

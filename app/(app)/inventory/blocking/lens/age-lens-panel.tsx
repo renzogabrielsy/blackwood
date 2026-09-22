@@ -71,6 +71,7 @@ import {
   LensSummaryPrintControl,
   type LensSummaryPrintModel,
 } from './lens-summary-print';
+import { buildLensSummaryBuckets } from './lens-summary-model';
 import {
   formatLensBlocks,
   formatLensDays,
@@ -432,54 +433,42 @@ export function AgeLensPanel({
     if (!lens) return null;
     const bandCount = lens.bands.length;
 
-    const buckets = new Map<
-      number,
-      { blockLoc: string; batchCode: string; kg: string; figure: string; sortBy: number }[]
-    >();
-    const undatedRows: { blockLoc: string; batchCode: string; kg: string; figure: string }[] = [];
-    for (const [loc, block] of Object.entries(data)) {
-      const band = lens.bandByBlock[loc];
-      if (band === undefined) {
-        // In NO band: the batch has no dated delivery, so it has no age. NOT 0 days old.
-        undatedRows.push({
-          blockLoc: loc,
-          batchCode: block.batch_code,
-          kg: formatLensKg(block.balance),
-          figure: LENS_EMDASH,
-        });
-        continue;
-      }
-      const age = lens.ageByBlock[loc];
-      const list = buckets.get(band) ?? [];
-      list.push({
-        blockLoc: loc,
-        batchCode: block.batch_code,
-        kg: formatLensKg(block.balance),
-        figure: age === undefined ? LENS_EMDASH : `${formatLensDays(age)} d`,
-        sortBy: age ?? 0,
-      });
-      buckets.set(band, list);
-    }
+    // ONE bucketing, shared by all three lenses: band → warehouse → rows, with the
+    // grid's own lab readings joined in. A LOOKUP of `bandByBlock`, never a sum of it.
+    const { byBand, excludedRows } = buildLensSummaryBuckets({
+      data,
+      bandOf: (loc) => lens.bandByBlock[loc],
+      figureOf: (loc) => {
+        const age = lens.ageByBlock[loc];
+        // NULL IS NEVER 0 DAYS — a pile with no dated delivery reads as an em dash.
+        return age === undefined ? LENS_EMDASH : `${formatLensDays(age)} d`;
+      },
+      sortKeyOf: (loc) => lens.ageByBlock[loc] ?? 0,
+      formatKg: formatLensKg,
+      formatBlocks: formatLensBlocks,
+      excludedFigure: LENS_EMDASH,
+    });
 
     const visible = lens.bands.filter((b) => picked.size === 0 || picked.has(b.index));
 
     return {
-      title: 'Yard by age',
-      settingsLines: [
-        `Average age ${formatLensDays(lens.total.kgWeightedAgeDays)} days`,
-        `as of ${lens.asOf}`,
+      // THE TITLE IS THE LENS'S NAME. The settings line says what it is set to.
+      title: 'Age lens',
+      settingsLine: [
+        `As of ${lens.asOf}`,
+        `avg ${formatLensDays(lens.total.kgWeightedAgeDays)} d`,
         lens.total.oldestAgeDays !== null
           ? `oldest ${formatLensWholeDays(lens.total.oldestAgeDays)}${
-              lens.total.oldestBlockLoc ? ` at ${lens.total.oldestBlockLoc}` : ''
+              lens.total.oldestBlockLoc ? ` ${lens.total.oldestBlockLoc}` : ''
             }`
-          : 'no dated pile in the yard',
-        'weighted by the kilograms still in each block, from its deliveries\u2019 average date',
-      ],
-      cutLine: `Cut lines ${settings.edgeDays.map((d) => `${d} d`).join(', ')}`,
+          : 'no dated pile',
+        `cuts ${settings.edgeDays.map((d) => `${d} d`).join(' · ')}`,
+        `by ${settings.unit === 'kg' ? 'kilograms' : 'block count'}`,
+      ].join(' · '),
       unit: settings.unit,
       ramp: AGE_LENS_RAMP,
       bandCount,
-      figureColumnLabel: 'Avg age (d)',
+      figureColumnLabel: 'Age (d)',
       bands: visible.map((b) => ({
         index: b.index,
         label: ageBandLabel(b, settings.bandNames),
@@ -488,11 +477,7 @@ export function AgeLensPanel({
         sharePct: share(b),
         share: formatLensSharePct(share(b)),
         figure: `${formatLensDays(b.kgWeightedAgeDays)} d`,
-        rows: (buckets.get(b.index) ?? [])
-          .sort((x, y) => y.sortBy - x.sortBy)
-          // The sort key is dropped explicitly rather than rest-destructured, so the
-          // printed row shape is the one the model declares and nothing else.
-          .map((r) => ({ blockLoc: r.blockLoc, batchCode: r.batchCode, kg: r.kg, figure: r.figure })),
+        warehouses: byBand.get(b.index) ?? [],
       })),
       total: {
         blocks: formatLensBlocks(lens.total.blockCount),
@@ -505,11 +490,11 @@ export function AgeLensPanel({
       excluded:
         lens.undated.blockCount > 0
           ? {
-              title: `No delivery dates \u2014 ${formatLensBlocks(
+              title: `No delivery dates ${LENS_EMDASH} ${formatLensBlocks(
                 lens.undated.blockCount,
               )}, ${formatLensKg(lens.undated.kg)}`,
               note: 'In no band and out of every percentage and average. A pile with no dated delivery has no age, which is not the same as being new.',
-              rows: undatedRows,
+              rows: excludedRows,
             }
           : null,
     };
