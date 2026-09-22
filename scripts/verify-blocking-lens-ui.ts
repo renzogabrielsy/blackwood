@@ -94,11 +94,13 @@ import {
 import {
   LENS_CATEGORY_NEUTRAL_STOP,
   LENS_CATEGORY_STOPS,
+  LENS_PRINT_FILL_RGB,
   LENS_RAMP_CLASS_PREFIX,
   LENS_RAMP_IS_ORDINAL,
   LENS_RAMP_RGB,
   LENS_RAMP_STOPS,
   categoryStop,
+  printFillRgbAtStop,
   rampClass,
   rampClassAtStop,
   rampStop,
@@ -107,8 +109,10 @@ import {
 import { WAREHOUSES } from '../app/(app)/inventory/blocking/constants';
 import type { BlockData } from '../app/(app)/inventory/blocking/types';
 import {
+  LENS_YARD_MAP_DARK_INK,
   LENS_YARD_MAP_INK_CROSSOVER,
   LENS_YARD_MAP_MIN_LOC_PT,
+  LENS_YARD_MAP_MUTED_BG,
   buildLensYardMap,
   lensYardMapInkOn,
   lensYardMapLines,
@@ -1177,16 +1181,16 @@ console.log('\n7. THE FRAME — registry shape, Escape, and the classifier seam'
   });
 
   check('⚠️ the SUPPLIER lens reads `canShow: () => true`, like Age and unlike Price', () => {
-    // There is no money in its payload and none is derivable from it, so Production —
-    // the role that actually walks the yard and knows whose truck came in — sees it.
+    // Bands are SUPPLIERS, so the LENS itself is offered to every role including Production
+    // — the one that actually walks the yard and knows whose truck came in. Since
+    // 2026-09-22 the payload carries exactly two ₱ keys, and the panel reads the effective
+    // flag for EXACTLY ONE decision: whether the printed band table's last column is ₱/kg
+    // or `Mixed`. That is asserted, narrowly, in section 11a below — here the rule is that
+    // nothing about OFFERING the lens depends on it.
     const body = code(SUPPLIER_PANEL);
     assert.ok(
       /canShow: \(\) => true,/.test(body),
-      'the supplier lens grew a capability gate — its payload carries no ₱',
-    );
-    assert.ok(
-      !/canViewPrices/.test(body),
-      'the supplier panel mentions canViewPrices — there is no money in it to gate',
+      'the supplier lens grew a capability gate — its payload is peso-free apart from two nulled keys',
     );
     assert.ok(
       !/canViewPrices/.test(code(SUPPLIER_SETTINGS)),
@@ -1977,7 +1981,12 @@ console.log('\n10. THE PRINTED LENS SUMMARY (2026-09-21, REDESIGNED 2026-09-22)'
     // And the figures on the sheet are the payload's own.
     assert.ok(/b\.kgWeightedPhpKg === null \? EMDASH/.test(code(PANEL)), 'the price band figure is derived');
     assert.ok(/formatLensDays\(b\.kgWeightedAgeDays\)/.test(code(AGE_PANEL)), 'the age band figure is derived');
-    assert.ok(/formatLensKg\(b\.dominantKg\)/.test(code(SUPPLIER_PANEL)), 'the supplier band figure is derived');
+    // RESTATED 2026-09-22: the supplier band figure MOVED from `dominantKg` to
+    // `kgWeightedPhpKg` — still the payload's own number, read verbatim. See section 11a.
+    assert.ok(
+      /b\.kgWeightedPhpKg === null/.test(code(SUPPLIER_PANEL)),
+      'the supplier band figure is no longer the published weighted ₱/kg',
+    );
   });
 
   check('a block the lens cannot place is listed SEPARATELY, never inside a band', () => {
@@ -2006,11 +2015,19 @@ console.log('\n10. THE PRINTED LENS SUMMARY (2026-09-21, REDESIGNED 2026-09-22)'
         new RegExp(`<LensSummaryPrintControl model=\\{printModel\\} lensLabel="${label}"`).test(body),
         `${panel} lost its unconditional Print button`,
       );
-      assert.ok(
-        !/canViewPrices/.test(body),
-        `${panel} grew a price flag — there is no money in its payload and Production must keep it`,
-      );
     }
+    // The AGE payload has no money in it at all, so its panel must never learn the word.
+    assert.ok(
+      !/canViewPrices/.test(code(AGE_PANEL)),
+      `${AGE_PANEL} grew a price flag — there is no money in its payload and Production must keep it`,
+    );
+    // The SUPPLIER payload carries two ₱ keys (2026-09-22), so its panel DOES read the
+    // effective flag — but only to choose a COLUMN, never to withhold the button. Asserted
+    // by shape: the control is mounted with no conditional before it.
+    assert.ok(
+      !/canViewPrices && \(\s*<LensSummaryPrintControl/.test(code(SUPPLIER_PANEL).replace(/\s+/g, ' ')),
+      'the supplier Print button was put behind the price flag — the rest of its sheet is peso-free',
+    );
     assert.ok(!/canViewPrices/.test(code(PRINT)), 'the shared sheet grew a price concern');
     assert.ok(!/canViewPrices/.test(code(SUMMARY_MODEL)), 'the shared bucketing grew a price concern');
   });
@@ -2321,6 +2338,166 @@ console.log('\n11. THE SUPPLIER LENS (2026-09-22)');
 }
 
 // ===========================================================================
+console.log('\n11a. THE SUPPLIER BAND TABLE\'S LAST COLUMN — ₱/kg, OR MIXED (2026-09-22)');
+// ===========================================================================
+//
+// The owner, on the live supplier-lens print: *"I don't get the last column — 'kg dominant'
+// — kind of useless. Replace it with average weighted price or something."* He was right: a
+// band row already carried `Blocks` and `Kg`, so a third kilogram figure said nothing a
+// reader could act on. What a type-checker cannot see, and what a data-layer test cannot:
+// that the new column is the PAYLOAD's own weighted price rather than a TypeScript average,
+// that a NULL prints an em dash and never ₱0, that the column is ABSENT (not blank, not ₱0)
+// for a reader without the effective price flag with `Mixed` in its place, that the
+// dominant-kg figure survived on the settings popover's detail line, and that the price and
+// age sheets did not move.
+{
+  const supplier = code(SUPPLIER_PANEL);
+  const sheet = code(`${LENS_DIR}/lens-summary-print.tsx`);
+
+  check('the BAND column is the payload\'s `kgWeightedPhpKg` — not a fold, not `dominantKg`', () => {
+    // The figure and the accounting pair both read the published key, verbatim.
+    assert.ok(
+      /figure: priced\s*\?\s*b\.kgWeightedPhpKg === null/.test(supplier),
+      'the band figure is not the published weighted ₱/kg',
+    );
+    assert.ok(
+      /figureAccounting:\s*priced && b\.kgWeightedPhpKg !== null/.test(supplier),
+      'the accounting cell is not bound to the published weighted ₱/kg',
+    );
+    // `dominantKg` is GONE from the printed band figure — that was the owner's complaint.
+    const printBlock = supplier.slice(supplier.indexOf('const printModel'), supplier.indexOf('/** THE BAR'));
+    assert.ok(
+      !/figure: `\$\{formatLensKg\(b\.dominantKg\)\} dominant`/.test(printBlock),
+      'the printed band figure is still "N kg dominant"',
+    );
+    // And no TypeScript average anywhere near it. A weighted mean is SQL's, always.
+    assert.ok(!/\.reduce\s*\(/.test(supplier), 'the supplier panel folds a figure');
+    assert.ok(!/[^+]\+=[^=]/.test(supplier), 'the supplier panel accumulates');
+    assert.ok(
+      !/\/\s*(pricedDominantKg|dominantKg|lens\.total)/.test(supplier),
+      'the panel divides to make a weighted price — that mean is `fn_blocking_supplier_lens`\'s',
+    );
+  });
+
+  check('⚠️ NULL IS AN EM DASH, NEVER ₱0, and the WEIGHT is what says which null it is', () => {
+    // The contract's three readings: null + pricesHidden = WITHHELD; null + pricedDominantKg
+    // 0 = dominates no priced block; a number = a real price. The panel prints a blank for
+    // both nulls and prints ₱0 for neither.
+    assert.ok(
+      /=== null\s*\?\s*LENS_EMDASH/.test(supplier),
+      'a null weighted ₱/kg does not print an em dash',
+    );
+    assert.ok(
+      !/kgWeightedPhpKg \?\? 0/.test(supplier) && !/kgWeightedPhpKg \|\| 0/.test(supplier),
+      'a null weighted ₱/kg is COALESCED to zero — that is the L-008 placeholder mistake',
+    );
+    // The gate reads BOTH halves: the effective cap AND the payload's own statement.
+    assert.ok(
+      /caps\.canViewPrices && lens !== null && !lens\.pricesHidden/.test(supplier),
+      'the price decision does not read both the effective flag and `pricesHidden`',
+    );
+    assert.ok(
+      /const priced = caps\.canViewPrices && !lens\.pricesHidden;/.test(supplier),
+      'the printed column\'s own decision does not read both halves',
+    );
+  });
+
+  check('a price-DENIED reader gets MIXED in its place — the column is never blank', () => {
+    assert.ok(
+      /bandFigureColumnLabel: priced \? '₱\/kg' : 'Mixed',/.test(supplier),
+      'the band column heading does not swap to Mixed when prices are withheld',
+    );
+    assert.ok(
+      /\$\{b\.mixedBlockCount\.toLocaleString\(\)\} mixed/.test(supplier),
+      'the price-denied band cell does not carry the published mixed-block count',
+    );
+    assert.ok(
+      /\$\{lens\.total\.mixedBlockCount\.toLocaleString\(\)\} mixed/.test(supplier),
+      'the price-denied footer does not carry the published yard mixed-block count',
+    );
+    // And the footer's qualifier follows the column: `avg of priced` only qualifies a price.
+    assert.ok(
+      /figureNote: priced \? 'avg of priced' : '',/.test(supplier),
+      'the footer note does not follow the column it qualifies',
+    );
+  });
+
+  check('the FOOTER is the payload\'s yard figure, labelled `avg of priced` like Price\'s', () => {
+    assert.ok(
+      /figure: priced\s*\?\s*lens\.total\.kgWeightedPhpKg === null/.test(supplier),
+      'the footer is not the published yard weighted ₱/kg',
+    );
+    // The SAME words the price lens uses, because it is the same documented asymmetry —
+    // the counts cover every occupied block, the price covers the priced ones.
+    assert.ok(/figureNote: 'avg of priced'/.test(code(PANEL)), 'the price lens lost its footer label');
+  });
+
+  check('the ACCOUNTING layout is the Excel Standard, and the SHEET still formats nothing', () => {
+    // ₱ pinned LEFT, number pinned RIGHT, tabular figures — `flex justify-between`.
+    assert.ok(/flex justify-between gap-1 tabular-nums/.test(sheet), 'the ₱ cell is not the accounting layout');
+    assert.ok(/\{acc\.symbol\}/.test(sheet) && /\{acc\.amount\}/.test(sheet), 'the accounting cell is not two slots');
+    // Both slots are the LENS's strings. The sheet must still not know how a peso is written.
+    assert.ok(!/formatLens/.test(sheet), 'the sheet formats a figure itself');
+    assert.ok(!/toFixed\(/.test(sheet) && !/toLocaleString\(/.test(sheet), 'the sheet formats a number itself');
+    assert.ok(!/₱/.test(sheet), 'the sheet spells a currency glyph — that is the lens\'s to supply');
+    // FOUR decimals, as SQL publishes the weighted mean — the same precision the CONTEXT
+    // quotes (₱43.5690), so the sheet cannot silently round a peso away.
+    assert.ok(
+      /minimumFractionDigits: 4, maximumFractionDigits: 4/.test(supplier),
+      'the printed ₱/kg is no longer at the payload\'s own four decimals',
+    );
+  });
+
+  check('the DOMINANT-kg figure survived — on the settings popover\'s detail line ONLY', () => {
+    // It is still the attribution the TINT is drawn from, so it must stay readable
+    // SOMEWHERE; the popover is where a reader goes to ask what a colour means.
+    assert.ok(
+      /`\$\{formatLensKg\(b\.dominantKg\)\} dominant`/.test(supplier),
+      'the dominant kilograms vanished from the band detail line too',
+    );
+    assert.ok(
+      /`\$\{formatLensKg\(b\.apportionedKg\)\} apportioned`/.test(supplier),
+      'the detail line stopped naming the apportioned attribution beside it',
+    );
+    // BOTH attributions on one line is the whole point — see the panel's header note.
+    assert.ok(/DOMINANCE/.test(read(SUPPLIER_PANEL)) && /APPORTIONED/.test(read(SUPPLIER_PANEL)));
+  });
+
+  check('the PRICE and AGE band tables did NOT move', () => {
+    // Neither states a band heading of its own, and neither supplies an accounting pair —
+    // so `bandFigureColumnLabel ?? figureColumnLabel` and the plain `figure` branch keep
+    // their sheets byte-for-byte what they were.
+    for (const panel of [PANEL, AGE_PANEL]) {
+      const body = code(panel);
+      assert.ok(!/bandFigureColumnLabel/.test(body), `${panel} grew a second band-column heading`);
+      assert.ok(!/figureAccounting/.test(body), `${panel} grew an accounting cell`);
+    }
+    // The sheet's fallback is what makes that true.
+    assert.ok(
+      /\{model\.bandFigureColumnLabel \?\? model\.figureColumnLabel\}/.test(sheet),
+      'the band table no longer falls back to the per-block column heading',
+    );
+  });
+
+  check('the FIXTURE can produce the price-DENIED payload, so the Mixed column is reachable', () => {
+    const fixture = read('app/dev/table-playground/supplierlens/supplierlens-fixture.tsx');
+    assert.ok(
+      /pricesHidden: !canViewPrices,/.test(fixture),
+      'the rig cannot produce a WITHHELD supplier payload, so the Mixed column cannot be looked at',
+    );
+    assert.ok(
+      /kgWeightedPhpKg: canViewPrices \?/.test(fixture) &&
+        /pricedDominantKg: canViewPrices \?/.test(fixture),
+      'the rig withholds only one of the two ₱ keys',
+    );
+    assert.ok(
+      /makeSupplierLens\(cells, n, canViewPrices\)/.test(fixture),
+      'the rig does not wire ?prices= into the supplier payload',
+    );
+  });
+}
+
+// ===========================================================================
 console.log('\n12. THE YARD MAP PAGE (2026-09-22)');
 // ===========================================================================
 //
@@ -2427,10 +2604,10 @@ console.log('\n12. THE YARD MAP PAGE (2026-09-22)');
     assert.ok(/offMapLocs\.length > 0/.test(sheet), 'the sheet never says it could not place a block');
   });
 
-  // ── The FILL is the ramp's own triple ─────────────────────────────────────
-  check('a banded cell wears the RAMP\'s solid triple — never a class, never a literal', () => {
+  // ── The FILL is the PRINT palette's own triple ────────────────────────────
+  check('a banded cell wears the PRINT palette\'s triple — never a class, never a literal', () => {
     for (const ramp of ['cost', 'age', 'category'] as const) {
-      const stops = LENS_RAMP_RGB[ramp];
+      const stops = LENS_PRINT_FILL_RGB[ramp];
       for (let stop = 0; stop < stops.length; stop += 1) {
         const paint = lensYardMapPaint(
           { loc: 'A-1A', lines: ['A-1A'], occupied: true, band: 3, mixed: false },
@@ -2438,14 +2615,145 @@ console.log('\n12. THE YARD MAP PAGE (2026-09-22)');
           new Map([[3, stop]]),
         );
         assert.equal(paint.kind, 'banded');
-        assert.equal(paint.bg, `rgb(${stops[stop]})`, `${ramp} stop ${stop} is not the ramp's own hue`);
+        assert.equal(
+          paint.bg,
+          `rgb(${stops[stop]})`,
+          `${ramp} stop ${stop} is not the PRINT palette's fill`,
+        );
+        // AND it is NOT the screen ramp — the whole point of the second table. (Nothing in
+        // either table repeats a value across ramps, so a coincidence cannot mask this.)
+        assert.notEqual(
+          paint.bg,
+          `rgb(${LENS_RAMP_RGB[ramp][stop]})`,
+          `${ramp} stop ${stop} still paints the SCREEN saturation solid`,
+        );
       }
     }
     // The class prefixes must not appear: on paper the fill is SOLID, and `.lens-band-3`
     // is a 22% wash that the print stage would render as a pale tint.
     assert.ok(!/lens-band-|lens-age-|lens-cat-/.test(model), 'the map model spells a ramp class');
     assert.ok(!/lens-band-|lens-age-|lens-cat-/.test(sheet), 'the map sheet spells a ramp class');
-    assert.ok(/rampRgbAtStop/.test(model), 'the map does not read the ramp triples');
+    assert.ok(/printFillRgbAtStop/.test(model), 'the map does not read the PRINT palette');
+    // And it must not reach for the SCREEN accessor at all — that is the single edit that
+    // would silently put white ink back on half the map.
+    for (const [rel, body] of [[YARD_MAP_MODEL, model], [YARD_MAP_PRINT, sheet]] as const) {
+      assert.ok(
+        !/rampRgbAtStop|LENS_RAMP_RGB/.test(body),
+        `${rel} reads the SCREEN ramp — the map paints solid and must use LENS_PRINT_FILL_RGB`,
+      );
+    }
+    // The LEGEND swatch is the same fill as the cells, or it describes a different map.
+    assert.ok(
+      /const rgb = printFillRgbAtStop\(/.test(sheet),
+      'the map legend swatch no longer reads the PRINT palette',
+    );
+  });
+
+  // ── The three PROPERTIES the print palette is chosen for ──────────────────
+  //
+  // `lens-ramp.ts` states all three in prose over `LENS_PRINT_FILL_RGB`, and prose is
+  // not a control (the deliveries latch's whole lesson). They are pinned here so a
+  // future palette edit that reached for a darker fill, a different hue or a flat
+  // ordinal ramp fails the check instead of quietly landing on paper — which is the
+  // exact failure the owner asked about: *"verify these are easy to read when printed
+  // on lower-quality printers."*
+  check('⚠️ BLACK INK ON EVERY PRINT FILL, at ≥ 7:1 — the white branch is unreachable', () => {
+    const ratio = (a: number, b: number) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+    let worst = Infinity;
+    for (const ramp of ['cost', 'age', 'category'] as const) {
+      for (const rgb of LENS_PRINT_FILL_RGB[ramp]) {
+        const L = lensYardMapLuminance(rgb);
+        // ABOVE the contrast-parity crossover, so `lensYardMapInkOn` cannot answer white.
+        assert.ok(
+          L > LENS_YARD_MAP_INK_CROSSOVER,
+          `${ramp} print fill ${rgb} (L ${L.toFixed(4)}) is dark enough to flip the loc to WHITE ink`,
+        );
+        assert.equal(
+          lensYardMapInkOn(rgb),
+          LENS_YARD_MAP_DARK_INK,
+          `${ramp} print fill ${rgb} does not take the near-black ink`,
+        );
+        worst = Math.min(worst, ratio(L, 0));
+      }
+    }
+    // Measured 2026-09-22: 7.75:1 (age stop 6, the deep-fuchsia tint). The floor is 7.0
+    // rather than that exact figure so a hue may be nudged; a fill that drops below it
+    // is a different palette and should be re-argued, not re-baselined.
+    assert.ok(worst >= 7, `the worst print fill is only ${worst.toFixed(2)}:1 against black`);
+  });
+
+  check('⚠️ a PRINT fill is a WHITE TINT of its own SCREEN hue — same hue angle, ≤ 2°', () => {
+    // This is what lets a reader match the map's legend swatch against the BAND TABLE's
+    // saturated `.lens-cat-N` swatch on page one. Measured max deviation 0.79°.
+    const hue = (triple: string): number => {
+      const [r, g, b] = triple.trim().split(/\s+/).map((n) => Number(n) / 255);
+      const max = Math.max(r, g, b);
+      const d = max - Math.min(r, g, b);
+      if (d === 0) return NaN; // the neutral zinc — no hue to preserve
+      const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+      return (h * 60 + 360) % 360;
+    };
+    for (const ramp of ['cost', 'age', 'category'] as const) {
+      LENS_PRINT_FILL_RGB[ramp].forEach((print, i) => {
+        const a = hue(print);
+        const b = hue(LENS_RAMP_RGB[ramp][i]);
+        if (Number.isNaN(a) || Number.isNaN(b)) return;
+        const raw = Math.abs(a - b) % 360;
+        const dev = raw > 180 ? 360 - raw : raw;
+        assert.ok(dev <= 2, `${ramp}[${i}] shifted ${dev.toFixed(2)}° off its screen hue`);
+      });
+    }
+  });
+
+  check('⚠️ the SEQUENTIAL ramps stay MONOTONIC in tone — a GREYSCALE print still reads', () => {
+    // A mono printer keeps the tone and loses the hue, so "dearer" / "older" has to stay
+    // readable as "darker". Measured min adjacent gap: cost 0.0751, age 0.0780.
+    for (const ramp of ['cost', 'age'] as const) {
+      const Ls = LENS_PRINT_FILL_RGB[ramp].map(lensYardMapLuminance);
+      let minGap = Infinity;
+      for (let i = 1; i < Ls.length; i += 1) {
+        assert.ok(
+          Ls[i] < Ls[i - 1],
+          `${ramp} stop ${i} is not darker than stop ${i - 1} — the ordinal ramp lost its order`,
+        );
+        minGap = Math.min(minGap, Ls[i - 1] - Ls[i]);
+      }
+      assert.ok(
+        minGap >= 0.06,
+        `${ramp}'s closest adjacent stops differ by only ${minGap.toFixed(4)} in luminance`,
+      );
+    }
+  });
+
+  check('⚠️ the NOMINAL ramp is deliberately FLAT, and `others` is deliberately NOT', () => {
+    // A supplier is not "more" than another supplier, so a tone gradient would invite a
+    // reading that does not exist. The stated consequence — the twelve are told apart in
+    // greyscale by the legend, the loc and the dashed mixed outline, never by tone — is
+    // only honest while they actually are flat. Measured 0.6973 … 0.7027.
+    const twelve = LENS_PRINT_FILL_RGB.category.slice(0, LENS_CATEGORY_NEUTRAL_STOP).map(
+      lensYardMapLuminance,
+    );
+    assert.equal(twelve.length, 12, 'the categorical ramp is no longer twelve hues + a neutral');
+    const spread = Math.max(...twelve) - Math.min(...twelve);
+    assert.ok(spread <= 0.02, `the twelve categorical tints span ${spread.toFixed(4)} in luminance`);
+    // The neutral `others` IS separated — from the twelve, and from the map's own
+    // muted/no-data grey, which is the fill it would otherwise be confused with.
+    const others = lensYardMapLuminance(LENS_PRINT_FILL_RGB.category[LENS_CATEGORY_NEUTRAL_STOP]);
+    assert.ok(
+      Math.min(...twelve) - others >= 0.1,
+      `the \`others\` neutral is only ${(Math.min(...twelve) - others).toFixed(4)} below the nearest hue`,
+    );
+    const muted = lensYardMapLuminance(
+      LENS_YARD_MAP_MUTED_BG.replace(
+        /^#(..)(..)(..)$/,
+        (_m, r: string, g: string, b: string) =>
+          `${parseInt(r, 16)} ${parseInt(g, 16)} ${parseInt(b, 16)}`,
+      ),
+    );
+    assert.ok(
+      muted - others >= 0.1,
+      `the \`others\` neutral is only ${(muted - others).toFixed(4)} below the map's muted grey`,
+    );
   });
 
   check('⚠️ THE LUMINANCE RULE EXISTS EXACTLY ONCE, and picks the MORE legible ink', () => {

@@ -135,6 +135,91 @@ export const LENS_RAMP_RGB: Record<LensRampId, readonly string[]> = {
 };
 
 /**
+ * ⚠️ THE **PRINT** FILLS — the same fourteen-plus-thirteen hues, PALE, for PAPER.
+ *
+ * The owner, on the live yard map: *"verify these are easy to read when printed on
+ * lower-quality printers. Use simple colours that contrast well from BLACK text — don't
+ * use dark colours that clash with black."* `LENS_RAMP_RGB` above is the SCREEN ramp, and
+ * on screen it is only ever seen as a **22% wash** over the cell's own surface. The yard
+ * map paints it SOLID, which put six of the fourteen ordinal hues and six of the thirteen
+ * categorical ones below the white/black contrast crossover — so the map flipped its loc
+ * text to WHITE on those, and white-on-deep-fuchsia off an office laser (or a
+ * near-empty toner cartridge) is exactly the case the owner was asking about.
+ *
+ * ── EVERY ENTRY HERE IS A WHITE TINT OF ITS OWN SCREEN HUE ──────────────────
+ * `fill = white + t × (hue − white)`, so the fill's HUE ANGLE is its screen hue's (measured:
+ * max deviation **0.79°** across all 27 stops, asserted ≤ 2° by `verify-blocking-lens-ui.ts`).
+ * That is what lets a reader match the map's legend swatch against the BAND TABLE's swatch
+ * on page one — which is still the saturated `.lens-cat-N` CSS class, because on screen and
+ * in a 8px table swatch a pale tint reads as nothing at all.
+ *
+ * ── THE THREE PROPERTIES, ALL MEASURED, NONE EYEBALLED ──────────────────────
+ *   1. **BLACK INK ALWAYS, at ≥ 7:1.** The worst fill on the whole table is **7.75:1**
+ *      against black — `age` stop 6, the deep-fuchsia tint at relative luminance 0.3377;
+ *      `cost` stop 6 is the runner-up at 7.81:1, and the best is 18.66:1. So
+ *      `lensYardMapInkOn` — still the ONE ink rule — returns near-black for every entry
+ *      here, and the white branch is structurally unreachable on the map. Asserted, so a
+ *      future palette edit that reached for a dark fill fails the build rather than
+ *      quietly reintroducing white ink.
+ *   2. **THE SEQUENTIAL RAMPS STAY MONOTONIC IN LUMINANCE.** A greyscale print loses the
+ *      hue and keeps the tone, so "dearer" / "older" has to remain readable as "darker".
+ *      Both `cost` and `age` descend strictly across all SEVEN stops with a minimum
+ *      adjacent gap of **0.0751**, well past the 0.06 a cheap mono printer needs.
+ *   3. **THE NOMINAL RAMP IS DELIBERATELY FLAT.** All twelve categorical hues sit at
+ *      luminance ≈ 0.70 (the neutral `others` at 0.58), because a supplier is not "more"
+ *      than another supplier and a tone gradient would invite a reading that does not
+ *      exist. The stated consequence: **in GREYSCALE the twelve are indistinguishable
+ *      from each other** and are told apart by the legend, by the block loc printed in
+ *      each cell, and — for a mixed block — by the dashed outline. They ARE separated
+ *      from the map's own greys: 0.0748…0.0802 from the muted/no-data zinc, 0.1975 from
+ *      the neutral, 0.2973…0.3027 from an empty slot's white.
+ *
+ * Two pairs rely on the legend rather than on tone, and both are stated rather than
+ * papered over: the twelve categorical hues among themselves (above), and — only when a
+ * reader configures SIX or SEVEN price/age bands, never in a default configuration —
+ * stop 1 against the muted grey (ΔL 0.0220 / 0.0196).
+ */
+export const LENS_PRINT_FILL_RGB: Record<LensRampId, readonly string[]> = {
+  cost: [
+    '224 246 239', // emerald tint  L 0.8799  18.60:1
+    '217 239 184', // lime tint     L 0.7995  16.99:1
+    '245 217 133', // yellow tint   L 0.7073  15.15:1
+    '249 201 118', // amber tint    L 0.6322  13.64:1
+    '252 176 123', // orange tint   L 0.5318  11.64:1
+    '246 148 148', // red tint      L 0.4291   9.58:1
+    '237 122 147', // rose tint     L 0.3403   7.81:1
+  ],
+  age: [
+    '224 245 254', // sky tint          L 0.8831  18.66:1
+    '222 231 252', // blue tint         L 0.7971  16.94:1
+    '218 216 250', // indigo tint       L 0.7092  15.18:1
+    '218 200 250', // violet tint       L 0.6312  13.62:1
+    '214 178 247', // purple tint       L 0.5285  11.57:1
+    '224 148 233', // fuchsia tint      L 0.4291   9.58:1
+    '204 131 211', // deep fuchsia tint L 0.3377   7.75:1
+  ],
+  // FLAT at L ≈ 0.70 — see property 3 above. The thirteenth is the neutral `others`, kept
+  // DARKER than the map's muted grey (0.5800 against 0.7775) on purpose: the map already
+  // spends zinc-200 on "not selected / no data", so an `others` band wearing the same grey
+  // would be unreadable as a band at all.
+  category: [
+    '169 226 252', // sky tint      L 0.6986  14.97:1
+    '224 212 253', // violet tint   L 0.7003  15.01:1
+    '252 207 215', // rose tint     L 0.7023  15.05:1
+    '251 212 148', // amber tint    L 0.6973  14.95:1
+    '170 229 223', // teal tint     L 0.6991  14.98:1
+    '245 205 251', // fuchsia tint  L 0.7004  15.01:1
+    '194 230 140', // lime tint     L 0.6996  14.99:1
+    '214 215 251', // indigo tint   L 0.6986  14.97:1
+    '165 229 239', // cyan tint     L 0.7027  15.05:1
+    '250 206 228', // pink tint     L 0.7007  15.01:1
+    '244 216 129', // yellow tint   L 0.6993  14.99:1
+    '199 219 252', // blue tint     L 0.6983  14.97:1
+    '200 200 205', // zinc tint — the NEUTRAL, reserved for `others`. L 0.5800  12.60:1
+  ],
+};
+
+/**
  * Which stop a band lands on, by POSITION across an ORDINAL ramp.
  *
  * A NOMINAL ramp does not answer this question — a category has no position — so it
@@ -213,4 +298,18 @@ export function rampRgb(ramp: LensRampId, index: number, bandCount: number): str
 export function rampRgbAtStop(ramp: LensRampId, stop: number): string {
   const clamped = Math.max(0, Math.min(LENS_RAMP_STOP_COUNT[ramp] - 1, Math.round(stop)));
   return LENS_RAMP_RGB[ramp][clamped];
+}
+
+/**
+ * The **PRINT** fill for a stop a caller has already decided — the pale twin of
+ * `rampRgbAtStop`, and the ONLY way the yard map and its legend read a colour.
+ *
+ * It is a separate function rather than a flag on `rampRgbAtStop` so that a call site
+ * cannot silently be "the screen one on paper": a reader of `lens-yard-map-model.ts` sees
+ * the word PRINT at the point the fill is chosen. Same clamping, so a stale stop is the
+ * wrong colour and never an undefined one.
+ */
+export function printFillRgbAtStop(ramp: LensRampId, stop: number): string {
+  const clamped = Math.max(0, Math.min(LENS_RAMP_STOP_COUNT[ramp] - 1, Math.round(stop)));
+  return LENS_PRINT_FILL_RGB[ramp][clamped];
 }

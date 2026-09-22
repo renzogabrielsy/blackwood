@@ -48,7 +48,7 @@
 
 import { WAREHOUSES } from '../constants';
 import type { BlockData } from '../types';
-import { rampRgbAtStop, type LensRampId } from './lens-ramp';
+import { printFillRgbAtStop, type LensRampId } from './lens-ramp';
 
 // ── The paper palette ───────────────────────────────────────────────────────
 //
@@ -72,19 +72,32 @@ export const LENS_YARD_MAP_LIGHT_INK = '#ffffff';
 export const LENS_YARD_MAP_NODATA_MARK = '—';
 
 /**
- * ⚠️ THE LUMINANCE RULE, WRITTEN ONCE AND NOWHERE ELSE.
+ * ⚠️ THE LUMINANCE RULE, WRITTEN ONCE AND NOWHERE ELSE — AND ON PAPER IT NOW ALWAYS
+ * ANSWERS BLACK.
  *
- * A band's fill on paper is SOLID (this is a print, not the grid's 22% wash), and the
- * twelve categorical hues alone span emerald through deep fuchsia — so a hardcoded text
- * colour is illegible on roughly half of them. The ink is therefore CHOSEN from the
- * fill's own WCAG relative luminance.
+ * ── WHY IT STILL EXISTS AFTER THE PRINT PALETTE (2026-09-22, second pass) ────
+ * The owner, on the live map: *"verify these are easy to read when printed on lower-quality
+ * printers. Use simple colours that contrast well from BLACK text — don't use dark colours
+ * that clash with black."* The map used to paint the SCREEN ramp solid, which put six of
+ * the fourteen ordinal hues and six of the thirteen categorical ones BELOW the crossover
+ * below — so the loc flipped to WHITE, and white on deep fuchsia off a tired office laser
+ * is exactly the case he was asking about. The map now paints `LENS_PRINT_FILL_RGB`
+ * (`lens-ramp.ts`), whose WORST entry is **7.75:1 against black**, so this function
+ * returns near-black for every fill the map can produce and its white branch is
+ * structurally unreachable there.
+ *
+ * **It is kept rather than replaced by a hardcoded black**, for the reason every
+ * one-definition rule on this page exists: the ink is a FUNCTION OF THE FILL, and a map
+ * cell, a legend swatch border and a mixed block's dashed outline must all reach the same
+ * answer. `scripts/verify-blocking-lens-ui.ts` asserts that every print fill resolves to
+ * `LENS_YARD_MAP_DARK_INK`, so a future palette edit that reached for a dark fill fails
+ * the check instead of quietly reintroducing white ink on paper.
  *
  * The threshold is not a taste value: `sqrt(1.05 × 0.05) − 0.05 ≈ 0.1791` is the exact
  * luminance at which white-on-fill and black-on-fill have the SAME contrast ratio, so
  * picking the side of it with more contrast is, by construction, the better of the two.
- * Above it near-black wins (measured: emerald 0.411, yellow 0.498, sky 0.492, teal 0.372,
- * zinc 0.360, orange 0.324, pink 0.248, red 0.229); below it white does (rose 0.173,
- * fuchsia 0.173, blue 0.153, violet 0.134, indigo 0.117, deep fuchsia 0.116).
+ * Measured on the PRINT table: every entry lands between 0.3377 (deep fuchsia tint) and
+ * 0.8831 (sky tint), i.e. from 1.9× to 4.9× the crossover.
  */
 export const LENS_YARD_MAP_INK_CROSSOVER = 0.1791;
 
@@ -323,11 +336,13 @@ export interface LensYardMapPaint {
  * out is absent and the cell falls to `muted` — one map, one lookup, and the map cannot
  * disagree with the "Showing 2 of 4 bands" line above it.
  *
- * **The fill is the ramp's own triple at FULL opacity.** On screen a band is a 22% wash
- * over the cell's own surface, which is right for a screen carrying a batch code, a
+ * **The fill is the PRINT palette's tint at FULL opacity.** On screen a band is a 22%
+ * wash over the cell's own surface, which is right for a screen carrying a batch code, a
  * balance and a price; here the cell carries a loc and nothing else and the owner asked
- * for SOLID colour. `rampRgbAtStop` is still the only place a triple is read, so the
- * map, the band table's swatch and the grid are the same colour by construction.
+ * for SOLID colour. Solid at the SCREEN saturation is what put white ink on half the ramp,
+ * so the map reads `printFillRgbAtStop` — a white TINT of the same hue, ≥ 7.75:1 against
+ * black. The hue is the band table's swatch hue to within 0.79°, so the two are matchable
+ * by eye while each is legible on its own surface.
  *
  * **A MIXED block keeps its dashed INSET outline, in the ink rather than the hue.** On
  * the grid `.lens-cat-mixed` dashes in `var(--lens-hue)` over a 22% wash of that same
@@ -358,7 +373,7 @@ export function lensYardMapPaint(
       outline: cell.mixed ? LENS_YARD_MAP_MUTED_INK : null,
     };
   }
-  const rgb = rampRgbAtStop(ramp, stop);
+  const rgb = printFillRgbAtStop(ramp, stop);
   const ink = lensYardMapInkOn(rgb);
   return { kind: 'banded', bg: `rgb(${rgb})`, ink, outline: cell.mixed ? ink : null };
 }

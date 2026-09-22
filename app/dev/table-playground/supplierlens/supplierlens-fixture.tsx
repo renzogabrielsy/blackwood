@@ -90,16 +90,22 @@ interface SupplierSpec {
   mixed: number;
   /** PERCENT of the yard by APPORTIONED kg — the live figures. */
   kgShare: number;
+  /**
+   * ₱/kg, kg-weighted over this band's PRICED dominant blocks — the LIVE figures measured
+   * 2026-09-22. Note how wide the spread is (₱17.66 … ₱43.57): a rig that gave every band the
+   * same price could not show a column that is worth printing.
+   */
+  phpKg: number;
 }
 
 /** The six named suppliers of the live top-6, in the live order. */
 const SUPPLIERS: SupplierSpec[] = [
-  { key: 'ORNALES', display: 'Ornales', dominant: 78, mixed: 11, kgShare: 41.8193 },
-  { key: 'PAQUIBOT', display: 'Paquibot', dominant: 58, mixed: 0, kgShare: 36.3451 },
-  { key: '2023 BACKLOG', display: '2023 Backlog', dominant: 11, mixed: 0, kgShare: 7.32 },
-  { key: 'LLANTO', display: 'Llanto', dominant: 7, mixed: 6, kgShare: 3.751 },
-  { key: 'SEVILLA', display: 'Sevilla', dominant: 5, mixed: 0, kgShare: 2.9124 },
-  { key: 'LAYUPAN', display: 'Layupan', dominant: 6, mixed: 5, kgShare: 2.8445 },
+  { key: 'ORNALES', display: 'Ornales', dominant: 78, mixed: 11, kgShare: 41.8193, phpKg: 43.5690 },
+  { key: 'PAQUIBOT', display: 'Paquibot', dominant: 58, mixed: 0, kgShare: 36.3451, phpKg: 37.1574 },
+  { key: '2023 BACKLOG', display: '2023 Backlog', dominant: 11, mixed: 0, kgShare: 7.32, phpKg: 17.6566 },
+  { key: 'LLANTO', display: 'Llanto', dominant: 7, mixed: 6, kgShare: 3.751, phpKg: 29.9501 },
+  { key: 'SEVILLA', display: 'Sevilla', dominant: 5, mixed: 0, kgShare: 2.9124, phpKg: 19.0265 },
+  { key: 'LAYUPAN', display: 'Layupan', dominant: 6, mixed: 5, kgShare: 2.8445, phpKg: 20.7090 },
 ];
 
 /** The eleven suppliers the live yard folds into `others`, plus that fold's figures. */
@@ -107,7 +113,7 @@ const OTHERS_SUPPLIER_KEYS = [
   'MERCADO', 'ALBURO', 'CABAHUG', 'DELA CRUZ', 'ESCARIO', 'GARCIA',
   'JUMAWAN', 'NAVARRO', 'PANTALEON', 'QUIJANO', 'TORRES',
 ];
-const OTHERS_SPEC = { dominant: 5, mixed: 1, kgShare: 5.0077 };
+const OTHERS_SPEC = { dominant: 5, mixed: 1, kgShare: 5.0077, phpKg: 33.0862 };
 
 /** 17 suppliers, 23 mixed blocks — the live totals. */
 const TOTAL_SUPPLIERS = SUPPLIERS.length + OTHERS_SUPPLIER_KEYS.length;
@@ -188,7 +194,19 @@ function makeCells(includeUnattributed: boolean, includePrepared: boolean): Mock
  * including a band that dominates NO block (`dominantKg` a real 0, never a null) when N
  * is large enough to name one.
  */
-function makeSupplierLens(cells: MockCell[], topN: number): BlockingSupplierLens {
+function makeSupplierLens(
+  cells: MockCell[],
+  topN: number,
+  /**
+   * `false` reproduces what `fetchBlockingSupplierLens` returns to a reader WITHOUT the
+   * price flag: **both ₱ keys nulled, `pricesHidden: true`, everything else intact.** It is
+   * wired to the rig's own `?prices=0` so the printed band table's `Mixed` column — the
+   * price-denied shape of the sheet — is reachable at all. Before this, `?prices=0` only
+   * dropped the PRICE lens from the tab strip and left the supplier payload fully priced,
+   * so the branch could not be looked at.
+   */
+  canViewPrices: boolean,
+): BlockingSupplierLens {
   const named = SUPPLIERS.slice(0, topN);
   const foldedKeys = [
     ...SUPPLIERS.slice(topN).map((s) => s.key),
@@ -290,10 +308,29 @@ function makeSupplierLens(cells: MockCell[], topN: number): BlockingSupplierLens
       blockSharePct:
         attributedBlocks > 0 ? ((dominantBlocks[i] ?? 0) / attributedBlocks) * 100 : null,
       mixedBlockCount: mixedBlocks[i] ?? 0,
-      // `spec` is read only for its live figures above; kept so the intent is visible.
-      ...(spec ? {} : {}),
+      // THE ₱ COLUMN (2026-09-22). The live per-band figure, weighted over the band's PRICED
+      // dominant blocks — and on the live yard EVERY block is priced, so the rig mirrors that
+      // and sets the weight equal to `dominantKg`. A rig that wants to exercise the partial
+      // coverage case should lower one band's `pricedDominantKg` and leave its price alone.
+      // WITHHELD is `null` on BOTH keys, never 0 on the weight — that pair is what the
+      // panel reads to tell "withheld" from "dominates no priced block".
+      kgWeightedPhpKg: canViewPrices ? (spec ? spec.phpKg : null) : null,
+      pricedDominantKg: canViewPrices ? (dominantKg[i] ?? 0) : null,
     };
   });
+
+  // The yard's own figure, weighted over the bands rather than restated — so the rig's footer
+  // and its rows can never disagree, which is exactly the property the SQL guarantees live.
+  // Folded over `dominantKg`, not over the (possibly withheld) per-band weight, so the
+  // rig's footer is the same number whether or not the reader may see it.
+  const pricedTotalKg = dominantKg.reduce((s, kg) => s + kg, 0);
+  const weightedTotalPhp =
+    pricedTotalKg > 0
+      ? bands.reduce(
+          (s, b, i) => s + (dominantKg[i] ?? 0) * (b.isOthers ? OTHERS_SPEC.phpKg : SUPPLIERS[i].phpKg),
+          0,
+        ) / pricedTotalKg
+      : null;
 
   return {
     topN,
@@ -308,7 +345,11 @@ function makeSupplierLens(cells: MockCell[], topN: number): BlockingSupplierLens
       mixedBlockCount: mixedTotal,
       attributedBlockCount: attributedBlocks,
       attributedKg,
+      kgWeightedPhpKg: canViewPrices ? weightedTotalPhp : null,
+      pricedDominantKg: canViewPrices ? pricedTotalKg : null,
     },
+    // TRUE = the two ₱ keys above were WITHHELD, not absent. Driven by `?prices=0`.
+    pricesHidden: !canViewPrices,
   };
 }
 
@@ -494,10 +535,10 @@ export function SupplierLensFixture() {
     () => ({
       fetchLens: async (n) => {
         await sleep(FIXTURE_LATENCY_MS);
-        return { ok: true, lens: makeSupplierLens(cells, n) };
+        return { ok: true, lens: makeSupplierLens(cells, n, canViewPrices) };
       },
     }),
-    [cells],
+    [cells, canViewPrices],
   );
 
   const ageAdapter: AgeLensAdapter = React.useMemo(
@@ -591,9 +632,10 @@ export function SupplierLensFixture() {
         Supplier lens look rig · static payload · <code>?top={topKey}</code> ({topN} named +
         others) · <code>?unattributed={includeUnattributed ? '1' : '0'}</code> ·{' '}
         <code>?prices={canViewPrices ? '1' : '0'}</code> ({lenses.length} lens
-        {lenses.length === 1 ? '' : 'es'} offered) · <code>?pca={includePrepared ? '1' : '0'}</code>{' '}
-        (PCA/PCB on the printed yard map) · dashed outline = MIXED block · toggle the OS/app
-        theme to see both.
+        {lenses.length === 1 ? '' : 'es'} offered; the supplier payload&apos;s two ₱ keys are{' '}
+        {canViewPrices ? 'present' : 'WITHHELD, so the printed band table heads Mixed'}) ·{' '}
+        <code>?pca={includePrepared ? '1' : '0'}</code> (PCA/PCB on the printed yard map) ·
+        dashed outline = MIXED block · toggle the OS/app theme to see both.
         {focused && (
           <>
             {' '}

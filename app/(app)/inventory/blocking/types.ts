@@ -419,11 +419,19 @@ export const BLOCKING_AGE_EDGE_MAX_DAYS = 5000;
 // "Whose charcoal is in my yard." The THIRD lens on the frame the price lens built, over
 // `fn_blocking_supplier_lens` (migration `20260922011759_blocking_supplier_lens`).
 //
-// It shares the AGE lens's posture, not the price lens's: **no ₱ figure exists in this
-// payload and none is derivable from it**, so `fetchBlockingSupplierLens` has NO
-// `canViewPrices()` call and the lens is shown to EVERY role INCLUDING Production. A
-// supplier's name beside a kilogram total says nothing about what it cost.
-// `scripts/verify-blocking-supplier-lens.ts` asserts the gate's ABSENCE.
+// **IT CARRIES MONEY IN EXACTLY TWO KEYS, AND ONLY IN THEM** (added 2026-09-22, migration
+// `20260922051500_blocking_supplier_lens_weighted_price`): `kgWeightedPhpKg` and
+// `pricedDominantKg`, on each band and on `total`. Everything else — supplier names,
+// kilograms, counts, percentages, block addresses — is money-free and NOT derivable into
+// money, because a supplier's name beside a kilogram total says nothing about what it cost.
+//
+// So `fetchBlockingSupplierLens` NULLS those two for a `!canViewPrices()` caller and sets
+// `pricesHidden: true`, and still returns everything else — the lens stays usable by EVERY
+// role INCLUDING Production, the role that walks the yard. That is the `BlendAnalysis` idiom
+// (its `price` section is deleted while `quality`/`age` ship) narrowed from a section to two
+// keys, and it is NOT the PRICE lens's outright refusal, where band membership itself pins a
+// block's ₱/kg. `scripts/verify-blocking-supplier-lens.ts` asserts the gate exists, nulls
+// exactly those two keys, and that no OTHER money-named key is in the payload.
 //
 // NOTHING HERE IS A NEW DEFINITION. Supplier identity (`canonical_supplier` over the
 // origin-stripped spelling) and the ALL/SOME rule (`supplier_count_in_block > 1`) are
@@ -497,6 +505,45 @@ export interface BlockingSupplierBand {
   blockSharePct: number | null;
   /** How many of this band's dominated blocks are mixed (`supplierCount > 1`). */
   mixedBlockCount: number;
+  /**
+   * **₱/kg — THE WEIGHTED PRICE OF THE BLOCKS THIS SUPPLIER DOMINATES** (2026-09-22). The
+   * kg-weighted mean of `view_blocking_grid.avg_php_kg` — the same per-block price the
+   * Blocking cell displays, never a second definition — over this band's DOMINANT blocks,
+   * i.e. exactly the population `dominantBlockCount` / `dominantKg` describe, so it is the
+   * price of the kilograms on its own row.
+   *
+   * **It is NOT the price of this supplier's charcoal, and it cannot be.** `avg_php_kg` is a
+   * price per BLOCK; no per-supplier price exists in the database and none is derivable
+   * (`rc_out` records which BATCH kilos left, never whose). So on a MIXED block every
+   * supplier in it shares one price, and a supplier that dominates nothing has **no price at
+   * all** — null beside a real `apportionedKg`. Label it accordingly; do not call it "what we
+   * paid ORNALES".
+   *
+   * **NULL, NEVER 0**, in two different situations the UI must not conflate:
+   *   the band dominates no PRICED block — `avg_php_kg` null or ≤ 0 is the L-008 unpriced
+   *     placeholder, so it is excluded; `pricedDominantKg` then reads a real **0**.
+   *   the reader may not see prices — then BOTH this and `pricedDominantKg` are null and
+   *     `BlockingSupplierLens.pricesHidden` is true. **Read `pricesHidden` to tell them
+   *     apart**; a blank is otherwise ambiguous.
+   *
+   * Same key name, same NULL rule, same population asymmetry as
+   * `BlockingPriceBand.kgWeightedPhpKg`. One name, one meaning, across both lenses.
+   */
+  kgWeightedPhpKg: number | null;
+  /**
+   * **₱-adjacent: the WEIGHT `kgWeightedPhpKg` was actually taken over** — the balance of
+   * this band's PRICED dominant blocks. Compare it with `dominantKg` to see how much of the
+   * band the price covers, and say so rather than implying the figure covers the whole band.
+   *
+   * A real **0** when nothing in the band is priced ("zero priced kilograms" is a
+   * measurement). **NULL only means WITHHELD** from a price-denied reader — it is nulled with
+   * its price because a kilogram weight paired with nothing to weigh is noise, and because
+   * publishing it alone would say which blocks are priced. Read `pricesHidden`.
+   *
+   * `Σ bands[].pricedDominantKg === total.pricedDominantKg` exactly (the bands partition the
+   * attributed blocks by dominance, and this is a plain sum of balances).
+   */
+  pricedDominantKg: number | null;
 }
 
 /** One occupied block, as the supplier lens sees it. */
@@ -538,6 +585,9 @@ export interface BlockingSupplierBlock {
  *   `Object.keys(bandByBlock).length + unattributed.blockCount === total.blockCount`
  *   `bandByBlock` and `blockByLoc` have IDENTICAL key sets
  *   an `others` band exists **iff** `total.supplierCount > topN`
+ *   Σ `bands[].pricedDominantKg` === `total.pricedDominantKg` (exact — plain sum of balances)
+ *   every published `kgWeightedPhpKg` === Σ(balance × the grid's own `avg_php_kg`) ÷ Σ(balance)
+ *     over that band's PRICED dominant blocks — proven in exact decimal, gap 0
  *   the population is the PRICE and AGE lenses' — one yard, same blocks, same kg
  *
  * **THE APPORTIONED FOLD IS NOT BIT-EXACT, and the difference is worth knowing before you
@@ -577,7 +627,24 @@ export interface BlockingSupplierLens {
     mixedBlockCount: number;
     attributedBlockCount: number;
     attributedKg: number;
+    /**
+     * The yard's own weighted ₱/kg, over the PRICED ATTRIBUTED blocks — **while
+     * `blockCount` and `kg` above still count EVERY occupied block, priced or not.** That
+     * asymmetry is deliberate and is the same one `BlockingPriceLens.total` records: the
+     * counts are a count of the yard, the price is a price of what is priced. Null, never 0,
+     * when nothing is priced — or when the reader may not see prices (`pricesHidden`).
+     */
+    kgWeightedPhpKg: number | null;
+    /** The weight that figure was taken over. `Σ bands[].pricedDominantKg` exactly. */
+    pricedDominantKg: number | null;
   };
+  /**
+   * **TRUE means the two ₱ keys above were WITHHELD, not measured as absent.** Set by
+   * `fetchBlockingSupplierLens` from the canonical `canViewPrices()`. Everything else in the
+   * payload is unchanged for such a reader, so the lens renders in full minus the price
+   * column — do not hide the band table, and do not print a blank price as "₱0".
+   */
+  pricesHidden: boolean;
 }
 
 /** Why a supplier-lens call came back empty. Each maps to a sentence written for a human. */

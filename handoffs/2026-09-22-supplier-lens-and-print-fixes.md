@@ -59,3 +59,11 @@ landscape page. Shipped on `feat/lens-print-yard-map`: page 2 of every lens prin
 (10.4 mm / 10 pt with PCA/PCB), locs wrap at the hyphen rather than shrink, bold mono advance 0.63 em,
 ink chosen by luminance. Lesson: **a map that shares a data-sized page is legible only by luck** — give it
 its own page. Unverified on the live 170-block yard.
+
+## 8. ADDENDUM (same day) — ₱/KG column + print palette
+Supplier band table: "kg dominant" → **₱/KG** (weighted over the blocks a supplier dominates; footer
+`avg of priced`), **MIXED** for a price-denied reader (₱ column absent, never blank). Yard map: a light
+PRINT palette, black ink on every fill at ≥ 7.75:1, cost/age ramps monotonic in luminance. **Open
+decision for Renzo:** the 12 supplier tints are equal-luminance and print as ONE grey on a mono printer
+(locs + dashed outline survive); spreading their luminance would fix mono at the cost of colour
+separation. Harness: stub `window.print` AND `printCard`'s 1000 ms fallback before capturing a PDF.
