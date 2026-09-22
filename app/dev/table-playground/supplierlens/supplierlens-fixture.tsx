@@ -120,6 +120,17 @@ const MOCK_BLOCKS = [
   'D-1A', 'D-2A', 'D-3A', 'D-4A', 'D-5A', 'D-6A', 'D-7A', 'D-8A', 'D-9A', 'D-10A',
 ] as const;
 
+/**
+ * The PREPARED-CHARCOAL slots, appended under `?pca=1`.
+ *
+ * They exist for the PRINTED YARD MAP, which includes PCA/PCB **iff the grid payload
+ * holds a block in one of them** — so the map has two shapes (14 cell rows against 11)
+ * and the one that solves to the SMALLER cell is the one only this switch can produce.
+ * They are deliberately NOT in the 30-cell on-screen rig (that grid draws rows A/B/D at
+ * ten columns and would have nowhere to put them); the rig's job here is the print.
+ */
+const MOCK_PREPARED_BLOCKS = ['PCA-15A', 'PCA-16B', 'PCB-15A', 'PCB-17C'] as const;
+
 interface MockCell {
   loc: string;
   batch: string;
@@ -142,8 +153,11 @@ interface MockCell {
  * 30 cells spread over the seven bands, including MIXED ones in three different bands so
  * the dashed outline can be judged against three hues, and optional unattributed ones.
  */
-function makeCells(includeUnattributed: boolean): MockCell[] {
-  return MOCK_BLOCKS.map((loc, i) => {
+function makeCells(includeUnattributed: boolean, includePrepared: boolean): MockCell[] {
+  const locs: readonly string[] = includePrepared
+    ? [...MOCK_BLOCKS, ...MOCK_PREPARED_BLOCKS]
+    : MOCK_BLOCKS;
+  return locs.map((loc, i) => {
     const unattributed = includeUnattributed && i % 13 === 9;
     // Bands 0…5 get four cells each; the last six go to the `others` fold.
     const supplierIdx = i < 24 ? i % 6 : -1;
@@ -443,8 +457,13 @@ export function SupplierLensFixture() {
   const topN = TOP_N_SHAPES[topKey] ?? 6;
   const includeUnattributed = params.get('unattributed') === '1';
   const canViewPrices = params.get('prices') !== '0';
+  /** `?pca=1` puts stock in PCA/PCB, which is what makes the PRINTED yard map include them. */
+  const includePrepared = params.get('pca') === '1';
 
-  const cells = React.useMemo(() => makeCells(includeUnattributed), [includeUnattributed]);
+  const cells = React.useMemo(
+    () => makeCells(includeUnattributed, includePrepared),
+    [includeUnattributed, includePrepared],
+  );
 
   // The grid map every panel reads for its PRINTED summary's per-block rows — the block
   // code, the batch, the balance AND the seven lab readings the new sheet prints. Shaped
@@ -572,8 +591,9 @@ export function SupplierLensFixture() {
         Supplier lens look rig · static payload · <code>?top={topKey}</code> ({topN} named +
         others) · <code>?unattributed={includeUnattributed ? '1' : '0'}</code> ·{' '}
         <code>?prices={canViewPrices ? '1' : '0'}</code> ({lenses.length} lens
-        {lenses.length === 1 ? '' : 'es'} offered) · dashed outline = MIXED block · toggle
-        the OS/app theme to see both.
+        {lenses.length === 1 ? '' : 'es'} offered) · <code>?pca={includePrepared ? '1' : '0'}</code>{' '}
+        (PCA/PCB on the printed yard map) · dashed outline = MIXED block · toggle the OS/app
+        theme to see both.
         {focused && (
           <>
             {' '}

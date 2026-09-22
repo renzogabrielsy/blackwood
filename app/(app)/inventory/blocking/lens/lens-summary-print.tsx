@@ -26,6 +26,15 @@
 //      grouped by WAREHOUSE, carrying every lab reading the grid already holds — and
 //      each band starts on a NEW PAGE, because more pages is the trade he asked for.
 //
+// ── THE YARD MAP, ADDED THE SAME DAY ────────────────────────────────────────
+// *"Within this page or maybe the next page, I'd like to see the actual block arrangement
+// in our app to be printed in SOLID colors… make the block loc (C-19A, etc.) right in the
+// middle and in BIG font… show ALL blocks in one landscape page."* It is PAGE TWO — its
+// own sheet, because page one's band table is data-sized and a map sharing it would be
+// legible or not depending on how many cut lines the reader configured. The page lives in
+// `lens-yard-map-print.tsx` and its cells in `lens-yard-map-model.ts`; the measured fit,
+// the four cell kinds and the one luminance rule are documented there.
+//
 // ── THE LAB READINGS ARE READ, NEVER COMPUTED ───────────────────────────────
 // They come off the grid payload the page already holds (`view_blocking_grid` rows),
 // joined by `block_loc`. A WAREHOUSE SUBTOTAL therefore carries its block count and its
@@ -70,7 +79,7 @@ import {
 } from '@/components/shared/print/print-page-rules';
 import { cn } from '@/lib/utils';
 
-import { rampClass, rampClassAtStop, type LensRampId } from './lens-ramp';
+import { rampClassAtStop, resolveBandRampStop, type LensRampId } from './lens-ramp';
 import { LensRatioBar } from './lens-ratio-bar';
 import type { LensUnit } from './lens-shared';
 import {
@@ -79,6 +88,8 @@ import {
   type LensSummaryBlockRow,
   type LensSummaryWarehouse,
 } from './lens-summary-model';
+import type { LensYardMap } from './lens-yard-map-model';
+import { LensYardMapPage } from './lens-yard-map-print';
 
 export type { LensSummaryBlockRow, LensSummaryWarehouse };
 
@@ -145,11 +156,25 @@ export interface LensSummaryPrintModel {
   };
   /** The population in NO band: unpriced / undated / no supplier at all. */
   excluded: { title: string; note: string; rows: LensSummaryBlockRow[] } | null;
+  /**
+   * THE YARD MAP — every block location of the grid, for the sheet's second page.
+   *
+   * Built by the shared `buildLensYardMap` from the SAME `bandOf` lookup the band tables
+   * are bucketed with, so the map and the tables can never place a block in two different
+   * bands. It carries no kilogram, no ₱, no age, no supplier and no lab reading: the page
+   * exists for location reference only. See `lens-yard-map-print.tsx`.
+   */
+  yardMap: LensYardMap;
 }
 
 // ── The print rules ─────────────────────────────────────────────────────────
 
-const LENS_PRINT_MARGIN_MM = 10;
+/**
+ * EXPORTED because the YARD MAP page solves its cell size against this exact box, and a
+ * page-fitting promise made against a different margin from the one `@page` applies is
+ * not a promise at all. One number, stated once, read by both.
+ */
+export const LENS_PRINT_MARGIN_MM = 10;
 
 /**
  * The `@page` block plus this sheet's own scoped rules.
@@ -160,9 +185,14 @@ const LENS_PRINT_MARGIN_MM = 10;
  *
  * `break-before: page` on `.lens-print-band` is what makes each band start a fresh
  * sheet: page one is the title, the settings line, the band table and the ratio bar,
- * and then one page per band. A warehouse group is one `<tbody>`, `break-inside: avoid`
- * while it is small enough to travel whole, and its heading row carries
- * `break-after: avoid` so a large group's title cannot be stranded at a page foot.
+ * then the YARD MAP, and then one page per band. A warehouse group is one `<tbody>`,
+ * `break-inside: avoid` while it is small enough to travel whole, and its heading row
+ * carries `break-after: avoid` so a large group's title cannot be stranded at a page foot.
+ *
+ * `.lens-print-yardmap` takes the SAME `break-before: page` plus a `break-inside: avoid`:
+ * "all blocks in one landscape page" is the owner's requirement, so the map must be
+ * structurally unable to spill onto a second sheet. Its own arithmetic (`fitCellGrid`)
+ * guarantees it never needs to.
  */
 export const LENS_SUMMARY_PRINT_RULES = buildPrintPageRules({
   scopeAttr: 'data-lens-print',
@@ -172,6 +202,13 @@ export const LENS_SUMMARY_PRINT_RULES = buildPrintPageRules({
 [data-lens-print] .lens-print-band h2 { break-after: avoid; }
 [data-lens-print] tbody.lens-print-whse-small { break-inside: avoid; }
 [data-lens-print] tr.lens-print-whse-head { break-after: avoid; }
+[data-lens-print] .lens-print-yardmap {
+  break-before: page;
+  page-break-before: always;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+[data-lens-print] .lens-print-yardmap h2 { break-after: avoid; }
 `,
 });
 
@@ -190,10 +227,18 @@ const BLOCK_COL_WIDTHS = ['8%', '17%', '11%'] as const;
 const LAB_COL_WIDTH = '7.5%';
 const FIGURE_COL_WIDTH = '11.5%';
 
+/**
+ * The swatch class for one band.
+ *
+ * `resolveBandRampStop` is the ONE place the ordinal-vs-nominal case analysis lives
+ * (`lens-ramp.ts`): the yard map needs the same answer as an `r g b` triple, and written
+ * out twice the swatch and the map cell could disagree about one band's colour.
+ */
 function bandSwatchClass(model: LensSummaryPrintModel, band: LensSummaryBand): string {
-  return band.rampStop === undefined
-    ? rampClass(model.ramp, band.index, model.bandCount)
-    : rampClassAtStop(model.ramp, band.rampStop);
+  return rampClassAtStop(
+    model.ramp,
+    resolveBandRampStop(model.ramp, band.index, model.bandCount, band.rampStop),
+  );
 }
 
 /** One band's blocks: a full-width table, one `<tbody>` per warehouse. */
@@ -386,6 +431,19 @@ function LensSummarySheet({
         />
       </div>
 
+      {/* ── PAGE TWO: THE YARD MAP — every slot, solid colour, loc in big type ──
+          Its own page, and that was measured rather than preferred: the band table above
+          is data-sized (2 to 13 rows), so a map sharing page one would be legible or not
+          depending on how many cut lines the reader had added. See the page's own header. */}
+      <LensYardMapPage
+        map={model.yardMap}
+        ramp={model.ramp}
+        bands={model.bands}
+        bandCount={model.bandCount}
+        lensTitle={model.title}
+        marginMm={LENS_PRINT_MARGIN_MM}
+      />
+
       {/* ── One PAGE per band: its blocks, grouped by warehouse, with the lab panel ── */}
       {model.bands.map((b) => (
         <div key={b.index} className="lens-print-band">
@@ -494,7 +552,13 @@ export function LensSummaryPrintControl({ model, lensLabel }: LensSummaryPrintCo
               showHeader={false}
               title={model.title}
               subtitle={model.settingsLine}
-              countLabel={`${model.bands.length + 1} page${model.bands.length === 0 ? '' : 's'}`}
+              // Page one, the YARD MAP page, one page per band, and the excluded page
+              // when there is one. The header is off, so this only reaches the console
+              // and the stage — but a count that silently stopped counting the map would
+              // be the first thing to go stale.
+              countLabel={`${
+                model.bands.length + 2 + (model.excluded && model.excluded.rows.length > 0 ? 1 : 0)
+              } pages`}
               onDone={() => setPrintedAt(null)}
             >
               <GroupPrintPage>

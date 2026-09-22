@@ -55,7 +55,9 @@ Physical warehouse grid visualization — the digital equivalent of the Excel bl
 | `../_shared/use-blend-analysis.ts` | **NEW. THE ANALYSIS READ** — one payload per open / version switch / option change, and nothing else. Takes a DISCRIMINATED source (`{kind:'saved', proposalId, versionNo}` or `{kind:'live', blockLocs}`) so it is structurally incapable of sending both (the contract refuses that). **NO DEBOUNCE AT ALL** — its inputs are discrete events, not keystrokes, so a debounce would only be a timer for a remount to destroy (the 2026-09-21 lens stall) — and the guard is the request's own **SIGNATURE**, so a reply for what is still wanted is ALWAYS applied. A stall says so after `LENS_STALL_MS` with Copy and Retry; a refusal KEEPS the previous payload. Exports the `BlendAnalysisAdapter` port, defaulted to the live action and injectable only for the gated dev rig. |
 | `../_shared/blend-analysis-sections.tsx` | **NEW. THE ANALYSIS PAGES ON SCREEN** — `BlendAnalysisSections` (the stack) and `BlendAnalysisIncludePopover` (the header's **Include pages** control). Three pages: **Price groups — natural breaks** (a plain-language method note, then HIGH → AVERAGE → LOW, each group a dense table with a SUBTOTAL row and one grand FOOTER from the payload's `overall`, which is what makes it visibly equal the proposal's own raw blend price) plus **Against market** (the PRICE LENS's bands, labelled with the lens's OWN `priceBandLabel` and the reader's own band names, dearest first); **Quality** (three tables — MC, ASH, and BD ASTM **with BD JIS as a second value column**, not a fourth table — highest reading first, with the reader's own WET / ASHY highlight applied through `getLabHighlightText`); **Age** (the AGE LENS's bands via `ageBandLabel`, oldest first, block · batch · balance · age · first delivery · last delivery). Excel Standard throughout: `table-fixed`, explicit pixel widths whose STATED sum is the table's `minWidth`, `font-mono` right-aligned numerics, accounting ₱. **Every subtotal and footer figure is the payload's own** — there is no `reduce`, no `+=` and no division by a total in the file; the one piece of money arithmetic is a per-ROW `kg × ₱/kg`, which contributes to no total. An unmeasured / undated block is listed in a MUTED group with an em dash, **never in the cheapest, cleanest or freshest group**. |
 | `../_shared/blend-analysis-print.ts` | **NEW. THE ANALYSIS PAGES ON PAPER** — `buildBlendAnalysisPages(input)` returns one `<section class="apage">` per chosen page and `BLEND_ANALYSIS_PRINT_CSS` carries their rules; both are appended to the existing self-contained iframe document by `buildBlendPrintDocument`'s new fifth argument. **An empty analysis leaves that document byte-identical, including its `<style>` block.** Print-specific rules the screen does not need: **no `<tfoot>`** (Chrome repeats one on every page, so a subtotal and the grand total are `<tbody>` rows), **a group is its own `<tbody>`** with `break-inside: avoid` only while it is SMALL (≤ 4 rows — forcing a 24-row group whole would push a page of white space ahead of it), `break-after: avoid` on every heading and caption, a **7pt font floor** with the padding squeezed first, and the group tints written as inline `rgb(r g b / 0.18)` from `lens/lens-ramp.ts` because **an iframe has no `globals.css`, so a `.lens-band-3` class would print white**. |
-| `lens/lens-summary-print.tsx` | **THE PRINTED LENS SUMMARY, REDESIGNED 2026-09-22** — `LensSummaryPrintControl` (the legend bar's **Print** button) + the sheet, over a normalized `LensSummaryPrintModel` each lens builds for itself. The owner's four asks, in his order: the TITLE is **exactly the lens's name** (`Price lens` / `Age lens` / `Supplier lens`) with **no blurb and no subheading**; **ONE terse settings line** under it in the `<fact> · <fact>` style (`Set price ₱46 · ₱46 and up is above set price · cuts −1 · market · by kilograms · printed 2026-09-22 09:04`), the stamp appended by the sheet; the **BAND TABLE** (band · blocks · kg · share · the lens's weighted figure, total as the last `<tbody>` row, its figure cell saying **`avg of priced`** / `avg of dated`) and the **RATIO BAR** kept unchanged, because they are the part he said worked; and the three-column block lists **replaced by ONE FULL-WIDTH TABLE PER BAND, GROUPED BY WAREHOUSE** — `BLOCK · BATCH · BALANCE kg · MC · ASH · BD ASTM · BD JIS · GRIT · VM · FC · <figure>` — with **each band on its own page** (`.lens-print-band { break-before: page }`), a warehouse group per `<tbody>` (`break-inside: avoid` while small, its heading row `break-after: avoid`), a WAREHOUSE SUBTOTAL carrying blocks + kg and **every lab cell BLANK**, and a BAND TOTAL from the payload. Spanning several sheets is the deliberate trade for the lab panel. **Band ISOLATION is respected and SAID** (*"Showing 2 of 4 bands"*). It reuses the PLATFORM print kit (`GroupPrintStage` + `printCard` + `buildPrintPageRules`, stage PORTALLED to `<body>`) and adds nothing to it; the sheet is explicitly LIGHT (`bg-white` / `text-zinc-*`) because it lays out in the live DOM, with two deliberate exceptions — the swatch and the bar segments use `lens-band-swatch` + the ramp class, whose solid `rgb(var(--lens-hue))` is identical in both themes and identical to the grid. **It formats nothing**: every figure arrives preformatted. |
+| `lens/lens-summary-print.tsx` | **THE PRINTED LENS SUMMARY, REDESIGNED 2026-09-22** — `LensSummaryPrintControl` (the legend bar's **Print** button) + the sheet, over a normalized `LensSummaryPrintModel` each lens builds for itself. The owner's four asks, in his order: the TITLE is **exactly the lens's name** (`Price lens` / `Age lens` / `Supplier lens`) with **no blurb and no subheading**; **ONE terse settings line** under it in the `<fact> · <fact>` style (`Set price ₱46 · ₱46 and up is above set price · cuts −1 · market · by kilograms · printed 2026-09-22 09:04`), the stamp appended by the sheet; the **BAND TABLE** (band · blocks · kg · share · the lens's weighted figure, total as the last `<tbody>` row, its figure cell saying **`avg of priced`** / `avg of dated`) and the **RATIO BAR** kept unchanged, because they are the part he said worked; and the three-column block lists **replaced by ONE FULL-WIDTH TABLE PER BAND, GROUPED BY WAREHOUSE** — `BLOCK · BATCH · BALANCE kg · MC · ASH · BD ASTM · BD JIS · GRIT · VM · FC · <figure>` — with **each band on its own page** (`.lens-print-band { break-before: page }`), a warehouse group per `<tbody>` (`break-inside: avoid` while small, its heading row `break-after: avoid`), a WAREHOUSE SUBTOTAL carrying blocks + kg and **every lab cell BLANK**, and a BAND TOTAL from the payload. Spanning several sheets is the deliberate trade for the lab panel. **Band ISOLATION is respected and SAID** (*"Showing 2 of 4 bands"*). **PAGE TWO is the YARD MAP** (2026-09-22, `lens/lens-yard-map-print.tsx`) — every block location in solid band colour, loc centred and big; it exports `LENS_PRINT_MARGIN_MM` so the map's fit arithmetic and the `@page` rule cannot disagree. It reuses the PLATFORM print kit (`GroupPrintStage` + `printCard` + `buildPrintPageRules`, stage PORTALLED to `<body>`) and adds nothing to it; the sheet is explicitly LIGHT (`bg-white` / `text-zinc-*`) because it lays out in the live DOM, with two deliberate exceptions — the swatch and the bar segments use `lens-band-swatch` + the ramp class, whose solid `rgb(var(--lens-hue))` is identical in both themes and identical to the grid. **It formats nothing**: every figure arrives preformatted. |
+| `lens/lens-yard-map-model.ts` | **NEW (2026-09-22). THE YARD MAP's CELLS — pure, no React.** `buildLensYardMap({ data, bandOf, isMixed? })` turns the grid's OWN geometry (`../constants`'s `WAREHOUSES`, plus `blocking-grid.tsx`'s `<whse>-<col><row>` slot key — **never a literal 220/238**) into one `LensYardMapCell` per SLOT: `{ loc, lines, occupied, band, mixed }`. Also `lensYardMapPaint(cell, ramp, stopByVisibleBand)` (the FOUR cell kinds — `banded` / `muted` / `nodata` / `empty`), **`lensYardMapInkOn(rgb)` — the ONE luminance rule** — `lensYardMapLuminance`, `lensYardMapLines(key, loc, force?)` and the paper palette + `LENS_YARD_MAP_MIN_LOC_PT` / `_LINE_HEIGHT` / `_NODATA_PT` / `_INK_CROSSOVER`. It counts SLOTS and nothing else: no kilogram, no ₱, no age, no supplier, no lab reading. |
+| `lens/lens-yard-map-print.tsx` | **NEW (2026-09-22). THE YARD MAP PAGE** — `LensYardMapPage`, page TWO of the lens print. Every warehouse as a labelled block of square cells (column numbers along the top, row letters down the side, both small and muted), each occupied slot in the **SOLID** band hue from `LENS_RAMP_RGB` with the BLOCK LOC centred in the largest font the cell allows. Solves its one-page promise with the PLATFORM `fitCellGrid` / `fitMonoLabelPt` (`components/shared/print/print-fit.ts`) against `a4LandscapeBox(LENS_PRINT_MARGIN_MM)` — the sheet's own margin, exported so the `@page` rule and the arithmetic cannot disagree. Carries a one-line legend (every shown band, `other bands (not shown)` when isolated, `— no data (N)`, `empty slot`) and NAMES any occupied block whose code is not a slot on this layout. |
 | `lens/lens-summary-model.ts` | **NEW (2026-09-22). THE ONE BUCKETING behind the printed sheet** — `buildLensSummaryBuckets({ data, bandOf, figureOf, sortKeyOf, formatKg, formatBlocks, excludedFigure })` → `{ byBand: Map<band, LensSummaryWarehouse[]>, excludedRows }`, plus `LENS_SUMMARY_LAB_KEYS` / `_LABELS`, `lensSummaryLab(block)` (**the Excel Standard applied once — BD 3 dp, everything else 2 dp**) and `warehouseOfBlockLoc`. All three lenses call it, because three copies is how the price sheet and the age sheet would order warehouses two different ways. The warehouse order is `Object.keys(WAREHOUSES)` — the grid's own layout, never a second list — with a trailing `-` / `Other` group so a `block_loc` whose prefix is not a warehouse is still counted. **⚠️ IT HOLDS THE ONE SUM IN THE WHOLE LENS DIRECTORY**, the warehouse kilogram subtotal, and it is deliberately ABSENT from `verify-blocking-lens-ui.ts`'s no-sum list: the payload publishes no figure for "band 2's kilograms in warehouse C" at any grain, so that sum has nothing it could disagree with, and the fold is proven to tie back to the band's own published kilograms. **What is still absolutely forbidden and is NOT done: a weighted average.** A subtotal's lab cells stay blank, because a kg-weighted MC over a partition SQL never computed would be a second definition of a lab average living in TypeScript. |
 | `lens/supplier-lens-panel.tsx` | **NEW (2026-09-22). The SUPPLIER lens body + its `SUPPLIER_LENS` registration** — lens #3 on the frame, registered AFTER Age. Legend bar: the headline `17 suppliers · 23 mixed`, one shared chip per band (supplier display names, plus `Others (11)`), the shared ratio bar, the muted `No supplier — N` chip, Print, the kg\|blocks switch and the gear. Settings popover: the yard's supplier count and mixed-block count, ONE line saying which figure the tint uses and which the bar uses, the detailed band rows (`N blocks dominant · X kg apportioned · M mixed`), and a **Top suppliers** number input (1…12, default 6) with Apply and Reset. **`canShow: () => true`** — no ₱ anywhere in the payload, so Production sees it. **IT COMPUTES NO STATISTIC**: no `reduce`, no `+=`, no division by a total, and it never `===`-tests the apportioned fold (the contract records a −1.9e-9 kg residue through JSON). Exports **`SupplierLensAdapter`**, the one-method port onto `fetchBlockingSupplierLens`, defaulted to the live action and injectable only for the gated dev fixture. |
 | `lens/supplier-lens-settings.ts` | **NEW (2026-09-22). Pure settings arithmetic** — `SupplierLensSettings` (**`topN` + `unit`, and nothing else**), `DEFAULT_SUPPLIER_LENS_SETTINGS` (`{ topN: 6, unit: 'kg' }`), `parseSupplierLensSettings` (**untrusted, FIELD BY FIELD** — an out-of-range, fractional or non-finite `topN` falls back rather than being clamped, because a clamp silently answers a question nobody asked), `serializeSupplierLensSettings` (**defaults OMITTED**), `normalizeTopN` / `setTopN` / `parseTopNInput` (both ends refused with a sentence, never a throw), `supplierBandLabel` (**the supplier's own `display`; `Others (11)` is the UI's word — the payload carries `key: null` / `display: null` on the fold and does not name it**), `supplierBandRampStop` / `supplierBandRampClass`, `SUPPLIER_LENS_RAMP` (`'category'`) and `SUPPLIER_LENS_MIXED_CLASS`. **THERE ARE NO BAND NAMES, and that is deliberate**: a supplier band already has a name, and renaming it would let the legend disagree with the yard about whose charcoal it is. |
@@ -918,11 +920,97 @@ kilograms in warehouse C" at any grain, so that sum has nothing it could disagre
 is proven to tie back to the band's own published kilograms by a real run of the bucketing over a
 synthetic grid, and a weighted average remains flatly banned.
 
-**Paging.** Page one is the title, the settings line, the band table and the ratio bar; then one
-page per band (`.lens-print-band { break-before: page }`), and one more for the excluded
-population when there is one. A warehouse group is one `<tbody>` with `break-inside: avoid` while
-it is small (≤ 6 rows) and its heading row carries `break-after: avoid`, so a big group may split
-without stranding its title. No `<tfoot>` anywhere, landscape A4 at 10mm, 7pt floor.
+**Paging.** Page one is the title, the settings line, the band table and the ratio bar; **page
+two is the YARD MAP** (below); then one page per band (`.lens-print-band { break-before: page }`),
+and one more for the excluded population when there is one. A warehouse group is one `<tbody>`
+with `break-inside: avoid` while it is small (≤ 6 rows) and its heading row carries
+`break-after: avoid`, so a big group may split without stranding its title. No `<tfoot>`
+anywhere, landscape A4 at 10mm, 7pt floor.
+
+#### THE YARD MAP PAGE — ADDED 2026-09-22
+
+Renzo, looking at the blank lower half of page one: *“within this page or maybe the next page,
+I'd like to see the actual block arrangement in our app to be printed in SOLID colors. This is
+purely for location reference, so make the block loc (C-19A, etc.) right in the middle and in BIG
+font so it can be fully seen in the print. Make sure it shows ALL blocks in one landscape page.”*
+
+It is on **ALL THREE lenses**, built by `lens/lens-yard-map-model.ts` and drawn by
+`lens/lens-yard-map-print.tsx` — see both in Files.
+
+**IT IS PAGE TWO, AND THAT WAS MEASURED RATHER THAN PREFERRED.** He offered page one *or* the
+next page. Page one's band table is **data-sized** — two bands on a default price lens, up to
+seven, up to thirteen on the supplier lens — so a map sharing it would be legible or not
+depending on how many cut lines the reader had added. Measured on A4 landscape at a 10mm margin
+(718.11 px of printable height): sharing page one leaves ≈518 px once a four-band table and the
+bar are in, which solves to a **35.8 px cell at 8.2 pt** with the standard warehouses alone and a
+**26.4 px cell at 5.8 pt** once PCA/PCB are in — below the print kit's 7 pt floor. On its own
+page the same solve gives **51.53 px (13.64 mm) at 11 pt** and **39.14 px (10.36 mm) at 10 pt**.
+`.lens-print-yardmap` carries `break-before: page` **and `break-inside: avoid`**, so “all blocks
+in one landscape page” is structurally true, not merely usually true.
+
+**THE GEOMETRY IS THE GRID'S OWN, AND THERE IS NO SECOND COPY OF IT.** Sections come from
+`../constants`'s `WAREHOUSES` and each slot key is built the way `blocking-grid.tsx` builds it
+(`<whse>-<col><row>`); a literal `220` / `238` appears nowhere in either file and the verify
+script asserts it. **PCA/PCB are opt-in INDEPENDENTLY**, exactly as their two filter chips are on
+screen: each is drawn iff the grid payload holds a block in it. They **share ONE lane** (side by
+side) rather than taking a lane each — three columns wide, a lane apiece spends two full rows of
+the height budget on 18 slots and shrinks every other cell on the page from 51.5 px to 28 px.
+
+**FOUR CELL KINDS, AND “GREY” IS TWO OF THEM.**
+
+| Kind | When | How it prints |
+|---|---|---|
+| `banded` | occupied, in a band the sheet is SHOWING | the band's hue at **FULL opacity** from `LENS_RAMP_RGB` — not the grid's 22% wash — with the loc centred in bold |
+| `muted` | occupied, in a band the reader ISOLATED OUT | light neutral grey. The map matches the tables' *“Showing 2 of 4 bands”*; a map that painted the hidden bands would describe a different filter |
+| `nodata` | occupied, in NO band (unpriced / undated / unattributed) | the same grey **plus a small `—`**, because *“we don't know”* and *“not selected”* are different answers. Painting it as the cheapest/newest band is the L-008 mistake again |
+| `empty` | no block in the slot | white with a hairline and the loc in small muted text — location reference matters for the empty slots too |
+
+A **MIXED** block (supplier lens only, from the view's carried `isMixed` column) keeps its dashed
+**inset** outline. On the grid `.lens-cat-mixed` dashes in `var(--lens-hue)` over a 22% wash of
+that hue; over a SOLID fill of it the dash would be invisible, so on paper it takes the ink.
+
+**⚠️ THE LUMINANCE RULE IS WRITTEN ONCE, IN `lensYardMapInkOn`.** A solid fill spans emerald to
+deep fuchsia, so a hardcoded text colour is illegible on about half the ramp. The threshold is
+not a taste value: **`sqrt(1.05 × 0.05) − 0.05 ≈ 0.1791`** is the luminance at which white-on-fill
+and black-on-fill have the SAME WCAG contrast ratio, so taking the side with more contrast is
+optimal by construction. Above it near-black (emerald 0.411, yellow 0.498, sky 0.492, teal 0.372,
+zinc 0.360, orange 0.324, pink 0.248, red 0.229); below it white (rose 0.173, fuchsia 0.173, blue
+0.153, violet 0.134, indigo 0.117, deep fuchsia 0.116). The verify script proves the chosen ink
+wins on contrast for **every hue all three ramps declare**.
+
+**THE FIT IS THE PLATFORM SOLVER, AND WRAPPING BEATS SHRINKING.** `fitCellGrid` solves ONE square
+cell edge against both budgets (`min(width ÷ (20 cols + gutter), height ÷ (cell rows + lane
+chrome))`) and the smaller wins. A label that still does not fit has two outcomes, and the page
+takes the better one: **below `LENS_YARD_MAP_MIN_LOC_PT` (9 pt) every loc is WRAPPED at its
+hyphen instead of shrunk** — measured, the PCA/PCB shape solves to 8.5 pt on one line and **10 pt
+on two**, so the wrap makes the loc bigger. A multi-letter warehouse (`PCA-15A`, seven characters)
+always wraps. **Nothing is ever truncated** — the owner's requirement is that the loc “can be
+fully seen”. The height budget subtracts the `nodata` dash, so the one cell carrying a warning
+cannot clip it.
+
+**The mono advance is 0.65, not RC Movement's 0.6, and the difference was a real bug.** A map
+cell's loc is `font-bold` and the bold face is wider: measured in a browser over a 100-character
+run of `A-10A`, regular **0.6039**, bold **0.6298**. Budgeted at 0.6 the five-character locs
+(`A-10A`, `B-10A`, `D-10A`) overflowed and the browser wrapped them mid-code — visible in the
+first PDF this page produced.
+
+**IT CARRIES A LOCATION AND NOTHING ELSE.** No batch code, no balance, no ₱, no age, no supplier
+name, no lab reading; *“purely for location reference”* is the whole specification, and it is also
+what leaves the cells big enough to read. Every figure about a band still lives on page one and in
+the per-band tables. Because there is no money on it, the map needs no price consideration of its
+own — the price lens's whole Print button is already behind the effective price flag, and Age and
+Supplier carry no ₱ at all.
+
+**Two things it cannot draw, and says so rather than hiding:** an occupied block whose `block_loc`
+is not a slot on this layout is NAMED under the map (the trailing `Other` warehouse group's
+discipline), and a fit that ever failed would print a sentence instead of a cropped yard.
+
+**Measured on REAL PDFs** (headless Chromium driving the real Print button on
+`/dev/table-playground/supplierlens`, `pdfinfo` + a 300 dpi rasterisation of page 2), 12 cases =
+3 lenses × PCA/PCB absent|present × isolation off|on: the map is **exactly one page in all 12**,
+220 slots drawn standard / 238 with PCA/PCB, cell **51.53 px (13.64 mm) at 11 pt** and **39.14 px
+(10.36 mm) at 10 pt**, zero console errors, and page 3 is the first band's table in every case.
+The rig's `?pca=1` is what makes the worst case reachable.
 
 ### Price lens — DATA LAYER (2026-09-19, migration `20260919025729_blocking_price_lens`)
 
@@ -1885,9 +1973,12 @@ two hues for band identity would collide.
 
 > **SHIPPED**, as lens **#3** on the frame the price lens built and the age lens proved
 > extensible. The data layer is the section immediately above and is unchanged. Proofs:
-> `npx tsx scripts/verify-blocking-lens-ui.ts` (**167 assertions**, up from 149) beside
+> `npx tsx scripts/verify-blocking-lens-ui.ts` (**186 assertions** — 167 on 2026-09-22, plus
+> 19 for the YARD MAP page the same day) beside
 > `npx tsx scripts/verify-blocking-supplier-lens.ts` (the live data layer, 48). Look rig:
-> `/dev/table-playground/supplierlens`.
+> `/dev/table-playground/supplierlens` — `?top=`, `?unattributed=1`, `?prices=0`, and
+> **`?pca=1`** (stock in PCA/PCB, which is what makes the printed yard map's worst-case
+> geometry reachable).
 
 **What it answers.** "Whose charcoal is in my yard." Every occupied block is tinted by the
 supplier that holds the MOST of it, with a ratio of the yard per supplier, cut at the top
@@ -2232,7 +2323,7 @@ columns.
 - **THE LENS LEGEND BAR replaced the docked sidebar (2026-09-21)** — the lens is now the strip's second sticky row: lens switch · headline · one CHIP per band (the isolate toggles) · a thin ratio bar · the unpriced/undated chip · a Problem chip on a refusal or stall · kg\|blocks · **Settings** (gear) · Clear · close, on ONE line that scrolls rather than wraps. The detail — market basis, the band rows with their counts and averages, Customize, the refusal banner — lives in the Settings POPOVER, which floats over the grid only while open. **The grid is full width again**
 - **The blend modal's SUPPLIER · OPENED · LAST PILED columns (2026-09-21)** — after BATCH: a GREEN pill when `isSingleSupplier === true`, ORANGE with the dominant supplier + share when `false`, a plain em dash when `null`; then the two ages as `38 d`, dates on the `title`, NULL never 0. Keyed by `batch_id` (a block address is reused), and a SAVED version asks about the Asia/Manila date of its own version and says so. No ₱ — every role sees them. The print is A4 LANDSCAPE and keeps the pill colours
 - **THE ANALYSIS PAGES in the blend dialog (2026-09-21)** — an **Analysis** button in the header opens **Include pages** (Price groups · Quality · Age, all three ON by default, remembered per user under `blocking_blend_analysis`); the chosen pages render as sections below the blocks table AND as separate sheets in the printout and the PDF, with the Print button showing `+N`. Groups read HIGH → LOW on every table, each with a SUBTOTAL row and one grand FOOTER taken from the payload's own `overall` — **nothing is summed, averaged or shared out in TypeScript**. The price page is dropped for any reader without the EFFECTIVE price flag, and the payload they receive has no `price` section at all. An unmeasured or undated block sits in a muted "no reading" group with an em dash, never in the cheapest, cleanest or freshest group
-- **THE LENS SUMMARY PRINT (2026-09-21, REDESIGNED 2026-09-22)** — a **Print** button on the Highlight legend bar prints the active lens as configured. Page one: the title (**exactly `Price lens` / `Age lens` / `Supplier lens`, no blurb**), ONE terse settings line, the band table (its total labelled **`avg of priced`** / `avg of dated`) and the ratio bar. Then **one page per band**, each carrying a full-width table **grouped by WAREHOUSE** with the seven lab readings (`MC · ASH · BD ASTM · BD JIS · GRIT · VM · FC`) read off the grid payload, a warehouse subtotal of blocks + kg whose **lab cells are deliberately BLANK** (never a TypeScript weighted average), and a band total from the payload. **Band isolation is respected and stated** ("Showing 2 of 4 bands"). Absent on Price for a reader without the effective price flag; present for every role on Age and Supplier
+- **THE LENS SUMMARY PRINT (2026-09-21, REDESIGNED 2026-09-22)** — a **Print** button on the Highlight legend bar prints the active lens as configured. Page one: the title (**exactly `Price lens` / `Age lens` / `Supplier lens`, no blurb**), ONE terse settings line, the band table (its total labelled **`avg of priced`** / `avg of dated`) and the ratio bar. **Page two is the YARD MAP** — all 220 slots (238 with PCA/PCB), every occupied block in the SOLID band colour with its `block_loc` centred in the biggest font the cell allows, isolated-out and un-lensed blocks in neutral grey (the latter with a `—`), empty slots white, on ONE landscape sheet. Then **one page per band**, each carrying a full-width table **grouped by WAREHOUSE** with the seven lab readings (`MC · ASH · BD ASTM · BD JIS · GRIT · VM · FC`) read off the grid payload, a warehouse subtotal of blocks + kg whose **lab cells are deliberately BLANK** (never a TypeScript weighted average), and a band total from the payload. **Band isolation is respected and stated** ("Showing 2 of 4 bands"). Absent on Price for a reader without the effective price flag; present for every role on Age and Supplier
 - **Warehouse filter chips** — ALL/WHSE A/B/C/D toggle buttons in global header. Individual chips toggle on/off. If all deselected, auto-reverts to ALL. Global stats recalculate for visible warehouses only
 - **Weighted average stats** — Each warehouse header shows all 7 lab result weighted averages (weighted by balance): MC, ASH, BD ASTM, BD JIS, GRIT, VM, FC. Also shows weighted PHP/KG (gated via the EFFECTIVE `canViewPrices` = server gate AND the `showPrices` toggle)
 - **Prices visibility toggle** — Eye/EyeOff "Prices" button in the top-right controls (default ON). Hide-only presenter/privacy switch — see **Role-Gating → Price-Visibility Toggle**. Hides ALL ₱ across Blocking (cells, detail panel, blend modal, and every print/PDF export) when OFF; the effective flag is always `serverCanViewPrices && showPrices`; persisted to `localStorage` `blocking_show_prices`; the control is hidden entirely for server-gated no-price users

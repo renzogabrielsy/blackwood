@@ -87,6 +87,7 @@ import {
   type LensSummaryPrintModel,
 } from './lens-summary-print';
 import { buildLensSummaryBuckets } from './lens-summary-model';
+import { buildLensYardMap } from './lens-yard-map-model';
 import {
   formatLensBlocks,
   formatLensKg,
@@ -397,6 +398,16 @@ export function SupplierLensPanel({
       excludedFigure: LENS_EMDASH,
     });
 
+    // THE YARD MAP page — the SAME `bandOf` lookup the buckets above use, so the map and
+    // the per-band tables can never place a block in two different bands. This is the one
+    // lens that can answer `isMixed`, and it reads the VIEW's carried ALL/SOME column
+    // rather than a list length, exactly as the grid classifier does.
+    const yardMap = buildLensYardMap({
+      data,
+      bandOf: (loc) => lens.bandByBlock[loc],
+      isMixed: (loc) => lens.blockByLoc[loc]?.isMixed === true,
+    });
+
     const visible = lens.bands.filter((b) => picked.size === 0 || picked.has(b.index));
 
     return {
@@ -429,6 +440,7 @@ export function SupplierLensPanel({
         figure: `${lens.total.supplierCount} suppliers`,
         figureNote: '',
       },
+      yardMap,
       excluded:
         lens.unattributed.blockCount > 0
           ? {

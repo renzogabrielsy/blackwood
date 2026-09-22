@@ -96,6 +96,7 @@ import {
   type LensSummaryPrintModel,
 } from './lens-summary-print';
 import { buildLensSummaryBuckets } from './lens-summary-model';
+import { buildLensYardMap } from './lens-yard-map-model';
 import { priceBasisNoun } from '../../_shared/blend-analysis-text';
 import {
   formatLensBlocks,
@@ -605,6 +606,11 @@ export function PriceLensPanel({
       excludedFigure: EMDASH,
     });
 
+    // THE YARD MAP page — the SAME `bandOf` lookup the buckets above use, so the map and
+    // the per-band tables can never place a block in two different bands. It reads no
+    // price: a cell carries its `block_loc` and a solid band fill, nothing more.
+    const yardMap = buildLensYardMap({ data, bandOf: (loc) => lens.bandByBlock[loc] });
+
     const visible = lens.bands.filter((b) => picked.size === 0 || picked.has(b.index));
 
     return {
@@ -645,6 +651,7 @@ export function PriceLensPanel({
         // block, the price covers the PRICED ones.
         figureNote: 'avg of priced',
       },
+      yardMap,
       excluded:
         lens.unpriced.blockCount > 0
           ? {

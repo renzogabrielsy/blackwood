@@ -11,7 +11,9 @@ labels say) is decided by the caller and handed in as numbers.
 
 Two reports use it today — `/analytics` (where `printCard` and `GroupPrintStage` were
 born) and `/operations` — and RC Movement's printed matrix (2026-09-17) is the third, which
-is what pulled the *geometry* half out into `print-fit.ts`.
+is what pulled the *geometry* half out into `print-fit.ts`. The Blocking **lens summary**
+is the fourth (2026-09-21), and its **yard map page** (2026-09-22) is what added
+`fitCellGrid` / `fitMonoLabelPt` to that module.
 
 ## Files
 
@@ -20,7 +22,7 @@ is what pulled the *geometry* half out into `print-fit.ts`.
 | `print-card.ts` | ~79 | **The MECHANISM.** `printCard(el)` marks the element `data-print-card`, tags every ancestor up to `<body>` `data-print-ancestor`, adds `bw-printing` to `<body>`, calls `window.print()`, and takes all three marks off again on `afterprint` (with a 1s fallback, because not every engine fires `afterprint` on a dismissed dialog). The print rules in `globals.css` key off exactly those attributes. Moved here from `app/(app)/analytics/` on 2026-09-16; the analytics path is a one-line re-export. |
 | `group-print.tsx` | ~157 | **The OFFSTAGE STAGE.** `GroupPrintStage` renders a real, laid-out, 1040px column parked in a zero-sized clipped box (`.bw-print-stage`), waits `LAYOUT_SETTLE_MS` (400ms) for layout to settle, then calls `printCard` on it and unmounts on `afterprint` (2s fallback). `GroupPrintPage` is the per-sheet wrapper that carries the page break. `showHeader` (default true) draws the report's own title block; `/operations` and RC Movement pass FALSE because each of their pages carries its own heading. |
 | `print-page-rules.ts` | 93 | **The `@page` BLOCK, injected for the duration of one print.** `buildPrintPageRules({scopeAttr, marginMm, extraCss})` returns the rules as a STRING; `usePrintPageRules(css \| null)` mounts them while non-null and removes them on cleanup. Added 2026-09-17 for RC Movement. |
-| `print-fit.ts` | 234 | **PAPER GEOMETRY** — the arithmetic behind a "this fits on one sheet" promise. Pure: **zero imports**, no React, not even `'use client'`. Added 2026-09-17 for RC Movement. |
+| `print-fit.ts` | ~400 | **PAPER GEOMETRY** — the arithmetic behind a "this fits on one sheet" promise. Pure: **zero imports**, no React, not even `'use client'`. Added 2026-09-17 for RC Movement; gained the SQUARE-CELL solve (`fitCellGrid`, `fitMonoLabelPt`) on 2026-09-22 for the Blocking lens print's yard map. |
 
 ## Data
 
@@ -35,6 +37,9 @@ is what pulled the *geometry* half out into `print-fit.ts`.
 | `fitColumnWidths({columns, availablePx, ladder, padPx, advanceEm}) → PrintWidthFit` | **THE HORIZONTAL SOLVE** — the largest font step on a DESCENDING ladder at which every column fits. Returns `fits: false` at the floor when nothing does, so the caller can paginate instead of shrinking below legibility. |
 | `maxRepeatingColumns({fixed, unit, …}) → number` | How many REPEATING columns fit beside a fixed spine at a given font. Returns at least 1 (0 would make a caller loop forever). |
 | `fitRowHeight({budgetPx, rowCount, minRowH, maxRowH, chromePx, ladder}) → PrintRowFit` | **THE VERTICAL SOLVE** — row height as a function of the ROW COUNT, clamped, with the font stepping down beside it. Also returns `lineH`, because a `<tr>` height is only a FLOOR in the table model: the only way to pin a row is to pin its content. |
+| `fitMonoLabelPt({widthPx, chars, advanceEm, ladder, maxPt?})` | The largest ladder step at which `chars` glyphs fit in `widthPx`, also respecting the caller's own `maxPt` (a height budget, a house ceiling). **Exported separately** because a caller may legitimately ask twice for ONE layout — the yard map re-asks with a shorter label once it decides to wrap — and two spellings of "which step fits" is how a page lays out at one size and claims another. `fitCellGrid` uses it internally. |
+| `PrintCellGridSection` | One section of a cell grid: `{key, cols, rows, lane}`. Sections sharing a **lane** are drawn SIDE BY SIDE and pay one lane's chrome and one lane's height. |
+| `fitCellGrid({sections, box, reservedHeightPx, gutterPx, laneChromePx, laneGapPx, sectionGapPx, cellChromePx, minCellPx, maxCellPx, labelChars, advanceEm, fontLadderPt}) → PrintCellGridFit` | **THE SQUARE-CELL SOLVE** (2026-09-22) — a set of equal square cells, each carrying one short label, that must land on ONE sheet. Solves the edge against BOTH budgets and takes the smaller, so the cells stay square and neither dimension overflows. Returns `cellPx`, `fontPt`, `fits`, `laneCount`, `cellRowCount`, `widestLaneCols`, `totalWidthPx`, `totalHeightPx`, `labelBoxPx` and `boundBy` (`'width' \| 'height'`). **The width budget is decided by the TIGHTEST lane, not the widest column count** — a lane of many narrow sections pays more gutters and can bind before a lane of one wide one. |
 | `splitEvenly(items, maxPerChunk)` | BALANCED chunking — 25 at 20 per page is `13 + 12`, never `20 + 5`. |
 
 ## Key Behaviors
@@ -44,6 +49,23 @@ width of one glyph of the caller's monospace face as a fraction of the font size
 no font engine**, so it cannot be derived here — it is measured in a real browser by the
 caller and passed in. For the app's mono stack it is **0.6120**, carried by RC Movement as
 **0.62, rounded UP**: a width derived from an under-estimate is a clipped number.
+
+> ⚠️ **AND IT IS PER WEIGHT, NOT PER FAMILY.** Measured in a real browser on the Blocking
+> page over a 100-character run: regular **0.6039**, **bold 0.6298**. The yard map's cells
+> are `font-bold`, and budgeted at RC Movement's regular-face figure its five-character
+> labels overflowed and the browser silently wrapped them mid-code — visible in the very
+> first PDF that page produced. It now passes **0.65**. A caller whose text is bold must
+> measure the BOLD face.
+
+**A square-cell grid solves the SAME way, one dimension further.** `fitCellGrid` exists
+because the number of SECTIONS and the number of cell ROWS are both data (a yard map may or
+may not include its optional areas), so a hardcoded cell size is the constant-row-height bug
+in a second costume. Two things generalise from its first caller: **lanes** are what make a
+narrow section cheap (two three-column sections stacked below twenty-column ones spend two
+full rows of the height budget on a handful of cells and shrink every other cell from
+51.5 px to 28 px — measured), and when a label does not fit, **wrapping beats shrinking**:
+on A4 landscape at 10 mm with the optional areas in, one line solves to 8.5 pt and two lines
+to 10 pt.
 
 **Row height is a FUNCTION of the row count, and every row that will be drawn at the body
 font belongs in the divisor.** `/operations` learned this the hard way — a row height

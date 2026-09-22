@@ -163,6 +163,26 @@ export function categoryStop(index: number, isOthers: boolean): number {
   return Math.max(0, Math.min(LENS_CATEGORY_NEUTRAL_STOP - 1, index));
 }
 
+/**
+ * THE ONE RULE FOR "WHICH STOP DOES THIS BAND WEAR" — position, unless the lens said.
+ *
+ * Every shared presentational piece faces the same two-case question: an ORDINAL lens
+ * leaves `rampStop` undefined and gets a position across the gradient, a NOMINAL one
+ * states its own slot. The printed band table, the printed band headings and the printed
+ * YARD MAP all need it, and two of them need a CLASS while the third needs an `r g b`
+ * TRIPLE — so the case analysis lives here, once, and each caller pairs it with
+ * `rampClassAtStop` or `rampRgbAtStop`. Written out per caller it is exactly the kind of
+ * two-line duplicate that lets a swatch and a map cell disagree about one band's colour.
+ */
+export function resolveBandRampStop(
+  ramp: LensRampId,
+  index: number,
+  bandCount: number,
+  ownStop?: number,
+): number {
+  return ownStop === undefined ? rampStop(index, bandCount, ramp) : ownStop;
+}
+
 /** The class name for that stop on that ramp. */
 export function rampClass(ramp: LensRampId, index: number, bandCount: number): string {
   return rampClassAtStop(ramp, rampStop(index, bandCount, ramp));

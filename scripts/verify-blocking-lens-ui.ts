@@ -101,7 +101,49 @@ import {
   categoryStop,
   rampClass,
   rampClassAtStop,
+  rampStop,
+  resolveBandRampStop,
 } from '../app/(app)/inventory/blocking/lens/lens-ramp';
+import { WAREHOUSES } from '../app/(app)/inventory/blocking/constants';
+import type { BlockData } from '../app/(app)/inventory/blocking/types';
+import {
+  LENS_YARD_MAP_INK_CROSSOVER,
+  LENS_YARD_MAP_MIN_LOC_PT,
+  buildLensYardMap,
+  lensYardMapInkOn,
+  lensYardMapLines,
+  lensYardMapLuminance,
+  lensYardMapPaint,
+} from '../app/(app)/inventory/blocking/lens/lens-yard-map-model';
+import {
+  a4LandscapeBox,
+  fitCellGrid,
+  fitMonoLabelPt,
+  PX_PER_PT,
+} from '../components/shared/print/print-fit';
+
+/**
+ * One occupied slot, with every figure at a value the YARD MAP must never read.
+ *
+ * The map draws a `block_loc` and a fill; if a future edit reached for a kilogram or a
+ * price, these zeros would not catch it — the assertion that does is the source scan
+ * below. This exists only so `buildLensYardMap` has a real `BlockData` to place.
+ */
+const BLOCK_STUB: BlockData = {
+  batch_code: 'SEPT-26-BLK1',
+  batch_id: 'stub',
+  status: 'STORED',
+  balance: 0,
+  total_in: 0,
+  php: null,
+  bd_astm: 0,
+  bd_jis: 0,
+  ash: 0,
+  mc: 0,
+  grit: 0,
+  vm: 0,
+  fc: 0,
+};
 import {
   DEFAULT_SUPPLIER_LENS_SETTINGS,
   isDefaultSupplierLensSettings,
@@ -152,10 +194,19 @@ const BAR = `${LENS_DIR}/lens-ratio-bar.tsx`;
 const CUSTOMIZE = `${LENS_DIR}/lens-customize.tsx`;
 const BANNER = `${LENS_DIR}/lens-refusal-banner.tsx`;
 /** Every lens file, for the rules that must hold across ALL of them. */
+/** The YARD MAP page (2026-09-22) — its model and its sheet. */
+const YARD_MAP_MODEL = `${LENS_DIR}/lens-yard-map-model.ts`;
+const YARD_MAP_PRINT = `${LENS_DIR}/lens-yard-map-print.tsx`;
+/** The PLATFORM fit module both the map and RC Movement solve against. */
+const PRINT_FIT = 'components/shared/print/print-fit.ts';
 const ALL_LENS_FILES = [
   PANEL, AGE_PANEL, SUPPLIER_PANEL, SETTINGS, AGE_SETTINGS, SUPPLIER_SETTINGS,
   FRAME, TYPES, STORE, REGISTRY,
   RAMP, SHARED, ROWS, BAR, CUSTOMIZE, BANNER,
+  // The yard map carries NO kilogram, NO ₱, NO age and NO supplier figure — it draws a
+  // loc and a fill — so it belongs under the no-maths rule rather than beside
+  // `lens-summary-model.ts`'s one stated exception.
+  YARD_MAP_MODEL, YARD_MAP_PRINT,
 ];
 const CONTEXT = 'app/(app)/inventory/blocking/CONTEXT.md';
 
@@ -2266,6 +2317,347 @@ console.log('\n11. THE SUPPLIER LENS (2026-09-22)');
     for (const f of ['createClient', '@/lib/supabase', 'getUserRole', 'canViewPrices()']) {
       assert.ok(!body.includes(f), `the fixture reaches for ${f}`);
     }
+  });
+}
+
+// ===========================================================================
+console.log('\n12. THE YARD MAP PAGE (2026-09-22)');
+// ===========================================================================
+//
+// The owner: *"I'd like to see the actual block arrangement in our app to be printed in
+// SOLID colors… make the block loc (C-19A, etc.) right in the middle and in BIG font…
+// show ALL blocks in one landscape page."*
+//
+// Node has no renderer and no font engine, so what it CAN prove is everything except how
+// the paper looks: that the page exists for all three lenses, that the geometry is the
+// grid's own rather than a literal, that a band's fill is the ramp's own triple, that the
+// ink rule exists exactly once and picks the more legible side, that the fit is the
+// PLATFORM solver rather than a private copy, and that nothing on the map does arithmetic
+// on a kilogram. The look itself is proven by a REAL headless-Chrome PDF over the
+// `/dev/table-playground/supplierlens` rig (see `blocking/CONTEXT.md` for the measured
+// cell edge, the font and the page counts).
+{
+  const model = code(YARD_MAP_MODEL);
+  const sheet = code(YARD_MAP_PRINT);
+  const summary = code(`${LENS_DIR}/lens-summary-print.tsx`);
+  const PRINT_PANELS = [PANEL, AGE_PANEL, SUPPLIER_PANEL];
+
+  check('ALL THREE lenses carry the map, built from the SAME `bandOf` as their tables', () => {
+    for (const panel of PRINT_PANELS) {
+      const body = code(panel);
+      assert.ok(/buildLensYardMap\(\{/.test(body), `${panel} builds no yard map`);
+      assert.ok(/yardMap,/.test(body), `${panel} does not put the map in its print model`);
+      // THE one-lookup rule: the map and the per-band tables must bucket identically, or
+      // a block could be in one band on the map and another in the table beneath it.
+      const buckets = /bandOf: \(loc\) => lens\.bandByBlock\[loc\]/g;
+      assert.ok(
+        (body.match(buckets) ?? []).length >= 2,
+        `${panel} does not hand the map the same bandOf its buckets use`,
+      );
+    }
+    assert.ok(/yardMap: LensYardMap;/.test(summary), 'the print model has no yard map');
+    assert.ok(/<LensYardMapPage/.test(summary), 'the sheet never renders the map page');
+  });
+
+  check('the map takes its OWN page and cannot spill onto a second one', () => {
+    const rules = summary.slice(summary.indexOf('LENS_SUMMARY_PRINT_RULES'));
+    assert.ok(/lens-print-yardmap \{[\s\S]{0,200}break-before: page/.test(rules), 'the map does not start a page');
+    assert.ok(/lens-print-yardmap \{[\s\S]{0,200}break-inside: avoid/.test(rules), 'the map may split across sheets');
+    assert.ok(
+      /page-break-inside: avoid/.test(rules),
+      'the map has no legacy break-inside fallback',
+    );
+    assert.ok(/className="lens-print-yardmap"/.test(sheet), 'the page does not wear the scoped class');
+  });
+
+  // ── The GEOMETRY is the grid's, not a literal ─────────────────────────────
+  check('the map reads `WAREHOUSES` and states NO slot count of its own', () => {
+    assert.ok(/from '\.\.\/constants'/.test(model), 'the map does not read the grid geometry');
+    for (const [rel, body] of [[YARD_MAP_MODEL, model], [YARD_MAP_PRINT, sheet]] as const) {
+      assert.ok(
+        !/\b(220|238|240|18)\b/.test(body.replace(/\d+px|\d+pt|\d+mm/g, ' ')),
+        `${rel} hardcodes a slot count — the geometry has exactly one declaration`,
+      );
+    }
+    // And the slot key is built the way `blocking-grid.tsx` builds it.
+    assert.ok(/\$\{key\}-\$\{col\}\$\{row\}/.test(model), 'the map invents its own block_loc format');
+    assert.ok(
+      /`\$\{whseKey\}-\$\{col\}\$\{row\}`/.test(code(GRID)),
+      'the grid changed how it spells a block_loc — the map now disagrees with it',
+    );
+  });
+
+  check('EVERY slot is drawn, counted from the constants — and the count is the geometry', () => {
+    const expected = Object.values(WAREHOUSES).reduce(
+      (a, w) => a + w.cols * w.rows.length,
+      0,
+    );
+    const standard = Object.entries(WAREHOUSES)
+      .filter(([k]) => k.length === 1)
+      .reduce((a, [, w]) => a + w.cols * w.rows.length, 0);
+    const empty = buildLensYardMap({ data: {}, bandOf: () => undefined });
+    assert.equal(empty.slotCount, standard, 'an empty yard does not draw every standard slot');
+    assert.equal(empty.occupiedCount, 0);
+    // PCA/PCB are OPT-IN **INDEPENDENTLY**, the way the grid's two filter chips are:
+    // absent with no stock, present with it, and one does not drag the other in.
+    assert.ok(!empty.sections.some((s) => s.key.length > 1), 'PCA/PCB drawn with no stock in them');
+    const onlyPca = buildLensYardMap({ data: { 'PCA-15A': BLOCK_STUB }, bandOf: () => undefined });
+    assert.ok(onlyPca.sections.some((s) => s.key === 'PCA'), 'PCA absent although the yard has stock in it');
+    assert.ok(
+      !onlyPca.sections.some((s) => s.key === 'PCB'),
+      'an empty PCB was drawn because PCA had stock — the two are separate chips on the grid',
+    );
+    const both = buildLensYardMap({
+      data: { 'PCA-15A': BLOCK_STUB, 'PCB-17C': BLOCK_STUB },
+      bandOf: () => undefined,
+    });
+    assert.equal(both.slotCount, expected, 'the opt-in sections are not the rest of the geometry');
+    // They share ONE lane. A lane each shrinks every other cell on the page.
+    const lanes = new Set(both.sections.filter((s) => s.key.length > 1).map((s) => s.lane));
+    assert.equal(lanes.size, 1, 'PCA and PCB took a lane each — every other cell shrinks');
+  });
+
+  check('a block that is NOT a slot on this layout is NAMED, never silently dropped', () => {
+    const m = buildLensYardMap({
+      data: { 'A-1A': BLOCK_STUB, 'FEEDING # 2': BLOCK_STUB, 'ZZ-99Z': BLOCK_STUB },
+      bandOf: () => 0,
+    });
+    assert.deepEqual([...m.offMapLocs], ['FEEDING # 2', 'ZZ-99Z']);
+    assert.equal(m.occupiedCount, 1, 'an off-map block was counted as occupying a slot');
+    assert.ok(/offMapLocs\.length > 0/.test(sheet), 'the sheet never says it could not place a block');
+  });
+
+  // ── The FILL is the ramp's own triple ─────────────────────────────────────
+  check('a banded cell wears the RAMP\'s solid triple — never a class, never a literal', () => {
+    for (const ramp of ['cost', 'age', 'category'] as const) {
+      const stops = LENS_RAMP_RGB[ramp];
+      for (let stop = 0; stop < stops.length; stop += 1) {
+        const paint = lensYardMapPaint(
+          { loc: 'A-1A', lines: ['A-1A'], occupied: true, band: 3, mixed: false },
+          ramp,
+          new Map([[3, stop]]),
+        );
+        assert.equal(paint.kind, 'banded');
+        assert.equal(paint.bg, `rgb(${stops[stop]})`, `${ramp} stop ${stop} is not the ramp's own hue`);
+      }
+    }
+    // The class prefixes must not appear: on paper the fill is SOLID, and `.lens-band-3`
+    // is a 22% wash that the print stage would render as a pale tint.
+    assert.ok(!/lens-band-|lens-age-|lens-cat-/.test(model), 'the map model spells a ramp class');
+    assert.ok(!/lens-band-|lens-age-|lens-cat-/.test(sheet), 'the map sheet spells a ramp class');
+    assert.ok(/rampRgbAtStop/.test(model), 'the map does not read the ramp triples');
+  });
+
+  check('⚠️ THE LUMINANCE RULE EXISTS EXACTLY ONCE, and picks the MORE legible ink', () => {
+    // One definition, in the model. The sheet must not compute a second one.
+    assert.equal((model.match(/function lensYardMapInkOn/g) ?? []).length, 1);
+    assert.ok(!/0\.2126|0\.7152|0\.0722/.test(sheet), 'the sheet computes its own luminance');
+    assert.ok(
+      !/#ffffff|#18181b/.test(sheet.replace(/LENS_YARD_MAP_[A-Z_]+/g, ' ')),
+      'the sheet hardcodes an ink colour instead of reading the rule',
+    );
+    // The crossover is the contrast-parity point, not a taste value.
+    assert.ok(
+      Math.abs(LENS_YARD_MAP_INK_CROSSOVER - (Math.sqrt(1.05 * 0.05) - 0.05)) < 5e-4,
+      'the ink crossover is no longer the white/black contrast-parity luminance',
+    );
+    // And on every hue the ramps actually declare, the chosen ink WINS on contrast.
+    const ratio = (a: number, b: number) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+    for (const ramp of ['cost', 'age', 'category'] as const) {
+      for (const rgb of LENS_RAMP_RGB[ramp]) {
+        const L = lensYardMapLuminance(rgb);
+        const ink = lensYardMapInkOn(rgb);
+        const white = ratio(L, 1.0);
+        const black = ratio(L, 0.0);
+        const chose = ink === '#ffffff' ? white : black;
+        assert.ok(
+          chose >= Math.max(white, black) - 1e-9,
+          `${ramp} hue ${rgb} took the LESS legible ink (white ${white.toFixed(2)} vs black ${black.toFixed(2)})`,
+        );
+      }
+    }
+  });
+
+  check('GREY is two answers, and only ONE of them draws a dash', () => {
+    const hidden = lensYardMapPaint(
+      { loc: 'A-1A', lines: ['A-1A'], occupied: true, band: 2, mixed: false },
+      'cost',
+      new Map([[0, 0]]), // band 2 is isolated OUT
+    );
+    assert.equal(hidden.kind, 'muted', 'an isolated-out band is not muted on the map');
+    const unplaced = lensYardMapPaint(
+      { loc: 'A-1A', lines: ['A-1A'], occupied: true, band: null, mixed: false },
+      'cost',
+      new Map([[0, 0]]),
+    );
+    assert.equal(unplaced.kind, 'nodata', 'a block in NO band is not marked as such');
+    assert.equal(hidden.bg, unplaced.bg, 'the two greys diverged — the dash is the distinction');
+    const empty = lensYardMapPaint(
+      { loc: 'A-1A', lines: ['A-1A'], occupied: false, band: null, mixed: false },
+      'cost',
+      new Map([[0, 0]]),
+    );
+    assert.equal(empty.kind, 'empty');
+    assert.equal(empty.bg, '#ffffff', 'an empty slot is not white');
+    // The dash rides on the `nodata` kind, in the sheet, and nowhere else.
+    assert.ok(/kind === 'nodata'/.test(sheet), 'the sheet does not mark the no-data cells');
+  });
+
+  check('a MIXED block keeps its dashed INSET outline, in the ink rather than the hue', () => {
+    const paint = lensYardMapPaint(
+      { loc: 'A-1A', lines: ['A-1A'], occupied: true, band: 0, mixed: true },
+      'category',
+      new Map([[0, 0]]),
+    );
+    assert.equal(paint.outline, paint.ink, 'the mixed dash is not the colour that is legible on the fill');
+    assert.ok(/outlineOffset: '-2px'/.test(sheet), 'the mixed marker is not INSET — it reads as a selection ring');
+    assert.ok(/dashed/.test(sheet), 'the mixed marker is not dashed');
+    // Only the SUPPLIER lens can answer the question, and it reads the carried column.
+    assert.ok(
+      /isMixed: \(loc\) => lens\.blockByLoc\[loc\]\?\.isMixed === true/.test(code(SUPPLIER_PANEL)),
+      'the supplier lens does not hand the map the VIEW\'s own ALL/SOME column',
+    );
+    for (const panel of [PANEL, AGE_PANEL]) {
+      assert.ok(!/isMixed/.test(code(panel)), `${panel} claims to know whether a block is mixed`);
+    }
+  });
+
+  // ── The FIT is the PLATFORM solver ────────────────────────────────────────
+  check('the fit is the SHARED solver, and that solver has ZERO tenant vocabulary', () => {
+    assert.ok(
+      /from '@\/components\/shared\/print\/print-fit'/.test(sheet),
+      'the map page does not use the platform fit module',
+    );
+    assert.ok(/fitCellGrid\(\{/.test(sheet), 'the map does not call the shared cell-grid solver');
+    assert.ok(!/A4_|PX_PER_MM|297|210/.test(sheet), 'the map page re-derives the paper geometry');
+    // The CODE, not the prose: the module's header DISCLAIMS these words by name, which
+    // is exactly the kind of sentence a raw-source scan would trip over.
+    const fitSrc = code(PRINT_FIT);
+    for (const word of [
+      'charcoal', 'block', 'warehouse', 'batch', 'supplier', 'lens', 'blocking',
+      'campaign', 'php', 'peso', '₱',
+    ]) {
+      assert.ok(
+        !new RegExp(word, 'i').test(fitSrc),
+        `the platform fit module names a tenant concept: "${word}"`,
+      );
+    }
+    assert.ok(!/import .* from/.test(fitSrc), 'the platform fit module grew a dependency');
+  });
+
+  check('the solve is MEASURED — the shipped geometry lands where CONTEXT.md says', () => {
+    // These two shapes are the whole population: the standard four warehouses, and the
+    // same plus PCA/PCB. Both were rendered to a REAL PDF at these exact numbers.
+    const run = (data: Record<string, typeof BLOCK_STUB>) => {
+      const m = buildLensYardMap({ data, bandOf: () => 0 });
+      return fitCellGrid({
+        sections: m.sections.map((s) => ({
+          key: s.key, cols: s.cols.length, rows: s.rows.length, lane: s.lane,
+        })),
+        box: a4LandscapeBox(10),
+        reservedHeightPx: 40,
+        gutterPx: 16,
+        laneChromePx: 22,
+        laneGapPx: 5,
+        sectionGapPx: 8,
+        cellChromePx: 2,
+        minCellPx: 20,
+        maxCellPx: 64,
+        labelChars: m.labelChars,
+        advanceEm: 0.65,
+        fontLadderPt: [13, 12, 11.5, 11, 10.5, 10, 9.5, 9, 8.5, 8, 7.5, 7],
+      });
+    };
+    const std = run({ 'A-1A': BLOCK_STUB });
+    const pca = run({ 'A-1A': BLOCK_STUB, 'PCA-15A': BLOCK_STUB, 'PCB-17C': BLOCK_STUB });
+    assert.ok(std.fits && pca.fits, 'a shipped yard shape no longer fits one sheet');
+    assert.equal(std.cellRowCount, 11, 'the standard warehouses no longer total 11 cell rows');
+    assert.equal(pca.cellRowCount, 14, 'PCA/PCB no longer add exactly 3 cell rows');
+    assert.ok(std.cellPx > 51 && std.cellPx < 52, `standard cell moved to ${std.cellPx}px`);
+    assert.ok(pca.cellPx > 39 && pca.cellPx < 40, `worst-case cell moved to ${pca.cellPx}px`);
+    // And the LOC is never smaller than the legibility floor, because the page wraps
+    // rather than shrinks below it. `pca` solves to 8.5 unwrapped, so it MUST wrap.
+    assert.ok(std.fontPt >= LENS_YARD_MAP_MIN_LOC_PT, `standard loc fell to ${std.fontPt}pt`);
+    assert.ok(pca.fontPt < LENS_YARD_MAP_MIN_LOC_PT, 'the worst case no longer needs the wrap');
+    const wrapped = fitMonoLabelPt({
+      widthPx: pca.labelBoxPx,
+      chars: buildLensYardMap({ data: { 'PCA-15A': BLOCK_STUB }, bandOf: () => 0 }).wrappedLabelChars,
+      advanceEm: 0.65,
+      ladder: [13, 12, 11.5, 11, 10.5, 10, 9.5, 9, 8.5, 8, 7.5, 7],
+      maxPt: (pca.labelBoxPx - 5.5 * PX_PER_PT) / 2 / (PX_PER_PT * 1.1),
+    });
+    assert.ok(
+      wrapped >= LENS_YARD_MAP_MIN_LOC_PT,
+      `wrapping the worst case still only reaches ${wrapped}pt`,
+    );
+    assert.ok(wrapped > pca.fontPt, 'wrapping made the loc SMALLER, which is the wrong trade');
+  });
+
+  check('a loc is WRAPPED, never truncated — the whole code is always on the paper', () => {
+    assert.deepEqual([...lensYardMapLines('A', 'A-20C')], ['A-20C']);
+    assert.deepEqual([...lensYardMapLines('PCA', 'PCA-15A')], ['PCA', '15A']);
+    assert.deepEqual([...lensYardMapLines('A', 'A-20C', true)], ['A', '20C']);
+    const m = buildLensYardMap({ data: { 'PCA-15A': BLOCK_STUB }, bandOf: () => 0 });
+    assert.equal(m.labelChars, 5, 'the unwrapped worst-case label is no longer `A-20C`');
+    assert.equal(m.wrappedLabelChars, 3, 'the wrapped worst-case label moved');
+    for (const body of [model, sheet]) {
+      // `slice(0, cut)` IS the hyphen split and is allowed; a NUMERIC bound is not, and
+      // neither is a CSS ellipsis — both would shorten a code a person has to read.
+      assert.ok(!/\.slice\(\s*0\s*,\s*\d/.test(body), 'a loc is cut to a fixed length');
+      assert.ok(!/substring|substr\(|truncate|text-ellipsis|…/.test(body), 'a loc is truncated');
+    }
+  });
+
+  // ── It carries NOTHING but a location ─────────────────────────────────────
+  check('the map is LOCATION REFERENCE ONLY — no kg, no ₱, no age, no supplier', () => {
+    for (const [rel, body] of [[YARD_MAP_MODEL, model], [YARD_MAP_PRINT, sheet]] as const) {
+      for (const forbidden of [
+        'balance', 'total_in', 'php', 'peso', 'cost', 'price', 'ageDays', 'kg',
+        'formatLens', 'toFixed', 'toLocaleString',
+      ]) {
+        assert.ok(
+          !new RegExp(`\\b${forbidden}\\b`).test(body),
+          `${rel} reaches for \`${forbidden}\` — the map draws a loc and a fill, nothing else`,
+        );
+      }
+      assert.ok(!/\.reduce\s*\(/.test(body), `${rel} folds something`);
+      assert.ok(!/\+=/.test(body), `${rel} accumulates`);
+    }
+    // And the sheet says so on the paper, so a reader never mistakes it for a report.
+    assert.ok(/location\s*\n?\s*reference only/.test(read(YARD_MAP_PRINT)), 'the map never states what it is for');
+  });
+
+  check('the page is explicitly LIGHT, like the rest of the sheet it lives on', () => {
+    // It lays out in the LIVE DOM, so a theme token prints whatever theme the reader is
+    // in. Every surface is an explicit zinc/hex.
+    assert.ok(
+      !/bg-background|bg-card|bg-muted|text-foreground|text-muted-foreground|border-border/.test(sheet),
+      'the map page uses a theme token and will print dark for a dark-mode reader',
+    );
+    assert.ok(/text-zinc-/.test(sheet), 'the map page lost its explicit light inks');
+  });
+
+  check('the map and the band swatches resolve their stop through ONE function', () => {
+    assert.ok(/resolveBandRampStop/.test(code(RAMP)), 'the shared stop resolver is gone');
+    assert.ok(/resolveBandRampStop/.test(sheet), 'the map decides a band stop itself');
+    assert.ok(/resolveBandRampStop/.test(summary), 'the band swatch decides its stop itself');
+    // Ordinal: position. Nominal: the lens's own slot. Same answers, one implementation.
+    assert.equal(resolveBandRampStop('cost', 1, 3), rampStop(1, 3, 'cost'));
+    assert.equal(resolveBandRampStop('category', 1, 7, categoryStop(6, true)), LENS_CATEGORY_NEUTRAL_STOP);
+  });
+
+  check('the MARGIN is stated once and read by both the @page rule and the solve', () => {
+    assert.ok(/export const LENS_PRINT_MARGIN_MM = 10;/.test(summary), 'the sheet margin is no longer exported');
+    assert.ok(/marginMm: LENS_PRINT_MARGIN_MM/.test(summary), 'the @page rule uses a different margin');
+    assert.ok(/marginMm=\{LENS_PRINT_MARGIN_MM\}/.test(summary), 'the map solves against a different margin');
+    assert.ok(/a4LandscapeBox\(marginMm\)/.test(sheet), 'the map does not solve against the sheet\'s own box');
+  });
+
+  check('the FIXTURE can produce BOTH map shapes, so the worst case is reachable', () => {
+    const fixture = read('app/dev/table-playground/supplierlens/supplierlens-fixture.tsx');
+    assert.ok(/MOCK_PREPARED_BLOCKS/.test(fixture), 'the rig cannot put stock in PCA/PCB');
+    assert.ok(/params\.get\('pca'\) === '1'/.test(fixture), 'the rig has no ?pca= switch');
+    assert.ok(/'PCA-/.test(fixture) && /'PCB-/.test(fixture), 'the rig names neither prepared area');
   });
 }
 

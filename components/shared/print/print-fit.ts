@@ -215,6 +215,199 @@ export function fitRowHeight(opts: {
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────
+// A GRID OF EQUAL, SQUARE CELLS THAT MUST LAND ON ONE SHEET (2026-09-22)
+//
+// The third shape of the same question. `fitColumnWidths` solves a table whose columns
+// have DIFFERENT demands; `fitRowHeight` solves a table whose row count is data. This
+// solves a **map**: a set of equal square cells, laid out in sections, each carrying one
+// short label, where the whole thing has to fit inside one printable box without
+// clipping and without a second page.
+//
+// ── WHY THE CELL EDGE IS A QUOTIENT AND NOT A CONSTANT ─────────────────────────
+// Exactly the `/operations` lesson from the header, one dimension further: the number of
+// SECTIONS and the number of cell ROWS are both data (a map may or may not include its
+// optional sections), so a hardcoded cell size is a page-fitting promise that holds for
+// one shape. Both budgets are solved and the SMALLER wins, so the cells stay square and
+// the page never overflows in either direction.
+//
+// ── LANES ARE WHAT MAKE A NARROW SECTION CHEAP ─────────────────────────────────
+// Sections sharing a `lane` are laid SIDE BY SIDE and pay ONE lane's chrome and one
+// lane's height. Without that, two three-column sections stacked below twenty-column
+// ones spend two full rows' worth of the height budget on a handful of cells and shrink
+// every other cell on the page — measured, on A4 landscape at a 10 mm margin, from
+// 51.5 px to 28 px. A caller that wants a section on its own line simply gives it its
+// own lane.
+//
+// ZERO tenant knowledge: sections are `{key, cols, rows, lane}` and a label is a
+// character count. What the cells MEAN is entirely the caller's.
+// ─────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The largest ladder step at which `chars` monospace glyphs fit inside `widthPx`.
+ *
+ * EXPORTED separately from `fitCellGrid` because a caller may legitimately ask the
+ * question twice for ONE layout — the yard map re-asks it with a shorter label once it
+ * decides to wrap — and two spellings of "which font step fits" is exactly the kind of
+ * duplicate that lets a page lay out at one size and claim another.
+ *
+ * `maxPt` is the caller's own second constraint (a height budget, a house maximum); the
+ * answer is the largest step satisfying both, or the ladder's floor.
+ */
+export function fitMonoLabelPt(opts: {
+  widthPx: number;
+  chars: number;
+  advanceEm: number;
+  ladder: readonly number[];
+  maxPt?: number;
+}): number {
+  const { widthPx, chars, advanceEm, ladder, maxPt } = opts;
+  for (const pt of ladder) {
+    if (maxPt !== undefined && pt > maxPt) continue;
+    if (chars * monoCharPx(pt, advanceEm) <= widthPx) return pt;
+  }
+  return ladder[ladder.length - 1] ?? 0;
+}
+
+export interface PrintCellGridSection {
+  key: string;
+  /** Cell COLUMNS this section occupies. */
+  cols: number;
+  /** Cell ROWS this section occupies. */
+  rows: number;
+  /**
+   * Sections sharing a lane sit SIDE BY SIDE and pay one lane's chrome and height.
+   * Lanes are laid out in ascending order; the values need not be contiguous.
+   */
+  lane: number;
+}
+
+export interface PrintCellGridFit {
+  /** The edge of every cell, in px. Square, and the same for every section. */
+  cellPx: number;
+  /** The largest ladder step at which `labelChars` fits inside one cell. */
+  fontPt: number;
+  /** FALSE when even `minCellPx` overflows a budget — the caller must say so. */
+  fits: boolean;
+  laneCount: number;
+  /** Σ over lanes of the tallest section in that lane. */
+  cellRowCount: number;
+  /** The widest lane's cell columns — what the width budget was divided by. */
+  widestLaneCols: number;
+  /** Σ lane heights + per-lane chrome + lane gaps + the reserved band, in px. */
+  totalHeightPx: number;
+  /** The widest lane's width, gutters and inter-section gaps included, in px. */
+  totalWidthPx: number;
+  /** The width a label actually has: the cell minus its own border/padding. */
+  labelBoxPx: number;
+  /** Which budget decided the edge — useful in a report that states its own fit. */
+  boundBy: 'width' | 'height';
+}
+
+/**
+ * THE SQUARE-CELL SOLVE — one page, every cell, no clipping.
+ *
+ * `fontLadderPt` is DESCENDING and deliberately coarse, for the same reason
+ * `fitColumnWidths`' is: two maps of similar shape should print at the same size.
+ */
+export function fitCellGrid(opts: {
+  sections: readonly PrintCellGridSection[];
+  /** The printable box — usually `a4LandscapeBox(marginMm)`. */
+  box: PrintPageBox;
+  /** Height this page spends on things that are NOT the grid (heading, legend). */
+  reservedHeightPx: number;
+  /** The row-label gutter each section carries, in px. */
+  gutterPx: number;
+  /** Per LANE: its heading row plus its column-number row, in px. */
+  laneChromePx: number;
+  /** Between two lanes, in px. */
+  laneGapPx: number;
+  /** Between two sections sharing a lane, in px. */
+  sectionGapPx: number;
+  /** Border and padding a cell spends before its label, in px. */
+  cellChromePx: number;
+  minCellPx: number;
+  maxCellPx: number;
+  /** The longest label LINE any cell will draw, in characters. */
+  labelChars: number;
+  advanceEm: number;
+  fontLadderPt: readonly number[];
+}): PrintCellGridFit {
+  const {
+    sections, box, reservedHeightPx, gutterPx, laneChromePx, laneGapPx, sectionGapPx,
+    cellChromePx, minCellPx, maxCellPx, labelChars, advanceEm, fontLadderPt,
+  } = opts;
+
+  const lanes = [...new Set(sections.map((s) => s.lane))].sort((a, b) => a - b);
+  const laneOf = (lane: number) => sections.filter((s) => s.lane === lane);
+
+  // ── The HEIGHT budget: one row of cells per cell row, plus each lane's chrome ──
+  let cellRowCount = 0;
+  for (const lane of lanes) {
+    let tallest = 0;
+    for (const s of laneOf(lane)) tallest = Math.max(tallest, s.rows);
+    cellRowCount = cellRowCount + tallest;
+  }
+  const chromePx =
+    reservedHeightPx + lanes.length * laneChromePx + Math.max(0, lanes.length - 1) * laneGapPx;
+  const heightBudget = box.heightPx - chromePx;
+  const byHeight = heightBudget / Math.max(1, cellRowCount);
+
+  // ── The WIDTH budget: the TIGHTEST lane decides, not the widest column count ──
+  // A lane's fixed cost is its sections' gutters plus the gaps between them, so a lane
+  // of many narrow sections can bind before a lane of one wide one.
+  let byWidth = Number.POSITIVE_INFINITY;
+  let widestLaneCols = 0;
+  for (const lane of lanes) {
+    const inLane = laneOf(lane);
+    let cols = 0;
+    for (const s of inLane) cols = cols + s.cols;
+    widestLaneCols = Math.max(widestLaneCols, cols);
+    const fixed = inLane.length * gutterPx + Math.max(0, inLane.length - 1) * sectionGapPx;
+    byWidth = Math.min(byWidth, (box.widthPx - fixed) / Math.max(1, cols));
+  }
+
+  const raw = Math.min(byWidth, byHeight);
+  // Two decimals: enough for a sub-pixel-accurate layout, coarse enough that the number
+  // a report PRINTS about itself is the number it laid out with.
+  const clamped = Math.max(minCellPx, Math.min(maxCellPx, raw));
+  const cellPx = Math.floor(clamped * 100) / 100;
+
+  const labelBoxPx = Math.max(0, cellPx - cellChromePx);
+  const fontPt = fitMonoLabelPt({
+    widthPx: labelBoxPx,
+    chars: labelChars,
+    advanceEm,
+    ladder: fontLadderPt,
+  });
+
+  // The widest lane's rendered width, for the container the caller centres or pins.
+  let totalWidthPx = 0;
+  for (const lane of lanes) {
+    const inLane = laneOf(lane);
+    let cols = 0;
+    for (const s of inLane) cols = cols + s.cols;
+    const w =
+      inLane.length * gutterPx +
+      Math.max(0, inLane.length - 1) * sectionGapPx +
+      cols * cellPx;
+    totalWidthPx = Math.max(totalWidthPx, w);
+  }
+
+  return {
+    cellPx,
+    fontPt,
+    fits: cellRowCount * cellPx <= heightBudget && totalWidthPx <= box.widthPx,
+    laneCount: lanes.length,
+    cellRowCount,
+    widestLaneCols,
+    totalHeightPx: chromePx + cellRowCount * cellPx,
+    totalWidthPx,
+    labelBoxPx,
+    boundBy: byWidth <= byHeight ? 'width' : 'height',
+  };
+}
+
 /**
  * Split a list into balanced chunks of at most `maxPerChunk`.
  *
