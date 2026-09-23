@@ -56,13 +56,29 @@ import { resolve } from 'node:path';
 import {
   analysisPages,
   analysisPagesLabel,
+  includedPageCount,
   BLEND_ANALYSIS_PAGE_ORDER,
+  BLEND_INCLUDE_PAGE_ORDER,
   BLEND_ANALYSIS_SETTINGS_MODULE,
   DEFAULT_BLEND_ANALYSIS_OPTIONS,
   parseBlendAnalysisOptions,
   serializeBlendAnalysisOptions,
   wantsAnalysis,
 } from '../app/(app)/inventory/_shared/blend-analysis-options';
+import {
+  BLEND_PRINT_MARGIN_MM,
+  buildBlendYardMapModel,
+  buildBlendYardMapPage,
+  blendYardMapLegend,
+  blendYardMapStops,
+} from '../app/(app)/inventory/_shared/blend-yard-map-print';
+import {
+  BLEND_YARD_MAP_ACCENT_STOP,
+  LENS_YARD_MAP_MUTED_BG,
+  lensYardMapPaint,
+} from '../app/(app)/inventory/blocking/lens/lens-yard-map-model';
+import { LENS_PRINT_FILL_RGB } from '../app/(app)/inventory/blocking/lens/lens-ramp';
+import { WAREHOUSES } from '../app/(app)/inventory/blocking/constants';
 import {
   ageMethodNote,
   groupWord,
@@ -121,6 +137,9 @@ const PRINT = `${SHARED}/blend-analysis-print.ts`;
 const HOOK = `${SHARED}/use-blend-analysis.ts`;
 const DIALOG = `${SHARED}/blend-proposal-dialog.tsx`;
 const PDF = `${SHARED}/blend-proposal-pdf.ts`;
+const YARD = `${SHARED}/blend-yard-map-print.ts`;
+const YARD_MODEL = 'app/(app)/inventory/blocking/lens/lens-yard-map-model.ts';
+const GRID = 'app/(app)/inventory/blocking/blocking-grid.tsx';
 const LENS_PRINT = `${LENS}/lens-summary-print.tsx`;
 const PRICE_PANEL = `${LENS}/price-lens-panel.tsx`;
 const AGE_PANEL = `${LENS}/age-lens-panel.tsx`;
@@ -132,8 +151,8 @@ const FIXTURE_PAGE = 'app/dev/table-playground/blendanalysis/page.tsx';
 
 /** Every file this script reasons about. A missing one is a failure, not a pass. */
 const ALL_FILES = [
-  OPTIONS, TEXT, SECTIONS, PRINT, HOOK, DIALOG, PDF, LENS_PRINT, PRICE_PANEL, AGE_PANEL,
-  SUPPLIER_PANEL, `${LENS}/lens-summary-model.ts`,
+  OPTIONS, TEXT, SECTIONS, PRINT, HOOK, DIALOG, PDF, YARD, YARD_MODEL, GRID, LENS_PRINT,
+  PRICE_PANEL, AGE_PANEL, SUPPLIER_PANEL, `${LENS}/lens-summary-model.ts`,
 ];
 
 const cache = new Map<string, string>();
@@ -225,13 +244,15 @@ console.log('\n2. THE PRICE GATE — PAGE, CHECKBOX AND THE LENS PRINT');
 // ===========================================================================
 {
   check('`analysisPages` is the ONE place the choice meets the permission', () => {
-    const all = { price: true, quality: true, age: true };
+    const all = { price: true, quality: true, age: true, yardMap: true };
+    // `analysisPages` NEVER returns the yard map, however it is ticked — see §11.
     assert.deepEqual(analysisPages(all, true), ['price', 'quality', 'age']);
     // A denied reader loses the price page WHATEVER the stored option says.
     assert.deepEqual(analysisPages(all, false), ['quality', 'age']);
-    assert.deepEqual(analysisPages({ price: true, quality: false, age: false }, false), []);
-    assert.equal(wantsAnalysis({ price: true, quality: false, age: false }, false), false);
-    assert.equal(wantsAnalysis({ price: true, quality: false, age: false }, true), true);
+    const priceOnly = { price: true, quality: false, age: false, yardMap: false };
+    assert.deepEqual(analysisPages(priceOnly, false), []);
+    assert.equal(wantsAnalysis(priceOnly, false), false);
+    assert.equal(wantsAnalysis(priceOnly, true), true);
   });
 
   check('the sections and the print BOTH route through it, and neither re-implements it', () => {
@@ -309,9 +330,16 @@ console.log('\n2. THE PRICE GATE — PAGE, CHECKBOX AND THE LENS PRINT');
 console.log('\n3. THE INCLUDE-PAGES CHOICE IS UNTRUSTED — proven by running the parser');
 // ===========================================================================
 {
-  check('the default is all three pages ON', () => {
-    assert.deepEqual(DEFAULT_BLEND_ANALYSIS_OPTIONS, { price: true, quality: true, age: true });
+  check('the default is every page ON, and the yard map is the FOURTH checkbox', () => {
+    assert.deepEqual(DEFAULT_BLEND_ANALYSIS_OPTIONS, {
+      price: true,
+      quality: true,
+      age: true,
+      yardMap: true,
+    });
+    // The ANALYSIS order is unchanged — the map is not an analysis page (§11).
     assert.deepEqual(BLEND_ANALYSIS_PAGE_ORDER, ['price', 'quality', 'age']);
+    assert.deepEqual(BLEND_INCLUDE_PAGE_ORDER, ['price', 'quality', 'age', 'yardMap']);
   });
 
   check('a hostile document falls back FIELD BY FIELD, never wholesale', () => {
@@ -323,7 +351,7 @@ console.log('\n3. THE INCLUDE-PAGES CHOICE IS UNTRUSTED — proven by running th
       __proto__: { age: false },
       extra: { nested: true },
     });
-    assert.deepEqual(parsed, { price: false, quality: true, age: true });
+    assert.deepEqual(parsed, { price: false, quality: true, age: true, yardMap: true });
   });
 
   check('junk of every shape parses to the shipped defaults', () => {
@@ -334,18 +362,25 @@ console.log('\n3. THE INCLUDE-PAGES CHOICE IS UNTRUSTED — proven by running th
 
   check('serialize OMITS defaults, so turning everything back on is a REMOVAL', () => {
     assert.deepEqual(serializeBlendAnalysisOptions(DEFAULT_BLEND_ANALYSIS_OPTIONS), {});
-    assert.deepEqual(serializeBlendAnalysisOptions({ price: false, quality: true, age: false }), {
-      price: false,
-      age: false,
-    });
+    assert.deepEqual(
+      serializeBlendAnalysisOptions({
+        price: false,
+        quality: true,
+        age: false,
+        yardMap: false,
+      }),
+      { price: false, age: false, yardMap: false },
+    );
   });
 
-  check('parse ∘ serialize is the identity on every one of the eight states', () => {
+  check('parse ∘ serialize is the identity on every one of the SIXTEEN states', () => {
     for (const price of [true, false]) {
       for (const quality of [true, false]) {
         for (const age of [true, false]) {
-          const o = { price, quality, age };
-          assert.deepEqual(parseBlendAnalysisOptions(serializeBlendAnalysisOptions(o)), o);
+          for (const yardMap of [true, false]) {
+            const o = { price, quality, age, yardMap };
+            assert.deepEqual(parseBlendAnalysisOptions(serializeBlendAnalysisOptions(o)), o);
+          }
         }
       }
     }
@@ -370,12 +405,19 @@ console.log('\n3. THE INCLUDE-PAGES CHOICE IS UNTRUSTED — proven by running th
     assert.equal(analysisPagesLabel(1), '1 extra page');
     assert.equal(analysisPagesLabel(0), 'no extra pages');
     const body = code(DIALOG);
+    // RESTATED 2026-09-23: the count is now `includedPageCount` (the analysis pages PLUS
+    // the yard map) and the ANALYSIS gate is still called by name for the price-group
+    // decision, so both halves are asserted rather than one standing in for the other.
     assert.ok(
-      /analysisPageCount = analysisPages\(analysisOptions, showPrices\)\.length/.test(body),
-      'the button count is derived some other way than the gate',
+      /analysisPageIds = analysisPages\(analysisOptions, showPrices\)/.test(body),
+      'the dialog no longer routes through the shared analysis gate',
+    );
+    assert.ok(
+      /printPageCount = includedPageCount\(analysisOptions, showPrices\)/.test(body),
+      'the button count is derived some other way than the shared count',
     );
     assert.ok(/data-blend-print/.test(body), 'the print button lost its test hook');
-    assert.ok(/\+\{analysisPageCount\}/.test(body), 'the print button does not show the count');
+    assert.ok(/\+\{printPageCount\}/.test(body), 'the print button does not show the count');
   });
 }
 
@@ -915,7 +957,7 @@ console.log('\n7. THE PRINTED SHEETS — tbody totals, page breaks, a 7pt floor'
     // The strongest form: build the real pages from a real-shaped analysis and count.
     const html = buildBlendAnalysisPages({
       analysis: SAMPLE_ANALYSIS,
-      options: { price: true, quality: true, age: true },
+      options: { price: true, quality: true, age: true, yardMap: true },
       canViewPrices: true,
       labHighlights: SAMPLE_HIGHLIGHTS,
     });
@@ -943,7 +985,13 @@ console.log('\n7. THE PRINTED SHEETS — tbody totals, page breaks, a 7pt floor'
       'the PDF heading helper no longer adds a page',
     );
     // Six call sites — one per table — and NO other `addPage` in the analysis builder.
-    const builder = pdf.slice(pdf.indexOf('function appendAnalysisPages'));
+    // BOUNDED 2026-09-23: the yard map's own `drawYardMapPage` lives further down the
+    // file and legitimately adds its ONE page, so the slice ends where this builder does.
+    const builder = pdf.slice(
+      pdf.indexOf('function appendAnalysisPages'),
+      pdf.indexOf('function pdfPhp('),
+    );
+    assert.ok(builder.length > 0, 'the analysis builder slice is empty — the bound moved');
     const headings = (builder.match(/analysisHeading\(/g) ?? []).length;
     assert.ok(headings >= 4, `only ${headings} PDF tables add a page of their own`);
     assert.ok(
@@ -1456,6 +1504,440 @@ console.log('\n10. THE DEV FIXTURE, AND THE DOCS');
       'A TYPED FIGURE IS A SET PRICE',
       'apportioned',
       'Supplier lens — UI',
+    ]) {
+      assert.ok(doc.includes(phrase), `CONTEXT.md does not mention "${phrase}"`);
+    }
+  });
+}
+
+// ===========================================================================
+console.log('\n11. THE YARD MAP PAGE IN THE BLEND PRINT (2026-09-23)');
+// ===========================================================================
+//
+// The owner: *"I'd also like to see a blocking view in the print of blend proposals,
+// similar to the ones we made for the lens prints."*
+//
+// "Similar to" is the assertion, not a compliment: the geometry, the one-page fit, the
+// paper palette, the ink rule and the four cell kinds must be the LENS MAP's, imported
+// rather than ported — a second copy of "how big is a cell" is how a one-page promise
+// stops being one. Node has no renderer, so what is proven here is everything except how
+// the paper looks: that the page exists in BOTH print paths, that it lands between the
+// blocks table and the analysis sheets, that the fourth option is parsed as untrusted and
+// defaults ON, that the fill comes from the analysis payload's own groups when they are
+// there and from ONE accent when they are not, that a vacated block is marked and never
+// dropped, and that nothing on the sheet does arithmetic on a kilogram.
+{
+  const yard = code(YARD);
+  const model = code(YARD_MODEL);
+  const dialog = code(DIALOG);
+  const pdf = code(PDF);
+
+  // A yard shaped like the fixture's: 24 selected blocks (one of them vacated), plus
+  // other piles, over the app's own geometry.
+  const SELECTED = ['A-1A', 'B-1B', 'D-1A', 'A-2B', 'C-2A', 'D-2B', 'A-3C'];
+  const VACATED = 'A-3C';
+  const OTHERS = ['A-7A', 'B-8A', 'C-7A', 'D-8A'];
+  const OCCUPIED = [...SELECTED.filter((l) => l !== VACATED), ...OTHERS];
+
+  /** A price section shaped like `fn_blend_analysis`'s, with three natural groups. */
+  function priceAnalysis(): BlendAnalysis {
+    const mk = (loc: string) => ({ batchId: loc, blockLoc: loc, batchCode: `X-${loc}`, kg: 1000, phpKg: 40 });
+    const group = (index: number, label: 'low' | 'mid' | 'high', locs: string[]) => ({
+      index,
+      label,
+      rangeMin: 36,
+      rangeMax: 50,
+      blockCount: locs.length,
+      kg: locs.length * 1000,
+      kgSharePct: 100 / 3,
+      blockSharePct: 100 / 3,
+      kgWeightedPhpKg: 40,
+      valuePhp: locs.length * 40000,
+      blocks: locs.map(mk),
+    });
+    return {
+      ...SAMPLE_ANALYSIS,
+      price: {
+        ...SAMPLE_ANALYSIS.price!,
+        natural: {
+          ...SAMPLE_ANALYSIS.price!.natural,
+          groupCount: 3,
+          groups: [
+            group(0, 'low', ['A-1A', 'B-1B']),
+            group(1, 'mid', ['D-1A', 'A-2B']),
+            group(2, 'high', ['C-2A', 'D-2B', 'A-3C']),
+          ],
+        },
+      },
+    } as BlendAnalysis;
+  }
+
+  check('the page exists in BOTH print paths, and in NEITHER as a second implementation', () => {
+    // HTML: one section, built by the ONE builder and threaded through the document.
+    assert.ok(/export function buildBlendYardMapPage\(/.test(yard), 'there is no HTML map builder');
+    assert.ok(/buildBlendYardMapPage\(yardMap\)/.test(dialog), 'the dialog never builds the map sheet');
+    assert.ok(/yardMapHtml\?: string \| null/.test(dialog), 'the print document takes no map sheet');
+    // PDF: drawn natively, on its own added page, from the SAME model object.
+    assert.ok(/function drawYardMapPage\(/.test(pdf), 'the PDF has no map page');
+    assert.ok(/if \(yardMap\) drawYardMapPage\(/.test(pdf), 'the PDF never draws the map');
+    // ONE page, added once — the same discipline `analysisHeading` keeps.
+    const draw = pdf.slice(
+      pdf.indexOf('function drawYardMapPage'),
+      pdf.indexOf('export function downloadBlendPdf'),
+    );
+    assert.ok(draw.length > 0, 'the map drawing slice is empty — the bound moved');
+    assert.equal(
+      (draw.match(/doc\.addPage\(\)/g) ?? []).length,
+      1,
+      'the PDF map page adds more than one sheet',
+    );
+    assert.ok(
+      /yardMap\?: BlendYardMapModel \| null/.test(pdf),
+      'the PDF builds its own map model instead of taking the screen’s',
+    );
+    // ONE model, TWO documents.
+    assert.equal(
+      (dialog.match(/buildBlendYardMapModel\(/g) ?? []).length,
+      1,
+      'the dialog builds the map model more than once — the two documents could disagree',
+    );
+    assert.ok(
+      !/buildBlendYardMapModel/.test(pdf),
+      'the PDF builds its own map model — it must take the one the screen built',
+    );
+  });
+
+  check('it lands DIRECTLY after Selected Blocks and BEFORE the analysis sheets', () => {
+    const doc = read(DIALOG);
+    const blocks = doc.indexOf('<h2>Selected Blocks</h2>');
+    const map = doc.indexOf('${yardHtml}');
+    const analysisAt = doc.indexOf('${analysisHtml}');
+    assert.ok(blocks > 0 && map > 0 && analysisAt > 0, 'one of the three sections is gone');
+    assert.ok(blocks < map, 'the map prints before the blocks table it describes');
+    assert.ok(map < analysisAt, 'the map prints after the analysis sheets');
+    // The PDF orders them the same way, by call order.
+    assert.ok(
+      pdf.indexOf('drawYardMapPage(doc, marginX, yardMap)') <
+        pdf.indexOf('appendAnalysisPages(doc, marginX, analysis)'),
+      'the PDF draws the map after the analysis pages',
+    );
+  });
+
+  check('ONE landscape page, structurally — and its CSS rides independently', () => {
+    assert.ok(/\.ymap \{[^}]*break-before: page/.test(yard), 'the map does not start a page');
+    assert.ok(/\.ymap \{[^}]*break-inside: avoid/.test(yard), 'the map may split across sheets');
+    assert.ok(/page-break-inside: avoid/.test(yard), 'the map has no legacy break-inside fallback');
+    // It must NOT wear `.apage`: that stylesheet rides only when there ARE analysis
+    // sheets, and the map may be the only extra sheet a reader ticked.
+    assert.ok(!/class="apage/.test(yard), 'the map borrows the analysis page class');
+    assert.ok(
+      /const yardCss = yardHtml === '' \? '' : BLEND_YARD_MAP_PRINT_CSS;/.test(dialog),
+      'the map CSS is not gated on the map being present',
+    );
+    // And the margin is ONE number, read by the @page rule and by the solve.
+    assert.equal(BLEND_PRINT_MARGIN_MM, 10);
+    assert.ok(
+      /margin: \$\{BLEND_PRINT_MARGIN_MM\}mm/.test(dialog),
+      'the @page rule states its own margin instead of reading the constant',
+    );
+    assert.ok(
+      /return blendYardMapSolve\(model, BLEND_PRINT_MARGIN_MM\);/.test(yard),
+      'the map solves against a margin the document does not print at',
+    );
+    // ⚠️ THE CHROME BUDGET IS THE SHEET'S OWN, and BOTH paths read it. At the lens
+    // sheet's 40 px this page laid out 46.59 px over one A4 landscape sheet and its
+    // legend printed on a second one, which `break-inside: avoid` cannot fix.
+    assert.ok(
+      /function blendYardMapReservedPx\(/.test(yard),
+      'the map no longer budgets its own heading, legend and footnote',
+    );
+    assert.ok(
+      /solveYardMapFit\(model\.map, marginMm, blendYardMapReservedPx\(model\.note !== ''\)\)/.test(yard),
+      'the solve does not take the sheet’s own reserve',
+    );
+    assert.ok(
+      /blendYardMapSolve\(model, marginMm\)/.test(pdf),
+      'the PDF page does not share the sheet’s chrome budget',
+    );
+    // The LENS callers pass no reserve, so their pages are unchanged.
+    assert.ok(
+      /reservedHeightPx: number = YARD_MAP_RESERVED_PX/.test(code(YARD_MODEL)),
+      'the reserve override has no lens-preserving default',
+    );
+  });
+
+  check('the GEOMETRY, the FIT, the PALETTE and the INK are IMPORTED, never restated', () => {
+    assert.ok(
+      /from '\.\.\/blocking\/lens\/lens-yard-map-model'/.test(yard),
+      'the blend map does not read the lens map model',
+    );
+    for (const fn of ['buildBlendYardMapCells', 'lensYardMapPaint', 'solveYardMapFit', 'lensYardMapLines']) {
+      assert.ok(yard.includes(fn), `the blend map does not reuse ${fn}`);
+    }
+    assert.ok(/printFillRgbAtStop/.test(yard), 'the blend map does not read the PRINT palette');
+    assert.ok(/resolveBandRampStop/.test(yard), 'the blend map decides a band stop itself');
+    // It must not reach for the SCREEN ramp (the lens map's own rule — solid at screen
+    // saturation is what put white ink on half the paper).
+    assert.ok(!/LENS_RAMP_RGB|rampRgbAtStop/.test(yard), 'the blend map paints the SCREEN ramp solid');
+    assert.ok(!/lens-band-|lens-age-|lens-cat-/.test(yard), 'the blend map spells a ramp class');
+    // No second copy of the geometry or the paper box.
+    assert.ok(!/WAREHOUSES/.test(yard), 'the blend map restates the yard geometry');
+    assert.ok(!/fitCellGrid|a4LandscapeBox|A4_|PX_PER_MM/.test(yard), 'the blend map re-derives the fit');
+    // The slot count must appear in NEITHER — scoped to the map's own drawing block in
+    // the PDF, because that file's table styles legitimately carry a grey `238` channel.
+    const pdfDraw = pdf.slice(
+      pdf.indexOf('function drawYardMapPage'),
+      pdf.indexOf('export function downloadBlendPdf'),
+    );
+    for (const [rel, body] of [[YARD, yard], [`${PDF} (map)`, pdfDraw]] as const) {
+      assert.ok(body.length > 0, `${rel} is empty — the bound moved`);
+      assert.ok(
+        !/\b(220|238|240)\b/.test(body.replace(/\d+px|\d+pt|\d+mm/g, ' ')),
+        `${rel} hardcodes a slot count — the geometry has exactly one declaration`,
+      );
+    }
+    // The PDF draws with the shared solve too, and converts units rather than re-solving.
+    assert.ok(
+      !/fitCellGrid|fitMonoLabelPt|a4LandscapeBox/.test(pdf),
+      'the PDF page re-solves the grid itself',
+    );
+    assert.ok(/PT_PER_PX/.test(pdf), 'the PDF page does not convert the solve’s px to points');
+  });
+
+  check('EVERY slot is drawn — the count comes out of `WAREHOUSES`', () => {
+    const standard = Object.entries(WAREHOUSES)
+      .filter(([k]) => k.length === 1)
+      .reduce((a, [, w]) => a + w.cols * w.rows.length, 0);
+    const m = buildBlendYardMapModel({
+      occupiedLocs: OCCUPIED,
+      selectedLocs: SELECTED,
+      analysis: null,
+      priceGroupsOn: false,
+    });
+    assert.equal(m.map.slotCount, standard, 'the map does not draw every standard slot');
+    // PCA/PCB are opt-in INDEPENDENTLY, exactly as on the lens map.
+    const withPca = buildBlendYardMapModel({
+      occupiedLocs: [...OCCUPIED, 'PCA-15A'],
+      selectedLocs: SELECTED,
+      analysis: null,
+      priceGroupsOn: false,
+    });
+    assert.ok(withPca.map.sections.some((s) => s.key === 'PCA'), 'PCA absent with stock in it');
+    assert.ok(!withPca.map.sections.some((s) => s.key === 'PCB'), 'PCB drawn with nothing in it');
+  });
+
+  check('⚠️ a SELECTED block the yard no longer holds is FILLED and MARKED, never dropped', () => {
+    const m = buildBlendYardMapModel({
+      occupiedLocs: OCCUPIED,
+      selectedLocs: SELECTED,
+      analysis: null,
+      priceGroupsOn: false,
+    });
+    assert.deepEqual([...m.goneLocs], [VACATED], 'the vacated block is not reported');
+    const cell = m.map.sections
+      .flatMap((s) => s.cells.flat())
+      .find((c) => c.loc === VACATED);
+    assert.ok(cell, 'the vacated block is not on the map at all');
+    assert.equal(cell!.occupied, true, 'the vacated block reads as an empty slot');
+    assert.equal(cell!.mixed, true, 'the vacated block carries no marker');
+    const paint = lensYardMapPaint(cell!, m.ramp, blendYardMapStops(m));
+    assert.equal(paint.kind, 'banded', 'the vacated block lost its selection fill');
+    assert.equal(paint.outline, paint.ink, 'the marker is not the ink that is legible on the fill');
+    // The legend NAMES it, and the sheet says which blocks they were.
+    const legend = blendYardMapLegend(m).map((r) => r.text);
+    assert.ok(
+      legend.some((t) => t.includes('no longer occupied')),
+      'the legend never explains the dashed cells',
+    );
+    const html = buildBlendYardMapPage(m);
+    assert.ok(html.includes(VACATED), 'the sheet does not name the vacated block');
+    assert.ok(/dashed/.test(html), 'no cell on the sheet is dashed');
+    // A block still in the yard is NOT marked.
+    const kept = m.map.sections.flatMap((s) => s.cells.flat()).find((c) => c.loc === 'A-1A');
+    assert.equal(kept!.mixed, false, 'a block that is still there was marked as vacated');
+  });
+
+  check('an occupied block that is NOT in the blend is plain grey — never the dash', () => {
+    const m = buildBlendYardMapModel({
+      occupiedLocs: OCCUPIED,
+      selectedLocs: SELECTED,
+      analysis: null,
+      priceGroupsOn: false,
+    });
+    const other = m.map.sections.flatMap((s) => s.cells.flat()).find((c) => c.loc === 'A-7A');
+    const paint = lensYardMapPaint(other!, m.ramp, blendYardMapStops(m));
+    // `muted`, NOT `nodata`: "not selected" and "we could not place it" are different
+    // answers, and only the second draws a dash.
+    assert.equal(paint.kind, 'muted', 'an unselected pile reads as a no-data cell');
+    assert.equal(paint.bg, LENS_YARD_MAP_MUTED_BG);
+    assert.equal(paint.outline, null, 'an unselected pile is dashed');
+    // And an empty slot is white.
+    const empty = m.map.sections.flatMap((s) => s.cells.flat()).find((c) => c.loc === 'A-19A');
+    assert.equal(lensYardMapPaint(empty!, m.ramp, blendYardMapStops(m)).kind, 'empty');
+  });
+
+  check('⚠️ the fill is the PAYLOAD’s price groups when the page is ON — NOTHING is grouped here', () => {
+    const m = buildBlendYardMapModel({
+      occupiedLocs: OCCUPIED,
+      selectedLocs: SELECTED,
+      analysis: priceAnalysis(),
+      priceGroupsOn: true,
+    });
+    assert.equal(m.byPriceGroup, true, 'the map ignored the price groups it was handed');
+    assert.equal(m.bandCount, 3);
+    // THREE legend entries, LOW first — the words come from `groupWord`, the one definition.
+    assert.deepEqual(
+      m.bands.map((b) => b.label),
+      [groupWord('low', 3), groupWord('mid', 3), groupWord('high', 3)],
+    );
+    // low / average / high → the cost ramp's stops 0 / 3 / 6, the SAME mapping the tables
+    // use (`rampStop(index, 3)` positional over seven stops).
+    const stops = blendYardMapStops(m);
+    assert.deepEqual([stops.get(0), stops.get(1), stops.get(2)], [0, 3, 6]);
+    // And a block wears its OWN group's fill, read off `groups[].blocks[]`.
+    const high = m.map.sections.flatMap((s) => s.cells.flat()).find((c) => c.loc === 'C-2A');
+    assert.equal(high!.band, 2, 'a block is not in the group the payload put it in');
+    assert.equal(
+      lensYardMapPaint(high!, m.ramp, stops).bg,
+      `rgb(${LENS_PRINT_FILL_RGB.cost[6]})`,
+      'the dearest group is not the PRINT palette’s stop 6',
+    );
+  });
+
+  check('with the price page OFF (or no payload) it is ONE accent and says only `Selected block`', () => {
+    for (const [why, input] of [
+      ['page off', { analysis: priceAnalysis(), priceGroupsOn: false }],
+      ['no payload', { analysis: null, priceGroupsOn: true }],
+    ] as const) {
+      const m = buildBlendYardMapModel({
+        occupiedLocs: OCCUPIED,
+        selectedLocs: SELECTED,
+        ...input,
+      });
+      assert.equal(m.byPriceGroup, false, `${why}: the map still coloured by price group`);
+      assert.equal(m.bandCount, 1);
+      assert.deepEqual(m.bands.map((b) => b.label), ['Selected block'], `${why}: wrong legend`);
+      // The accent is stated, not positional — a single band at position 0 would otherwise
+      // wear the ramp's CHEAPEST stop and read as a price claim.
+      assert.equal(blendYardMapStops(m).get(0), BLEND_YARD_MAP_ACCENT_STOP);
+      assert.equal(BLEND_YARD_MAP_ACCENT_STOP, 3, 'the accent is no longer the ramp’s middle stop');
+      const cell = m.map.sections.flatMap((s) => s.cells.flat()).find((c) => c.loc === 'A-1A');
+      assert.equal(
+        lensYardMapPaint(cell!, m.ramp, blendYardMapStops(m)).bg,
+        `rgb(${LENS_PRINT_FILL_RGB.cost[BLEND_YARD_MAP_ACCENT_STOP]})`,
+      );
+    }
+  });
+
+  check('the map is PRICE-FREE, so its checkbox is NOT gated and a denied reader keeps it', () => {
+    // No ₱ glyph, no cost vocabulary, in either the module or the model it reads.
+    for (const [rel, body] of [[YARD, yard], [YARD_MODEL, model]] as const) {
+      assert.ok(!/₱/.test(body), `${rel} carries a peso glyph`);
+      assert.ok(!/phpKg|valuePhp|kgWeighted/.test(body), `${rel} reads a money figure`);
+    }
+    // The emitted SHEET carries none either, on a payload that has prices in it.
+    const html = buildBlendYardMapPage(
+      buildBlendYardMapModel({
+        occupiedLocs: OCCUPIED,
+        selectedLocs: SELECTED,
+        analysis: priceAnalysis(),
+        priceGroupsOn: true,
+      }),
+    );
+    assert.ok(!/₱|PHP|\bpeso\b/i.test(html), 'the printed yard map carries money');
+    // The checkbox list filters ONLY the price row; the map row survives for every reader.
+    assert.ok(
+      /filter\(\(id\) => id !== 'price' \|\| canViewPrices\)/.test(code(SECTIONS)),
+      'the include-pages row filter changed shape',
+    );
+    // And the count keeps the map for a denied reader.
+    const all = { price: true, quality: true, age: true, yardMap: true };
+    assert.equal(includedPageCount(all, true), 4);
+    assert.equal(includedPageCount(all, false), 3, 'a denied reader lost the yard map too');
+    assert.equal(
+      includedPageCount({ price: true, quality: false, age: false, yardMap: true }, false),
+      1,
+      'the map alone does not count as a page',
+    );
+    // The map alone must NOT trigger the analysis round-trip.
+    assert.equal(
+      wantsAnalysis({ price: false, quality: false, age: false, yardMap: true }, true),
+      false,
+      'ticking only the yard map still fetches the analysis',
+    );
+  });
+
+  check('the `+N` on the Print button is the INCLUDE count, from the one definition', () => {
+    assert.ok(
+      /const printPageCount = includedPageCount\(analysisOptions, showPrices\);/.test(dialog),
+      'the button count is not the shared include count',
+    );
+    assert.ok(/\+\{printPageCount\}/.test(dialog), 'the button no longer shows the count');
+    assert.ok(/pageCount=\{printPageCount\}/.test(dialog), 'the popover shows a different count');
+    // And the PRICE-GROUP decision reads the same gate the document does.
+    assert.ok(
+      /const priceGroupsOn = analysisPageIds\.includes\('price'\);/.test(dialog),
+      'the map decides its colouring from something other than the analysis gate',
+    );
+  });
+
+  check('the SHEET computes nothing: no reduce, no running total, no percentage', () => {
+    for (const [rel, body] of [[YARD, yard]] as const) {
+      assert.ok(!/\breduce\s*\(/.test(body), `${rel} folds something`);
+      assert.ok(!/[^+]\+=[^=]/.test(body), `${rel} keeps a running total`);
+      assert.ok(!/\*\s*100\b/.test(body), `${rel} builds a percentage`);
+      assert.ok(!/\/\s*(total|totalKg|blockCount|\w+\.length)\b/.test(body), `${rel} divides by a total`);
+    }
+  });
+
+  check('the CAPTION says which half is today and which half is the saved day', () => {
+    const live = buildBlendYardMapModel({
+      occupiedLocs: OCCUPIED,
+      selectedLocs: SELECTED,
+      analysis: null,
+      priceGroupsOn: false,
+    });
+    assert.equal(live.caption, 'Yard occupancy as of today');
+    const savedMap = buildBlendYardMapModel({
+      occupiedLocs: OCCUPIED,
+      selectedLocs: SELECTED,
+      analysis: null,
+      priceGroupsOn: false,
+      asSavedDate: '2026-09-21',
+    });
+    assert.equal(
+      savedMap.caption,
+      'Yard occupancy as of today · selection as saved 2026-09-21',
+    );
+    // The date is the SNAPSHOT's, never the print clock.
+    assert.ok(
+      /blendComputedDate\(saved\.proposal\.computed_at\)/.test(dialog),
+      'the caption date is not the saved version’s own computed_at',
+    );
+    assert.ok(buildBlendYardMapPage(savedMap).includes('2026-09-21'));
+  });
+
+  check('the grid supplies the WHOLE yard, and the fixture can stage the vacated case', () => {
+    const grid = code(GRID);
+    assert.ok(/const occupiedLocs = useMemo\(\(\) => Object\.keys\(data\), \[data\]\);/.test(grid),
+      'the grid does not derive the occupancy from its own payload');
+    assert.ok(/occupiedLocs=\{occupiedLocs\}/.test(grid), 'the grid does not hand the dialog the yard');
+    const fixture = code(FIXTURE);
+    assert.ok(/VACATED_LOC/.test(fixture), 'the rig cannot stage a block the yard no longer holds');
+    assert.ok(/OTHER_OCCUPIED_LOCS/.test(fixture), 'the rig has no other piles, so the map has no grey');
+    assert.ok(/params\.get\('pca'\) === '1'/.test(fixture), 'the rig has no ?pca= switch for the worst fit');
+    assert.ok(/occupiedLocs=\{occupiedLocs\}/.test(fixture), 'the rig never passes an occupancy');
+  });
+
+  check('CONTEXT.md documents the map page, the colour rule, the caption and the option', () => {
+    const doc = read(CONTEXT);
+    for (const phrase of [
+      '_shared/blend-yard-map-print.ts',
+      'Yard occupancy as of today',
+      'no longer occupied',
+      'Selected block',
+      'THE YARD MAP PAGE IN THE BLEND PRINT',
+      'BLEND_PRINT_MARGIN_MM',
     ]) {
       assert.ok(doc.includes(phrase), `CONTEXT.md does not mention "${phrase}"`);
     }

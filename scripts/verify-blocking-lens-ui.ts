@@ -2941,12 +2941,30 @@ console.log('\n12. THE YARD MAP PAGE (2026-09-22)');
 
   // ── The FIT is the PLATFORM solver ────────────────────────────────────────
   check('the fit is the SHARED solver, and that solver has ZERO tenant vocabulary', () => {
+    // RESTATED 2026-09-23, NOT WEAKENED: the solve MOVED from the sheet into the model
+    // when the blend proposal print grew the same map through a non-React path, so the
+    // property is now asserted where the solve lives — and STRENGTHENED, because the
+    // sheet must additionally be proven NOT to own a second copy.
     assert.ok(
-      /from '@\/components\/shared\/print\/print-fit'/.test(sheet),
-      'the map page does not use the platform fit module',
+      /from '@\/components\/shared\/print\/print-fit'/.test(model),
+      'the map model does not use the platform fit module',
     );
-    assert.ok(/fitCellGrid\(\{/.test(sheet), 'the map does not call the shared cell-grid solver');
-    assert.ok(!/A4_|PX_PER_MM|297|210/.test(sheet), 'the map page re-derives the paper geometry');
+    assert.ok(/fitCellGrid\(\{/.test(model), 'the map does not call the shared cell-grid solver');
+    assert.ok(
+      /export function solveYardMapFit\(/.test(model),
+      'the ONE yard-map solve is gone from the model',
+    );
+    assert.ok(
+      /solveYardMapFit\(map, marginMm\)/.test(sheet),
+      'the lens sheet no longer calls the shared solve',
+    );
+    assert.ok(
+      !/fitCellGrid|fitMonoLabelPt/.test(sheet),
+      'the lens sheet solves the grid itself — there is a second copy of the fit',
+    );
+    for (const [rel, body] of [[YARD_MAP_MODEL, model], [YARD_MAP_PRINT, sheet]] as const) {
+      assert.ok(!/A4_|PX_PER_MM|297|210/.test(body), `${rel} re-derives the paper geometry`);
+    }
     // The CODE, not the prose: the module's header DISCLAIMS these words by name, which
     // is exactly the kind of sentence a raw-source scan would trip over.
     const fitSrc = code(PRINT_FIT);
@@ -3067,7 +3085,10 @@ console.log('\n12. THE YARD MAP PAGE (2026-09-22)');
     assert.ok(/export const LENS_PRINT_MARGIN_MM = 10;/.test(summary), 'the sheet margin is no longer exported');
     assert.ok(/marginMm: LENS_PRINT_MARGIN_MM/.test(summary), 'the @page rule uses a different margin');
     assert.ok(/marginMm=\{LENS_PRINT_MARGIN_MM\}/.test(summary), 'the map solves against a different margin');
-    assert.ok(/a4LandscapeBox\(marginMm\)/.test(sheet), 'the map does not solve against the sheet\'s own box');
+    // The box is built inside `solveYardMapFit` (the model) since 2026-09-23; the sheet
+    // hands it the margin, so the chain @page → prop → solve → box is still one number.
+    assert.ok(/a4LandscapeBox\(marginMm\)/.test(model), 'the solve does not build the page box from its caller\'s margin');
+    assert.ok(/solveYardMapFit\(map, marginMm\)/.test(sheet), 'the map does not solve against the sheet\'s own margin');
   });
 
   check('the FIXTURE can produce BOTH map shapes, so the worst case is reachable', () => {

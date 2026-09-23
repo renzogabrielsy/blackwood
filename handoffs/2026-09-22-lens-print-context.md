@@ -51,3 +51,10 @@ Tag-at 1.51M ₱44.40 ↓12.4% corr 0.74 prem −0.38.
 ## 6. Git state
 `main` = `origin/main` after the merge. Branch kept. Merged worktrees under `.claude/worktrees/`
 can be removed. Fly worker unchanged (**v31**).
+
+## 7. ADDENDUM (2026-09-23) — yard map in the blend proposal print
+Page 3 of the proposal print, both paths, from the SHARED lens yard-map model (extracted, lens output
+unchanged). Selected blocks coloured by natural-breaks group when the Price page is on, else one accent;
+vacated blocks keep their fill with a dashed outline. Fourth Include-pages option `Yard map`. Lesson:
+**a page that borrows another page's chrome budget overflows by exactly the chrome it doesn't have** —
+measure the reserve per sheet. Still unverified on the real signed-in page.

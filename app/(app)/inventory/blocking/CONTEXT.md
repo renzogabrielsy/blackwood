@@ -56,8 +56,9 @@ Physical warehouse grid visualization — the digital equivalent of the Excel bl
 | `../_shared/use-blend-analysis.ts` | **NEW. THE ANALYSIS READ** — one payload per open / version switch / option change, and nothing else. Takes a DISCRIMINATED source (`{kind:'saved', proposalId, versionNo}` or `{kind:'live', blockLocs}`) so it is structurally incapable of sending both (the contract refuses that). **NO DEBOUNCE AT ALL** — its inputs are discrete events, not keystrokes, so a debounce would only be a timer for a remount to destroy (the 2026-09-21 lens stall) — and the guard is the request's own **SIGNATURE**, so a reply for what is still wanted is ALWAYS applied. A stall says so after `LENS_STALL_MS` with Copy and Retry; a refusal KEEPS the previous payload. Exports the `BlendAnalysisAdapter` port, defaulted to the live action and injectable only for the gated dev rig. |
 | `../_shared/blend-analysis-sections.tsx` | **NEW. THE ANALYSIS PAGES ON SCREEN** — `BlendAnalysisSections` (the stack) and `BlendAnalysisIncludePopover` (the header's **Include pages** control). Three pages: **Price groups — natural breaks** (a plain-language method note, then HIGH → AVERAGE → LOW, each group a dense table with a SUBTOTAL row and one grand FOOTER from the payload's `overall`, which is what makes it visibly equal the proposal's own raw blend price) plus **Against market** (the PRICE LENS's bands, labelled with the lens's OWN `priceBandLabel` and the reader's own band names, dearest first); **Quality** (three tables — MC, ASH, and BD ASTM **with BD JIS as a second value column**, not a fourth table — highest reading first, with the reader's own WET / ASHY highlight applied through `getLabHighlightText`); **Age** (the AGE LENS's bands via `ageBandLabel`, oldest first, block · batch · balance · age · first delivery · last delivery). Excel Standard throughout: `table-fixed`, explicit pixel widths whose STATED sum is the table's `minWidth`, `font-mono` right-aligned numerics, accounting ₱. **Every subtotal and footer figure is the payload's own** — there is no `reduce`, no `+=` and no division by a total in the file; the one piece of money arithmetic is a per-ROW `kg × ₱/kg`, which contributes to no total. An unmeasured / undated block is listed in a MUTED group with an em dash, **never in the cheapest, cleanest or freshest group**. |
 | `../_shared/blend-analysis-print.ts` | **NEW. THE ANALYSIS PAGES ON PAPER** — `buildBlendAnalysisPages(input)` returns one `<section class="apage">` per chosen page and `BLEND_ANALYSIS_PRINT_CSS` carries their rules; both are appended to the existing self-contained iframe document by `buildBlendPrintDocument`'s new fifth argument. **An empty analysis leaves that document byte-identical, including its `<style>` block.** Print-specific rules the screen does not need: **no `<tfoot>`** (Chrome repeats one on every page, so a subtotal and the grand total are `<tbody>` rows), **a group is its own `<tbody>`** with `break-inside: avoid` only while it is SMALL (≤ 4 rows — forcing a 24-row group whole would push a page of white space ahead of it), `break-after: avoid` on every heading and caption, a **7pt font floor** with the padding squeezed first, and the group tints written as inline `rgb(r g b / 0.18)` from `lens/lens-ramp.ts` because **an iframe has no `globals.css`, so a `.lens-band-3` class would print white**. |
+| `../_shared/blend-yard-map-print.ts` | **NEW (2026-09-23). THE BLEND PRINT'S YARD MAP** — pure, no React. `BLEND_PRINT_MARGIN_MM` (the blend document's ONE margin, read by its `@page` rule AND by the map's fit), `buildBlendYardMapModel` (the normalized `BlendYardMapModel` BOTH print paths consume — cells, bands, caption, `goneLocs`, `byPriceGroup`), `blendYardMapStops` / `blendYardMapLegend` / `blendYardMapFit`, `BLEND_YARD_MAP_PRINT_CSS` and `buildBlendYardMapPage` (the `<section class="ymap">` HTML). **IT IS THE LENS MAP, NOT A PORT OF IT** — the geometry, the one-page fit (`solveYardMapFit`), the PRINT palette (`printFillRgbAtStop`), the ink rule (`lensYardMapInkOn`) and the four cell kinds (`lensYardMapPaint`) are all imported from `lens/lens-yard-map-model.ts`; a literal `220`/`238` appears nowhere and `WAREHOUSES` is never restated. It adds exactly two decisions — which band a selected block is in, and that a selected block the yard no longer holds is still drawn. **No ₱, no kilogram, no lab reading**, so its Include-pages checkbox is the one that is NOT price-gated. |
 | `lens/lens-summary-print.tsx` | **THE PRINTED LENS SUMMARY, REDESIGNED 2026-09-22** — `LensSummaryPrintControl` (the legend bar's **Print** button) + the sheet, over a normalized `LensSummaryPrintModel` each lens builds for itself. The owner's four asks, in his order: the TITLE is **exactly the lens's name** (`Price lens` / `Age lens` / `Supplier lens`) with **no blurb and no subheading**; **ONE terse settings line** under it in the `<fact> · <fact>` style (`Set price ₱46 · ₱46 and up is above set price · cuts −1 · market · by kilograms · printed 2026-09-22 09:04`), the stamp appended by the sheet; the **BAND TABLE** (band · blocks · kg · share · the lens's weighted figure, total as the last `<tbody>` row, its figure cell saying **`avg of priced`** / `avg of dated`) and the **RATIO BAR** kept unchanged, because they are the part he said worked (**the band table's last column grew TWO optional fields later the same day — `bandFigureColumnLabel` and a per-figure `LensPrintAccounting {symbol, amount}` — so the SUPPLIER sheet can head it `₱/kg` in the accounting layout, or `Mixed` for a price-denied reader, while the price and age sheets, which supply neither, stay byte-for-byte what they were**); and the three-column block lists **replaced by ONE FULL-WIDTH TABLE PER BAND, GROUPED BY WAREHOUSE** — `BLOCK · BATCH · BALANCE kg · MC · ASH · BD ASTM · BD JIS · GRIT · VM · FC · <figure>` — with **each band on its own page** (`.lens-print-band { break-before: page }`), a warehouse group per `<tbody>` (`break-inside: avoid` while small, its heading row `break-after: avoid`), a WAREHOUSE SUBTOTAL carrying blocks + kg, and a BAND TOTAL from the payload. **SECOND PASS 2026-09-22 — three PRICE-SHEET-ONLY additions, each behind an OPTIONAL model field so the age and supplier sheets are provably unchanged:** `warehousePages` puts each `WHSE X` on its OWN SHEET under a repeated band running line (the first warehouse rides the band's own break; the BAND TOTAL rides the LAST warehouse's page; `showWarehouseHeadingRow={false}` stops the heading printing twice); `figures` / `totalFigures` fill the subtotal's and the band total's seven lab cells and ₱/kg from `warehouseSubtotals` — a **LOOKUP**, never a computation, NULL an em dash and never a 0, with a coverage note naming only the stats short of the group; and `blockSupplierColumnLabel` adds a SUPPLIER column between BATCH and BALANCE (`Ornales` / `Paquibot 63%` / an em dash), on a SEPARATE width table that sums to exactly 100%. `page1Extra` is a NODE carrying page one's context block, so this sheet still knows nothing about a market series. Spanning several sheets is the deliberate trade for the lab panel. **Band ISOLATION is respected and SAID** (*"Showing 2 of 4 bands"*). **PAGE TWO is the YARD MAP** (2026-09-22, `lens/lens-yard-map-print.tsx`) — every block location in solid band colour, loc centred and big; it exports `LENS_PRINT_MARGIN_MM` so the map's fit arithmetic and the `@page` rule cannot disagree. It reuses the PLATFORM print kit (`GroupPrintStage` + `printCard` + `buildPrintPageRules`, stage PORTALLED to `<body>`) and adds nothing to it; the sheet is explicitly LIGHT (`bg-white` / `text-zinc-*`) because it lays out in the live DOM, with two deliberate exceptions — the swatch and the bar segments use `lens-band-swatch` + the ramp class, whose solid `rgb(var(--lens-hue))` is identical in both themes and identical to the grid. **It formats nothing**: every figure arrives preformatted. |
-| `lens/lens-yard-map-model.ts` | **NEW (2026-09-22). THE YARD MAP's CELLS — pure, no React.** `buildLensYardMap({ data, bandOf, isMixed? })` turns the grid's OWN geometry (`../constants`'s `WAREHOUSES`, plus `blocking-grid.tsx`'s `<whse>-<col><row>` slot key — **never a literal 220/238**) into one `LensYardMapCell` per SLOT: `{ loc, lines, occupied, band, mixed }`. Also `lensYardMapPaint(cell, ramp, stopByVisibleBand)` (the FOUR cell kinds — `banded` / `muted` / `nodata` / `empty`; a `banded` fill is `printFillRgbAtStop`, **never** the screen ramp), **`lensYardMapInkOn(rgb)` — the ONE luminance rule, which on the print palette now answers near-black for every fill and whose white branch is therefore unreachable on the map** (kept rather than hardcoded, because a cell, a legend swatch border and a mixed block's dash must all reach the same answer) — `lensYardMapLuminance`, `lensYardMapLines(key, loc, force?)` and the paper palette + `LENS_YARD_MAP_MIN_LOC_PT` / `_LINE_HEIGHT` / `_NODATA_PT` / `_INK_CROSSOVER`. It counts SLOTS and nothing else: no kilogram, no ₱, no age, no supplier, no lab reading. |
+| `lens/lens-yard-map-model.ts` | **NEW (2026-09-22). THE YARD MAP's CELLS — pure, no React.** `buildLensYardMap({ data, bandOf, isMixed? })` turns the grid's OWN geometry (`../constants`'s `WAREHOUSES`, plus `blocking-grid.tsx`'s `<whse>-<col><row>` slot key — **never a literal 220/238**) into one `LensYardMapCell` per SLOT: `{ loc, lines, occupied, band, mixed }`. Also `lensYardMapPaint(cell, ramp, stopByVisibleBand)` (the FOUR cell kinds — `banded` / `muted` / `nodata` / `empty`; a `banded` fill is `printFillRgbAtStop`, **never** the screen ramp), **`lensYardMapInkOn(rgb)` — the ONE luminance rule, which on the print palette now answers near-black for every fill and whose white branch is therefore unreachable on the map** (kept rather than hardcoded, because a cell, a legend swatch border and a mixed block's dash must all reach the same answer) — `lensYardMapLuminance`, `lensYardMapLines(key, loc, force?)` and the paper palette + `LENS_YARD_MAP_MIN_LOC_PT` / `_LINE_HEIGHT` / `_NODATA_PT` / `_INK_CROSSOVER`. It counts SLOTS and nothing else: no kilogram, no ₱, no age, no supplier, no lab reading. **SHARED WITH THE BLEND PROPOSAL PRINT since 2026-09-23** — the core `buildYardMapCells` (which `buildLensYardMap` is now a two-line wrapper over), the page geometry constants and the two-stage solve `solveYardMapFit` moved HERE from `lens-yard-map-print.tsx` so the blend's non-React print paths can read them; the lens page's own output is unchanged by construction, because none of the inputs moved. |
 | `lens/lens-yard-map-print.tsx` | **NEW (2026-09-22). THE YARD MAP PAGE** — `LensYardMapPage`, page TWO of the lens print. Every warehouse as a labelled block of square cells (column numbers along the top, row letters down the side, both small and muted), each occupied slot in the **SOLID** band fill from **`LENS_PRINT_FILL_RGB`** (the PRINT palette — a pale tint of the screen hue, so the loc is BLACK on every cell; the legend swatches read the same accessor, or the legend would describe a different map) with the BLOCK LOC centred in the largest font the cell allows. Solves its one-page promise with the PLATFORM `fitCellGrid` / `fitMonoLabelPt` (`components/shared/print/print-fit.ts`) against `a4LandscapeBox(LENS_PRINT_MARGIN_MM)` — the sheet's own margin, exported so the `@page` rule and the arithmetic cannot disagree. Carries a one-line legend (every shown band, `other bands (not shown)` when isolated, `— no data (N)`, `empty slot`) and NAMES any occupied block whose code is not a slot on this layout. |
 | `lens/lens-print-chart.tsx` | **NEW (2026-09-22). A CHART FOR PAPER** — `PrintSeriesChart` (one shape, two uses: a bare LINE for the market series, an AREA-plus-LINE for a price-vs-volume panel), `PrintChartLegend`, the explicit `PRINT_CHART_INK` palette and `LENS_PRINT_CHART_LABEL_PX`. **Hand-drawn SVG rather than recharts, and that is a defect list not a preference:** `/analytics`' charts are `<ResponsiveContainer>` and size themselves from a ResizeObserver callback one frame LATER, so they print an EMPTY BOX under `printCard` (which calls `window.print()` as soon as the stage lays out); their series are theme tokens (`var(--chart-2)`), so a dark-mode reader would print a dark chart onto white paper; and importing them would put recharts in the Blocking bundle for a twelve-point print-only series. **Nothing in `app/(app)/analytics/` was moved or shared — that CONTEXT.md is untouched.** It computes no statistic (scaling a value to a y coordinate is geometry) and formats nothing: every label is a string the model already built, and the file contains no `₱` and no `toLocaleString`. **A `null` BREAKS the line and the area** rather than drawing across it — NULL is never 0. Size is stated by the caller in PIXELS; ink is explicit hex with `print-color-adjust: exact`; **every label reads ONE constant (7 px)**, after the first pass shipped 5.5 px month ticks (~4 pt on paper). |
 | `lens/lens-market-model.ts` | **NEW (2026-09-22). BOTH page-one context blocks, as PRINTABLE MODELS** — `buildLensMarketPrintModel()` (the price sheet's MARKET table + chart) and `buildLensSupplierMarketPrintModel()` (the supplier sheet's PRICE vs VOLUME panels + table), plus `printChartDomain()`. **NOT ONE NUMBER IS DERIVED HERE**: every price, kilogram, share, change, direction, correlation and premium is a field of `BlockingMarketContext` / `BlockingSupplierMarket`, rendered verbatim — those functions aggregate as Σ money ÷ Σ priced kg inside `view_analytics_rcin_monthly` / `view_analytics_supplier_monthly`, and a TypeScript copy would be a second definition. What it DOES do is FORMAT (it owns every `₱`, so the two sheets spell none) and work out a CHART DOMAIN, which is an axis range and not a statistic. **`printChartDomain` takes a `floor`** — measured on a real PDF, the 8% pad pushed a VOLUME axis below zero and every panel printed `−41t`; it is a floor, **not** a zero-base, so a price axis still starts near its own minimum. NULL IS NEVER 0 in six places, including `direction` (NULL, never the word *flat*) and `priceVolumeCorr` (`n/a (2 m)` under three priced months). PURE. |
@@ -754,7 +755,8 @@ took the live site down). Both existing lens probes and the block-facts probe ar
 
 > **THE DATA LAYER IS THE SECTION ABOVE.** This one is what the reader sees and what
 > comes out of the printer. Proofs: `npx tsx scripts/verify-blend-analysis-ui.ts`
-> (**65 assertions**), which is the UI twin of `verify-blend-analysis.ts`'s 71.
+> (**97 assertions** — 82, plus 15 for the 2026-09-23 yard-map page), which is the UI twin of
+> `verify-blend-analysis.ts`'s 71.
 
 **What the owner asked for**, verbatim: *"in the proposals, when printing and viewing saved
 blend proposals, add more pages that group and arrange blocks according to high priced and
@@ -879,6 +881,110 @@ project's standing answer to a constant that must live in two places.
 **The PDF carries the same pages**, built from the same payload and the same words through
 `pdfText` (jsPDF's Helvetica is WinAnsi, so `₱` is spelled `PHP` and every cell is filtered),
 with the subtotal and total as body rows for the same reason.
+
+#### THE YARD MAP PAGE IN THE BLEND PRINT — ADDED 2026-09-23
+
+Renzo: *"I'd also like to see a blocking view in the print of blend proposals, similar to
+the ones we made for the lens prints."*
+
+**"Similar to" is implemented as "IS".** The page is drawn from
+`lens/lens-yard-map-model.ts` — the same geometry (`WAREHOUSES` through
+`buildYardMapCells`), the same one-page solve (`solveYardMapFit`), the same PRINT palette
+(`LENS_PRINT_FILL_RGB` via `printFillRgbAtStop`), the same ink rule (`lensYardMapInkOn`,
+which on that palette always answers near-black) and the same four cell kinds
+(`lensYardMapPaint`). `_shared/blend-yard-map-print.ts` adds two decisions and the HTML;
+nothing about the yard's shape or the cell size is stated a second time, and the verify
+script asserts the module contains no `WAREHOUSES`, no `fitCellGrid`, no `a4LandscapeBox`
+and no slot literal.
+
+**What MOVED to make that possible** (and it is the only thing that moved): the page
+geometry constants and the two-stage fit left `lens/lens-yard-map-print.tsx` for the
+model, because the lens sheet is a React component laying out in the live DOM while the
+blend printout is a self-contained HTML string in an iframe and a jsPDF page — neither can
+render the other. `buildLensYardMap` is now a two-line wrapper over the shared
+`buildYardMapCells` core, so **the lens prints' output is unchanged by construction rather
+than by inspection**; `verify-blocking-lens-ui.ts` stays at **228 assertions**, with two of
+them restated to look for the solve where it now lives (and strengthened: the sheet is
+additionally proven NOT to own a second copy).
+
+**WHERE IT LANDS:** its own sheet, **directly after `Selected Blocks` and before the
+analysis pages**, in BOTH print paths — it describes the block list rather than analysing
+it. Measured on the `blendanalysis` rig by driving the REAL Print and Download buttons in
+headless Chromium (zero console errors): with the Price page ON, **9 pages in both paths**
+— *head · Selected blocks · **Yard map** · Price groups · Against market · MC · ASH · BD ·
+Age* — and at `?prices=0`, **7 pages in both paths**, the map still **page 3**. The two
+documents agree page for page because they consume the same model.
+
+**⚠️ THE CHROME BUDGET IS THIS SHEET'S OWN, AND THAT WAS MEASURED THE HARD WAY.** The lens
+map reserves **40 px** for its heading and legend; this one also carries an as-of caption
+and a footnote, and at 40 px the first draft laid out **764.70 px against 718.11 px of
+printable height — 46.59 px over**, so its legend printed on a **second sheet**.
+`break-inside: avoid` cannot fix that: Chrome cannot avoid breaking what does not fit. So
+`solveYardMapFit` gained an optional `reservedHeightPx` (**defaulting to the lens budget,
+so the lens pages are untouched**) and `blendYardMapReservedPx()` states what this sheet
+actually spends — measured in a real print-media render: `<h2>` 19.80 + 1 px, legend 14.00
++ 3 px, a footnote line 14.00 px **budgeted at TWO so a long block list that wraps cannot
+push the page over**, plus 4 px of rounding slack. **Both print paths read that one
+budget** (`blendYardMapSolve(model, marginMm)`), which is what lets the jsPDF file print at
+its own 40 pt margin without a second copy of the arithmetic. Two things also FOLDED to buy
+the cells their size back: the caption rides ON the heading line in the house
+`<fact> · <fact>` style, and the two footnotes join into one — budgeting them separately
+cost **5.5 px off every cell row** (33.65 px cells with PCA/PCB in, against 37.0 px folded).
+
+**THE COLOUR RULE**
+
+| Cell | Fill |
+|---|---|
+| a SELECTED block, Price groups page ON and its payload present | that block's own natural-breaks group — **low / average / high → the cost ramp's stops 0 / 3 / 6**, resolved by the same `resolveBandRampStop` the analysis tables use, with a three-entry legend (`LOW · AVERAGE · HIGH`, the words `groupWord()` already owns) |
+| a SELECTED block otherwise (page off, price-denied, or the analysis has not arrived) | **ONE accent — the cost ramp's MIDDLE stop 3** (the amber tint `249 201 118`, 13.64:1 against black), legend `Selected block`. The middle on purpose: stop 0's emerald would read "cheap" and stop 6's rose "dear" on a map making no price claim. The stop is STATED on the band (`rampStop`), because a single band at position 0 would otherwise inherit the ramp's cheapest colour |
+| any OTHER occupied slot | the lens map's light neutral grey, loc small and dark — the `muted` kind, **with NO dash**, because "not selected" and "we could not place it" are different answers and only the second draws one |
+| an EMPTY slot | white with a hairline and a small muted loc |
+| **a SELECTED block the yard NO LONGER HOLDS** | the selection fill **plus a dashed inset outline** (the supplier lens's mixed-marker technique, in the ink rather than the hue), a legend entry `dashed = no longer occupied (N)`, and a footnote NAMING the blocks. It is **never dropped** — the proposal said that block, and a map that omitted it would quietly describe a different blend |
+
+**Nothing is computed.** Group membership is a LOOKUP over the payload's own
+`price.natural.groups[].blocks[]`; the map carries no kilogram, no ₱, no age and no lab
+reading, and the verify script runs the no-`reduce` / no-`+=` / no-`* 100` / no-division
+scan over the module.
+
+**THE CAPTION IS THE HONEST PART.** The occupancy is **today's** (it comes from the live
+grid payload, handed down as the dialog's new `occupiedLocs` prop — `Object.keys(data)` in
+`blocking-grid.tsx`) while the SELECTION is the day the version was proposed. So a saved
+version's map reads `Yard occupancy as of today · selection as saved 2026-09-21` (the date
+is the snapshot's own `computed_at` through `blendComputedDate`, never the print clock) and
+the live modal's reads `Yard occupancy as of today`. Without that line a reader could not
+tell whether a grey cell means "fed out since" or "never in the blend".
+
+**THE FOURTH OPTION.** `Yard map` is the fourth **Include pages** checkbox, **default ON**,
+persisted in the same `user_table_settings` document through the same untrusted per-field
+parser — which is why it needed no migration and no backfill: a document written before it
+existed simply says nothing about it, and the parser reads that as the shipped default.
+`serializeBlendAnalysisOptions` still omits defaults, so `parse ∘ serialize` is the identity
+on all **sixteen** states. It is deliberately **NOT** in `BLEND_ANALYSIS_PAGE_ORDER` and
+`analysisPages()` never returns it, and three correct things follow from that one fact: it
+renders no on-screen section (print only), `buildBlendAnalysisPages` never builds it, and
+**`wantsAnalysis()` stays FALSE when it is the only page ticked**, so a reader who wants
+only the map pays no analysis round-trip. It is **NOT price-gated** (it carries no ₱) — a
+price-denied reader keeps the map and gets the single accent. The Print button's `+N` is
+`includedPageCount()`, THE one definition: 4 with everything on, 3 for a denied reader.
+
+**ONE PAGE, STRUCTURALLY.** `.ymap` carries `break-before: page` **and**
+`break-inside: avoid` (+ the legacy `page-break-*` twins), and it deliberately does **not**
+wear `.apage`: that stylesheet rides only when there ARE analysis sheets, and the map may be
+the only extra sheet a reader ticked. `BLEND_PRINT_MARGIN_MM` (10) is stated once and read
+by the document's `@page` rule AND by the solve, so the sheet cannot lay out against a
+different box than it prints on.
+
+**THE jsPDF PATH DRAWS THE CELLS NATIVELY — rectangles and text, never a rasterised
+screenshot.** There is no DOM to photograph (the PDF is built from the payload in a pure
+function that also runs in Node) and the project has no html2canvas; more to the point the
+map IS rectangles and five-character labels, so drawing them keeps the text selectable and
+the file small — the same reason `buildBlendPdf` exists rather than screenshotting the
+modal. It consumes the **same `BlendYardMapModel` object** the HTML sheet does (built once,
+in the dialog) and the **same `solveYardMapFit`**; the only thing it adds is the unit
+conversion, `PT_PER_PX = 72/96`, since the solve works in CSS px at 96 dpi and jsPDF in
+points. Its box is solved against the document's own `marginX`, converted to mm, so the
+drawing and the arithmetic cannot disagree. The dashed marker is `setLineDashPattern`, and
+the legend rows come from the shared `blendYardMapLegend`.
 
 #### THE LENS SUMMARY PRINT — REDESIGNED 2026-09-22
 
@@ -1068,7 +1174,11 @@ purely for location reference, so make the block loc (C-19A, etc.) right in the 
 font so it can be fully seen in the print. Make sure it shows ALL blocks in one landscape page.”*
 
 It is on **ALL THREE lenses**, built by `lens/lens-yard-map-model.ts` and drawn by
-`lens/lens-yard-map-print.tsx` — see both in Files.
+`lens/lens-yard-map-print.tsx` — see both in Files. **The MODEL is shared with the BLEND
+PROPOSAL print since 2026-09-23** (its core `buildYardMapCells`, the page geometry constants
+and the two-stage solve `solveYardMapFit`, which moved out of the sheet so a non-React print
+path could read them) — see "THE YARD MAP PAGE IN THE BLEND PRINT" below; the lens pages'
+own output is unchanged.
 
 **IT IS PAGE TWO, AND THAT WAS MEASURED RATHER THAN PREFERRED.** He offered page one *or* the
 next page. Page one's band table is **data-sized** — two bands on a default price lens, up to

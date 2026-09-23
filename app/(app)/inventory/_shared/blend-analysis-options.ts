@@ -17,10 +17,22 @@
 // never "one bad key, everything to defaults", which would throw away two good
 // choices for one typo.
 //
-// ── THE DEFAULT IS ALL THREE ON ──────────────────────────────────────────────
+// ── THE DEFAULT IS EVERYTHING ON ─────────────────────────────────────────────
 // The pages are the feature; a reader who has never opened the popover should see
 // them. `serializeBlendAnalysisOptions` therefore omits a `true`, so the stored
-// document says only what was turned OFF and "no row" means "everything".
+// document says only what was turned OFF and "no row" means "everything" — which is
+// also why the FOURTH page (the yard map, 2026-09-23) needed no migration and no
+// backfill: a document written before it existed simply says nothing about it, and the
+// per-field parser reads that as the shipped default.
+//
+// ── THE YARD MAP IS AN INCLUDE-PAGE, NOT AN ANALYSIS PAGE ────────────────────
+// It is ticked in the same popover, stored in the same document and counted on the same
+// `+N` button, but it is NOT in `BLEND_ANALYSIS_PAGE_ORDER` and `analysisPages()` never
+// returns it, because three things follow from that one fact and all three are correct:
+// it renders no on-screen section (it is a printed sheet only), it is not built by
+// `buildBlendAnalysisPages`, and `wantsAnalysis()` stays FALSE when it is the only page
+// ticked — so a reader who wants nothing but the map pays no analysis round-trip. It also
+// carries NO ₱ (it is slots and colours), so unlike the price page it is never gated.
 //
 // ── PRICE IS NOT A PREFERENCE ALONE ──────────────────────────────────────────
 // The price page is also subject to the page's EFFECTIVE price flag
@@ -36,7 +48,7 @@
 /** `user_table_settings.module` for the Include-pages choice. Also the localStorage base. */
 export const BLEND_ANALYSIS_SETTINGS_MODULE = 'blocking_blend_analysis';
 
-/** The three optional pages, in render and print order. */
+/** The three optional ANALYSIS pages, in render and print order. */
 export type BlendAnalysisPageId = 'price' | 'quality' | 'age';
 
 export const BLEND_ANALYSIS_PAGE_ORDER: readonly BlendAnalysisPageId[] = [
@@ -45,9 +57,27 @@ export const BLEND_ANALYSIS_PAGE_ORDER: readonly BlendAnalysisPageId[] = [
   'age',
 ];
 
+/** Every page a reader can tick — the three analysis pages plus the YARD MAP. */
+export type BlendIncludePageId = BlendAnalysisPageId | 'yardMap';
+
+/**
+ * The CHECKBOX order, and the order the parser and serializer walk.
+ *
+ * The yard map is LAST here because it is the fourth checkbox, and FIRST in the printed
+ * document (immediately after the Selected blocks table) because it belongs beside the
+ * block list rather than among the analysis tables. Two orders, each stated where it
+ * applies; neither is derived from the other.
+ */
+export const BLEND_INCLUDE_PAGE_ORDER: readonly BlendIncludePageId[] = [
+  'price',
+  'quality',
+  'age',
+  'yardMap',
+];
+
 /** What each checkbox says, and what the page is for. */
 export const BLEND_ANALYSIS_PAGE_LABELS: Record<
-  BlendAnalysisPageId,
+  BlendIncludePageId,
   { label: string; blurb: string }
 > = {
   price: {
@@ -62,18 +92,25 @@ export const BLEND_ANALYSIS_PAGE_LABELS: Record<
     label: 'Age',
     blurb: 'How long each pile has been sitting, in the age lens’s own bands.',
   },
+  yardMap: {
+    label: 'Yard map',
+    blurb: 'Where the blend sits — every block location on one landscape sheet.',
+  },
 };
 
 export interface BlendAnalysisOptions {
   price: boolean;
   quality: boolean;
   age: boolean;
+  /** The printed YARD MAP sheet. Not an analysis page — see the header. */
+  yardMap: boolean;
 }
 
 export const DEFAULT_BLEND_ANALYSIS_OPTIONS: BlendAnalysisOptions = {
   price: true,
   quality: true,
   age: true,
+  yardMap: true,
 };
 
 /**
@@ -86,7 +123,7 @@ export function parseBlendAnalysisOptions(raw: unknown): BlendAnalysisOptions {
   const out: BlendAnalysisOptions = { ...DEFAULT_BLEND_ANALYSIS_OPTIONS };
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
   const rec = raw as Record<string, unknown>;
-  for (const id of BLEND_ANALYSIS_PAGE_ORDER) {
+  for (const id of BLEND_INCLUDE_PAGE_ORDER) {
     if (typeof rec[id] === 'boolean') out[id] = rec[id] as boolean;
   }
   return out;
@@ -103,7 +140,7 @@ export function serializeBlendAnalysisOptions(
   o: BlendAnalysisOptions,
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {};
-  for (const id of BLEND_ANALYSIS_PAGE_ORDER) {
+  for (const id of BLEND_INCLUDE_PAGE_ORDER) {
     if (o[id] !== DEFAULT_BLEND_ANALYSIS_OPTIONS[id]) body[id] = o[id];
   }
   return body;
@@ -126,6 +163,20 @@ export function analysisPages(
     if (id === 'price') return canViewPrices;
     return true;
   });
+}
+
+/**
+ * How many EXTRA SHEETS the printout will carry — THE one definition of the `+N` count.
+ *
+ * The yard map is added here rather than inside `analysisPages()` so the analysis gate
+ * keeps meaning exactly one thing (which ANALYSIS pages a reader may see), and so the
+ * price permission cannot accidentally take the map away: it carries no ₱.
+ */
+export function includedPageCount(
+  o: BlendAnalysisOptions,
+  canViewPrices: boolean,
+): number {
+  return analysisPages(o, canViewPrices).length + (o.yardMap ? 1 : 0);
 }
 
 /** `3 extra pages` / `1 extra page` / `no extra pages` — for the Print button's title. */

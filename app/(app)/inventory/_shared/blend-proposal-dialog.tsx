@@ -66,6 +66,7 @@ import type { BlendProposal, BlendProposalBlock } from '../blocking/actions';
 import {
   analysisPages,
   analysisPagesLabel,
+  includedPageCount,
   DEFAULT_BLEND_ANALYSIS_OPTIONS,
   parseBlendAnalysisOptions,
   serializeBlendAnalysisOptions,
@@ -73,6 +74,18 @@ import {
   BLEND_ANALYSIS_SETTINGS_MODULE,
   type BlendAnalysisOptions,
 } from './blend-analysis-options';
+// ── THE YARD MAP SHEET (2026-09-23) ──
+// The owner: *"I'd also like to see a blocking view in the print of blend proposals,
+// similar to the ones we made for the lens prints."* It IS the lens map — the geometry,
+// the fit, the paper palette and the ink all come from `blocking/lens/lens-yard-map-model`
+// through this module, which only decides which band each block is in and emits the HTML.
+import {
+  BLEND_PRINT_MARGIN_MM,
+  BLEND_YARD_MAP_PRINT_CSS,
+  buildBlendYardMapModel,
+  buildBlendYardMapPage,
+  type BlendYardMapModel,
+} from './blend-yard-map-print';
 import {
   BlendAnalysisIncludePopover,
   BlendAnalysisSections,
@@ -185,6 +198,17 @@ export function buildBlendPrintDocument(
    * what it was before the analysis existed, including its `<style>` block.
    */
   analysisPagesHtml?: string | null,
+  /**
+   * The YARD MAP sheet, already built by `buildBlendYardMapPage` — one
+   * `<section class="ymap">` that lands directly AFTER the Selected Blocks table and
+   * BEFORE the analysis sheets, because it describes the block list rather than
+   * analysing it.
+   *
+   * Passed in for the same reason `analysisPagesHtml` is: the document stays a pure
+   * function of what was on screen. Absent or empty → this document is byte-identical to
+   * what it was before the map existed, including its `<style>` block.
+   */
+  yardMapHtml?: string | null,
 ): string {
   const showPrices = proposal.can_view_prices && showPricesPref && proposal.raw_price_per_kg !== null;
 
@@ -315,9 +339,13 @@ export function buildBlendPrintDocument(
   const remarkLine = remark ? `<p class="subtitle remark">${escapeHtml(remark)}</p>` : '';
 
   // The analysis sheets' CSS rides ONLY when there are analysis sheets, so a printout
-  // with no extra pages is byte-identical to the pre-existing one.
+  // with no extra pages is byte-identical to the pre-existing one. The map's CSS is
+  // INDEPENDENT of it for the same reason in reverse: the map may be the ONLY extra sheet
+  // a reader ticked, and it carries its own `break-before: page`.
   const analysisHtml = (analysisPagesHtml ?? '').trim();
   const analysisCss = analysisHtml === '' ? '' : BLEND_ANALYSIS_PRINT_CSS;
+  const yardHtml = (yardMapHtml ?? '').trim();
+  const yardCss = yardHtml === '' ? '' : BLEND_YARD_MAP_PRINT_CSS;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -328,7 +356,7 @@ export function buildBlendPrintDocument(
   /* LANDSCAPE. The table is 15 columns wide once supplier + the two ages join it,
      and portrait A4 cannot hold that without shrinking the type below legibility.
      Padding is squeezed BEFORE the font, and the font floor is 7pt. */
-  @page { size: A4 landscape; margin: 10mm; }
+  @page { size: A4 landscape; margin: ${BLEND_PRINT_MARGIN_MM}mm; }
   /* The HEAD BLOCKS are squeezed so the 24-block table still lands on ONE page:
      A4 landscape leaves ~190mm of height, the table needs ~95mm of it, and the
      three definition lists were eating nearly all of the rest in white space. */
@@ -352,7 +380,7 @@ export function buildBlendPrintDocument(
   }
   .sup-all  { background: #d1fae5; color: #065f46; border: 1px solid #6ee7b7; }
   .sup-some { background: #ffedd5; color: #9a3412; border: 1px solid #fdba74; }
-${analysisCss}</style>
+${yardCss}${analysisCss}</style>
 </head>
 <body>
   <h1>${title}</h1>
@@ -373,6 +401,7 @@ ${pricingSection}
     <h2>Selected Blocks</h2>
     ${blockTable}
   </section>
+${yardHtml}
 ${analysisHtml}
   <div class="doc-footer">Blackwood ${EMDASH} Blend proposal${
     meta?.versionNo != null ? ` v${meta.versionNo}` : ''
@@ -1026,6 +1055,17 @@ interface BlendProposalDialogProps {
    */
   batchIdByLoc?: Record<string, string | null>;
   /**
+   * Every `block_loc` the yard holds a pile in RIGHT NOW — the grid's own payload.
+   *
+   * The printed YARD MAP draws today's occupancy in grey behind the blend's own blocks,
+   * so it needs the WHOLE yard, not just the selection. It is a separate prop from
+   * `batchIdByLoc` on purpose: that one answers "which batch is in this block" for the
+   * blocks of the BLEND, and a caller may legitimately supply it for the selection alone.
+   * Omitted → the map still draws (the selection filled, every other slot empty), which
+   * is the honest answer to "what else is in the yard?" when nobody said.
+   */
+  occupiedLocs?: readonly string[];
+  /**
    * The supplier/age read's PORT — the same adapter idiom the lens panels carry, at the
    * same tiny scale. The default IS the server action and is what production always
    * uses; it is injectable for exactly one reason, which is the one the lens fixtures
@@ -1086,6 +1126,7 @@ export function BlendProposalDialog({
   onRemoveBlock,
   showPrices: showPricesPref = true,
   batchIdByLoc,
+  occupiedLocs,
   factsAdapter,
   analysisAdapter,
   saved = null,
@@ -1211,7 +1252,15 @@ export function BlendProposalDialog({
   const { settings: tableSettings } = useTableSettings();
   const labHighlights = tableSettings.labHighlights;
 
-  const analysisPageCount = analysisPages(analysisOptions, showPrices).length;
+  const analysisPageIds = analysisPages(analysisOptions, showPrices);
+  /**
+   * The map is coloured by PRICE GROUP only when that page is actually in the document.
+   * A legend describing a grouping the reader switched off would be a legend with no
+   * table; with it off (or for a price-denied reader) the map falls to one accent.
+   */
+  const priceGroupsOn = analysisPageIds.includes('price');
+  /** THE `+N` on the Print button — the analysis sheets PLUS the yard map. */
+  const printPageCount = includedPageCount(analysisOptions, showPrices);
 
   /**
    * A TYPED market price is the cut line itself, so the `manual` basis sends
@@ -1279,6 +1328,29 @@ export function BlendProposalDialog({
     ],
   );
 
+  // ── THE YARD MAP SHEET ──
+  //
+  // ONE model, TWO documents (the HTML iframe printout and the jsPDF file), for the same
+  // reason `analysisPagesHtml` is built once: two builds of the same map could describe
+  // different yards. The occupancy is the LIVE grid's; the selection is the proposal's
+  // own; the caption says which is which, because a saved version's blocks are a
+  // statement about the day it was written while the yard is today's.
+  const yardMap: BlendYardMapModel | null = useMemo(() => {
+    if (!proposal || !analysisOptions.yardMap) return null;
+    return buildBlendYardMapModel({
+      occupiedLocs: occupiedLocs ?? [],
+      selectedLocs: proposal.blocks.map((b) => b.block_loc),
+      analysis,
+      priceGroupsOn,
+      asSavedDate: saved ? blendComputedDate(saved.proposal.computed_at) : null,
+    });
+  }, [proposal, analysisOptions.yardMap, occupiedLocs, analysis, priceGroupsOn, saved]);
+
+  const yardMapHtml = useMemo(
+    () => (yardMap ? buildBlendYardMapPage(yardMap) : ''),
+    [yardMap],
+  );
+
   // ── Download PDF (label prompt) ──
   const [pdfPopoverOpen, setPdfPopoverOpen] = useState(false);
   const [pdfLabel, setPdfLabel] = useState('');
@@ -1320,6 +1392,8 @@ export function BlendProposalDialog({
           ageBandNames: ageLensSettings.bandNames,
           labHighlights,
         },
+        // The SAME map model the HTML printout draws, so the two cannot disagree.
+        yardMap,
       );
       handlePdfPopoverOpenChange(false);
     } catch (err) {
@@ -1347,6 +1421,8 @@ export function BlendProposalDialog({
         // One sheet per chosen analysis page, after this one. Empty when none is
         // ticked — the document is then byte-identical to the pre-analysis one.
         analysisPagesHtml,
+        // The YARD MAP sheet, between the blocks table and the analysis sheets.
+        yardMapHtml,
       );
       const ok = printViaIframe(html);
       if (!ok) {
@@ -1512,7 +1588,7 @@ export function BlendProposalDialog({
                 options={analysisOptions}
                 onChange={patchAnalysisOptions}
                 canViewPrices={showPrices}
-                pageCount={analysisPageCount}
+                pageCount={printPageCount}
               />
 
               {/* Download PDF — prompts for a label via a Popover, then saves YYMMDD - {label}.pdf */}
@@ -1588,27 +1664,27 @@ export function BlendProposalDialog({
                    transition-all duration-150 cursor-pointer disabled:opacity-40 disabled:pointer-events-none`,
                   // The page count needs room, so the button widens rather than
                   // clipping — and it is only ever there when there is a count.
-                  analysisPageCount > 0 ? 'gap-1 px-1.5' : 'w-7',
+                  printPageCount > 0 ? 'gap-1 px-1.5' : 'w-7',
                 )}
                 // WHAT WILL COME OUT OF THE PRINTER, said before it does. A reader who
                 // ticked three pages and got one sheet would have no way to tell
                 // whether the pages or the printer were at fault.
                 title={
-                  analysisPageCount > 0
+                  printPageCount > 0
                     ? `Print blend proposal — the blocks sheet plus ${analysisPagesLabel(
-                        analysisPageCount,
+                        printPageCount,
                       )}`
                     : 'Print blend proposal'
                 }
                 aria-label={
-                  analysisPageCount > 0
-                    ? `Print blend proposal (${analysisPagesLabel(analysisPageCount)})`
+                  printPageCount > 0
+                    ? `Print blend proposal (${analysisPagesLabel(printPageCount)})`
                     : 'Print blend proposal'
                 }
               >
                 <Printer className="w-3.5 h-3.5" />
-                {analysisPageCount > 0 && (
-                  <span className="font-mono text-[9px] font-semibold">+{analysisPageCount}</span>
+                {printPageCount > 0 && (
+                  <span className="font-mono text-[9px] font-semibold">+{printPageCount}</span>
                 )}
               </button>
               <button

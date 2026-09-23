@@ -27,8 +27,8 @@ import { useSearchParams } from 'next/navigation';
 
 import { BlendProposalDialog } from '@/app/(app)/inventory/_shared/blend-proposal-dialog';
 import {
-  BLEND_ANALYSIS_PAGE_ORDER,
-  type BlendAnalysisPageId,
+  BLEND_INCLUDE_PAGE_ORDER,
+  type BlendIncludePageId,
 } from '@/app/(app)/inventory/_shared/blend-analysis-options';
 import type { BlendProposal } from '@/app/(app)/inventory/blocking/actions';
 import type {
@@ -500,6 +500,31 @@ function makeProposal(blocks: Block[], canViewPrices: boolean): BlendProposal {
   };
 }
 
+// ── The YARD, for the printed yard map (2026-09-23) ─────────────────────────
+//
+// The map draws TODAY's occupancy in grey behind the blend's own blocks, so the rig has
+// to hand the dialog a whole yard rather than just the selection — and the one case worth
+// looking at is the one that only a rig can stage: **a selected block the yard no longer
+// holds**, which keeps its selection fill and takes a dashed inset outline.
+//
+// `VACATED_LOC` is a real slot on the A/B/C/D layout and IS in the blend; it is simply
+// absent from the occupancy list, as if its batch had been fed out since the version was
+// saved. `?pca=1` additionally puts stock in the two prepared-charcoal areas, which is the
+// map's worst fit case (10.4 mm cells at 10 pt against 13.6 mm at 11 pt without them).
+
+/** In the blend, NOT in the yard — the dashed "no longer occupied" marker. */
+const VACATED_LOC = 'A-3C';
+
+/** Other piles in the yard, so the map has grey cells to draw. Plain literals. */
+const OTHER_OCCUPIED_LOCS = [
+  'A-7A', 'A-8A', 'A-9B', 'A-12C', 'A-13A', 'A-15B', 'A-18C', 'A-20A',
+  'B-8A', 'B-9B', 'B-11A', 'B-14B', 'B-17A', 'B-19B',
+  'C-7A', 'C-10B', 'C-12A', 'C-15B', 'C-18A', 'C-20B',
+  'D-8A', 'D-9C', 'D-11B', 'D-13D', 'D-15A', 'D-16C', 'D-18B', 'D-20D',
+] as const;
+
+const PREPARED_OCCUPIED_LOCS = ['PCA-15A', 'PCA-16C', 'PCB-17B'] as const;
+
 // ── The rig ─────────────────────────────────────────────────────────────────
 
 const AS_OF = '2026-09-21';
@@ -512,6 +537,7 @@ export function BlendAnalysisFixture() {
   const stall = params.get('stall') === '1';
   const delay = Number(params.get('slow') ?? '300');
   const pagesParam = params.get('pages');
+  const includePrepared = params.get('pca') === '1';
 
   const blocks = React.useMemo(() => makeBlocks(includeUnmeasured), [includeUnmeasured]);
   const proposal = React.useMemo(
@@ -534,6 +560,19 @@ export function BlendAnalysisFixture() {
     [analysis, delay, stall],
   );
 
+  /**
+   * Today's yard: every selected block EXCEPT the vacated one, plus the other piles.
+   * Derived from the blend so the two can never drift apart in the rig.
+   */
+  const occupiedLocs = React.useMemo(() => {
+    const selected = blocks.map((b) => b.loc).filter((loc) => loc !== VACATED_LOC);
+    return [
+      ...selected,
+      ...OTHER_OCCUPIED_LOCS,
+      ...(includePrepared ? PREPARED_OCCUPIED_LOCS : []),
+    ];
+  }, [blocks, includePrepared]);
+
   const factsAdapter = React.useCallback(async () => {
     await new Promise((r) => setTimeout(r, 120));
     return { ok: true as const, facts: {}, asOf: AS_OF };
@@ -553,12 +592,12 @@ export function BlendAnalysisFixture() {
           pagesParam
             .split(',')
             .map((s) => s.trim())
-            .filter((s): s is BlendAnalysisPageId =>
-              (BLEND_ANALYSIS_PAGE_ORDER as readonly string[]).includes(s),
+            .filter((s): s is BlendIncludePageId =>
+              (BLEND_INCLUDE_PAGE_ORDER as readonly string[]).includes(s),
             ),
         );
         const doc: Record<string, boolean> = {};
-        for (const id of BLEND_ANALYSIS_PAGE_ORDER) if (!wanted.has(id)) doc[id] = false;
+        for (const id of BLEND_INCLUDE_PAGE_ORDER) if (!wanted.has(id)) doc[id] = false;
         window.localStorage.setItem('bw.blocking_blend_analysis.v1', JSON.stringify(doc));
       }
     } catch {
@@ -636,7 +675,8 @@ export function BlendAnalysisFixture() {
         Blend analysis look rig · static payload · <code>?prices={canViewPrices ? '1' : '0'}</code> ·{' '}
         <code>?saved={isSaved ? '1' : '0'}</code> ·{' '}
         <code>?unmeasured={includeUnmeasured ? '1' : '0'}</code> ·{' '}
-        <code>?pages={pagesParam ?? '(all)'}</code> · adapter delay{' '}
+        <code>?pages={pagesParam ?? '(all)'}</code> ·{' '}
+        <code>?pca={includePrepared ? '1' : '0'}</code> · adapter delay{' '}
         <code>{stall ? 'never answers' : `${delay}ms`}</code> · toggle the OS/app theme to see both.
       </p>
       {!open && (
@@ -658,6 +698,7 @@ export function BlendAnalysisFixture() {
           analysisAdapter={analysisAdapter}
           factsAdapter={factsAdapter}
           batchIdByLoc={Object.fromEntries(blocks.map((b) => [b.loc, b.loc]))}
+          occupiedLocs={occupiedLocs}
           saved={
             isSaved
               ? {
