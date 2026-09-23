@@ -61,7 +61,7 @@ import { ageBandLabel } from '../blocking/lens/age-lens-settings';
 import { priceBandLabel } from '../blocking/lens/price-lens-settings';
 import {
   BLEND_ANALYSIS_PAGE_LABELS,
-  BLEND_ANALYSIS_PAGE_ORDER,
+  BLEND_INCLUDE_PAGE_ORDER,
   analysisPages,
   analysisPagesLabel,
   type BlendAnalysisOptions,
@@ -102,7 +102,7 @@ export interface BlendAnalysisIncludePopoverProps {
 }
 
 /**
- * "Include pages" — three checkboxes, persisted per user.
+ * "Include pages" — four checkboxes, persisted per user.
  *
  * The PRICE row is absent (not disabled) for a reader who may not see prices: there is
  * nothing for them to turn on, the payload they receive has `price: null`, and a
@@ -115,7 +115,10 @@ export function BlendAnalysisIncludePopover({
   pageCount,
 }: BlendAnalysisIncludePopoverProps) {
   const [open, setOpen] = React.useState(false);
-  const rows = BLEND_ANALYSIS_PAGE_ORDER.filter((id) => id !== 'price' || canViewPrices);
+  // FOUR rows since 2026-09-23 — the three analysis pages plus the YARD MAP, which is
+  // deliberately NOT price-gated: it carries no ₱, so a price-denied reader still gets it
+  // (in the single accent rather than coloured by price group).
+  const rows = BLEND_INCLUDE_PAGE_ORDER.filter((id) => id !== 'price' || canViewPrices);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -143,8 +146,8 @@ export function BlendAnalysisIncludePopover({
         <div className="space-y-2">
           <div className="text-xs font-semibold text-foreground">Include pages</div>
           <p className="text-[11px] text-muted-foreground leading-snug">
-            Extra pages under the blocks table, and extra sheets in the printout. Your choice is
-            remembered.
+            Extra pages under the blocks table, and extra sheets in the printout. The yard map
+            is print only. Your choice is remembered.
           </p>
           <ul className="flex flex-col gap-1.5">
             {rows.map((id) => {

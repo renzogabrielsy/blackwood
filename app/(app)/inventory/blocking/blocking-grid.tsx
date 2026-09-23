@@ -739,6 +739,15 @@ export function BlockingGrid({
     return out;
   }, [data]);
 
+  /**
+   * Every block_loc the yard holds a pile in RIGHT NOW — the grid payload's own keys.
+   *
+   * The blend printout's YARD MAP draws today's occupancy in grey behind the blend's own
+   * blocks, so it needs the WHOLE yard rather than the selection. Same source as
+   * `batchIdByLoc`, different question, so it is a separate prop.
+   */
+  const occupiedLocs = useMemo(() => Object.keys(data), [data]);
+
   /** Non-archived proposals — what the header badge counts. */
   const liveProposalCount = useMemo(() => proposals.filter((p) => !p.isArchived).length, [proposals]);
 
@@ -1823,6 +1832,8 @@ export function BlockingGrid({
         // keyed by batch — a block address is reused when a pile empties, so resolving
         // by address would describe different charcoal under the same name.
         batchIdByLoc={batchIdByLoc}
+        // WHAT ELSE IS IN THE YARD, for the printed yard map's grey cells.
+        occupiedLocs={occupiedLocs}
         saved={savedContext}
         onSaveNew={handleSaveNewProposal}
         saving={saving}

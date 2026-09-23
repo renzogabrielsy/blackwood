@@ -50,6 +50,24 @@ import {
   vsMarketUnavailableNote,
 } from './blend-analysis-text';
 import { rampRgb } from '../blocking/lens/lens-ramp';
+// THE YARD MAP (2026-09-23) — the SAME model the HTML printout draws, the SAME solve and
+// the SAME paper palette the lens print uses. Nothing here re-derives the geometry.
+import {
+  blendYardMapLegend,
+  blendYardMapSolve,
+  blendYardMapStops,
+  type BlendYardMapModel,
+} from './blend-yard-map-print';
+import {
+  LENS_YARD_MAP_HAIRLINE,
+  YARD_MAP_COLHDR_H_PX,
+  YARD_MAP_GUTTER_PX,
+  YARD_MAP_LABEL_H_PX,
+  YARD_MAP_LANE_GAP_PX,
+  YARD_MAP_SECTION_GAP_PX,
+  lensYardMapLines,
+  lensYardMapPaint,
+} from '../blocking/lens/lens-yard-map-model';
 import { ageBandLabel } from '../blocking/lens/age-lens-settings';
 import { priceBandLabel } from '../blocking/lens/price-lens-settings';
 import type { LabHighlightSpec, LabMetric } from '@/types/table-settings';
@@ -121,6 +139,12 @@ export function buildBlendPdf(
    * what it was before the analysis existed.
    */
   analysis?: BlendPdfAnalysis | null,
+  /**
+   * The YARD MAP (2026-09-23) — the model the HTML printout already built, so the two
+   * documents cannot describe different yards. Absent → the file is exactly what it was
+   * before the map existed.
+   */
+  yardMap?: BlendYardMapModel | null,
 ): jsPDF {
   const showPrices = proposal.can_view_prices && showPricesPref && proposal.raw_price_per_kg !== null;
 
@@ -345,6 +369,11 @@ export function buildBlendPdf(
     marginX,
     afterTableY + 18,
   );
+
+  // ── The YARD MAP, on its own sheet, directly after the blocks table ──
+  // It describes the block list above it, so it comes BEFORE the analysis sheets — the
+  // same position the HTML printout puts it in.
+  if (yardMap) drawYardMapPage(doc, marginX, yardMap);
 
   // ── The ANALYSIS PAGES, one per chosen page, each on its own sheet ──
   if (analysis) appendAnalysisPages(doc, marginX, analysis);
@@ -822,6 +851,190 @@ const QUALITY_PDF_TABLES: { metric: BlendQualityMetric; companion?: BlendQuality
   { metric: 'bd_astm', companion: 'bd_jis' },
 ];
 
+// ─── The YARD MAP page ────────────────────────────────────────────────────────
+//
+// ⚠️ DRAWN NATIVELY — rectangles and text, never a rasterised screenshot.
+//
+// The obvious shortcut would be to render the HTML sheet and photograph it, but this
+// document has no DOM to render into (it is built from the payload, in a worker-free pure
+// function, and is the one surface that also runs in Node for tests), and the project has
+// no html2canvas. More to the point the map IS rectangles and five-character labels, so
+// drawing them keeps the text SELECTABLE and the file small — the same reason
+// `buildBlendPdf` exists at all rather than screenshotting the modal.
+//
+// ── ONE MODEL, ONE SOLVE, ONE PALETTE ───────────────────────────────────────
+// The cells, the bands, the caption and the legend come from `BlendYardMapModel` — the
+// SAME object the HTML sheet consumes — and the cell edge and font come from
+// `solveYardMapFit` via `blendYardMapFit`. The only thing this function adds is the unit
+// conversion: the solve works in CSS px at 96 dpi and jsPDF works in POINTS, so every
+// length is multiplied by 72/96. The box is solved against THIS document's own margin
+// (derived from `marginX` in points), so the drawing and the arithmetic cannot disagree.
+//
+// NO ₱, no kilogram, no lab reading — it is slots and colours.
+
+/** CSS px → typographic points. The solve is in px at 96 dpi; jsPDF is in pt. */
+const PT_PER_PX = 72 / 96;
+
+/** `rgb(r g b)` or `#rrggbb` → jsPDF's own `[r, g, b]`. */
+function cssRgb(value: string): [number, number, number] {
+  const trimmed = value.trim();
+  if (trimmed.startsWith('#')) {
+    const hex = trimmed.slice(1);
+    return [
+      parseInt(hex.slice(0, 2), 16),
+      parseInt(hex.slice(2, 4), 16),
+      parseInt(hex.slice(4, 6), 16),
+    ];
+  }
+  const nums = trimmed.replace(/^rgb\(/, '').replace(/\)$/, '').split(/[\s,/]+/).filter((t) => t !== '');
+  return [Number(nums[0]), Number(nums[1]), Number(nums[2])];
+}
+
+function setFill(doc: jsPDF, css: string): void {
+  const [r, g, b] = cssRgb(css);
+  doc.setFillColor(r, g, b);
+}
+
+function setStroke(doc: jsPDF, css: string): void {
+  const [r, g, b] = cssRgb(css);
+  doc.setDrawColor(r, g, b);
+}
+
+function setInk(doc: jsPDF, css: string): void {
+  const [r, g, b] = cssRgb(css);
+  doc.setTextColor(r, g, b);
+}
+
+/**
+ * The map, on its own landscape page, drawn cell by cell.
+ *
+ * `marginX` is the document's own left/right margin in POINTS; the map solves against the
+ * box that margin implies, so a future change to one moves the other.
+ */
+function drawYardMapPage(doc: jsPDF, marginX: number, model: BlendYardMapModel): void {
+  doc.addPage();
+
+  // ── ONE heading line, the model's own — slot count, as-of caption, what it is for ──
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.setTextColor(0, 0, 0);
+  doc.text('Yard map', marginX, 40);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(80, 80, 80);
+  doc.text(pdfText(model.headline), marginX + 62, 40);
+
+  // ── The solve, in points ──
+  // The box comes from THIS document's own margin (the drawing and the arithmetic cannot
+  // disagree) and the chrome budget is the sheet's own, shared with the HTML path.
+  const marginMm = (marginX / 72) * 25.4;
+  const fit = blendYardMapSolve(model, marginMm);
+  const stops = blendYardMapStops(model);
+  const cell = fit.cells.cellPx * PT_PER_PX;
+  const gutter = YARD_MAP_GUTTER_PX * PT_PER_PX;
+  const labelH = YARD_MAP_LABEL_H_PX * PT_PER_PX;
+  const colHdrH = YARD_MAP_COLHDR_H_PX * PT_PER_PX;
+  const laneGap = YARD_MAP_LANE_GAP_PX * PT_PER_PX;
+  const sectionGap = YARD_MAP_SECTION_GAP_PX * PT_PER_PX;
+
+  const lanes = [...new Set(model.map.sections.map((s) => s.lane))].sort((a, b) => a - b);
+  let y = 52;
+
+  doc.setLineWidth(0.4);
+  for (const lane of lanes) {
+    const sections = model.map.sections.filter((s) => s.lane === lane);
+    let x = marginX;
+    let laneHeight = 0;
+    for (const section of sections) {
+      // The warehouse label.
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7);
+      doc.setTextColor(82, 82, 91);
+      doc.text(section.label.toUpperCase(), x, y + labelH - 2);
+
+      const gridTop = y + labelH;
+      // Column numbers.
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(5.5);
+      doc.setTextColor(113, 113, 122);
+      section.cols.forEach((col, ci) => {
+        doc.text(String(col), x + gutter + ci * cell + cell / 2, gridTop + colHdrH - 1, {
+          align: 'center',
+        });
+      });
+
+      const cellsTop = gridTop + colHdrH;
+      section.rows.forEach((row, ri) => {
+        // The row letter.
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(6.5);
+        doc.setTextColor(113, 113, 122);
+        doc.text(row, x + gutter / 2, cellsTop + ri * cell + cell / 2 + 2, { align: 'center' });
+
+        section.cells[ri].forEach((c, ci) => {
+          const paint = lensYardMapPaint(c, model.ramp, stops);
+          const cx = x + gutter + ci * cell;
+          const cy = cellsTop + ri * cell;
+          setFill(doc, paint.bg);
+          setStroke(doc, LENS_YARD_MAP_HAIRLINE);
+          doc.rect(cx, cy, cell, cell, 'FD');
+          if (paint.outline) {
+            // The DASHED INSET marker — a selected block the yard no longer holds.
+            setStroke(doc, paint.outline);
+            doc.setLineDashPattern([1.5, 1.5], 0);
+            doc.rect(cx + 1.5, cy + 1.5, cell - 3, cell - 3, 'S');
+            doc.setLineDashPattern([], 0);
+          }
+          const lines = fit.wrapAll
+            ? lensYardMapLines(section.key, c.loc, true)
+            : c.lines;
+          const empty = paint.kind === 'empty';
+          doc.setFont('helvetica', empty ? 'normal' : 'bold');
+          doc.setFontSize(empty ? Math.min(fit.fontPt, 7.5) : fit.fontPt);
+          setInk(doc, paint.ink);
+          const lineH = fit.fontPt * 1.05;
+          const first = cy + cell / 2 - ((lines.length - 1) * lineH) / 2 + fit.fontPt * 0.35;
+          lines.forEach((line, li) => {
+            doc.text(line, cx + cell / 2, first + li * lineH, { align: 'center' });
+          });
+        });
+      });
+
+      const sectionHeight = labelH + colHdrH + section.rows.length * cell;
+      laneHeight = Math.max(laneHeight, sectionHeight);
+      x = x + gutter + section.cols.length * cell + sectionGap;
+    }
+    y = y + laneHeight + laneGap;
+  }
+
+  // ── The legend — the SAME rows the HTML sheet prints ──
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setLineWidth(0.4);
+  let lx = marginX;
+  const ly = y + 6;
+  for (const row of blendYardMapLegend(model)) {
+    setFill(doc, row.bg);
+    setStroke(doc, row.border);
+    if (row.dashed) doc.setLineDashPattern([1, 1], 0);
+    doc.rect(lx, ly - 5, 5, 5, 'FD');
+    if (row.dashed) doc.setLineDashPattern([], 0);
+    doc.setTextColor(63, 63, 70);
+    const text = pdfText(row.text);
+    doc.text(text, lx + 7, ly);
+    lx = lx + 7 + doc.getTextWidth(text) + 12;
+  }
+
+  // The ONE footnote the model already composed — what the map cannot draw, said rather
+  // than hidden. Wrapped to the printable width, never off the edge.
+  if (model.note !== '') {
+    doc.setTextColor(82, 82, 91);
+    const width = doc.internal.pageSize.getWidth() - 2 * marginX;
+    doc.text(doc.splitTextToSize(pdfText(model.note), width) as string[], marginX, ly + 10);
+  }
+  doc.setTextColor(20, 20, 20);
+}
+
 /**
  * Generate the blend-proposal PDF and trigger a browser download named
  * `YYMMDD - {label}.pdf`. Throws on a blank/illegal label or any jsPDF failure — the
@@ -837,11 +1050,20 @@ export function downloadBlendPdf(
   meta?: BlendDocMeta | null,
   blockFacts?: BlendPdfFacts | null,
   analysis?: BlendPdfAnalysis | null,
+  yardMap?: BlendYardMapModel | null,
 ): void {
   const filename = composeBlendPdfFilename(label);
   if (!filename) {
     throw new Error('A label is required to name the PDF.');
   }
-  const doc = buildBlendPdf(proposal, showPricesPref, new Date(), meta, blockFacts, analysis);
+  const doc = buildBlendPdf(
+    proposal,
+    showPricesPref,
+    new Date(),
+    meta,
+    blockFacts,
+    analysis,
+    yardMap,
+  );
   doc.save(filename);
 }

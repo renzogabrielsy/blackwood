@@ -55,79 +55,38 @@
 
 import * as React from 'react';
 
-import {
-  a4LandscapeBox,
-  fitCellGrid,
-  fitMonoLabelPt,
-  PX_PER_PT,
-} from '@/components/shared/print/print-fit';
-
 import { resolveBandRampStop, printFillRgbAtStop, type LensRampId } from './lens-ramp';
 import {
   LENS_YARD_MAP_EMPTY_BG,
   LENS_YARD_MAP_EMPTY_INK,
   LENS_YARD_MAP_HAIRLINE,
-  LENS_YARD_MAP_LINE_HEIGHT,
-  LENS_YARD_MAP_MIN_LOC_PT,
   LENS_YARD_MAP_MUTED_BG,
   LENS_YARD_MAP_MUTED_INK,
   LENS_YARD_MAP_NODATA_MARK,
   LENS_YARD_MAP_NODATA_PT,
+  YARD_MAP_COLHDR_H_PX,
+  YARD_MAP_GUTTER_PX,
+  YARD_MAP_LABEL_H_PX,
+  YARD_MAP_LANE_GAP_PX,
+  YARD_MAP_SECTION_GAP_PX,
   lensYardMapInkOn,
   lensYardMapLines,
   lensYardMapPaint,
+  solveYardMapFit,
   type LensYardMap,
+  type LensYardMapBand,
   type LensYardMapCell,
 } from './lens-yard-map-model';
 
-/** Only what the map needs of a band: which one, what it is called, what colour. */
-export interface LensYardMapBand {
-  index: number;
-  label: string;
-  /** Stated by a NOMINAL lens; omitted by an ordinal one. See `lens-ramp.ts`. */
-  rampStop?: number;
-}
-
-// ── The page geometry ───────────────────────────────────────────────────────
+// ── The page geometry and the fit live in the MODEL ─────────────────────────
 //
-// Every one of these is an input to the solve above, so they are constants in ONE place
-// and the numbers the header quotes were measured with exactly these values.
+// Both were HERE until 2026-09-23, when the blend proposal print grew the same map
+// through a non-React path and could not import a component. They moved beside the
+// geometry they measure (`solveYardMapFit`, `YARD_MAP_*`) so there is exactly one
+// statement of how big a cell is — nothing about the inputs changed, so this page lays
+// out identically.
 
-/** Heading + legend + a little slack, in px. */
-const RESERVED_PX = 40;
-/** The row-letter column each section carries. */
-const GUTTER_PX = 16;
-/** A lane's warehouse label row. */
-const LABEL_H_PX = 13;
-/** A lane's column-number row. */
-const COLHDR_H_PX = 9;
-const LANE_CHROME_PX = LABEL_H_PX + COLHDR_H_PX;
-const LANE_GAP_PX = 5;
-/** Between PCA and PCB, which share a lane. */
-const SECTION_GAP_PX = 8;
-/** A cell's two 1px borders. There is no padding — the loc is flex-centred. */
-const CELL_CHROME_PX = 2;
-const MIN_CELL_PX = 20;
-/** A ceiling, so a hypothetically tiny yard does not get comic cells. */
-const MAX_CELL_PX = 64;
-/**
- * DESCENDING, and coarse for the same reason the rest of the print kit's ladders are.
- * 7 pt is the floor the whole kit keeps.
- */
-const FONT_LADDER_PT = [13, 12, 11.5, 11, 10.5, 10, 9.5, 9, 8.5, 8, 7.5, 7] as const;
-/**
- * The advance width of one glyph, as a fraction of the font size — the one MEASURED
- * input `print-fit.ts` cannot derive (Node has no font engine).
- *
- * ⚠️ **0.65, not RC Movement's 0.6, and the difference is a BUG THIS PAGE ALREADY HAD.**
- * A map cell's loc is `font-bold`, and the bold face is WIDER than the regular one: over
- * a 100-character run of `A-10A` in a real browser on this page, regular measured
- * **0.6039** and bold **0.6298**. Budgeted at 0.6 the five-character locs (`A-10A`,
- * `B-10A`, `D-10A`) overflowed their cell and the browser silently wrapped them mid-code,
- * which is visible in the very first PDF this page produced. 0.65 is the measured bold
- * figure rounded up, so the budget has real headroom rather than 1.2 px of luck.
- */
-const MONO_ADVANCE_EM = 0.65;
+export type { LensYardMapBand };
 
 export interface LensYardMapPageProps {
   map: LensYardMap;
@@ -224,54 +183,8 @@ export function LensYardMapPage({
     stopByVisibleBand.set(b.index, resolveBandRampStop(ramp, b.index, bandCount, b.rampStop));
   }
 
-  const fit = fitCellGrid({
-    sections: map.sections.map((s) => ({
-      key: s.key,
-      cols: s.cols.length,
-      rows: s.rows.length,
-      lane: s.lane,
-    })),
-    box: a4LandscapeBox(marginMm),
-    reservedHeightPx: RESERVED_PX,
-    gutterPx: GUTTER_PX,
-    laneChromePx: LANE_CHROME_PX,
-    laneGapPx: LANE_GAP_PX,
-    sectionGapPx: SECTION_GAP_PX,
-    cellChromePx: CELL_CHROME_PX,
-    minCellPx: MIN_CELL_PX,
-    maxCellPx: MAX_CELL_PX,
-    labelChars: map.labelChars,
-    advanceEm: MONO_ADVANCE_EM,
-    fontLadderPt: FONT_LADDER_PT,
-  });
-
-  // ── STAGE TWO: WRAP RATHER THAN SHRINK ───────────────────────────────────
-  // The cell EDGE is fixed by the page, not by the label, so a label that does not fit
-  // has exactly two outcomes: a smaller font, or two lines. Measured on A4 landscape at
-  // 10 mm with PCA/PCB in (39.14 px cells): one line solves to **8.5 pt**, two lines to
-  // **10 pt** — so wrapping makes the loc BIGGER. The height budget subtracts the
-  // `nodata` dash, because that cell must hold three lines without clipping any of them
-  // and sizing only the common case is how the one cell that carries a warning loses it.
-  const dashPx = LENS_YARD_MAP_NODATA_PT * PX_PER_PT;
-  const maxPtForLines = (n: number) =>
-    (fit.labelBoxPx - dashPx) / n / (PX_PER_PT * LENS_YARD_MAP_LINE_HEIGHT);
-  const onePt = fitMonoLabelPt({
-    widthPx: fit.labelBoxPx,
-    chars: map.labelChars,
-    advanceEm: MONO_ADVANCE_EM,
-    ladder: FONT_LADDER_PT,
-    maxPt: maxPtForLines(1),
-  });
-  const wrapAll = onePt < LENS_YARD_MAP_MIN_LOC_PT;
-  const fontPt = wrapAll
-    ? fitMonoLabelPt({
-        widthPx: fit.labelBoxPx,
-        chars: map.wrappedLabelChars,
-        advanceEm: MONO_ADVANCE_EM,
-        ladder: FONT_LADDER_PT,
-        maxPt: maxPtForLines(2),
-      })
-    : onePt;
+  // ONE solve, shared with the blend proposal print. See `solveYardMapFit`.
+  const { cells: fit, fontPt, wrapAll } = solveYardMapFit(map, marginMm);
 
   const lanes = [...new Set(map.sections.map((s) => s.lane))].sort((a, b) => a - b);
   const isolated = bands.length < bandCount;
@@ -291,7 +204,7 @@ export function LensYardMapPage({
           <div
             key={lane}
             className="flex items-start"
-            style={{ gap: SECTION_GAP_PX, marginTop: laneIdx === 0 ? 0 : LANE_GAP_PX }}
+            style={{ gap: YARD_MAP_SECTION_GAP_PX, marginTop: laneIdx === 0 ? 0 : YARD_MAP_LANE_GAP_PX }}
           >
             {map.sections
               .filter((s) => s.lane === lane)
@@ -299,15 +212,15 @@ export function LensYardMapPage({
                 <div key={s.key}>
                   <div
                     className="font-semibold uppercase tracking-wide text-zinc-600"
-                    style={{ height: LABEL_H_PX, fontSize: '7pt', lineHeight: `${LABEL_H_PX}px` }}
+                    style={{ height: YARD_MAP_LABEL_H_PX, fontSize: '7pt', lineHeight: `${YARD_MAP_LABEL_H_PX}px` }}
                   >
                     {s.label}
                   </div>
                   <div
                     className="grid"
                     style={{
-                      gridTemplateColumns: `${GUTTER_PX}px repeat(${s.cols.length}, ${fit.cellPx}px)`,
-                      gridTemplateRows: `${COLHDR_H_PX}px repeat(${s.rows.length}, ${fit.cellPx}px)`,
+                      gridTemplateColumns: `${YARD_MAP_GUTTER_PX}px repeat(${s.cols.length}, ${fit.cellPx}px)`,
+                      gridTemplateRows: `${YARD_MAP_COLHDR_H_PX}px repeat(${s.rows.length}, ${fit.cellPx}px)`,
                     }}
                   >
                     {/* The corner, above the row letters. */}

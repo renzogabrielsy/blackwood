@@ -25,7 +25,8 @@ import { BlendAnalysisFixture } from './blendanalysis-fixture';
 //   http://localhost:3000/dev/table-playground/blendanalysis
 //   ?saved=1        — render the SAVED-version viewer (title, remark, version rail)
 //   ?prices=0       — a price-DENIED reader: no price page, no ₱ anywhere
-//   ?pages=quality  — seed the Include-pages choice (comma list of price|quality|age)
+//   ?pages=quality  — seed the Include-pages choice (comma list of price|quality|age|yardMap)
+//   ?pca=1          — put stock in PCA/PCB, the printed yard map's worst fit case
 //   ?unmeasured=1   — include blocks with no lab reading and no price
 //   ?slow=2000      — a slower adapter, to look at the skeletons
 //   ?stall=1        — an adapter that never answers, to see the watchdog banner
