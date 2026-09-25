@@ -1816,3 +1816,92 @@ Files: `workers/sync/src/lib/months.ts`, `src/reports/deliveries/extract.ts`,
 `src/lib/batchCodeAlias.ts` (comment), `test/lib/batchCodeHousePrefix.test.ts` (new),
 `test/reports/deliveries-feeding-label.test.ts`, `test/parity/{expected-deviations.json,deviations.test.ts}`.
 Spec: `workers/sync/specs/deliveries.md` §2 + §11.2a; `specs/PORTING_DECISIONS.md`.
+
+---
+
+## L-054 — A NOT NULL CONSTRAINT IS NOT A VALIDATION RULE — THE EXTRACTOR MUST KNOW WHERE THE TABLE ENDS (2026-09-25)
+
+**What happened.** Runs `b1abba0b` and `ea4ed942` both ended `partial` with three errors each:
+*"Couldn't save the delivery on row 82 / 83 / 84 of the RC DELIVERIES report (2026-09-24 ·
+CCP 1309 · SEPT-26-BLK14) — the database refused it"*, technical detail `23502: null value in
+column "lab_results" … violates not-null constraint`. The email stayed unprocessed, so every run
+re-tried them.
+
+**What those three "deliveries" were.** MC's `260924 RC DELIVERIES 2026.xlsx`, tab `SEPTEMBER
+2026`: the last real truckload is row 68 (Ornales · `B14` · D-12C · CCP 1309 · 370 sacks ·
+10,900 kg), row 76 is `Average`, and rows 82–84 are **her own arithmetic typed under the table** —
+only the Weight column filled: `449325`, `500000`, `-50675` (a 500-tonne target, delivered so far,
+remaining). The sync tried to record **a 449,325 kg truckload, a 500,000 kg truckload and a
+−50,675 kg truckload** under `SEPT-26-BLK14`.
+
+**The mechanism (verified by running the extractor on the stored workbook).** Not a date
+carry-forward and not the classifier. The Average row was only SKIPPED, so the scan continued; each
+scratch row had a weight and no plate, batch, block or date of its own — precisely the WET-RECOVERY
+SUB-ROW shape (L-021: the yard pulls over-moisture sacks off a load and books them on the next row
+with only weight, sacks, MC and a "net kilos of …" remark). So `buildRecoveryRow` let each one
+**inherit the last mother** — row 68's supplier, plate, block, batch and date — from 14 to 16 rows
+away and across the Average row. The inheritance had a shape test and no notion of *where* a
+recovery may sit. The Python oracle does exactly the same (measured). The rows then classified as
+three NEW beside 14 NOOPs, and apply sent them. **The only thing standing between 1,000 phantom
+tonnes and `batches.current_weight` was that the scratch rows had no lab cells, so `lab_results`
+collapsed to `null` into a NOT NULL column.** A lucky catch, not a rule: one typed moisture value on
+row 82 and it would have inserted. And the same `null` would equally have refused a GENUINE
+truckload booked before its lab panel came back.
+
+### The fix — positive signals, measured before they were chosen
+
+- **A row is a delivery only on a positive signal from its OWN cells** (the L-042 discipline):
+  its own supplier AND its own truck plate — every one of the 654 distinct non-recovery rows in all
+  64 stored RC DELIVERIES workbooks has both — or a wet-recovery sub-row that sits on the row
+  IMMEDIATELY after the last emitted row AND carries its own sacks or remark (all 6 distinct real
+  ones do; none of the scratch rows does). Everything else with a weight is a **`stray_row`**
+  finding: never inserted, never held, never blocking the watermark. **The batch label / block was
+  deliberately NOT made mandatory** (the brief proposed it): three real rows carry neither — MC's
+  "pile not assigned yet" shape, which L-042 already routes to its own quiet bucket.
+- **The Average row does NOT end the table — measured, not assumed.** Run `10575906`'s AUGUST 2026
+  tab carries two genuine 2026-08-12 truckloads (AAV 6111 · 18,595 kg; KCA 378 · 18,650 kg — both
+  now in `deliveries`) BELOW its Average row. A hard stop would have made them invisible, i.e.
+  traded a loud wrong for a quiet one. The Average row is recorded instead (a stray below it says
+  so, and reads `info` rather than `attention`), and it breaks recovery adjacency by construction.
+- **Weight bounds, as the last line.** A delivery-shaped weight ≤ 0 or above **60,000 kg** is
+  refused at extraction (`weight_out_of_range`). Heaviest delivery with a truck plate ever:
+  **36,069 kg**; the all-time max is 88,695 kg, but it and all 63 rows above 40 t are plate-less
+  hand-seeded BACKLOG opening balances, never a truck in MC's log.
+- **`lab_results` is never an explicit null.** INSERT writes `{}` ("no reading") — not the column
+  default, which is seven zeros ("measured 0") under two retired key names; `view_blocking_grid`
+  weights each stat only over rows where the key exists, so `{}` drops out of the average and the
+  default would drag MC toward zero. An empty incoming panel is dropped from an UPDATE patch
+  (absence is not deletion). One helper, `lib/labResults.ts`, both writers of `deliveries`.
+
+### Two rules that generalise
+
+1. **A database constraint is the backstop for a bug, never the place the bug is caught.** If the
+   only thing between a scratch sum and a balance is a constraint on an unrelated column, there is
+   no rule — there is luck. Every row that reaches a write must first have been accepted by a
+   predicate that states what a valid row IS.
+2. **Inheritance is the most dangerous carry-forward, so it needs the strictest evidence.** A
+   forward-filled DATE is harmless context; an inherited supplier + plate + batch turns any number
+   in the right column into a delivery of somebody else's truck. The permission to inherit must
+   depend on WHERE the row sits (directly under its parent) and on it saying something of its own —
+   never on the absence of other cells, which is exactly what a scratch note also looks like.
+
+### Measured effect and proof
+
+| | before | after |
+|---|---|---|
+| incident workbook, SEPTEMBER 2026 | 66 rows; 82/83/84 = CCP 1309 · SEPT-26-BLK14 · 449,325 / 500,000 / −50,675 kg · `_recovery` | **63 rows + 4 findings** (82/83/84 `stray_row`/`recovery_not_adjacent`, below the Average row; 111 `stray_row`/`weight_not_a_number`) |
+| classified vs live DB (since 2026-09-21) | new 3 · noop 14 | **new 0 · noop 14** |
+| all 64 stored workbooks, 425 tabs | 29,630 emitted rows | the same 29,627, byte-identical (warnings + confidence) — **0 gained, 0 changed, exactly the 3 scratch rows lost** |
+| worker tests | 1059 | **1082** (`deliveries-stray-rows.test.ts` +22, `deviations.test.ts` +1) |
+| app `scripts/verify-findings.ts` | 96 | **100** |
+| parity | 12/12, 79 | **12/12, 79** — TS-only business rule, registered DORMANT (`expected-deviations.json` → `dormant_classify`, rule `L-054`): neither fixture contains such a row |
+
+No database write was made. The three phantom rows never reached `deliveries` (the constraint held
+on both runs), so there is nothing to clean up; the next run after deploy files them as findings
+and ingests the email normally.
+
+Files: `workers/sync/src/reports/deliveries/{extract.ts,extractionNotes.ts (new),apply.ts,index.ts}`,
+`src/reports/gsheet/apply.ts`, `src/lib/labResults.ts` (new), `src/workflows/normalizeReport.ts`,
+`app/(app)/sync/types.ts`, `lib/sync/{cases-fold.ts,findings.ts}`, `scripts/verify-findings.ts`,
+`test/reports/deliveries-stray-rows.test.ts` (new), `test/parity/{expected-deviations.json,deviations.test.ts}`.
+Spec: `workers/sync/specs/deliveries.md` §2 + §5 + §13; `specs/PORTING_DECISIONS.md`.

@@ -70,3 +70,11 @@ the same two-table UPDATE). Not done: renaming the 15 `AUGUST-26-…` batches; m
 a finding. Renzo fixes the Sheet cells by hand. Also this day: research report on Jev / Laya decision
 models (no code) — recommendation: Laya self-hosted in shadow mode on Sync Review; labelled data is the
 gap (84 of 94 held cases are only 'investigated', not a verdict) — start logging verdicts first.
+
+## 9. ADDENDUM (2026-09-25) — L-054 stray rows
+RC DELIVERIES rows 82–84 were MC's scratch sums (449,325 / 500,000 / −50,675 kg); the wet-sack split rule
+copied `CCP 1309 · SEPT-26-BLK14` onto them from 14 rows up and only the `lab_results` NOT NULL refused the
+insert. Fixed in the worker (own-cell supplier+plate, split only on the NEXT row, date-only forward-fill,
+0 < weight ≤ 60,000, `stray_row` / `weight_out_of_range` findings, `{}` for no readings). The Average row is
+NOT an end-of-table marker (real trucks sit below it in AUGUST 2026). **Next:** the same guard in
+`gsheet/extract.ts` (~line 263). Lesson: a NOT NULL constraint is not a validation rule.

@@ -52,6 +52,7 @@ import type { DbClient } from "../../lib/db.js";
 import type { ProgressEmitter } from "../../lib/progress.js";
 import { rcOutReconcileCutover } from "../../lib/env.js";
 import { deliveriesInsertGuardColumns } from "../../lib/deliveryIdentity.js";
+import { labResultsForInsert, shouldWriteLabPatch } from "../../lib/labResults.js";
 import { type DeliveryHumanEdit, deliveryHumanEditNote } from "../deliveryHumanEdit.js";
 import { type HeldRow, type HeldKind, rcOutKey, deliveriesKey } from "../held.js";
 import { operatorError, errText } from "../../lib/operatorError.js";
@@ -402,7 +403,8 @@ async function writeRcInDelivery(
     weight_kg: nr.weight_kg,
     cost_basis: 0, // L-008 placeholder.
     remarks: nr.remarks,
-    lab_results: nr.lab_results,
+    // L-054 — never an explicit null into the NOT NULL column; `{}` = "no reading yet".
+    lab_results: labResultsForInsert(nr.lab_results),
     true_weight_kg: nr.true_weight_kg ?? null,
     deduction_note: nr.deduction_note ?? null,
   };
@@ -580,7 +582,8 @@ export async function applyFromCompact(
         weight_kg: nr.weight_kg,
         cost_basis: 0, // L-008 placeholder.
         remarks: nr.remarks,
-        lab_results: nr.lab_results,
+        // L-054 — never an explicit null into the NOT NULL column; `{}` = "no reading yet".
+        lab_results: labResultsForInsert(nr.lab_results),
         // PORTING_DECISIONS #4 — WRITE these (Python apply drops them).
         true_weight_kg: nr.true_weight_kg ?? null,
         deduction_note: nr.deduction_note ?? null,
@@ -685,6 +688,9 @@ export async function applyFromCompact(
     const patch: Record<string, unknown> = {};
     for (const d of r.diff) {
       if (d.field === "cost_basis") continue; // never written by gsheet-sync.
+      // L-054 — a blank lab block never erases a stored panel (absence is not deletion),
+      // and a `null` would violate NOT NULL and fail the whole update batch.
+      if (d.field === "lab_results" && !shouldWriteLabPatch(d.sheet)) continue;
       patch[d.field] = d.sheet;
     }
     if (!Object.keys(patch).length) continue;

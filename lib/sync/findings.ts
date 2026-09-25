@@ -21,6 +21,7 @@ import type {
   AttributionDiff,
   AutoCreatedBatch,
   AwaitingBatchAssignment,
+  ExtractionNote,
   BatchAliasNote,
   BatchClose,
   BlockDiff,
@@ -52,6 +53,7 @@ import {
   collectAttributionDiffs,
   collectAutoCreatedBatches,
   collectAwaitingBatchAssignments,
+  collectExtractionNotes,
   collectBatchAliasNotes,
   collectBatchCloses,
   collectBlockDiffs,
@@ -2005,6 +2007,73 @@ function fromAwaitingBatchAssignment(a: AwaitingBatchAssignment): RunFinding {
 }
 
 /**
+ * A row of the RC DELIVERIES workbook the extractor REFUSED to treat as a delivery
+ * (2026-09-25, L-054).
+ *
+ * THE INCIDENT: MC typed three sums under her September table — 449,325 / 500,000 /
+ * −50,675 kg in the Weight column and nothing else. The extractor read each as a wet-sack
+ * split of the last truckload (CCP 1309 · SEPT-26-BLK14), inherited its supplier, plate and
+ * pile, and tried to INSERT them. A NOT NULL constraint on `lab_results` refused them by
+ * luck; nothing knew where the table ended. A row now becomes a delivery only on a positive
+ * signal of its own, and everything else that carries a weight is reported here instead.
+ *
+ * Severity:
+ *   - `stray_row` BELOW the tab's Average row → `info`. Outside the table, so almost always
+ *     a working note; it is named (never silent) but it is not a problem.
+ *   - `stray_row` INSIDE the table → `attention`. A row in the middle of the log with a
+ *     weight and no truck is either a real delivery typed wrong or junk — a person should
+ *     look either way.
+ *   - `weight_out_of_range` → `attention`. A delivery-shaped row was NOT saved because its
+ *     weight is impossible; that truckload is missing until the cell is fixed.
+ * Never held, never a durable case, never blocking the watermark: the workbook is
+ * cumulative, so each note restates itself every run until the cell is fixed.
+ */
+function fromExtractionNote(n: ExtractionNote): RunFinding {
+  const isStray = n.kind === 'stray_row'
+  const row = num(n.source_row)
+  const sheet = str(n.sheet) ?? 'the report'
+  const cells = n.cells && typeof n.cells === 'object' ? n.cells : {}
+  const who = [str(n.supplier), str(n.truck_plate)].filter(Boolean).join(' ')
+  const weight = num(n.weight_kg)
+  const weightText = weight == null ? 'a non-number' : fmtKg(weight)
+
+  return {
+    key: `extraction:${n.kind}:${sheet}:${row ?? ''}`,
+    kind: isStray ? 'stray_row' : 'weight_out_of_range',
+    kindLabel: isStray ? 'Not a delivery row — nothing saved' : 'Impossible weight — not saved',
+    source: REPORT_SOURCE_LABEL.deliveries,
+    title: isStray
+      ? `Row ${row ?? '?'} has ${weightText} in the Weight column but no truckload of its own`
+      : `${who || `Row ${row ?? '?'}`}: ${weightText} is not a possible truckload weight`,
+    location:
+      [`"${sheet}" row ${row ?? '?'}`, n.below_summary_row ? 'below the Average row' : null]
+        .filter(Boolean)
+        .join(` ${DOT} `),
+    data: {
+      sheet,
+      source_row: row,
+      reason_code: n.reason_code,
+      weight_kg: weight,
+      supplier: str(n.supplier),
+      truck_plate: str(n.truck_plate),
+      batch_label: str(n.batch_label),
+      block_loc: str(n.block_loc),
+      context_date: str(n.context_date),
+      date_is_own: n.date_is_own === true,
+      summary_row: num(n.summary_row),
+      below_summary_row: n.below_summary_row === true,
+      ...(isStray ? {} : { cap_kg: num(n.cap_kg) }),
+      cells: { ...cells },
+    },
+    // The worker built the sentence once (reports/deliveries/extractionNotes.ts) so the
+    // panel, the Excel report and the progress feed all say the same thing.
+    reason: str(n.detail) ?? 'The sync did not treat this row as a delivery; nothing was saved for it.',
+    severity: isStray && n.below_summary_row === true ? 'info' : 'attention',
+    section: 'deliveries',
+  }
+}
+
+/**
  * A report whose SOURCE FILE never arrived in this run (2026-08-18, L-044).
  *
  * THE SENTENCE THIS REPLACES: *"Nothing new today — no RC DELIVERIES report waiting."*,
@@ -2478,6 +2547,12 @@ export function flattenRunFindings(result: SyncRunResult): RunFinding[] {
   //      the longer the cell stays empty.
   for (const a of collectAwaitingBatchAssignments(result)) out.push(fromAwaitingBatchAssignment(a))
 
+  // 12b′. Rows of the RC DELIVERIES workbook the extractor refused to call deliveries —
+  //       a weight with no truckload of its own, or an impossible weight (L-054). Beside
+  //       the awaiting-assignment rows because both are rows of the SAME sheet that were
+  //       deliberately not saved, and the operator fixes both in the same place.
+  for (const n of collectExtractionNotes(result)) out.push(fromExtractionNote(n))
+
   // 12d. Source workbooks that ARRIVED and could not be read (L-048). Immediately before
   //      the "never arrived" findings because the two answer the same operator question
   //      from opposite ends — nothing came in, versus something came in and told us
@@ -2896,6 +2971,9 @@ const SHORT_KIND: Record<string, string> = {
   price_reprice_failed: 'price not saved',
   unpriced_overdue: 'no price yet',
   awaiting_batch_assignment: 'no pile yet',
+  // L-054 (2026-09-25).
+  stray_row: 'not a delivery',
+  weight_out_of_range: 'impossible weight',
   report_generation_failed: 'no excel report',
   gmail_slow_search: 'gmail slow',
   // L-049 (2026-09-07).
@@ -2937,6 +3015,8 @@ const EXTRA_KIND_LABEL: Record<string, string> = {
   stale_stream_check_failed: 'The report-freshness check could not run',
   unpriced_overdue: 'Delivery still has no price',
   awaiting_batch_assignment: 'Waiting on a pile assignment',
+  stray_row: 'Not a delivery row — nothing saved',
+  weight_out_of_range: 'Impossible weight — not saved',
   report_generation_failed: 'Excel report could not be generated',
   gmail_slow_search: 'Gmail was slow',
 }

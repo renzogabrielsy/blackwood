@@ -550,6 +550,48 @@ export interface AwaitingBatchAssignment {
 }
 
 /**
+ * One row of the RC DELIVERIES workbook the EXTRACTOR refused to treat as a delivery
+ * (2026-09-25, L-054). Mirror of the worker's `reports/deliveries/extractionNotes.ts`.
+ *
+ * On 2026-09-24 MC typed three sums under her table (449,325 / 500,000 / −50,675 kg in the
+ * Weight column, nothing else). The extractor dressed them as wet-sack splits of the last
+ * truckload and tried to insert them; only a NOT NULL constraint stopped it. A row now
+ * becomes a delivery only on a positive signal of its OWN — supplier + truck plate, or a
+ * genuine wet-sack split sitting directly under its delivery — and everything else with a
+ * weight lands here instead:
+ *   - `stray_row`           — a weight with no delivery of its own; nothing saved.
+ *   - `weight_out_of_range` — a delivery-shaped row weighing ≤ 0 or more than `cap_kg`.
+ * Never held, never a durable case, never blocking the watermark. No ₱ field — the operator
+ * file has no price column.
+ */
+export interface ExtractionNote {
+  kind: 'stray_row' | 'weight_out_of_range' | string
+  /** Stable reason code (`no_own_supplier_or_plate`, `recovery_not_adjacent`, …). */
+  reason_code: string
+  report_type: string
+  sheet: string
+  source_row: number
+  /** The row's own date, else the nearest date above it — context, never a claim. */
+  context_date: string | null
+  date_is_own: boolean
+  /** The row's non-empty identity/quantity cells + remark, keyed by column label. */
+  cells: Record<string, string>
+  /** NULL when the Weight cell is not a number — never read as 0 kg. */
+  weight_kg: number | null
+  supplier: string | null
+  truck_plate: string | null
+  batch_label: string | null
+  block_loc: string | null
+  /** The tab's Average/Total/Sum row, when one sits above this row. */
+  summary_row: number | null
+  below_summary_row: boolean
+  /** `weight_out_of_range` only — the ceiling that was applied. */
+  cap_kg?: number | null
+  /** The worker's own plain-English sentence, built once so every surface agrees. */
+  detail: string
+}
+
+/**
  * A report whose SOURCE FILE did not arrive in a run at all (2026-08-18, L-044).
  *
  * The deliveries run used to answer this case with "Nothing new today — no RC DELIVERIES
@@ -946,6 +988,11 @@ export interface ApplyResult {
    *  read it as `apply?.awaiting_batch_assignment ?? []` (see
    *  `collectAwaitingBatchAssignments`). Only the `deliveries` report ever fills it. */
   awaiting_batch_assignment?: AwaitingBatchAssignment[]
+  /** Rows the RC DELIVERIES extractor refused to call deliveries — stray rows and
+   *  impossible weights (L-054). Same optionality contract — read it as
+   *  `apply?.extraction_notes ?? []` (see `collectExtractionNotes`). Only the `deliveries`
+   *  report ever fills it. */
+  extraction_notes?: ExtractionNote[]
   /** Source workbooks this run opened and could not fully read (L-048). Same optionality
    *  contract as `auto_created_batches` — read it as `apply?.source_tab_notes ?? []` (see
    *  `collectSourceTabNotes`). Only the `rc_out` report fills it today. */

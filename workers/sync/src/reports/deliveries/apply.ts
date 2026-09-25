@@ -33,6 +33,8 @@ import type { FieldDiff } from "./classify.js";
 import type { PriceNote } from "./enrich.js";
 import { type HeldRow, type HeldKind, deliveriesKey } from "../held.js";
 import { operatorError } from "../../lib/operatorError.js";
+import { labResultsForInsert, shouldWriteLabPatch } from "../../lib/labResults.js";
+import type { ExtractionNote } from "./extractionNotes.js";
 import {
   batchLocationConflictDetail,
   batchLocationConflictRow,
@@ -176,6 +178,16 @@ export interface ApplyResult {
    */
   awaiting_batch_assignment: AwaitingBatchAssignment[];
   /**
+   * Rows of the report the EXTRACTOR refused to treat as deliveries (L-054): `stray_row`
+   * (a weight with no supplier/plate of its own and not a genuine wet-sack split directly
+   * under its delivery) and `weight_out_of_range` (≤ 0 or above the per-truck ceiling).
+   * ALWAYS present (default []). Filled by `runReport` (extraction happens before apply).
+   * Never held, never an error, never blocking the watermark — a cumulative workbook
+   * restates each one every run until the cell is fixed. No ₱ field (the operator file
+   * has no price column).
+   */
+  extraction_notes: ExtractionNote[];
+  /**
    * Set ONLY when this report's source file did not arrive at all (L-044). Absent on
    * every ordinary run, so its mere presence IS the fact. Never an array: a report either
    * arrived or it did not, and "how late" is one number that the DB view owns.
@@ -318,7 +330,9 @@ export async function applyDeliveries(
         weight_kg: r.weight_kg,
         cost_basis: r.cost_basis !== null && r.cost_basis !== undefined ? r.cost_basis : 0, // L-008
         remarks: r.remarks ?? null,
-        lab_results: (r.lab_results as LabResults | null) ?? null,
+        // NEVER an explicit null (L-054): NOT NULL column. A row with no reading yet is
+        // written as `{}` ("no reading"), never the all-zero default ("measured 0").
+        lab_results: labResultsForInsert(r.lab_results as LabResults | null),
         true_weight_kg: r.true_weight_kg ?? null, // L-021
         deduction_note: r.deduction_note ?? null, // L-021
       };
@@ -392,7 +406,12 @@ export async function applyDeliveries(
   >();
   for (const c of chgRows) {
     const patch: Record<string, unknown> = {};
-    for (const d of c.diff ?? []) patch[d.field] = d.emailValue;
+    for (const d of c.diff ?? []) {
+      // L-054 — a blank lab block in the report never erases a stored panel (and a `null`
+      // here would violate NOT NULL and fail the WHOLE update batch). Absence is not deletion.
+      if (d.field === "lab_results" && !shouldWriteLabPatch(d.emailValue)) continue;
+      patch[d.field] = d.emailValue;
+    }
     if (!Object.keys(patch).length) continue;
     const id = String(c.db_row.id);
     ops.push({ id, patch });
@@ -597,6 +616,8 @@ export async function applyDeliveries(
     unpriced_overdue: [],
     delivery_human_edits: humanEdits,
     awaiting_batch_assignment: awaitingBatch,
+    // Filled by runReport from the extract (L-054).
+    extraction_notes: [],
   };
 }
 

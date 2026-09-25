@@ -52,6 +52,12 @@ Read SHARED.md first — this spec does not repeat the Gmail/db.py/orchestrator_
 - First data row: scans up to 8 rows past the header for the first row whose column 2 parses as a date (`first_data_row_below`, extract_rc_deliveries.py:208-220); fallback = `header_row + 4` if none found.
 - Trailing rows: an "Average"/"Total"/"Sum" row (case-insensitive, column 1) is skipped (`is_average_or_summary_row`, extract_rc_deliveries.py:309-321); a row with no supplier AND no weight AND no date is also treated as noise and skipped.
 
+  > **TS PORT (L-054, 2026-09-25): the Average row is RECORDED but does NOT end the table** — a
+  > real workbook carried two genuine truckloads below one (run `10575906`, AUGUST 2026 rows 53–54).
+  > What decides whether a row is a delivery is the POSITIVE-SIGNAL rule in **§13**, and anything
+  > with a weight that fails it is reported as a `stray_row`, never emitted. A noise row whose
+  > Weight cell holds a NON-number (e.g. `ALA 9958`) is now named as a `stray_row` too.
+
 ### Column mapping (FIXED, not header-signature-driven)
 
 `OPERATOR_COLUMNS` (extract_rc_deliveries.py:77-94), 1-based column index:
@@ -83,8 +89,9 @@ Column 2's raw value is coerced via `coerce_date` (tries `datetime`/`date` objec
 
 - `supplier is None and weight_kg is None` → silently skipped (continuation-row noise, extract_rc_deliveries.py:357-359).
 - `weight_kg is None` (but supplier present) → warning + row SKIPPED entirely (extract_rc_deliveries.py:361-363) — note this is stricter than the classifier's later MALFORMED bucket; a missing-weight row never even reaches classification.
-- `weight_kg` outside `(0, 100_000)` exclusive → warning only, row still emitted (extract_rc_deliveries.py:364-368).
+- `weight_kg` outside `(0, 100_000)` exclusive → warning only, row still emitted (extract_rc_deliveries.py:364-368). **ORACLE ONLY — the TS port REFUSES a weight outside `(0, 60_000]` at extraction (`weight_out_of_range`, §13.3).**
 - `block_loc` present but not matching `^(PCA|PCB|[A-DF])-\d{1,2}[A-D]$` → warning only, still emitted.
+- **TS port only (L-054, §13):** a row with a weight is emitted only if its OWN cells carry a supplier AND a truck plate, or it is a wet-recovery sub-row that passes the adjacency + evidence gate below. Everything else is a `stray_row` note.
 
 ### Batch code translation (`translate_batch_code`, extract_rc_deliveries.py:226-303)
 
@@ -124,6 +131,17 @@ If a candidate is found (`extract_sheet`, extract_rc_deliveries.py:461-506):
 - If `last_mother` is set and is itself "inheritable" (`_is_inheritable_mother` = has a non-null `batch_code`), build a recovery row via `build_recovery_row(row_dict, last_mother)` — inherits `transaction_date`, `supplier`, `block_loc`, `truck_plate`, `batch_code`, `cost_basis` from the mother; KEEPS its own `weight_kg`, `sacks`, `lab_results`, `remarks`; re-derives its OWN `true_weight_kg`/`deduction_note` from ITS OWN remark (not the mother's).
 - If no inheritable mother exists, the row is kept AS-IS (no batch_code) with an added warning — it will surface as MALFORMED at classify time (missing `batch_code`).
 - **A recovery row never itself becomes the new `last_mother`** — inheritance always traces back to the original, real delivery row, even across multiple consecutive recovery sub-rows.
+
+> **TS PORT — THE INHERITANCE IS GATED (L-054, 2026-09-25).** The oracle lets ANY recovery-shaped
+> row inherit the last mother, however far below it sits — which is exactly how three weight-only
+> scratch sums 14–16 rows under the last truckload (and 6–8 rows under the Average row) became
+> `CCP 1309 · SEPT-26-BLK14` deliveries of 449,325 / 500,000 / −50,675 kg. In the TS port a
+> candidate inherits ONLY when (a) it is on the row IMMEDIATELY after the last emitted row (a
+> delivery or an accepted recovery — no gap, no Average row in between) AND (b) it carries evidence
+> of its own: a sack count or a remark. Measured over 64 stored workbooks (425 tabs): all 6 distinct
+> real recovery rows sit exactly 1 row under their mother and carry sacks + an MC reading + a
+> "net kilos of …" remark; they are all still accepted. A candidate that fails is a `stray_row`
+> (`recovery_not_adjacent` / `recovery_no_evidence`). See §13.
 
 ### Derived fields / units / rounding
 
@@ -264,6 +282,13 @@ transaction_date, supplier, batch_code, block_loc, truck_plate, sacks, weight_kg
 cost_basis (real value OR 0 placeholder — L-008), remarks, lab_results,
 true_weight_kg, deduction_note   (L-021, additive)
 ```
+
+**`lab_results` is NEVER sent as an explicit `null` (L-054, §13.4).** The column is
+`NOT NULL DEFAULT '{"bd":0,"fc":0,"mc":0,…}'`; the extractor still collapses a panel with no
+readings to `null` (that null is in the parity envelope), and the INSERT writes it as **`{}`** via
+`lib/labResults.ts::labResultsForInsert` — shared with `reports/gsheet/apply.ts`. On UPDATE, a
+`lab_results` diff whose incoming side is empty is DROPPED from the patch (`shouldWriteLabPatch`):
+absence is not deletion.
 
 ### Audit mechanism
 
@@ -1097,3 +1122,115 @@ while the other rows still apply and the watermark still advances, the raw strin
 `data`, the fingerprint equals the durable case fingerprint and survives the numbers moving) and
 `scripts/verify-decision-cards.ts` (1 new check — the card renders with `[Acknowledge]` and hides
 when acknowledged).
+
+---
+
+## 13. A NOT NULL constraint is not a validation rule — the extractor must know where the table ends (2026-09-25, L-054)
+
+### 13.1 The incident, measured
+
+Runs `b1abba0b` and `ea4ed942` (2026-09-25, both `partial`) read MC's
+`260924 RC DELIVERIES 2026.xlsx`, tab `SEPTEMBER 2026`. The last real truckload is **row 68**
+(Ornales · `B14` · D-12C · CCP 1309 · 370 sacks · 10,900 kg); rows 69–74 carry only a formula
+residue (FC = 100); **row 76 is `Average`**; **rows 82–84 are MC's own arithmetic** typed under
+the table — only the Weight column is filled: `449325`, `500000`, `-50675` (a "500 t target ·
+delivered so far · remaining" sum); row 111 is `ALA 9958` / `22840` typed one column off.
+
+**The mechanism (verified by running the extractor on the stored workbook).** The Average row was
+merely SKIPPED, so the scan went on. Each of rows 82–84 has a weight and no plate, batch, block or
+date of its own — exactly the wet-recovery sub-row shape of §2 — so `buildRecoveryRow` let it
+inherit the LAST MOTHER, row 68: supplier `Ornales`, plate `CCP 1309`, block `D-12C`, batch
+`SEPT-26-BLK14`, and row 68's date (2026-09-24). The rows had no lab cells, so `lab_results`
+collapsed to `null`. Classified against the live DB window (since 2026-09-21) they were three
+**NEW** rows beside 14 NOOPs, and apply tried to INSERT deliveries of **449,325 kg, 500,000 kg and
+−50,675 kg**. They were refused only because `lab_results` arrived as an explicit `null` into a
+NOT NULL column (SQLSTATE 23502) — the email stayed unprocessed and every run re-tried them. The
+Python oracle does the same (it emits the three rows as `_recovery: true` under
+`SEPTEMBER-26-BLK14`, measured).
+
+Only the DATE is a documented forward-fill; supplier / plate / block / batch reached those rows
+through the recovery inheritance alone. That inheritance had no notion of WHERE a recovery may sit.
+
+### 13.2 The rule: a delivery is a POSITIVE signal from the row's own cells
+
+The L-042 discipline — split by what is there, never by widening a bucket
+(`reports/deliveries/extract.ts::extractSheet`, notes built in `extractionNotes.ts`):
+
+1. **An ordinary truckload names its OWN supplier AND its OWN truck plate.** Measured across all 64
+   stored RC DELIVERIES workbooks (425 tabs): every one of the 654 distinct non-recovery rows does.
+   **The batch label / block is deliberately NOT required** (a departure from the brief that
+   proposed it): three real rows in the stored workbooks carry neither — MC's "weighed in, pile not
+   assigned yet" shape (L-042, including the two 2026-08-12 truckloads), which already has its own
+   quiet `awaiting_assignment` bucket downstream.
+2. **A wet-recovery sub-row inherits only on evidence** — on the row IMMEDIATELY after the last
+   emitted row, AND with its own sacks or remark (§2, "Wet-recovery sub-rows").
+3. **Everything else with a weight is a `stray_row`** — an `ExtractionNote`, never a
+   `DeliveryRow`: never inserted, never held, never an `errors[]` entry (the watermark and the Gmail
+   label proceed), reported through `apply.extraction_notes` → `lib/sync/findings.ts`
+   (`kind: 'stray_row'`, `section: 'deliveries'`). Reason codes: `no_own_supplier_or_plate`,
+   `recovery_not_adjacent`, `recovery_no_evidence`, `weight_not_a_number` (a noise row whose Weight
+   cell holds a non-number — row 111). A stray carries ONLY its own cells; the nearest date above
+   rides as `context_date` with `date_is_own: false`, never as a transaction date.
+4. **The Average/Total/Sum row does NOT end the table.** The brief proposed stopping there; it was
+   measured first, and run `10575906`'s AUGUST 2026 tab has two genuine 2026-08-12 truckloads
+   (Paquibot · AAV 6111 · 18,595 kg and Tag-at · KCA 378 · 18,650 kg — both later recorded in
+   `deliveries`) BELOW its Average row (row 31). Stopping would have made them invisible. So the
+   positive-signal rule governs, and the Average row is recorded instead: a note below it says so
+   (`below_summary_row`, `summary_row`), and because it occupies a row number it breaks recovery
+   adjacency by construction.
+
+**Measured before/after, all 64 stored workbooks × every tab (425 tabs, 29,630 emitted rows):** the
+new extractor emits every row the old one did, byte-identical (warnings and confidence included),
+EXCEPT the three scratch rows 82–84 — 0 rows gained, 3 lost, 0 changed. The 6 real recovery rows
+are all still accepted. Notes raised across the whole corpus: 5, all expected — rows 82/83/84
+(`recovery_not_adjacent`, below the Average row) and the `ALA 9958` row at 106 (260923) / 111
+(260924) (`weight_not_a_number`).
+
+### 13.3 Weight bounds — the last line of defence
+
+A delivery-shaped row (own, or an accepted recovery) whose weight is **≤ 0** or **above
+`DELIVERY_WEIGHT_CAP_KG` = 60,000 kg** is refused at extraction as `weight_out_of_range`
+(`weight_not_positive` / `weight_above_cap`) and never sent to the database. This REPLACES the old
+warn-only `(0, 100000)` check (which never fired on a real row — measured). **The cap, measured
+2026-09-25 (read-only):** the heaviest delivery WITH a truck plate is **36,069 kg** (2024-11-26,
+Sevilla, NAO3238); the heaviest since 2025 is 35,790 kg. The all-time max is **88,695 kg**, but it
+and all 63 rows above 40,000 kg carry NO plate — they are hand-seeded opening balances (`2023
+BACKLOG`, `SEVILLA 2022 BACKLOG`, `SUNDRY BACKLOG`, sacks 0), never typed into MC's truck log.
+60,000 kg is ~1.7× the heaviest truck ever recorded. No `deliveries` row has weight ≤ 0.
+
+### 13.4 `lab_results` is never an explicit null
+
+The column is `jsonb NOT NULL DEFAULT '{"bd":0,"fc":0,"mc":0,"vm":0,"ash":0,"jis":0,"grit":0}'`.
+A GENUINE truckload booked before its lab panel is back would have hit the same 23502 the scratch
+rows did. **Choice: `{}`, not the default.** The default is seven ZEROS under two retired key names;
+a zero moisture reading is a measurement, "not reported yet" is not. And `view_blocking_grid`
+weights each stat over `WHERE lab_results->>'<stat>' IS NOT NULL`, so `{}` drops the truckload out
+of both sides of the average while the default would drag the pile's MC toward zero. Measured: 0 of
+1,790 deliveries carry the default shape; exactly 1 carries `{}` (2026-03-18). Implementation:
+`lib/labResults.ts` — `labResultsForInsert` on every INSERT of BOTH writers
+(`reports/deliveries/apply.ts`, `reports/gsheet/apply.ts`), and `shouldWriteLabPatch` on every
+UPDATE patch (an empty incoming panel never erases a stored one, and would otherwise fail the whole
+`fn_apply_delivery_upstream` batch on NOT NULL). The extractor's `null` is unchanged — it is part of
+the parity envelope.
+
+### 13.5 Parity
+
+**TS-only business-rule deviation, REGISTERED** (`PORTING_DECISIONS.md` → "Business-rule
+deviations", `expected-deviations.json` → `dormant_classify`, rule `L-054`). The oracle still emits
+the three rows. Neither deliveries fixture contains a stray, an out-of-range weight or a gated
+recovery (measured: both fixture workbooks extract byte-identically before and after), so it is
+dormant and **parity stayed 12/12** with the same 79 production deviations. Apply-layer `{}` is not
+classify and needs no entry.
+
+### 13.6 Tests
+
+`workers/sync/test/reports/deliveries-stray-rows.test.ts` (22 cases, every cell copied from the
+stored workbooks): the incident tail reproduced (3 scratch rows → 3 `stray_row` notes, nothing
+inherited, the formula residue silent, row 111 named); a scratch weight above the Average row and
+one directly under a delivery with no evidence; supplier-without-plate and plate-without-supplier;
+the two real JUNE wet-sack splits and a same-truck multi-row split still pass; the two AUGUST
+truckloads below an Average row still read; blank labs still a delivery; 500,000 kg / −50,675 kg /
+the 60,000 kg boundary / an impossible weight on a split; `{}` on insert and the dropped empty lab
+patch through `applyDeliveries`; the window filter; `normalizeApply` carrying the channel (and
+stripping a cost-ish cell key); `flattenRunFindings` severities. App-side:
+`scripts/verify-findings.ts` (4 L-054 checks).

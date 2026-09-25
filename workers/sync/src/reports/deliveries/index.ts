@@ -31,7 +31,7 @@ import type { DbClient } from "../../lib/db.js";
 import type { ProgressEmitter } from "../../lib/progress.js";
 
 import { loadDeliveriesWorkbook } from "./sheet.js";
-import { extractDeliveries, type ExtractResult } from "./extract.js";
+import { extractDeliveries, type ExtractResult, type ExtractionNote } from "./extract.js";
 import {
   enrichPrices,
   MIN_BAND_SAMPLES,
@@ -402,6 +402,7 @@ export async function runReport(
       // reported through the same constructor the email path uses, with the ₱ redacted.
       delivery_human_edits: repricedEmpty.result?.human_edits ?? [],
       awaiting_batch_assignment: [],
+      extraction_notes: [],
       report_not_received: notReceived,
     };
     return {
@@ -594,6 +595,39 @@ export async function runReport(
     batch_codes: [...batchCodes],
   };
 
+  // ---------------------------------------------------------------------------
+  // WHAT THE EXTRACTOR REFUSED TO CALL A DELIVERY (L-054). Rows of the sheet that carry a
+  // weight but no positive delivery signal of their own (`stray_row`) or whose weight is
+  // not a truckload's (`weight_out_of_range`). They were never rows, so they never reached
+  // classify or apply; this is the ONLY place they surface. Scoped to the same window as
+  // every other row (a note's context date is its own date, else the nearest one above it),
+  // so a stray from earlier in the month is not re-announced once it is outside the window.
+  // Never an error: the watermark and the Gmail label proceed exactly as before. Announced
+  // BEFORE apply so the beat keeps its place on the monotonic progress track.
+  // ---------------------------------------------------------------------------
+  const extractionNotes = extractionNotesInWindow(extract.extraction_notes ?? [], since);
+  if (extractionNotes.length) {
+    const stray = extractionNotes.filter((n) => n.kind === "stray_row").length;
+    const bad = extractionNotes.length - stray;
+    await emit?.(
+      "classify",
+      [
+        stray
+          ? `${stray} row${stray === 1 ? "" : "s"} in the report ${stray === 1 ? "is" : "are"} ` +
+            `not a delivery (a number with no supplier or truck of its own)`
+          : null,
+        bad
+          ? `${bad} deliver${bad === 1 ? "y has" : "ies have"} an impossible weight`
+          : null,
+      ]
+        .filter(Boolean)
+        .join("; ") + " — nothing was saved for them.",
+      91,
+      undefined,
+      "warn",
+    );
+  }
+
   const apply = await applyDeliveries(compact, {
     db,
     labeler: deps.labeler,
@@ -601,6 +635,7 @@ export async function runReport(
     noLabel: deps.noLabel,
     runTs: deps.runTs,
   });
+  apply.extraction_notes = extractionNotes;
 
   // ---------------------------------------------------------------------------
   // THE UNPRICED WARNING (Renzo, 2026-08-07): "prices are not supposed to lag, and
@@ -674,6 +709,19 @@ export async function runReport(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+/**
+ * The extraction notes this run should REPORT: those whose context date (the row's own
+ * date, else the nearest date above it) is inside the sync window, plus any with no date
+ * context at all (nothing above them to place them — say it rather than drop it).
+ * Exported for the test suite.
+ */
+export function extractionNotesInWindow(
+  notes: readonly ExtractionNote[],
+  since: string,
+): ExtractionNote[] {
+  return notes.filter((n) => n.context_date === null || n.context_date.slice(0, 10) >= since);
+}
+
 function firstAttachment(manifest: DeliveriesManifest, key: string): StoredAttachmentLike | null {
   const arr = manifest.reports?.[key];
   return arr && arr.length ? arr[0] : null;
