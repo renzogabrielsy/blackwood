@@ -17,10 +17,11 @@
  * `production_batch` derives it from here, so the two conventions structurally
  * cannot diverge again.
  *
- * NOTE — this is NOT the batch_code month prefix. `batch_code` has its own,
- * deliberately mixed convention (JAN/MARCH/APRIL/SEPT + the SEPT/SEP asymmetry)
- * defined per-extractor (`PRIMARY_MONTH_PREFIX`, `MONTH_PREFIX_ALIASES`). Do not
- * unify the two — they are different identifiers with different histories.
+ * NOTE — the `production_batch` campaign name is NOT the batch_code month prefix.
+ * The two are different identifiers with different histories and must never be
+ * unified: a campaign is `SEPTEMBER` (full name, above), a batch is `SEPT-26-BLK12`
+ * (the house batch-code prefix, `BATCH_CODE_MONTH_PREFIX` / `shortMonthPrefix()`
+ * below). Both tables live in this one file so neither can grow a second copy.
  *
  * Pure module: zero imports, zero I/O. Safe for any layer.
  */
@@ -87,4 +88,40 @@ export function monthNumberFromToken(token: string | null | undefined): number |
   if (!name) return null;
   const idx = MONTH_NAMES.indexOf(name);
   return idx < 0 ? null : idx + 1;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE HOUSE BATCH-CODE MONTH PREFIX (2026-09-25, Renzo — L-053)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The ONE table every code the worker INVENTS takes its month prefix from. A code a
+// human typed is never rewritten through it — this governs only what the sync derives
+// (the deliveries extractor's `FEEDING # N` / `PILED IN <MONTH> # N` / `B<N>` rules and
+// the PROPOSED report's BLOCK DATE derivation).
+//
+// Values = the spelling ALREADY IN USE for that month in `batches` (measured
+// 2026-09-25 over every `<MONTH>-<YY>-` code): JAN 60 (no JANUARY), FEB 70 (no
+// FEBRUARY), MARCH (65; every 2025+ code — MAR survives only on 2021–2024 codes),
+// APRIL (40; every 2025+ code — APR only on 2022–2024), MAY, JUNE (no JUN), JULY (no
+// JUL), AUG 62 vs AUGUST 15 (the 15 are all 2026 codes the sync itself invented),
+// SEPT 54 vs SEPTEMBER 3 (all three sync-invented, renamed the same day), OCT, NOV, DEC.
+// It is byte-identical to the PROPOSED report's long-standing PRIMARY prefix, so the two
+// derivers now read one table instead of disagreeing — which is exactly how
+// `SEPTEMBER-26-BLK12` came to sit beside `SEPT-26-BLK2` … `SEPT-26-BLK11`.
+
+/** Batch-code month prefix, index 0 = January (use `shortMonthPrefix()` for 1-indexed). */
+export const BATCH_CODE_MONTH_PREFIX: readonly string[] = [
+  "JAN", "FEB", "MARCH", "APRIL", "MAY", "JUNE",
+  "JULY", "AUG", "SEPT", "OCT", "NOV", "DEC",
+];
+
+/**
+ * The house batch-code month prefix for a 1-indexed calendar month (1 = January),
+ * e.g. `shortMonthPrefix(9)` → `"SEPT"`. Throws on an out-of-range month — callers
+ * always pass a decoded calendar date.
+ */
+export function shortMonthPrefix(month: number): string {
+  const p = BATCH_CODE_MONTH_PREFIX[month - 1];
+  if (!p) throw new RangeError(`shortMonthPrefix: month out of range: ${month}`);
+  return p;
 }

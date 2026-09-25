@@ -58,3 +58,15 @@ unchanged). Selected blocks coloured by natural-breaks group when the Price page
 vacated blocks keep their fill with a dashed outline. Fourth Include-pages option `Yard map`. Lesson:
 **a page that borrows another page's chrome budget overflows by exactly the chrome it doesn't have** —
 measure the reserve per sheet. Still unverified on the real signed-in page.
+
+## 8. ADDENDUM (2026-09-25) — the 39,570 kg residual, L-053, short month convention
+Run `bcefc0f4` reported −39,570 kg unexplained. Cause: `SEPTEMBER-26-BLK12` (D-12D, 39,570 kg) — the
+Sheet's Blocking tab balance cell was BLANK because its RC IN rows and BLOCK cell spelled the month
+differently, and `blockBalance.ts` skips a non-numeric Sheet balance in silence (`sKg` null → no B1 diff,
+dropped from the Sheet sum). The long spelling was the worker's: `deliveries/extract.ts` derived codes
+from MC's shorthand with a FULL-name month table. Decision: SHORT prefix is the house convention;
+`shortMonthPrefix()` in `lib/months.ts`; three September batches renamed live (reversal: swap old/new in
+the same two-table UPDATE). Not done: renaming the 15 `AUGUST-26-…` batches; making a blank Sheet balance
+a finding. Renzo fixes the Sheet cells by hand. Also this day: research report on Jev / Laya decision
+models (no code) — recommendation: Laya self-hosted in shadow mode on Sync Review; labelled data is the
+gap (84 of 94 held cases are only 'investigated', not a verdict) — start logging verdicts first.

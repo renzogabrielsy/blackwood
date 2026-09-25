@@ -24,6 +24,15 @@
  * A MONTH-PREFIX ALIAS IS NOT A DISAGREEMENT. It is a naming convention, and the system
  * already knows the table.
  *
+ * L-053 (2026-09-25): the extractor no longer invents the long form — every derived code
+ * now takes the HOUSE prefix from `lib/months.ts::shortMonthPrefix` (JAN FEB MARCH APRIL
+ * MAY JUNE JULY AUG SEPT OCT NOV DEC). This module is what keeps that change safe in
+ * BOTH directions: a source still typing `SEPTEMBER-26-BLK12` compares equal to the
+ * `SEPT-26-BLK12` batch and is written as it, and a derived `AUG-26-BLK5` resolves to the
+ * `AUGUST-26-BLK5` batch the sync invented before the fix. Every long↔short pair of all
+ * twelve months folds both ways (MAY is one word; `test/lib/batchCodeAlias.test.ts` pins
+ * the whole table). `SEP` ↔ `SEPT` still does NOT fold — the table never said it does.
+ *
  * ─────────────────────────────────────────────────────────────────────────────
  * WHAT THIS IS NOT
  * ─────────────────────────────────────────────────────────────────────────────

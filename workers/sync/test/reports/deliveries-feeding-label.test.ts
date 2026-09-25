@@ -124,13 +124,13 @@ describe("L-042 — the operator's FEEDING shorthand translates like FEEDING ARE
       const area = translateBatchCode(`FEEDING AREA ${n}`, null, "2026-08-05");
       const hash = translateBatchCode(`FEEDING # ${n}`, null, "2026-08-05");
       expect(hash).toEqual(area);
-      expect(hash[0]).toBe(`AUGUST-26-FEED${n}`);
+      expect(hash[0]).toBe(`AUG-26-FEED${n}`); // L-053: the HOUSE prefix
       expect(hash[1]).toEqual([]);
     }
   });
 
   it("accepts the neighbouring spellings that plausibly appear", () => {
-    const expected = ["AUGUST-26-FEED2", []];
+    const expected = ["AUG-26-FEED2", []];
     for (const label of [
       "FEEDING AREA 2",
       "FEEDING # 2",
@@ -171,7 +171,7 @@ describe("L-042 — the operator's FEEDING shorthand translates like FEEDING ARE
   });
 
   it("the label does not hijack a `B<N>` row or a PILED-IN remark row", () => {
-    expect(translateBatchCode("B09", null, "2026-08-05")[0]).toBe("AUGUST-26-BLK9");
+    expect(translateBatchCode("B09", null, "2026-08-05")[0]).toBe("AUG-26-BLK9");
     expect(translateBatchCode("B09", "PILED IN JULY # 11", "2026-08-05")[0]).toBe("JULY-26-BLK11");
   });
 });
@@ -212,7 +212,7 @@ describe("L-042 — a month-prefix alias is not a disagreement", () => {
   it("THE HEADLINE CASE: the real 2026-08-05 AAV 6111 / 19,185 kg row resolves CLEAN", () => {
     // Extracted exactly as the widened extractor now produces it.
     const [code, warnings] = translateBatchCode("FEEDING # 1", null, "2026-08-05");
-    expect(code).toBe("AUGUST-26-FEED1");
+    expect(code).toBe("AUG-26-FEED1"); // L-053: derived straight into the DB's spelling
     expect(warnings).toEqual([]);
 
     const row = mkRow({
@@ -265,7 +265,7 @@ describe("L-042 — a month-prefix alias is not a disagreement", () => {
       operator_batch_label: "FEEDING # 2",
       _source_row: 19,
     });
-    expect(row.batch_code).toBe("AUGUST-26-FEED2");
+    expect(row.batch_code).toBe("AUG-26-FEED2");
 
     const classified = classifyDeliveries(mkExtract([row]), [DB_AUG12_RAWLABEL]);
     expect(classified.summary.identity_diff_count).toBe(1);
@@ -275,12 +275,12 @@ describe("L-042 — a month-prefix alias is not a disagreement", () => {
     expect(guarded.flagged).toHaveLength(1);
     expect(guarded.flagged[0].kind).toBe("L040_identity_diff");
     expect(guarded.flagged[0].reason).toContain("FEEDING # 2");
-    expect(guarded.flagged[0].reason).toContain("AUGUST-26-FEED2");
+    expect(guarded.flagged[0].reason).toContain("AUG-26-FEED2");
     // NOT re-inserted as a second copy of the same truckload.
     expect(guarded.new).toEqual([]);
   });
 
-  it("a genuinely NEW feeding row is written under the DB's own spelling, not beside it", () => {
+  it("a genuinely NEW feeding row is DERIVED in the DB's own spelling (L-053) — no re-spell needed", () => {
     const row = mkRow({
       transaction_date: "2026-08-14",
       batch_code: translateBatchCode("FEEDING # 2", null, "2026-08-14")[0],
@@ -289,7 +289,7 @@ describe("L-042 — a month-prefix alias is not a disagreement", () => {
       sacks: 500,
       weight_kg: 18000,
     });
-    expect(row.batch_code).toBe("AUGUST-26-FEED2");
+    expect(row.batch_code).toBe("AUG-26-FEED2");
 
     const guarded = applyDeliveriesGuard(
       classifyDeliveries(mkExtract([row]), []),
@@ -297,8 +297,31 @@ describe("L-042 — a month-prefix alias is not a disagreement", () => {
       LIVE_FEED_BATCH_CODES,
     );
     expect(guarded.new).toHaveLength(1);
-    // The apply step will now find `AUG-26-FEED2` and NOT create a duplicate batch.
     expect(guarded.new[0].row.batch_code).toBe("AUG-26-FEED2");
+    expect(guarded.new[0].notes?.join(" ") ?? "").not.toContain("L-042: batch re-spelled");
+  });
+
+  it("a NEW row for a pile the sync invented in the LONG form is written under THAT batch, not beside it", () => {
+    // `AUGUST-26-BLK1` is one of the 15 `AUGUST-26-…` batches the pre-L-053 extractor
+    // created. The extractor now derives `AUG-26-BLK1`; the alias resolves it to the
+    // batch that exists instead of auto-creating a twin.
+    const row = mkRow({
+      transaction_date: "2026-08-14",
+      batch_code: translateBatchCode("B1", null, "2026-08-14")[0],
+      operator_batch_label: "B1",
+      truck_plate: "AAV 6111",
+      sacks: 500,
+      weight_kg: 18000,
+    });
+    expect(row.batch_code).toBe("AUG-26-BLK1");
+
+    const guarded = applyDeliveriesGuard(
+      classifyDeliveries(mkExtract([row]), []),
+      [],
+      LIVE_FEED_BATCH_CODES,
+    );
+    expect(guarded.new).toHaveLength(1);
+    expect(guarded.new[0].row.batch_code).toBe("AUGUST-26-BLK1");
     expect(guarded.new[0].notes?.join(" ")).toContain("L-042: batch re-spelled");
   });
 });

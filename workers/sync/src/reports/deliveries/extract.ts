@@ -21,6 +21,7 @@
  * coerce_float parity) and a local coerceInt/coerceStr mirroring the Python.
  */
 import { coerceDate, coerceFloat } from "../../lib/norm.js";
+import { monthNumberFromToken, shortMonthPrefix } from "../../lib/months.js";
 import type { CellValue, LoadedSheet } from "../../lib/xlsx.js";
 import type { DeliveriesWorkbook } from "./sheet.js";
 import {
@@ -50,14 +51,18 @@ const LAB_PLAUSIBILITY: Record<string, [string, (v: number) => boolean]> = {
   bd_jis: ["BD JIS out of expected range", (v) => 0.2 < v && v < 1.0],
 };
 
-// Month name → full-name prefix (despite "ABBR", all values are the full name).
-const MONTH_ABBR_VALUES = [
-  "JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE",
-  "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER",
-];
-const MONTH_ABBR: Record<string, string> = Object.fromEntries(
-  MONTH_ABBR_VALUES.map((m) => [m, m]),
-);
+// The month prefix of every code this extractor DERIVES comes from lib/months.ts
+// (`shortMonthPrefix`) — THE house batch-code convention (2026-09-25, L-053).
+//
+// Until then a local `MONTH_ABBR_VALUES` table lived here which, despite its name, held
+// the FULL month names — a port of extract_rc_deliveries.py. So the sync itself invented
+// `SEPTEMBER-26-BLK12`, `SEPTEMBER-26-BLK1` and `SEPTEMBER-26-FEED1` from MC's shorthand
+// while MC's typed codes, the PROPOSED report's derivation and every other September
+// block in the yard read `SEPT-`. The Google Sheet's Blocking tab then looked the block
+// up under the yard's spelling, its D-12D balance cell went blank, and 39,570 kg dropped
+// out of the Blocking cross-check. A worker that invents a name must invent it in the
+// house convention. The Python oracle still emits the long form — a REGISTERED parity
+// deviation (PORTING_DECISIONS.md "L-053"), not a porter bug.
 
 // "PILED IN <MONTH> # <N>" in remarks. re.IGNORECASE.
 const PILED_REMARK_RE =
@@ -191,14 +196,15 @@ export function translateBatchCode(
   const label = operatorLabel.trim();
 
   // Rule (source-first): a FEEDING label (`FEEDING AREA N` / `FEEDING # N` / …)
-  // → "<MMM>-<YY>-FEED<N>". ONE output shape for every accepted spelling.
+  // → "<PREFIX>-<YY>-FEED<N>" with the HOUSE prefix (`SEPT-26-FEED1`, never
+  // `SEPTEMBER-26-FEED1`, L-053). ONE output shape for every accepted spelling.
   const mFeed = FEEDING_AREA_RE.exec(label);
   if (mFeed) {
     const feedNum = mFeed[1];
     if (feedNum && deliveryDate) {
       const dt = parseISODate(deliveryDate);
       if (dt) {
-        const mmm = MONTH_ABBR_VALUES[dt.month - 1];
+        const mmm = shortMonthPrefix(dt.month);
         const yy = deliveryDate.slice(2, 4);
         return [`${mmm}-${yy}-FEED${parseInt(feedNum, 10)}`, []];
       }
@@ -216,9 +222,9 @@ export function translateBatchCode(
   if (remarks) {
     const m = PILED_REMARK_RE.exec(remarks);
     if (m) {
-      const monthName = m[1].toUpperCase();
+      const monthNum = monthNumberFromToken(m[1]);
       const num = parseInt(m[2], 10);
-      const mmm = MONTH_ABBR[monthName];
+      const mmm = monthNum === null ? null : shortMonthPrefix(monthNum);
       let yy = "26";
       if (deliveryDate) {
         yy = deliveryDate.slice(2, 4);
@@ -235,7 +241,7 @@ export function translateBatchCode(
     const num = parseInt(mB[1], 10);
     const dt = parseISODate(deliveryDate);
     if (dt) {
-      const mmm = MONTH_ABBR_VALUES[dt.month - 1];
+      const mmm = shortMonthPrefix(dt.month);
       const yy = deliveryDate.slice(2, 4);
       return [
         `${mmm}-${yy}-BLK${num}`,
