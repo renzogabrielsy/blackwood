@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { History, Loader2, ArchiveRestore, Search, X, RefreshCw } from 'lucide-react';
+import { History, Loader2, ArchiveRestore, Search, X, RefreshCw, Pencil } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -32,7 +32,8 @@ const COLS = [
   { key: 'title', label: 'Title', w: 200, align: 'left' },
   { key: 'remark', label: 'Remark', w: 180, align: 'left' },
   { key: 'status', label: 'Status', w: 92, align: 'left' },
-  { key: 'version', label: 'v#', w: 48, align: 'right' },
+  // 62, not 48: room for `v3 /4` plus the pencil an in-place-edited version carries.
+  { key: 'version', label: 'v#', w: 62, align: 'right' },
   { key: 'blocks', label: 'Blocks', w: 56, align: 'right' },
   { key: 'balance', label: 'Balance', w: 94, align: 'right' },
   { key: 'mc', label: 'MC', w: 54, align: 'right' },
@@ -43,7 +44,7 @@ const COLS = [
   { key: 'actions', label: '', w: 66, align: 'right' },
 ] as const;
 
-// 1098px. The dialog is `max-w-6xl` (1152) precisely so this fits WITHOUT a horizontal
+// 1112px. The dialog is `max-w-6xl` (1152) precisely so this fits WITHOUT a horizontal
 // scroll on a desktop — 12 columns is a lot, and a list you have to scroll sideways to
 // read the author of is a list nobody reads. Below that width it scrolls, which is the
 // rule ("never crush, always scroll"), never a squeezed column.
@@ -304,6 +305,16 @@ export function BlendProposalsDialog({
                         </td>
                         <td className="px-2 py-1 text-xs text-right">
                           <span className="font-mono tabular-nums text-foreground">v{p.currentVersionNo}</span>
+                          {(p.currentVersionRevisionNo ?? 1) > 1 && (
+                            <span
+                              className="inline-flex align-middle ml-0.5 text-muted-foreground"
+                              title={`v${p.currentVersionNo}'s contents were edited in place${
+                                p.currentVersionRevisedAt ? ` on ${blendComputedDate(p.currentVersionRevisedAt)}` : ''
+                              }`}
+                            >
+                              <Pencil className="w-2.5 h-2.5" aria-label="edited in place" />
+                            </span>
+                          )}
                           {p.versionCount > 1 && (
                             <span className="text-muted-foreground text-[10px]"> /{p.versionCount}</span>
                           )}
