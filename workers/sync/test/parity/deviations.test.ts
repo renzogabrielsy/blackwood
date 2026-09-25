@@ -89,9 +89,17 @@ describe("staleDeviations", () => {
 describe("shipped expected-deviations.json", () => {
   const raw = JSON.parse(
     readFileSync(resolve(__dirname, "expected-deviations.json"), "utf8"),
-  ) as { deviations: ExpectedDeviation[]; apply_phase_deferred?: ExpectedDeviation[] };
+  ) as {
+    deviations: ExpectedDeviation[];
+    apply_phase_deferred?: ExpectedDeviation[];
+    dormant_classify?: ExpectedDeviation[];
+  };
 
-  const allEntries = [...(raw.deviations ?? []), ...(raw.apply_phase_deferred ?? [])];
+  const allEntries = [
+    ...(raw.deviations ?? []),
+    ...(raw.apply_phase_deferred ?? []),
+    ...(raw.dormant_classify ?? []),
+  ];
 
   it("parses and every entry (active + deferred) has rule/type/case/path/note", () => {
     expect(Array.isArray(raw.deviations)).toBe(true);
@@ -119,5 +127,13 @@ describe("shipped expected-deviations.json", () => {
     const activeGsheet = raw.deviations.filter((d) => d.type === "gsheet");
     expect(activeGsheet).toHaveLength(0);
     expect((raw.apply_phase_deferred ?? []).every((d) => d.type === "gsheet")).toBe(true);
+  });
+
+  it("records L-053 (house batch-code prefix) as a DORMANT classify deviation, not an active one", () => {
+    // The oracle derives SEPTEMBER-/AUGUST-/JANUARY-…; the TS port derives the house prefix.
+    // No current deliveries fixture derives a month where the two spell differently, so the
+    // entry is parked (no STALE noise) and the record persists until a fixture activates it.
+    expect((raw.dormant_classify ?? []).some((d) => d.rule === "L-053" && d.type === "deliveries")).toBe(true);
+    expect(raw.deviations.some((d) => d.rule === "L-053")).toBe(false);
   });
 });

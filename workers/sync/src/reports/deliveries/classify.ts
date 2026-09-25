@@ -534,6 +534,12 @@ export function applyDeliveriesGuard(
     //
     // It can ONLY ever point at a batch that ALREADY EXISTS, and never overrides a code
     // that already resolves — the same safety property as the L-033b hint.
+    //
+    // L-053 (2026-09-25) turned the direction round: the extractor now derives the HOUSE
+    // prefix (`AUG-26-BLK5`, `SEPT-26-FEED1` — lib/months.ts::shortMonthPrefix), so the
+    // live case is the 15 `AUGUST-26-…` batches the sync invented in August 2026 before
+    // the fix. A new delivery for one of those piles derives `AUG-26-BLK5`, finds no such
+    // batch, and is written under the EXISTING `AUGUST-26-BLK5` here — never beside it.
     const aliased = resolveKnownBatchCodeAlias(r.batch_code, batchCodes);
     if (aliased) {
       if (!item.notes) item.notes = [];

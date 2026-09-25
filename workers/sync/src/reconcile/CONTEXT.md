@@ -261,6 +261,17 @@ NOT a flat table:
   NOT a diff** (Ruleset O7 — usually a late delivery); but a *disagreement* with the Sheet on
   that block still is. A block present on only one side → a presence `balance` diff.
 
+**A blank Sheet cell can be a SPELLING, not a missing block (2026-09-25, L-053).** D-12D's
+balance cell on the Sheet's Blocking tab went blank and 39,570 kg left the cross-check — not
+because the engine mis-read anything, but because the pile was stored as `SEPTEMBER-26-BLK12`, a
+code the DELIVERIES EXTRACTOR had invented from MC's shorthand with a full-name month table, while
+the Sheet's lookup (and every other September pile) spells it `SEPT-`. B4's local
+`MONTH_CANONICAL` makes the engine alias-aware on its own side, but the Sheet's formula is not. The
+fix is upstream and single: every code the worker derives now takes the house prefix from
+`lib/months.ts::shortMonthPrefix`, and the three `SEPTEMBER-26-…` batches were renamed to `SEPT-`.
+Nothing in this module changed. When a block reads blank on the Sheet but carries a balance in the
+app, check the batch code's month spelling before suspecting the extractor.
+
 **B2's RESIDUAL — the grand total stops crying wolf (2026-08-12, Renzo's ask).** The
 grand-total delta on its own turned out to carry no information: measured across **all 11
 stored runs** that ever produced a block diff, `Σ(signed per-block gaps)` equalled the

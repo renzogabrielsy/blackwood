@@ -14,18 +14,18 @@
  */
 import type { LoadedWorkbook, LoadedSheet, CellValue } from "../../lib/xlsx.js";
 import { coerceFloat, coerceDate } from "../../lib/norm.js";
-import { monthName, monthNumberFromToken } from "../../lib/months.js";
+import { monthName, monthNumberFromToken, shortMonthPrefix } from "../../lib/months.js";
 import { CLOSING_PHRASES } from "../../lib/closingRemarks.js";
 
 // ---------------------------------------------------------------------------
 // PROPOSED DAILY REPORT — batch_code prefix conventions (extract_proposed_daily.py:48-69)
 // ---------------------------------------------------------------------------
-/** extract_proposed_daily.py:48-52 — PRIMARY_MONTH_PREFIX (1-indexed by month). */
-const PRIMARY_MONTH_PREFIX: Record<number, string> = {
-  1: "JAN", 2: "FEB", 3: "MARCH", 4: "APRIL", 5: "MAY",
-  6: "JUNE", 7: "JULY", 8: "AUG", 9: "SEPT",
-  10: "OCT", 11: "NOV", 12: "DEC",
-};
+// PRIMARY prefix (extract_proposed_daily.py:48-52 PRIMARY_MONTH_PREFIX) now comes from
+// `lib/months.ts::shortMonthPrefix` — THE house batch-code prefix (L-053, 2026-09-25).
+// The values are byte-identical to the local table that used to live here
+// (JAN FEB MARCH APRIL MAY JUNE JULY AUG SEPT OCT NOV DEC), so this move changes no
+// derived code; it exists so the deliveries extractor and this one read ONE table and can
+// never again invent two spellings of one block (`SEPTEMBER-26-BLK12` vs `SEPT-26-…`).
 
 /** extract_proposed_daily.py:55-59 — FALLBACK_MONTH_PREFIX. */
 const FALLBACK_MONTH_PREFIX: Record<number, string> = {
@@ -171,7 +171,7 @@ function calDateISO(d: CalDate): string {
  * `blockDate` is the BLOCK DATE cell (row R+1), NOT the sheet-name transaction_date
  * (rc_out.md §2 — they can differ across a month boundary).
  */
-function deriveBatchCodes(
+export function deriveBatchCodes(
   blockDate: CalDate | null,
   blockNo: number | null,
   isFeed: boolean,
@@ -180,7 +180,7 @@ function deriveBatchCodes(
   const month = blockDate.month;
   const yy = String(blockDate.year % 100).padStart(2, "0");
   const kind = isFeed ? "FEED" : "BLK";
-  const primary = PRIMARY_MONTH_PREFIX[month];
+  const primary = shortMonthPrefix(month);
   const fallback = FALLBACK_MONTH_PREFIX[month];
   const primaryCode = `${primary}-${yy}-${kind}${blockNo}`;
   const fallbackCode = `${fallback}-${yy}-${kind}${blockNo}`;

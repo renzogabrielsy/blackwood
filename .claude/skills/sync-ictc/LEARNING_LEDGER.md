@@ -1731,3 +1731,88 @@ Files: `src/lib/db.ts`, `src/reports/production/{index,extractIvy,classify,apply
 `scripts/backfill-waste-frontier-gap.ts` (new), `app/(app)/sync/types.ts`,
 `lib/sync/{cases-fold,findings}.ts`, `scripts/verify-findings.ts`.
 Spec: `workers/sync/specs/production.md` §3a.
+
+
+---
+
+## L-053 — A WORKER THAT INVENTS NAMES MUST INVENT THEM IN THE HOUSE CONVENTION (2026-09-25)
+
+**What happened.** On the Google Sheet's Blocking tab the balance cell for **D-12D went
+blank**, and **39,570 kg** dropped out of the Blocking cross-check. The pile was fine. Its
+NAME was not: the database held it as **`SEPTEMBER-26-BLK12`**, while MC's own typed codes,
+the Sheet's lookup and every other September pile in the yard (`SEPT-26-BLK2` …
+`SEPT-26-BLK11`) spell the month **`SEPT-`**. The Sheet looked D-12D up under the yard's
+spelling and found nothing.
+
+**Nobody typed `SEPTEMBER-26-BLK12`. The sync invented it.** MC writes shorthand in the
+Block column — `B12`, `FEEDING # 6`, or a remark `PILED IN SEPTEMBER # 12` — and
+`deliveries/extract.ts::translateBatchCode` turns that into a code using a table called
+`MONTH_ABBR_VALUES`, which, **despite its name, held the FULL month names** (a faithful port
+of `extract_rc_deliveries.py`). The auto-create policy then created the batch under that
+invented spelling. Three September batches were born that way (`SEPTEMBER-26-BLK1` at A-7C,
+59,210 kg; `SEPTEMBER-26-BLK12` at D-12D, 39,570 kg; `SEPTEMBER-26-FEED1`, closed) — and,
+measured the same day, **15 `AUGUST-26-…` batches** from August, while every earlier August
+code in the table reads `AUG-`. Meanwhile the PROPOSED report's extractor had derived `SEPT-`
+all along. **Two derivers, two tables, two spellings of one month** — BUG-005's shape again,
+on `batch_code` instead of `production_batch`.
+
+**Why it is the same mistake as L-039, L-042 and L-048, turned inside out.** Those were all a
+name a HUMAN typed that the system failed to recognise. This one is a name the SYSTEM typed
+that the humans' tools failed to recognise. The alias table (L-042) was already there and
+already folded `SEPTEMBER` ↔ `SEPT` — which is exactly why nothing inside Blackwood noticed:
+the sync compared through the alias and saw agreement. The Sheet does not share our alias
+table. **An alias makes a second spelling survivable inside the system; it does nothing for
+the first tool outside it that reads the name literally.** A worker that invents a name for
+something humans also name must invent it the way the humans do.
+
+### The fix — ONE convention produced by the worker, not a louder alarm
+
+- **`lib/months.ts::shortMonthPrefix(month)` is THE table** every derived code takes its
+  prefix from: `JAN FEB MARCH APRIL MAY JUNE JULY AUG SEPT OCT NOV DEC` — measured as the
+  spelling already in use for each month in `batches` (JAN 60/JANUARY 0 · FEB 70/FEBRUARY 0 ·
+  MARCH 65, every 2025+ code / MAR 17, ≤2024 only · APRIL 40, every 2025+ / APR 17, ≤2024 ·
+  JUNE 45/JUN 0 · JULY 58/JUL 0 · AUG 62/AUGUST 15 · SEPT 54/SEPTEMBER 3 · OCT 53 · NOV 51 ·
+  DEC 47). Renzo's shorthand list said MAR/APR; the data says MARCH/APRIL for every code
+  since 2025, and the brief said to follow the data where the month already has a form.
+- `deliveries/extract.ts` deleted its local full-name table and reads that function for all
+  three rules. `rc_out/extract.ts` reads it for its PRIMARY prefix — whose values were already
+  byte-identical, so rc_out derives exactly what it always did; the point is that there is now
+  one table to disagree with, not two.
+- **A code a human TYPED is never rewritten.** Only what the worker invents changes.
+  `gsheet/extract.ts` derives nothing and was not touched.
+- **The alias carries both directions.** A source still typing `SEPTEMBER-26-BLK12` lands on
+  `SEPT-26-BLK12`; a derived `AUG-26-BLK5` lands on the pre-fix `AUGUST-26-BLK5` rather than
+  auto-creating a twin beside it (L-033b's property: a re-spell only ever points at a batch
+  that already exists). Pinned for all twelve months by `test/lib/batchCodeHousePrefix.test.ts`.
+- **Data:** the three `SEPTEMBER-26-…` batches and their 8 deliveries were renamed to `SEPT-`
+  in ONE statement (a data-modifying CTE, because `deliveries.fk_batch_code` is NO ACTION with
+  no `ON UPDATE CASCADE` and not deferrable — both sides must move inside one statement so the
+  RI check at its end sees them agree). `current_weight` 59,210 / 39,570 / 0 and `avg_cost`
+  40.50 / 40.50 / 39.00 unchanged, `location_ref` A-7C / D-12D kept, no delivery latched
+  (`human_edited_at` NULL on all 8 — the MCP runs as `postgres` with no `auth.uid()`), 8
+  delivery audit rows from the trigger + 3 batch audit rows via `write_ingestion_audit`.
+  `view_blocking_grid` shows D-12D and A-7C at the same balances under the new codes. The 15
+  `AUGUST-26-…` batches were NOT renamed — that is a separate decision.
+
+### Two rules that generalise
+
+1. **A derived identifier must be derived in the convention of the people who also name the
+   thing** — and when two parts of the system derive the same kind of identifier, they must
+   read ONE table. The name of a variable (`MONTH_ABBR_VALUES`) is not evidence of what it
+   holds; measure the data it produces against the data already in the table.
+2. **An alias table is a tolerance, not a convention.** It lets the system survive a second
+   spelling; it does not stop the system MINTING one. Prefer fixing the mint.
+
+### Measured effect and proof
+
+| | before | after |
+|---|---|---|
+| worker tests | 1043 | **1059** (`test/lib/batchCodeHousePrefix.test.ts` +14, feeding-label +1, parity `deviations.test.ts` +1) |
+| parity | 12/12, 79 expected deviations | **12/12, 79** — the deviation is DORMANT: both deliveries fixtures derive only JUNE-/JULY- codes, which spell alike in both conventions |
+| oracle vs TS (`translate_batch_code`) | `('B12', None, '2026-09-24')` → `SEPTEMBER-26-BLK12` | TS → `SEPT-26-BLK12` (registered, `PORTING_DECISIONS.md` → "Business-rule deviations", `expected-deviations.json` → `dormant_classify`) |
+
+Files: `workers/sync/src/lib/months.ts`, `src/reports/deliveries/extract.ts`,
+`src/reports/rc_out/extract.ts`, `src/reports/deliveries/classify.ts` (comment),
+`src/lib/batchCodeAlias.ts` (comment), `test/lib/batchCodeHousePrefix.test.ts` (new),
+`test/reports/deliveries-feeding-label.test.ts`, `test/parity/{expected-deviations.json,deviations.test.ts}`.
+Spec: `workers/sync/specs/deliveries.md` §2 + §11.2a; `specs/PORTING_DECISIONS.md`.

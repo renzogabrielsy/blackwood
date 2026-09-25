@@ -88,6 +88,21 @@ Column 2's raw value is coerced via `coerce_date` (tries `datetime`/`date` objec
 
 ### Batch code translation (`translate_batch_code`, extract_rc_deliveries.py:226-303)
 
+> **TS PORT DIVERGES HERE BY RULING — L-053 (2026-09-25, Renzo). `MMM` below is the ORACLE's
+> behaviour (the FULL month name). The TS port derives the HOUSE prefix instead:**
+> `lib/months.ts::shortMonthPrefix(month)` = `JAN FEB MARCH APRIL MAY JUNE JULY AUG SEPT OCT NOV
+> DEC` — the spelling already in use for each month in `batches`, and byte-identical to the
+> PROPOSED report's PRIMARY prefix, so both derivers read ONE table. A code a human TYPED is never
+> rewritten (rule 4 below still returns it verbatim); only what the worker INVENTS changes. Why: the
+> full-name table made the sync create `SEPTEMBER-26-BLK12`, `SEPTEMBER-26-BLK1` and
+> `SEPTEMBER-26-FEED1` while MC's typed codes and every other September pile read `SEPT-`; the
+> Google Sheet's Blocking tab looked D-12D up under the yard's spelling, the balance cell went blank,
+> and **39,570 kg** dropped out of the Blocking cross-check. The fix is ONE convention produced by
+> the worker, not a louder alarm. The three batches were renamed to `SEPT-` the same day. Registered
+> parity deviation (dormant — no fixture derives a month where the two spellings differ):
+> `PORTING_DECISIONS.md` → "Business-rule deviations", `expected-deviations.json` →
+> `dormant_classify`. See §11.2a for how the alias keeps both directions safe.
+
 Priority order, first match wins:
 
 1. **Remarks match** `PILED\s+IN\s+(MONTH)\s*#\s*(\d+)` (case-insensitive) → `"{MMM}-{YY}-BLK{N}"`. `MMM` = the FULL month name (all 12 months map to their full name in `MONTH_ABBR`, extract_rc_deliveries.py:115-120 — despite the variable name "ABBR", every value is the full English month name). `YY` = 2-digit year from `delivery_date` if available, else hardcoded `"26"`.
@@ -882,6 +897,31 @@ collapse, and only when the year and the whole suffix are byte-identical. `JULY-
 `JUNE-26-BLK9` — the L-033 month-boundary phantom, and the pair BOTH deliveries parity fixtures turn
 on — is untouched, as is `SEP` vs `SEPT` (the table says each maps to `SEPTEMBER`, not to each
 other, so nothing is asserted that the table does not already say).
+
+### 11.2a L-053 (2026-09-25) — the extractor now derives the HOUSE prefix; the alias carries both directions
+
+§11.2 described the extractor deriving `AUGUST-26-FEED1` and the guard re-spelling it to the DB's
+`AUG-26-FEED1`. That re-spell only helps when the short batch **already exists**; for a brand-new
+pile there is nothing to point at, the auto-create policy creates the long form, and from then on
+the yard carries two conventions for one month. That is how `SEPTEMBER-26-BLK12` came to sit at
+D-12D beside `SEPT-26-BLK2` … `SEPT-26-BLK11`, and how 15 `AUGUST-26-…` batches were created during
+August 2026 while every earlier August code in the table reads `AUG-`.
+
+The derivation itself now emits the house prefix (`lib/months.ts::shortMonthPrefix`), so a new pile
+is born in the yard's spelling. `batchCodeAlias.ts` already folds every long↔short pair of all
+twelve months in both directions (MAY is one word), and `test/lib/batchCodeHousePrefix.test.ts` pins
+that for every month and every rule. The two directions that matter now:
+
+- **A source still typing the LONG form** (a human writing `SEPTEMBER-26-BLK12` in the Sheet, an old
+  email) compares equal to the `SEPT-26-BLK12` batch and is written AS it.
+- **A derived SHORT code for a pile the sync invented in the long form before the fix** — e.g. a new
+  delivery at A-9C derives `AUG-26-BLK5`, finds no such batch, and `resolveKnownBatchCodeAlias`
+  writes it under the existing `AUGUST-26-BLK5` rather than auto-creating a twin. Same L-033b
+  property: a re-spell may only ever point at a batch that already exists.
+
+**Not renamed:** the 15 `AUGUST-26-…` batches. Only the three `SEPTEMBER-26-…` batches were renamed
+(2026-09-25, one transaction, `audit_logs` row per batch); the August ones are resolved by the alias
+and renaming them is a separate decision.
 
 ### 11.3 "Not filled in yet" is not MALFORMED
 
