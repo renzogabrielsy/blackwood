@@ -9,6 +9,8 @@ import type {
   BlendProposalSummary,
   BlendProposalVersionSummary,
   BlendProposalSaveResult,
+  BlendProposalOverwriteResult,
+  BlendProposalOverwriteRefusalReason,
   BlendProposalWriteResult,
   BlendProposalVersionResult,
   BlockingMarketBasis,
@@ -738,6 +740,8 @@ type BlendRpcEnvelope = {
   version_no?: number;
   row_version?: number;
   current_version_no?: number;
+  revision_no?: number;
+  current_revision_no?: number;
   blocks?: string[];
 } | null;
 
@@ -804,6 +808,96 @@ export async function saveBlendProposal(input: {
     };
   } catch (err: unknown) {
     console.error('[Blocking] saveBlendProposal failed:', err);
+    return { ok: false, reason: 'exception', message: BLEND_RPC_UNREACHABLE };
+  }
+}
+
+const BLEND_OVERWRITE_REASONS: readonly BlendProposalOverwriteRefusalReason[] = [
+  'not_authenticated',
+  'invalid',
+  'no_blocks',
+  'not_found',
+  'archived',
+  'unknown_version',
+  'expected_revision_required',
+  'stale',
+  'unknown_block',
+  'rpc_error',
+  'exception',
+];
+
+/**
+ * OVERWRITE ONE SAVED VERSION IN PLACE — any version, not only the latest (Renzo,
+ * 2026-09-25). "Save as v(N+1)" (`saveBlendProposal`) is unchanged; this is the other
+ * door, over `fn_overwrite_blend_proposal_version` (migration `20260925075509`).
+ *
+ * NOTHING IS LOST: the database copies the replaced contents into the hidden,
+ * append-only `blend_proposal_version_revisions` archive in the SAME statement as the
+ * overwrite. The snapshot is recomputed in SQL from today's grid — never sent from here.
+ *
+ * Concurrency: `expectedRevisionNo` is the version's `revisionNo` as the author loaded
+ * it (`BlendProposalVersionSummary.revisionNo` / `SavedBlendProposal.revision_no`); the
+ * RPC re-checks it inside the UPDATE's own WHERE, so an overwrite made against a stale
+ * reading is REFUSED (`reason: 'stale'`, carrying `currentRevisionNo`). It does NOT move
+ * the header's `rowVersion` or `currentVersionNo`, so an open rename or "Save as v(N+1)"
+ * is never staled by it. A blank `changeNote` keeps the version's existing note. A blend
+ * identical to what the version already holds returns `unchanged: true` and writes
+ * nothing. The version's as-of date becomes the overwrite day (`asOfAt`).
+ *
+ * CARRIES NO PESO, so there is no `canViewPrices()` step here — the same posture as
+ * `saveBlendProposal`; prices are only ever read through `fetchBlendProposalVersion`.
+ */
+export async function overwriteBlendProposalVersion(input: {
+  proposalId: string;
+  versionNo: number;
+  /** REQUIRED — the version's `revisionNo` as you loaded it. */
+  expectedRevisionNo: number;
+  blockLocs: string[];
+  /** Why the contents changed. Omitted / blank keeps the existing note. */
+  changeNote?: string | null;
+}): Promise<BlendProposalOverwriteResult> {
+  try {
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc('fn_overwrite_blend_proposal_version', {
+      p_proposal_id: input.proposalId,
+      p_version_no: input.versionNo,
+      p_expected_revision_no: input.expectedRevisionNo,
+      p_block_locs: input.blockLocs ?? [],
+      p_change_note: input.changeNote ?? undefined,
+    });
+
+    if (error) {
+      console.error('[Blocking] overwriteBlendProposalVersion RPC error:', error);
+      return { ok: false, reason: 'rpc_error', message: error.message || BLEND_RPC_UNREACHABLE };
+    }
+
+    const res = data as BlendRpcEnvelope;
+    if (!res?.ok) {
+      const reason = (BLEND_OVERWRITE_REASONS as readonly string[]).includes(res?.reason ?? '')
+        ? (res!.reason as BlendProposalOverwriteRefusalReason)
+        : 'exception';
+      return {
+        ok: false,
+        reason,
+        message: res?.message ?? 'The version could not be overwritten.',
+        currentRevisionNo: res?.current_revision_no,
+        currentVersionNo: res?.current_version_no,
+        blocks: res?.blocks,
+      };
+    }
+
+    // Nothing was written on an unchanged re-save, so there is nothing to revalidate.
+    if (res.unchanged !== true) revalidatePath('/inventory/blocking');
+    return {
+      ok: true,
+      proposalId: String(res.proposal_id ?? input.proposalId),
+      versionNo: Number(res.version_no ?? input.versionNo),
+      revisionNo: Number(res.revision_no ?? input.expectedRevisionNo),
+      unchanged: res.unchanged === true,
+      message: res.message,
+    };
+  } catch (err: unknown) {
+    console.error('[Blocking] overwriteBlendProposalVersion failed:', err);
     return { ok: false, reason: 'exception', message: BLEND_RPC_UNREACHABLE };
   }
 }
@@ -921,7 +1015,7 @@ export async function fetchBlendProposalList(
     let query = supabase
       .from('view_blend_proposal_list')
       .select(
-        'id, title, notes, status, fed_on, current_version_no, row_version, version_count, block_count, total_balance_kg, w_mc, w_ash, w_bd_astm, current_version_change_note, current_version_created_at, is_archived, archived_at, created_at, created_by_name, updated_at, updated_by_name',
+        'id, title, notes, status, fed_on, current_version_no, row_version, version_count, block_count, total_balance_kg, w_mc, w_ash, w_bd_astm, current_version_change_note, current_version_created_at, current_version_revision_no, current_version_revised_at, is_archived, archived_at, created_at, created_by_name, updated_at, updated_by_name',
       )
       .order('updated_at', { ascending: false });
 
@@ -950,6 +1044,11 @@ export async function fetchBlendProposalList(
       wBdAstm: r.w_bd_astm === null || r.w_bd_astm === undefined ? null : Number(r.w_bd_astm),
       currentVersionChangeNote: r.current_version_change_note ?? null,
       currentVersionCreatedAt: r.current_version_created_at ?? null,
+      currentVersionRevisionNo:
+        r.current_version_revision_no === null || r.current_version_revision_no === undefined
+          ? null
+          : Number(r.current_version_revision_no),
+      currentVersionRevisedAt: r.current_version_revised_at ?? null,
       isArchived: r.is_archived === true,
       archivedAt: r.archived_at ?? null,
       createdAt: String(r.created_at),
@@ -972,7 +1071,7 @@ export async function fetchBlendProposalVersions(
     const { data, error } = await supabase
       .from('view_blend_proposal_versions')
       .select(
-        'proposal_id, version_no, is_current, block_count, total_balance_kg, w_mc, w_ash, w_bd_astm, w_bd_jis, w_grit, w_vm, w_fc, change_note, parent_version_no, computed_at, created_at, created_by_name',
+        'proposal_id, version_no, is_current, block_count, total_balance_kg, w_mc, w_ash, w_bd_astm, w_bd_jis, w_grit, w_vm, w_fc, change_note, parent_version_no, computed_at, created_at, created_by_name, revision_no, revised_at, revised_by_name, as_of_at',
       )
       .eq('proposal_id', proposalId)
       .order('version_no', { ascending: true });
@@ -1004,6 +1103,12 @@ export async function fetchBlendProposalVersions(
       computedAt: r.computed_at ?? null,
       createdAt: String(r.created_at),
       createdByName: r.created_by_name ?? null,
+      revisionNo: Number(r.revision_no ?? 1),
+      revisedAt: r.revised_at ?? null,
+      revisedByName: r.revised_by_name ?? null,
+      // THE as-of rule lives in the view (coalesce(revised_at, created_at)); the
+      // fallback only covers a row the view could not describe, and says the same thing.
+      asOfAt: String(r.as_of_at ?? r.revised_at ?? r.created_at),
     }));
   } catch (err: unknown) {
     console.error('[Blocking] fetchBlendProposalVersions failed:', err);
@@ -1037,13 +1142,15 @@ export async function fetchBlendProposalVersion(
     const [snapResult, metaResult, headResult] = await Promise.all([
       supabase
         .from('blend_proposal_versions')
-        .select('snapshot')
+        // revision_no rides on the SAME row as the snapshot, so the token handed back
+        // for an overwrite can never describe different contents than the ones shown.
+        .select('snapshot, revision_no, revised_at')
         .eq('proposal_id', proposalId)
         .eq('version_no', versionNo)
         .maybeSingle(),
       supabase
         .from('view_blend_proposal_versions')
-        .select('version_no, change_note, computed_at, created_at, created_by_name')
+        .select('version_no, change_note, computed_at, created_at, created_by_name, revised_by_name')
         .eq('proposal_id', proposalId)
         .eq('version_no', versionNo)
         .maybeSingle(),
@@ -1124,6 +1231,9 @@ export async function fetchBlendProposalVersion(
         created_at: String(meta?.created_at ?? ''),
         created_by_name: meta?.created_by_name ?? null,
         computed_at: (snap.computed_at as string | undefined) ?? meta?.computed_at ?? null,
+        revision_no: Number(snapResult.data.revision_no ?? 1),
+        revised_at: snapResult.data.revised_at ?? null,
+        revised_by_name: meta?.revised_by_name ?? null,
       },
     };
   } catch (err: unknown) {
@@ -2552,9 +2662,10 @@ type BlendBlockFactsRow = {
  * zero-filled.
  *
  * `asOf` omitted or null = TODAY in Asia/Manila (the live modal). A saved version passes
- * the Asia/Manila calendar date of its own `created_at` — read
- * `BlendProposalVersionSummary.createdAt` (or the snapshot's `computed_at`, which the
- * version read model also exposes as `computedAt`) and take its Manila date. Only
+ * the Asia/Manila calendar date of its AS-OF instant — read
+ * `BlendProposalVersionSummary.asOfAt` (`view_blend_proposal_versions.as_of_at` =
+ * `coalesce(revised_at, created_at)`, because an in-place overwrite recomputes the
+ * snapshot on the day it happens) and take its Manila date. Only
  * deliveries dated on or before it are considered, which is what makes the saved viewer's
  * answer a statement about the yard ON THAT DAY rather than about the yard now.
  *

@@ -1183,6 +1183,13 @@ export interface BlendProposalSummary {
   wBdAstm: number | null;
   currentVersionChangeNote: string | null;
   currentVersionCreatedAt: string | null;
+  /**
+   * The CURRENT version's revision token (`revision_no`) — 1 unless it has been
+   * overwritten in place. Null only when the proposal somehow has no current version row.
+   */
+  currentVersionRevisionNo: number | null;
+  /** When the current version was last overwritten in place; null if never. */
+  currentVersionRevisedAt: string | null;
   isArchived: boolean;
   archivedAt: string | null;
   createdAt: string;
@@ -1212,6 +1219,22 @@ export interface BlendProposalVersionSummary {
   computedAt: string | null;
   createdAt: string;
   createdByName: string | null;
+  /**
+   * The version's own compare-and-set token for an IN-PLACE OVERWRITE
+   * (`overwriteBlendProposalVersion`'s `expectedRevisionNo`). 1 = never overwritten;
+   * each overwrite bumps it and archives what it replaced.
+   */
+  revisionNo: number;
+  /** When this version was last overwritten in place; null if never. */
+  revisedAt: string | null;
+  revisedByName: string | null;
+  /**
+   * THE as-of instant of this saved version — `coalesce(revised_at, created_at)`, from
+   * `view_blend_proposal_versions.as_of_at`. An overwrite recomputes the snapshot on the
+   * day it happens, so the version describes the yard on THAT day. Pass its Asia/Manila
+   * date as `fetchBlendBlockFacts`' `asOf` — never `createdAt` alone.
+   */
+  asOfAt: string;
 }
 
 /**
@@ -1237,6 +1260,15 @@ export type SavedBlendProposal = BlendProposal & {
   created_by_name: string | null;
   /** When the database computed these numbers. */
   computed_at: string | null;
+  /**
+   * The revision token of the contents in THIS payload — pass it back as
+   * `expectedRevisionNo` to overwrite this version in place. Read from the same row as
+   * the snapshot, so it can never describe different contents.
+   */
+  revision_no: number;
+  /** When this version was last overwritten in place; null if never. */
+  revised_at: string | null;
+  revised_by_name: string | null;
 };
 
 /** Result of `saveBlendProposal`. A business refusal is data, never a throw. */
@@ -1255,6 +1287,52 @@ export type BlendProposalSaveResult =
       reason: string;
       message: string;
       /** Present on `stale` — what the proposal is actually on now. */
+      currentVersionNo?: number;
+      /** Present on `unknown_block` — the block_locs that are no longer on the grid. */
+      blocks?: string[];
+    };
+
+/**
+ * Why an in-place overwrite was refused. Every value maps to a human sentence in
+ * `message` (written by `fn_overwrite_blend_proposal_version`); the reason is for code.
+ */
+export type BlendProposalOverwriteRefusalReason =
+  | 'not_authenticated'
+  | 'invalid'
+  | 'no_blocks'
+  | 'not_found'
+  | 'archived'
+  | 'unknown_version'
+  | 'expected_revision_required'
+  /** Someone overwrote this version since you loaded it — see `currentRevisionNo`. */
+  | 'stale'
+  /** A block_loc is not on the grid right now — see `blocks`. */
+  | 'unknown_block'
+  | 'rpc_error'
+  | 'exception';
+
+/**
+ * Result of `overwriteBlendProposalVersion`. A business refusal is data, never a throw.
+ * CARRIES NO PESO. `unchanged: true` means the recomputed blend was identical to what
+ * the version already held (price-free hash), so nothing was written or archived.
+ */
+export type BlendProposalOverwriteResult =
+  | {
+      ok: true;
+      proposalId: string;
+      versionNo: number;
+      /** The version's revision token NOW — the next overwrite's `expectedRevisionNo`. */
+      revisionNo: number;
+      unchanged: boolean;
+      message?: string;
+    }
+  | {
+      ok: false;
+      reason: BlendProposalOverwriteRefusalReason;
+      message: string;
+      /** Present on `stale` / `expected_revision_required` — the token to reload with. */
+      currentRevisionNo?: number;
+      /** Present on `archived` / `unknown_version` — the proposal's newest version. */
       currentVersionNo?: number;
       /** Present on `unknown_block` — the block_locs that are no longer on the grid. */
       blocks?: string[];
@@ -1287,10 +1365,12 @@ export type BlendProposalVersionResult =
 //
 //   2. IT IS AS-OF. `asOf` omitted (or null) means TODAY in Asia/Manila, which is what
 //      the LIVE modal wants. A SAVED version passes the Asia/Manila calendar date of its
-//      own `created_at` (`BlendProposalVersionSummary.createdAt`, or the snapshot's
-//      `computed_at`) — because a proposal is a statement about the yard ON A PARTICULAR
-//      DAY, and its stored snapshot is immutable and hashed so this could not be added
-//      to it. Only deliveries dated on or before that date are considered.
+//      AS-OF instant — `BlendProposalVersionSummary.asOfAt` = `coalesce(revised_at,
+//      created_at)` (2026-09-25: an in-place overwrite recomputes the snapshot on the
+//      day it happens, so `createdAt` alone would describe the wrong day) — because a
+//      proposal is a statement about the yard ON A PARTICULAR DAY, and its stored
+//      snapshot is hashed so this could not be added to it. Only deliveries dated on or
+//      before that date are considered.
 //
 //   3. NOTHING HERE IS PRICE-SENSITIVE, so `fetchBlendBlockFacts` has NO
 //      `canViewPrices()` call and every role INCLUDING Production may read it. Suppliers,

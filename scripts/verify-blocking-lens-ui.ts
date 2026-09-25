@@ -1936,15 +1936,19 @@ console.log('\n9. THE BLEND TABLE — SUPPLIER DOMINANCE + THE TWO AGES (job D)'
   });
 
   check('A SAVED VERSION ASKS ABOUT ITS OWN DAY; the live modal passes nothing', () => {
+    // 2026-09-25: a version can be OVERWRITTEN in place, which recomputes its snapshot on
+    // the day it happens — so its as-of day is `asOfAt` = coalesce(revised_at, created_at)
+    // (`view_blend_proposal_versions.as_of_at`), no longer `createdAt` alone. For a version
+    // never overwritten the two are the same instant.
     assert.ok(
-      /const factsAsOf = manilaDate\(savedVersionCreatedAt\)/.test(dialog),
-      'the as-of date is not the version\'s own creation day',
+      /const factsAsOf = manilaDate\(savedVersionAsOfAt\)/.test(dialog),
+      'the as-of date is not the version\'s own as-of day',
     );
     assert.ok(
-      /saved\s*\?\s*saved\.versions\.find\(\(v\) => v\.versionNo === saved\.proposal\.version_no\)\?\.createdAt/.test(
+      /saved\s*\?\s*saved\.versions\.find\(\(v\) => v\.versionNo === saved\.proposal\.version_no\)\?\.asOfAt/.test(
         dialog,
       ),
-      'the date does not come from the version rail the read model always populates',
+      'the date does not come from the version rail\'s as_of_at (coalesce(revised_at, created_at))',
     );
     assert.ok(
       /Asia\/Manila/.test(dialog),

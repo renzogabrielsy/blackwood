@@ -2,24 +2,16 @@
 
 import { useState, useMemo, useCallback, useEffect, useRef, type CSSProperties } from 'react';
 import {
-  Calculator,
   Check,
   Layers,
-  X,
   Eye,
   EyeOff,
   Highlighter,
   History,
-  Save,
-  Loader2,
-  Pencil,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { errorToast } from '@/lib/toast';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Textarea } from '@/components/ui/textarea';
-import { Button } from '@/components/ui/button';
 import { WAREHOUSES, STANDARD_WAREHOUSES } from './constants';
 import type {
   BlockData,
@@ -27,11 +19,11 @@ import type {
   BlendProposalSummary,
   BlendProposalVersionSummary,
   SavedBlendProposal,
-  BlendProposalSaveResult,
 } from './types';
 import {
   buildBlendProposal,
   saveBlendProposal,
+  overwriteBlendProposalVersion,
   updateBlendProposalHeader,
   archiveBlendProposal,
   restoreBlendProposal,
@@ -40,14 +32,20 @@ import {
 } from './actions';
 import { BlockingSupplierSearch, type ActiveSupplierSummary } from './supplier-search';
 import { BlockingDetailPanel, type BlockingDetailNavTarget } from '../_shared/blocking-detail-panel';
-import { BlendProposalDialog, SaveNewPopover, type BlendSavedContext } from '../_shared/blend-proposal-dialog';
+import { BlendProposalDialog, type BlendSavedContext } from '../_shared/blend-proposal-dialog';
+import {
+  BlendActionBar,
+  describeOverwriteRefusal,
+  describeSaveRefusal,
+  type BlendEditingContext,
+} from './blend-action-bar';
+import { useBlendLiveStats } from './blend-live-stats';
 import { BlendProposalsDialog } from '../_shared/blend-proposals-dialog';
 import {
   resolveBlendBlocks,
   describeBlendUnresolved,
   compareBlendSnapshots,
   type BlendComparison,
-  type BlendResolution,
 } from '@/lib/blocking/blend-diff';
 import { useTableSettings } from '@/components/providers/table-settings';
 import { getLabHighlightText } from '@/types/table-settings';
@@ -420,112 +418,6 @@ const EMPTY_SUPPLIER_MAP: BlockingSupplierMap = { suppliers: [], byBlock: {} };
 /** Same, for the version rail. */
 const EMPTY_VERSIONS: BlendProposalVersionSummary[] = [];
 
-// ─── Blend proposal EDITING context (the "Modify" session) ────────────────────
-//
-// Set when the operator presses Modify on a saved version. It is what turns the
-// floating bar's "Build Proposal" into "Save as v(N+1)", and it carries the
-// compare-and-set token (`expectedVersionNo`) the save RPC re-checks inside its own
-// UPDATE — so a version someone else appended while this edit was open is REFUSED,
-// never overwritten.
-interface BlendEditingContext {
-  proposalId: string;
-  title: string;
-  notes: string | null;
-  /** The proposal's CURRENT version when Modify started — the compare-and-set token. */
-  expectedVersionNo: number;
-  /** The version the operator was actually looking at (shown on the pill). */
-  fromVersionNo: number;
-  /** How the version's block list resolved against the live grid, for the bar's notice. */
-  resolution: BlendResolution;
-}
-
-/** Turn a save refusal into something a human can act on. */
-function describeSaveRefusal(res: Extract<BlendProposalSaveResult, { ok: false }>): string {
-  if (res.reason === 'stale') {
-    return `${res.message} Someone appended v${res.currentVersionNo ?? '?'} while this edit was open — reopen the proposal and redo the change so nothing of theirs is lost.`;
-  }
-  if (res.reason === 'unknown_block' && res.blocks?.length) {
-    return `${res.message} (${res.blocks.join(', ')})`;
-  }
-  return res.message;
-}
-
-// ─── Save-as-next-version popover (the change note) ───────────────────────────
-
-function SaveVersionPopover({
-  versionNo,
-  busy,
-  disabled,
-  onSave,
-}: {
-  /** The version this save would CREATE. */
-  versionNo: number;
-  busy: boolean;
-  disabled: boolean;
-  onSave: (changeNote: string) => Promise<boolean>;
-}) {
-  const [open, setOpen] = useState(false);
-  const [note, setNote] = useState('');
-
-  // Cleared on OPEN (an event), never from an effect — a stale note from the previous
-  // version would be the most misleading thing this popover could carry.
-  function handleOpenChange(next: boolean) {
-    if (next) setNote('');
-    setOpen(next);
-  }
-
-  async function submit() {
-    if (busy) return;
-    const ok = await onSave(note.trim());
-    if (ok) setOpen(false);
-  }
-
-  return (
-    <Popover open={open} onOpenChange={handleOpenChange}>
-      <PopoverTrigger asChild>
-        <button
-          disabled={disabled || busy}
-          data-blend-save-version
-          className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary text-primary-foreground
-                     font-semibold hover:bg-primary/90 transition-all duration-150 cursor-pointer
-                     disabled:opacity-40 disabled:pointer-events-none"
-          title={`Append version ${versionNo} to this proposal`}
-        >
-          {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-          Save as v{versionNo}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="center" side="top" sideOffset={8} className="w-80 bg-popover/95 backdrop-blur-lg p-3">
-        <div className="space-y-2.5">
-          <div className="text-xs font-semibold text-foreground">Save as v{versionNo}</div>
-          <p className="text-[11px] text-muted-foreground leading-snug">
-            Versions are append-only &mdash; v{versionNo - 1} is never changed. A note here is what makes the history
-            readable a month from now.
-          </p>
-          <Textarea
-            autoFocus
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            rows={2}
-            placeholder="e.g. swapped A-3A for A-5B, MC too high"
-            className="text-xs min-h-[48px] resize-none"
-            aria-label="Change note"
-          />
-          <div className="flex items-center justify-end gap-1.5">
-            <Button type="button" variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setOpen(false)}>
-              Cancel
-            </Button>
-            <Button type="button" size="sm" className="h-7 text-xs" disabled={busy} onClick={submit}>
-              {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
-              Save v{versionNo}
-            </Button>
-          </div>
-        </div>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
 export function BlockingGrid({
   data,
   canViewPrices: serverCanViewPrices,
@@ -753,6 +645,18 @@ export function BlockingGrid({
 
   const clearBlend = useCallback(() => setBlendSelection(new Set()), []);
 
+  // ── Live blend stats (the running total / weighted averages in the action bar) ──
+  // Lives HERE, not in the bar: the route never remounts the grid on a URL change, so a
+  // read cannot be orphaned by the bar mounting/unmounting or by a `router.replace` race.
+  // Every figure is `buildBlendProposal` → `fn_blend_proposal`, the modal's own definition.
+  const liveStats = useBlendLiveStats({
+    enabled: blendMode,
+    selection: blendSelection,
+    fetcher: buildBlendProposal,
+  });
+
+  const handleCancelEditing = useCallback(() => setEditing(null), []);
+
   const handleToggleBlendMode = useCallback(() => {
     setBlendMode((prev) => {
       const next = !prev;
@@ -915,6 +819,58 @@ export function BlockingGrid({
     [editing, blendSelection, loadProposals],
   );
 
+  // ── Save the modified selection INTO the version being modified (overwrite in place) ──
+  // Any version, not only the latest. The token is the version's own `revision_no` as it
+  // was LOADED when Modify started; the RPC re-checks it inside its UPDATE, so an
+  // overwrite someone else made meanwhile is refused (`stale`), never clobbered. The
+  // replaced contents go to the hidden archive in the same statement.
+  const handleOverwriteVersion = useCallback(
+    async (changeNote: string) => {
+      if (!editing) return false;
+      const versionNo = editing.fromVersionNo;
+      const locs = Array.from(blendSelection);
+      if (locs.length === 0) {
+        errorToast('Nothing to save', { description: 'A version must contain at least one block.' });
+        return false;
+      }
+      setSaving(true);
+      try {
+        const res = await overwriteBlendProposalVersion({
+          proposalId: editing.proposalId,
+          versionNo,
+          expectedRevisionNo: editing.fromRevisionNo,
+          blockLocs: locs,
+          changeNote: changeNote || null,
+        });
+        if (!res.ok) {
+          errorToast(`Could not save to v${versionNo}`, { description: describeOverwriteRefusal(res, versionNo) });
+          return false;
+        }
+        if (res.unchanged) {
+          // Identical blend → nothing written or archived. Stay in the edit session.
+          toast(`Identical to v${versionNo} — nothing saved`, {
+            description: 'Change the blocks to save a different blend into this version.',
+          });
+          return true;
+        }
+        toast.success(`Saved changes to v${versionNo} of “${editing.title}”`, {
+          description: 'The previous contents are kept in the archive.',
+        });
+        await loadProposals();
+        setEditing(null);
+        setBlendSelection(new Set());
+        // Modify cleared `?proposal=`, so this is a fresh navigation: the route re-reads
+        // BOTH the version rail and the snapshot — the viewer can never show the cached
+        // pre-overwrite contents.
+        proposalLinkRef.current?.(editing.proposalId, versionNo);
+        return true;
+      } finally {
+        setSaving(false);
+      }
+    },
+    [editing, blendSelection, loadProposals],
+  );
+
   // ── Save the modified selection as a SEPARATE proposal (a fork by hand) ──
   const handleSaveAsNewFromEdit = useCallback(
     async ({ title, notes }: { title: string; notes: string }) => {
@@ -948,6 +904,19 @@ export function BlockingGrid({
       notes: savedProposal.notes,
       expectedVersionNo: savedSummary?.currentVersionNo ?? savedProposal.version_no,
       fromVersionNo: savedProposal.version_no,
+      // The overwrite token — read from the SAME row as the snapshot on screen, so it can
+      // never describe different contents than the ones the operator chose to modify.
+      fromRevisionNo: savedProposal.revision_no,
+      // The live stats' "change vs v{N}" baseline — the DB-computed snapshot, captured
+      // now because Modify is about to close the viewer and clear `savedProposal`.
+      baseline: {
+        block_count: savedProposal.block_count,
+        total_balance: savedProposal.total_balance,
+        weighted: savedProposal.weighted,
+        raw_price_per_kg: savedProposal.raw_price_per_kg,
+        product_cost_per_kg: savedProposal.product_cost_per_kg,
+        blocks: savedProposal.blocks,
+      },
       resolution: res,
     });
     setProposalOpen(false);
@@ -1730,91 +1699,25 @@ export function BlockingGrid({
       />
 
       {/* ── Blend Proposal floating action bar ── */}
-      {/* Also shown with an EMPTY selection while a Modify session is open: that is
-          exactly the state where the operator most needs to see why (every proposed
-          block changed hands) and how to get out of it. */}
-      {blendMode && (blendSelection.size > 0 || !!editing) && (
-        <div
-          data-blend-action-bar
-          className={cn(
-            'animate-fade-up fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-1.5',
-            'bg-background/95 px-4 py-2 text-xs font-medium shadow-lg border max-w-[calc(100vw-2rem)]',
-            'backdrop-blur supports-backdrop-filter:bg-background/60',
-            editing ? 'rounded-2xl' : 'rounded-full',
-          )}
-        >
-          {/* ── Modify session banner ── */}
-          {editing && (
-            <div className="flex items-center gap-2 flex-wrap justify-center">
-              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-primary/40 bg-primary/10 text-[11px]">
-                <Pencil className="w-3 h-3 text-primary" />
-                <span className="text-muted-foreground">Editing:</span>
-                <span className="font-semibold text-foreground max-w-[220px] truncate" title={editing.title}>
-                  {editing.title}
-                </span>
-                <span className="font-mono text-muted-foreground">v{editing.fromVersionNo}</span>
-                <button
-                  onClick={() => setEditing(null)}
-                  className="ml-0.5 text-muted-foreground hover:text-foreground transition-colors duration-150 cursor-pointer"
-                  title="Stop editing this proposal (the selection stays)"
-                  aria-label="Cancel editing this proposal"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </span>
-              {editingNotice && (
-                <span className="text-[11px] text-amber-500 max-w-[520px] text-center">{editingNotice}</span>
-              )}
-            </div>
-          )}
-
-          {/* ── Actions ── */}
-          <div className="flex items-center gap-3 flex-wrap justify-center">
-            <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-              <Check className="w-3.5 h-3.5 text-primary" />
-              <span className="font-mono font-semibold text-foreground">{blendSelection.size}</span>
-              block{blendSelection.size === 1 ? '' : 's'} selected
-            </span>
-            <span className="text-border">|</span>
-            <button
-              onClick={handleBuildProposal}
-              disabled={blendSelection.size === 0}
-              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary text-primary-foreground
-                         font-semibold hover:bg-primary/90 transition-all duration-150 cursor-pointer
-                         disabled:opacity-40 disabled:pointer-events-none"
-            >
-              <Calculator className="w-3.5 h-3.5" />
-              Build Proposal
-            </button>
-
-            {editing && (
-              <>
-                <SaveVersionPopover
-                  versionNo={editing.expectedVersionNo + 1}
-                  busy={saving}
-                  disabled={blendSelection.size === 0}
-                  onSave={handleSaveVersion}
-                />
-                <SaveNewPopover
-                  defaultTitle={`${editing.title} (copy)`}
-                  busy={saving}
-                  onSave={handleSaveAsNewFromEdit}
-                  label="Save as new"
-                  triggerTitle="Save this selection as a separate proposal, leaving the original untouched"
-                />
-              </>
-            )}
-
-            <button
-              onClick={clearBlend}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-muted-foreground
-                         hover:text-foreground hover:bg-muted transition-all duration-150 cursor-pointer"
-            >
-              <X className="w-3 h-3" />
-              Clear
-            </button>
-          </div>
-        </div>
+      {/* Shown for the WHOLE blend session — including with nothing picked yet, when the
+          live-stats strip says "Pick blocks to see the running blend", and with an empty
+          selection in a Modify session, which is exactly when the operator most needs to
+          see why (every proposed block changed hands) and how to get out of it. */}
+      {blendMode && (
+        <BlendActionBar
+          selectionSize={blendSelection.size}
+          stats={liveStats}
+          canViewPrices={canViewPrices}
+          editing={editing}
+          editingNotice={editingNotice}
+          saving={saving}
+          onBuild={handleBuildProposal}
+          onClear={clearBlend}
+          onCancelEditing={handleCancelEditing}
+          onSaveVersion={handleSaveVersion}
+          onOverwriteVersion={handleOverwriteVersion}
+          onSaveAsNew={handleSaveAsNewFromEdit}
+        />
       )}
 
       {/* ── Blend Proposal modal — LIVE what-if or a SAVED version, one component ── */}

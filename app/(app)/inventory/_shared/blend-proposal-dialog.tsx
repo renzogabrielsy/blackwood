@@ -659,6 +659,11 @@ function BlockRow({
 
 // ─── Version rail ─────────────────────────────────────────────────────────────
 
+/** A version whose contents were overwritten in place since it was first saved. */
+function versionWasEdited(v: { revisionNo: number; revisedAt: string | null }): boolean {
+  return v.revisionNo > 1 || !!v.revisedAt;
+}
+
 function VersionRail({
   versions,
   selected,
@@ -696,12 +701,20 @@ function VersionRail({
                   : 'bg-muted text-muted-foreground border-border hover:bg-accent hover:text-foreground',
               )}
               title={
-                v.changeNote
+                (v.changeNote
                   ? `v${v.versionNo} — ${v.changeNote}`
-                  : `v${v.versionNo}${v.isCurrent ? ' (current)' : ''}`
+                  : `v${v.versionNo}${v.isCurrent ? ' (current)' : ''}`) +
+                (versionWasEdited(v) ? ` · contents edited ${blendComputedDate(v.revisedAt) || ''}` : '')
               }
             >
               v{v.versionNo}
+              {versionWasEdited(v) && (
+                <Pencil
+                  data-blend-version-edited={v.versionNo}
+                  className="w-2 h-2 opacity-70"
+                  aria-label="contents edited since first saved"
+                />
+              )}
               {v.isCurrent && <Star className="w-2.5 h-2.5 fill-current" aria-label="current version" />}
             </button>
           );
@@ -717,8 +730,23 @@ function VersionRail({
               <span className="italic">No change note</span>
             )}
             <span className="mx-1.5 text-border">|</span>
-            <span className="font-mono">{blendComputedDate(chosen.createdAt) || EMDASH}</span>
+            {/* THE as-of date of a version is `asOfAt` = coalesce(revised_at, created_at):
+                an in-place overwrite recomputes the snapshot on the day it happens. */}
+            <span className="font-mono">{blendComputedDate(chosen.asOfAt) || EMDASH}</span>
             {chosen.createdByName && <span> &middot; {chosen.createdByName}</span>}
+            {versionWasEdited(chosen) && (
+              <span
+                data-blend-version-edited-line
+                className="italic"
+                title={`First saved ${blendComputedDate(chosen.createdAt) || EMDASH}${
+                  chosen.createdByName ? ` by ${chosen.createdByName}` : ''
+                }; contents replaced in place since (the earlier contents are archived).`}
+              >
+                {' '}
+                &middot; edited {blendComputedDate(chosen.revisedAt) || EMDASH}
+                {chosen.revisedByName ? ` by ${chosen.revisedByName}` : ''}
+              </span>
+            )}
           </>
         ) : null}
       </div>
@@ -1164,11 +1192,14 @@ export function BlendProposalDialog({
   // still the one wanted, so a fast switch between versions cannot leave the previous
   // version's suppliers on screen. The table renders IMMEDIATELY with em dashes in
   // reserved-width columns and the figures fill in — no layout jump.
-  const savedVersionCreatedAt = saved
-    ? saved.versions.find((v) => v.versionNo === saved.proposal.version_no)?.createdAt ?? null
+  // THE as-of instant of a saved version is the view's `as_of_at` =
+  // coalesce(revised_at, created_at): an in-place overwrite recomputes the snapshot on
+  // the day it happens, so `createdAt` alone would ask about the wrong day.
+  const savedVersionAsOfAt = saved
+    ? saved.versions.find((v) => v.versionNo === saved.proposal.version_no)?.asOfAt ?? null
     : null;
-  /** A SAVED version asks about the day it was written; the live modal asks about today. */
-  const factsAsOf = manilaDate(savedVersionCreatedAt);
+  /** A SAVED version asks about the day it was (last) written; the live modal asks about today. */
+  const factsAsOf = manilaDate(savedVersionAsOfAt);
 
   const batchIds = useMemo(() => {
     if (!proposal) return [] as string[];
@@ -1444,7 +1475,18 @@ export function BlendProposalDialog({
 
   const headerTitle = saved ? saved.proposal.title : 'Blend Proposal';
   const metaLine = saved
-    ? [blendVersionLine(docMeta), saved.proposal.created_by_name].filter(Boolean).join(' · ')
+    ? [
+        blendVersionLine(docMeta),
+        saved.proposal.created_by_name,
+        // An overwritten version says so — its contents changed since it was first saved.
+        saved.proposal.revision_no > 1 || saved.proposal.revised_at
+          ? `edited ${blendComputedDate(saved.proposal.revised_at) || EMDASH}${
+              saved.proposal.revised_by_name ? ` by ${saved.proposal.revised_by_name}` : ''
+            }`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(' · ')
     : '';
 
   return (

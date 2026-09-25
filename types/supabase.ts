@@ -183,6 +183,107 @@ export type Database = {
         }
         Relationships: []
       }
+      blend_proposal_version_revisions: {
+        Row: {
+          archived_at: string
+          archived_by: string
+          blocks: Json
+          change_note: string | null
+          created_at: string
+          created_by: string
+          id: string
+          proposal_id: string
+          revised_at: string | null
+          revised_by: string | null
+          revision_no: number
+          snapshot: Json
+          snapshot_hash: string
+          version_no: number
+        }
+        Insert: {
+          archived_at?: string
+          archived_by: string
+          blocks: Json
+          change_note?: string | null
+          created_at: string
+          created_by: string
+          id?: string
+          proposal_id: string
+          revised_at?: string | null
+          revised_by?: string | null
+          revision_no: number
+          snapshot: Json
+          snapshot_hash: string
+          version_no: number
+        }
+        Update: {
+          archived_at?: string
+          archived_by?: string
+          blocks?: Json
+          change_note?: string | null
+          created_at?: string
+          created_by?: string
+          id?: string
+          proposal_id?: string
+          revised_at?: string | null
+          revised_by?: string | null
+          revision_no?: number
+          snapshot?: Json
+          snapshot_hash?: string
+          version_no?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "blend_proposal_version_revisions_archived_by_fkey"
+            columns: ["archived_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "blend_proposal_version_revisions_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "blend_proposal_version_revisions_proposal_id_fkey"
+            columns: ["proposal_id"]
+            isOneToOne: false
+            referencedRelation: "blend_proposals"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "blend_proposal_version_revisions_proposal_id_fkey"
+            columns: ["proposal_id"]
+            isOneToOne: false
+            referencedRelation: "view_blend_proposal_list"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "blend_proposal_version_revisions_revised_by_fkey"
+            columns: ["revised_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "blend_proposal_version_revisions_version_fk"
+            columns: ["proposal_id", "version_no"]
+            isOneToOne: false
+            referencedRelation: "blend_proposal_versions"
+            referencedColumns: ["proposal_id", "version_no"]
+          },
+          {
+            foreignKeyName: "blend_proposal_version_revisions_version_fk"
+            columns: ["proposal_id", "version_no"]
+            isOneToOne: false
+            referencedRelation: "view_blend_proposal_versions"
+            referencedColumns: ["proposal_id", "version_no"]
+          },
+        ]
+      }
       blend_proposal_versions: {
         Row: {
           blocks: Json
@@ -192,6 +293,9 @@ export type Database = {
           id: string
           parent_version_no: number | null
           proposal_id: string
+          revised_at: string | null
+          revised_by: string | null
+          revision_no: number
           snapshot: Json
           snapshot_hash: string
           version_no: number
@@ -204,6 +308,9 @@ export type Database = {
           id?: string
           parent_version_no?: number | null
           proposal_id: string
+          revised_at?: string | null
+          revised_by?: string | null
+          revision_no?: number
           snapshot: Json
           snapshot_hash: string
           version_no: number
@@ -216,6 +323,9 @@ export type Database = {
           id?: string
           parent_version_no?: number | null
           proposal_id?: string
+          revised_at?: string | null
+          revised_by?: string | null
+          revision_no?: number
           snapshot?: Json
           snapshot_hash?: string
           version_no?: number
@@ -240,6 +350,13 @@ export type Database = {
             columns: ["proposal_id"]
             isOneToOne: false
             referencedRelation: "view_blend_proposal_list"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "blend_proposal_versions_revised_by_fkey"
+            columns: ["revised_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
         ]
@@ -3714,6 +3831,8 @@ export type Database = {
           current_version_computed_at: string | null
           current_version_created_at: string | null
           current_version_no: number | null
+          current_version_revised_at: string | null
+          current_version_revision_no: number | null
           fed_on: string | null
           id: string | null
           is_archived: boolean | null
@@ -3749,6 +3868,7 @@ export type Database = {
       }
       view_blend_proposal_versions: {
         Row: {
+          as_of_at: string | null
           block_count: number | null
           change_note: string | null
           computed_at: string | null
@@ -3759,6 +3879,10 @@ export type Database = {
           is_current: boolean | null
           parent_version_no: number | null
           proposal_id: string | null
+          revised_at: string | null
+          revised_by: string | null
+          revised_by_name: string | null
+          revision_no: number | null
           snapshot_hash: string | null
           total_balance_kg: number | null
           version_no: number | null
@@ -3790,6 +3914,13 @@ export type Database = {
             columns: ["proposal_id"]
             isOneToOne: false
             referencedRelation: "view_blend_proposal_list"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "blend_proposal_versions_revised_by_fkey"
+            columns: ["revised_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
         ]
@@ -6092,6 +6223,7 @@ export type Database = {
           w_vm: number
         }[]
       }
+      fn_blend_proposal_overwrite_probe: { Args: never; Returns: Json }
       fn_blend_proposal_snapshot: {
         Args: { p_block_locs: string[] }
         Returns: Json
@@ -6252,6 +6384,16 @@ export type Database = {
         Returns: Json
       }
       fn_ops_ledger_verify_posture: { Args: never; Returns: Json }
+      fn_overwrite_blend_proposal_version: {
+        Args: {
+          p_block_locs: string[]
+          p_change_note?: string
+          p_expected_revision_no: number
+          p_proposal_id: string
+          p_version_no: number
+        }
+        Returns: Json
+      }
       fn_product_grade_fingerprint: {
         Args: { p_payload: Json }
         Returns: string
