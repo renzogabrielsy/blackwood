@@ -136,4 +136,12 @@ describe("shipped expected-deviations.json", () => {
     expect((raw.dormant_classify ?? []).some((d) => d.rule === "L-053" && d.type === "deliveries")).toBe(true);
     expect(raw.deviations.some((d) => d.rule === "L-053")).toBe(false);
   });
+
+  it("records L-054 (stray rows / weight bounds / gated recovery) as a DORMANT classify deviation", () => {
+    // The oracle still emits a weight-only row under the table as a recovery of the last
+    // truckload; the TS port refuses it. Neither deliveries fixture contains such a row
+    // (measured: both extract byte-identically before and after), so the entry is parked.
+    expect((raw.dormant_classify ?? []).some((d) => d.rule === "L-054" && d.type === "deliveries")).toBe(true);
+    expect(raw.deviations.some((d) => d.rule === "L-054")).toBe(false);
+  });
 });

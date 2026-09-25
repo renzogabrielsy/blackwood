@@ -389,6 +389,34 @@ export interface AwaitingBatchAssignmentNote {
 }
 
 /**
+ * One row of the RC DELIVERIES workbook the EXTRACTOR refused to treat as a delivery
+ * (2026-09-25, L-054): `stray_row` or `weight_out_of_range`. Mirror of the frontend
+ * `ExtractionNote`, built by `reports/deliveries/extractionNotes.ts`. Never held and never a
+ * durable case. No PHP field — MC's workbook has no price column, and `cells` echoes only
+ * the date/supplier/label/block/plate/weight/sacks/remarks columns. `weight_kg` stays
+ * NULLABLE: "the Weight cell is not a number" must not read as "0 kg".
+ */
+export interface ExtractionNoteEntry {
+  kind: string;
+  reason_code: string;
+  report_type: string;
+  sheet: string;
+  source_row: number;
+  context_date: string | null;
+  date_is_own: boolean;
+  cells: Record<string, string>;
+  weight_kg: number | null;
+  supplier: string | null;
+  truck_plate: string | null;
+  batch_label: string | null;
+  block_loc: string | null;
+  summary_row: number | null;
+  below_summary_row: boolean;
+  cap_kg: number | null;
+  detail: string;
+}
+
+/**
  * One source workbook this run opened and could not fully read (2026-09-03, L-048).
  * Mirror of the frontend `SourceTabNote`, built by `reports/sourceTabs.ts`. Never held and
  * never a durable case — the moment the tab names parse it stops firing. No PHP field:
@@ -497,6 +525,10 @@ export interface ApplyResult {
   unpriced_overdue: UnpricedOverdueNote[];
   /** Deliveries with no pile assigned yet (L-042). ALWAYS present (default []). */
   awaiting_batch_assignment: AwaitingBatchAssignmentNote[];
+  /** Rows of the RC DELIVERIES workbook the extractor refused to call deliveries —
+   *  stray rows and impossible weights (L-054). ALWAYS present (default []). Only the
+   *  `deliveries` report fills it. */
+  extraction_notes: ExtractionNoteEntry[];
   /** Source workbooks this run opened and could not fully read (L-048). ALWAYS present
    *  (default []), so an ordinary run's shape does not depend on nothing going wrong. */
   source_tab_notes: SourceTabNoteEntry[];
@@ -604,6 +636,8 @@ interface RawApply {
   unpriced_overdue?: unknown;
   /** deliveries only — rows weighed in with no pile assigned yet (L-042). */
   awaiting_batch_assignment?: unknown;
+  /** deliveries only — rows the extractor refused to call deliveries (L-054). */
+  extraction_notes?: unknown;
   /** rc_out only (today) — workbooks opened whose tab names could not all be read (L-048). */
   source_tab_notes?: unknown;
   /** products only — grades added, renamed, ambiguous or gone (2026-09-07). */
@@ -928,6 +962,53 @@ function toAwaitingBatchAssignments(v: unknown): AwaitingBatchAssignmentNote[] {
   return Array.isArray(v) ? v.map(toAwaitingBatchAssignment) : [];
 }
 
+/**
+ * Coerce one raw extraction note → ExtractionNoteEntry (L-054). No PHP by construction; the
+ * `cells` map is re-filtered to string values under non-cost-ish keys anyway, so a
+ * hand-built or replayed envelope cannot smuggle a price through it.
+ */
+function toExtractionNote(v: unknown): ExtractionNoteEntry {
+  const o = (v ?? {}) as Record<string, unknown>;
+  const nullable = (x: unknown): string | null =>
+    typeof x === "string" && x.trim() ? x : null;
+  const nnum = (x: unknown): number | null => {
+    if (x === null || x === undefined || x === "") return null;
+    const n = typeof x === "number" ? x : Number(x);
+    return Number.isFinite(n) ? n : null;
+  };
+  const cells: Record<string, string> = {};
+  if (o.cells && typeof o.cells === "object" && !Array.isArray(o.cells)) {
+    for (const [k, val] of Object.entries(o.cells as Record<string, unknown>)) {
+      if (/cost|price|php|₱|amount|value/i.test(k)) continue;
+      if (typeof val === "string" || typeof val === "number") cells[k] = String(val);
+    }
+  }
+  return {
+    kind: str(o.kind) || "stray_row",
+    reason_code: str(o.reason_code),
+    report_type: str(o.report_type) || "deliveries",
+    sheet: str(o.sheet),
+    source_row: num(o.source_row),
+    context_date: nullable(o.context_date),
+    date_is_own: o.date_is_own === true,
+    cells,
+    weight_kg: nnum(o.weight_kg),
+    supplier: nullable(o.supplier),
+    truck_plate: nullable(o.truck_plate),
+    batch_label: nullable(o.batch_label),
+    block_loc: nullable(o.block_loc),
+    summary_row: nnum(o.summary_row),
+    below_summary_row: o.below_summary_row === true,
+    cap_kg: nnum(o.cap_kg),
+    detail: str(o.detail),
+  };
+}
+
+/** Coerce a raw extraction-notes array → ExtractionNoteEntry[]. */
+function toExtractionNotes(v: unknown): ExtractionNoteEntry[] {
+  return Array.isArray(v) ? v.map(toExtractionNote) : [];
+}
+
 /** Coerce one raw source-tab note → SourceTabNoteEntry (L-048). No PHP by construction. */
 function toSourceTabNote(v: unknown): SourceTabNoteEntry {
   const o = (v ?? {}) as Record<string, unknown>;
@@ -1208,6 +1289,7 @@ export function normalizeApply(
     price_notes: toPriceNotes(raw.price_notes),
     unpriced_overdue: toUnpricedOverdues(raw.unpriced_overdue),
     awaiting_batch_assignment: toAwaitingBatchAssignments(raw.awaiting_batch_assignment),
+    extraction_notes: toExtractionNotes(raw.extraction_notes),
     source_tab_notes: toSourceTabNotes(raw.source_tab_notes),
     product_notes: toProductNotes(raw.product_notes),
     downtime_notes: toDowntimeNotes(raw.downtime_notes),
@@ -1285,6 +1367,7 @@ export function failedReportResult(
       price_notes: [],
       unpriced_overdue: [],
       awaiting_batch_assignment: [],
+      extraction_notes: [],
       source_tab_notes: [],
       product_notes: [],
       downtime_notes: [],

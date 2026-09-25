@@ -2300,4 +2300,81 @@ check('L-052: a waste/downtime UNIQUE(shift_id) collision hold shows BOTH rows',
   assert.doesNotMatch(JSON.stringify(f), /₱/)
 })
 
+// ============================================================================
+// L-054 (2026-09-25) — MC typed three sums under her September table (449,325 / 500,000 /
+// −50,675 kg in the Weight column, nothing else). The extractor dressed them as wet-sack
+// splits of the last truckload and tried to INSERT them; only a NOT NULL constraint stopped
+// it. The extractor now refuses them and reports each one on `apply.extraction_notes`.
+// ============================================================================
+function extractionRun(notes: unknown[]): SyncRunResult {
+  return {
+    reports: { deliveries: { classify: null, apply: { extraction_notes: notes } } },
+  } as unknown as SyncRunResult
+}
+
+const scratchNote = (row: number, weight: number, below = true) => ({
+  kind: 'stray_row',
+  reason_code: 'recovery_not_adjacent',
+  report_type: 'deliveries',
+  sheet: 'SEPTEMBER 2026',
+  source_row: row,
+  context_date: '2026-09-24',
+  date_is_own: false,
+  cells: { 'Weight (kg)': String(weight) },
+  weight_kg: weight,
+  supplier: null,
+  truck_plate: null,
+  batch_label: null,
+  block_loc: null,
+  summary_row: below ? 76 : null,
+  below_summary_row: below,
+  detail: `Row ${row} of the "SEPTEMBER 2026" tab has ${weight} kg in the Weight column but no supplier…`,
+})
+
+check('L-054: a scratch sum under the table is a deliveries finding, `info`, naming row + weight', () => {
+  const [f] = flattenRunFindings(extractionRun([scratchNote(83, 500000)]))
+  assert.equal(f.kind, 'stray_row')
+  assert.equal(f.section, 'deliveries')
+  assert.equal(f.severity, 'info')
+  assert.match(f.title, /Row 83 has 500,000 kg/)
+  assert.match(f.location, /below the Average row/)
+  assert.equal(f.data.source_row, 83)
+})
+
+check('L-054: a stray INSIDE the table and an impossible weight are `attention`', () => {
+  const inside = flattenRunFindings(extractionRun([scratchNote(70, 12345, false)]))[0]
+  assert.equal(inside.severity, 'attention')
+  const heavy = flattenRunFindings(
+    extractionRun([
+      {
+        ...scratchNote(65, 500000, false),
+        kind: 'weight_out_of_range',
+        reason_code: 'weight_above_cap',
+        supplier: 'Llanto',
+        truck_plate: 'ALA 9958',
+        cap_kg: 60000,
+      },
+    ]),
+  )[0]
+  assert.equal(heavy.kind, 'weight_out_of_range')
+  assert.equal(heavy.severity, 'attention')
+  assert.match(heavy.title, /Llanto ALA 9958: 500,000 kg is not a possible truckload weight/)
+  assert.equal(heavy.data.cap_kg, 60000)
+})
+
+check('L-054: identity is sheet + row, and the cells are what expire an acknowledgement', () => {
+  const a = findingIdentity(flattenRunFindings(extractionRun([scratchNote(82, 449325)]))[0])
+  const b = findingIdentity(flattenRunFindings(extractionRun([scratchNote(82, 449325)]))[0])
+  const moved = findingIdentity(flattenRunFindings(extractionRun([scratchNote(82, 461005)]))[0])
+  assert.equal(a.fingerprint, b.fingerprint)
+  assert.equal(a.contentHash, b.contentHash)
+  assert.equal(a.fingerprint, moved.fingerprint)
+  assert.notEqual(a.contentHash, moved.contentHash)
+})
+
+check('L-054: the channel is optional — an older stored run without it yields no finding', () => {
+  const run = { reports: { deliveries: { classify: null, apply: {} } } } as unknown as SyncRunResult
+  assert.equal(flattenRunFindings(run).filter((f) => f.kind === 'stray_row').length, 0)
+})
+
 console.log(`\nAll ${passed} findings checks passed.`)

@@ -12,6 +12,7 @@ import type {
   AttributionDiff,
   AutoCreatedBatch,
   AwaitingBatchAssignment,
+  ExtractionNote,
   BatchAliasNote,
   BatchClose,
   BlockDiff,
@@ -206,6 +207,27 @@ export function collectAwaitingBatchAssignments(
     const report = reports[key]
     if (!report) continue
     for (const note of report.apply?.awaiting_batch_assignment ?? []) out.push(note)
+  }
+  return out
+}
+
+/**
+ * Flatten every row the RC DELIVERIES extractor refused to treat as a delivery
+ * (`result.reports.deliveries.apply.extraction_notes`, 2026-09-25, L-054) — stray rows
+ * (a weight with no supplier/plate of its own, e.g. a sum typed under the table) and
+ * impossible weights. Like `collectAwaitingBatchAssignments` these are NOT folded into
+ * durable cases: the workbook is cumulative, so each note restates itself every run until
+ * the cell is fixed, and there is nothing to close by hand.
+ */
+export function collectExtractionNotes(result: SyncRunResult): ExtractionNote[] {
+  const reports = result.reports
+  if (!reports) return []
+
+  const out: ExtractionNote[] = []
+  for (const key of Object.keys(reports) as SyncReportType[]) {
+    const report = reports[key]
+    if (!report) continue
+    for (const note of report.apply?.extraction_notes ?? []) out.push(note)
   }
   return out
 }

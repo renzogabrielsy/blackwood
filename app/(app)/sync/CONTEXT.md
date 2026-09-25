@@ -875,6 +875,22 @@ Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerpri
   `scripts/verify-awaiting-batch-assignment-fold.ts`. MALFORMED still reports separately and louder
   (an **orphan wet-recovery sub-row** stays there on purpose — see
   `workers/sync/specs/deliveries.md` §11.3).
+  **ROWS THE EXTRACTOR REFUSED TO CALL DELIVERIES (2026-09-25, L-054).**
+  `collectExtractionNotes(result)` → `result.reports[type].apply.extraction_notes ?? []` (only
+  `deliveries` fills it; optional additive field, absent on pre-feature runs) →
+  **`fromExtractionNote`**, `kind: 'stray_row' | 'weight_out_of_range'`, `section: 'deliveries'`,
+  shown right after the awaiting-assignment rows (same sheet, same place to fix). On 2026-09-24 MC
+  typed three sums under her table (449,325 / 500,000 / −50,675 kg in the Weight column, nothing
+  else); the extractor dressed them as wet-sack splits of the last truckload and tried to INSERT
+  them, and only a NOT NULL constraint on `lab_results` stopped it. A row is now a delivery only on
+  a positive signal of its own (supplier + plate, or a genuine split on the very next row with its
+  own sacks/remark), and everything else with a weight lands here. **Severity:** a stray BELOW the
+  tab's Average row → `info` (a working note, named but not a problem); a stray inside the table
+  or an impossible weight (≤ 0, or above the 60,000 kg per-truck ceiling) → `attention`. Never held,
+  never a durable case, never an `apply.errors` entry. Identity = `extraction:<kind>:<sheet>:<row>`,
+  so an acknowledgement survives until the row's cells change. The sentence is the worker's own
+  (`workers/sync/src/reports/deliveries/extractionNotes.ts`) so panel, Excel and progress feed agree.
+  Proof: `scripts/verify-findings.ts` (4 L-054 checks) + `workers/sync/test/reports/deliveries-stray-rows.test.ts`.
   **THE PRICE STEP THAT COULD NOT RUN (2026-09-12, L-050).** Two kinds joined, and one existing
   finding learned to say WHICH SIDE is missing. Eleven deliveries dated 2026-09-08 … 09-11 sat at
   `cost_basis = 0` (run `8500acc9`) while Czarina's workbook — already fetched into

@@ -12,7 +12,22 @@
  *     first_data_row_below), with the exact fallbacks.
  *   - Date carry-forward; the strict "no date, no prior date → SKIP" rule.
  *   - Row validity: supplier&weight both null → silent skip; weight null → warn+SKIP;
- *     weight out of (0,100000) → warn only; off-format block_loc → warn only.
+ *     off-format block_loc → warn only.
+ *
+ * TS-ONLY BUSINESS RULES ON TOP OF THE PORT (L-054, 2026-09-25 — registered in
+ * PORTING_DECISIONS.md "Business-rule deviations", the oracle keeps its old behaviour):
+ *   - A row becomes a delivery only on a POSITIVE signal from its OWN cells: its own
+ *     supplier AND its own truck plate, or — for a wet-recovery sub-row — sitting on the
+ *     very next row under an emitted delivery AND carrying its own sacks or remark. Every
+ *     other row with a weight is an `ExtractionNote` (`stray_row`), never a DeliveryRow.
+ *     Only the DATE forward-fills; supplier/plate/block/batch reach a row ONLY through the
+ *     (now gated) recovery inheritance.
+ *   - A delivery-shaped row whose weight is ≤ 0 or above DELIVERY_WEIGHT_CAP_KG is refused
+ *     here (`weight_out_of_range`). This REPLACES the old warn-only (0, 100000) check.
+ *   - An Average/Total/Sum row does NOT end the table: a real workbook (run 10575906,
+ *     AUGUST 2026 tab) carried two genuine 2026-08-12 truckloads BELOW its Average row, so
+ *     stopping there would have lost them. It is recorded, so a note can say a stray sits
+ *     outside the table, and it breaks recovery adjacency.
  *   - translate_batch_code's ACTUAL source check order (FEEDING AREA → PILED IN
  *     remark → B-number → fallthrough), which diverges from its docstring (trap).
  *   - lab_results null-collapse, deduction fields (L-021), confidence, wet-recovery.
@@ -30,13 +45,20 @@ import {
   isRecoveryRowDict,
   isInheritableMother,
 } from "./deductions.js";
+import {
+  DELIVERY_WEIGHT_CAP_KG,
+  NOTE_COLUMN_LABELS,
+  strayRowDetail,
+  weightOutOfRangeDetail,
+  type ExtractionNote,
+  type ExtractionNoteReason,
+} from "./extractionNotes.js";
+
+export type { ExtractionNote } from "./extractionNotes.js";
 
 // ---------------------------------------------------------------------------
 // Constants (verbatim from extract_rc_deliveries.py)
 // ---------------------------------------------------------------------------
-const WEIGHT_KG_MIN = 0;
-const WEIGHT_KG_MAX = 100_000;
-
 const BLOCK_LOC_REGEX = /^(PCA|PCB|[A-DF])-\d{1,2}[A-D]$/;
 
 /** short_key → (message, isPlausible) — mirrors LAB_PLAUSIBILITY. A warning is added
@@ -134,6 +156,13 @@ export interface ExtractResult {
   sheets_processed: string[];
   rows: DeliveryRow[];
   summary: ExtractSummary;
+  /**
+   * Rows the extractor REFUSED to turn into deliveries (L-054): `stray_row` (a weight with
+   * no positive delivery signal of its own) and `weight_out_of_range`. Never inserted,
+   * never held — reported as run findings via `apply.extraction_notes`. Optional so every
+   * hand-built ExtractResult in the tests stays valid; `extractDeliveries` always sets it.
+   */
+  extraction_notes?: ExtractionNote[];
 }
 
 // ---------------------------------------------------------------------------
@@ -337,12 +366,9 @@ function extractRow(
     warnings.push(`Row ${rowNum}: missing weight_kg — row skipped`);
     return { row: null, lastSeenDate, extra: warnings };
   }
-  if (!(WEIGHT_KG_MIN < weightKg && weightKg < WEIGHT_KG_MAX)) {
-    warnings.push(
-      `Row ${rowNum}: weight ${pyNum(weightKg)} outside plausible range ` +
-        `(${WEIGHT_KG_MIN}-${WEIGHT_KG_MAX})`,
-    );
-  }
+  // The old warn-only `(0, 100000)` check lived here. It is GONE (L-054): a weight outside
+  // (0, DELIVERY_WEIGHT_CAP_KG] is now REFUSED in `extractSheet` — after the row's shape is
+  // known — so a warning here could never reach an emitted row anyway.
 
   if (supplier === null) {
     warnings.push(`Row ${rowNum}: missing supplier`);
@@ -415,54 +441,201 @@ function isRecoveryCandidate(sheet: LoadedSheet, rowNum: number, rowDict: Delive
   return isRecoveryRowDict(rowDict as unknown as Record<string, unknown>, hasOwnDate);
 }
 
-function extractSheet(sheet: LoadedSheet): [DeliveryRow[], string[]] {
+/** Column A reads "Average" / "Total" / "Sum" — the tab's summary row. */
+function isSummaryLabelRow(sheet: LoadedSheet, rowNum: number): boolean {
+  const col1 = sheet.cell(rowNum, 1);
+  if (typeof col1 !== "string") return false;
+  const t = col1.trim().toLowerCase();
+  return t === "average" || t === "total" || t === "sum";
+}
+
+/** A cell as a short display string for a note (Date → ISO day). Never a ₱: see extractionNotes.ts. */
+function cellText(v: CellValue): string | null {
+  if (v === null || v === undefined) return null;
+  if (v instanceof Date) return coerceDate(v) ?? v.toISOString().slice(0, 10);
+  const s = String(v).trim();
+  return s ? s : null;
+}
+
+function noteCells(sheet: LoadedSheet, rowNum: number): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [col, label] of NOTE_COLUMN_LABELS) {
+    const t = cellText(sheet.cell(rowNum, col));
+    if (t !== null) out[label] = t;
+  }
+  return out;
+}
+
+interface SheetScanState {
+  summaryRow: number | null;
+  /** The date a blank-date row WOULD forward-fill from — context for a note, nothing more. */
+  lastSeenDate: string | null;
+}
+
+/** Build one ExtractionNote from the row's OWN cells (nothing inherited; the date is context only). */
+function buildNote(
+  sheet: LoadedSheet,
+  rowNum: number,
+  kind: ExtractionNote["kind"],
+  reason: ExtractionNoteReason,
+  st: SheetScanState,
+): ExtractionNote {
+  const ownDate = coerceDate(sheet.cell(rowNum, 2));
+  const base: Omit<ExtractionNote, "detail" | "kind"> = {
+    reason_code: reason,
+    report_type: "deliveries",
+    sheet: sheet.name,
+    source_row: rowNum,
+    context_date: ownDate ?? st.lastSeenDate,
+    date_is_own: ownDate !== null,
+    cells: noteCells(sheet, rowNum),
+    weight_kg: coerceFloat(sheet.cell(rowNum, 7)),
+    supplier: coerceStr(sheet.cell(rowNum, 3)),
+    truck_plate: coerceStr(sheet.cell(rowNum, 6)),
+    batch_label: coerceStr(sheet.cell(rowNum, 4)),
+    block_loc: coerceStr(sheet.cell(rowNum, 5)),
+    summary_row: st.summaryRow,
+    below_summary_row: st.summaryRow !== null && rowNum > st.summaryRow,
+    ...(kind === "weight_out_of_range" ? { cap_kg: DELIVERY_WEIGHT_CAP_KG } : {}),
+  };
+  return {
+    kind,
+    ...base,
+    detail: kind === "stray_row" ? strayRowDetail(base) : weightOutOfRangeDetail(base),
+  };
+}
+
+/** The (0, DELIVERY_WEIGHT_CAP_KG] bound — THE one definition of a plausible truckload weight. */
+function weightOutOfRange(w: number): ExtractionNoteReason | null {
+  if (!(w > 0)) return "weight_not_positive";
+  if (w > DELIVERY_WEIGHT_CAP_KG) return "weight_above_cap";
+  return null;
+}
+
+function extractSheet(sheet: LoadedSheet): [DeliveryRow[], string[], ExtractionNote[]] {
   const sheetWarnings: string[] = [];
+  const notes: ExtractionNote[] = [];
   const headerRow = findHeaderRow(sheet);
   if (headerRow === null) {
     sheetWarnings.push(
       `Sheet '${sheet.name}': no recognizable header row found in first 15 rows`,
     );
-    return [[], sheetWarnings];
+    return [[], sheetWarnings, notes];
   }
 
   const dataStart = firstDataRowBelow(sheet, headerRow);
   const rows: DeliveryRow[] = [];
-  let lastSeenDate: string | null = null;
+  const st: SheetScanState = { summaryRow: null, lastSeenDate: null };
   let lastMother: DeliveryRow | null = null;
+  // The sheet row of the last row EMITTED (an own delivery or an accepted recovery). A
+  // recovery must sit on the row immediately after it — no gap, no Average row between.
+  let lastEmittedRow: number | null = null;
 
   const maxRow = sheet.rowCount;
   for (let r = dataStart; r < maxRow + 1; r++) {
-    const out = extractRow(sheet, r, lastSeenDate);
-    lastSeenDate = out.lastSeenDate;
+    // An Average/Total/Sum row is RECORDED, not treated as the end of the table (L-054):
+    // a real workbook carried two genuine truckloads below one (AUGUST 2026, rows 53-54,
+    // run 10575906), so stopping there would have lost them. It still produces no row —
+    // `extractRow` skips it exactly as before — and because it occupies a row number it
+    // breaks recovery adjacency by construction.
+    const isSummary = isSummaryLabelRow(sheet, r);
+    if (isSummary && st.summaryRow === null) st.summaryRow = r;
+
+    const out = extractRow(sheet, r, st.lastSeenDate);
     for (const w of out.extra) sheetWarnings.push(w);
-    if (out.row === null) continue;
+    if (out.row === null) {
+      // A skipped row that nonetheless has something typed in the Weight column which is
+      // NOT a number and no supplier (2026-09-24 row 111: the plate "ALA 9958" in Weight
+      // and 22840 in Sacks — cells one column off). It used to vanish as "noise"; it is
+      // named now. A row whose Weight cell is simply blank stays silent, as before.
+      if (
+        !isSummary &&
+        cellText(sheet.cell(r, 7)) !== null &&
+        coerceFloat(sheet.cell(r, 7)) === null &&
+        coerceStr(sheet.cell(r, 3)) === null
+      ) {
+        notes.push(buildNote(sheet, r, "stray_row", "weight_not_a_number", st));
+      }
+      st.lastSeenDate = out.lastSeenDate;
+      continue;
+    }
+    // A note on THIS row takes its context date from ABOVE it; the row's own date (if any)
+    // is committed to `st.lastSeenDate` only after the row has been decided.
     const rowDict = out.row;
 
     if (isRecoveryCandidate(sheet, r, rowDict)) {
+      // THE GATE THAT WAS MISSING (L-054). A recovery INHERITS supplier, plate, block and
+      // batch from the last delivery — so it may only do so on POSITIVE evidence that it
+      // belongs to it: it is on the very next row, and it states something of its own (a
+      // sack count or a remark — every real wet-sack split measured carries both).
+      const adjacent = lastEmittedRow !== null && r === lastEmittedRow + 1;
+      const evidence = rowDict.sacks !== null || rowDict.remarks !== null;
+      if (!adjacent || !evidence) {
+        notes.push(
+          buildNote(
+            sheet,
+            r,
+            "stray_row",
+            adjacent ? "recovery_no_evidence" : "recovery_not_adjacent",
+            st,
+          ),
+        );
+        st.lastSeenDate = out.lastSeenDate;
+        continue;
+      }
+      let emitted: DeliveryRow;
       if (isInheritableMother(lastMother as unknown as Record<string, unknown>)) {
-        const recovery = buildRecoveryRow(
+        emitted = buildRecoveryRow(
           rowDict as unknown as Record<string, unknown>,
           lastMother as unknown as Record<string, unknown>,
         ) as unknown as DeliveryRow;
-        rows.push(recovery);
         // A recovery does NOT become the mother for a subsequent recovery.
       } else {
         sheetWarnings.push(
           `Row ${r}: recovery-shaped sub-row with no preceding mother ` +
             `delivery to inherit from — left unmapped`,
         );
-        rows.push(rowDict);
+        emitted = rowDict;
       }
+      const bad = weightOutOfRange(emitted.weight_kg);
+      if (bad) {
+        notes.push(buildNote(sheet, r, "weight_out_of_range", bad, st));
+        st.lastSeenDate = out.lastSeenDate;
+        continue;
+      }
+      rows.push(emitted);
+      lastEmittedRow = r;
+      st.lastSeenDate = out.lastSeenDate;
+      continue;
+    }
+
+    // An ordinary truckload names its OWN supplier and its OWN truck plate. Measured across
+    // all 64 stored RC DELIVERIES workbooks: every one of the 654 distinct non-recovery rows
+    // does. The batch label / block are NOT required here — a row with neither is MC's
+    // "weighed in, pile not assigned yet" (L-042), which has its own quiet bucket downstream
+    // and three real instances in the stored workbooks.
+    if (rowDict.supplier === null || rowDict.truck_plate === null) {
+      notes.push(buildNote(sheet, r, "stray_row", "no_own_supplier_or_plate", st));
+      st.lastSeenDate = out.lastSeenDate;
+      continue;
+    }
+
+    const bad = weightOutOfRange(rowDict.weight_kg);
+    if (bad) {
+      notes.push(buildNote(sheet, r, "weight_out_of_range", bad, st));
+      st.lastSeenDate = out.lastSeenDate;
       continue;
     }
 
     rows.push(rowDict);
+    lastEmittedRow = r;
+    st.lastSeenDate = out.lastSeenDate;
     if (isInheritableMother(rowDict as unknown as Record<string, unknown>)) {
       lastMother = rowDict;
     }
   }
 
-  return [rows, sheetWarnings];
+  return [rows, sheetWarnings, notes];
 }
 
 // ---------------------------------------------------------------------------
@@ -479,15 +652,17 @@ export function extractDeliveries(
 
   const allRows: DeliveryRow[] = [];
   const allWarnings: string[] = [];
+  const allNotes: ExtractionNote[] = [];
   const sheetsProcessed: string[] = [];
 
   for (const name of sheetNames) {
     const ws = wb.sheet(name);
     if (!ws) continue;
-    const [rows, warns] = extractSheet(ws);
+    const [rows, warns, notes] = extractSheet(ws);
     for (const row of rows) row._source_sheet = name;
     allRows.push(...rows);
     allWarnings.push(...warns);
+    allNotes.push(...notes);
     sheetsProcessed.push(name);
   }
 
@@ -516,6 +691,7 @@ export function extractDeliveries(
       overall_confidence: overallConfidence,
       unmapped_batches: unmapped,
     },
+    extraction_notes: allNotes,
   };
 }
 
