@@ -538,7 +538,12 @@ const PREPARED_OCCUPIED_LOCS = ['PCA-15A', 'PCA-16C', 'PCB-17B'] as const;
 //             and August at 97.3% fed-price traceability (the footnote case)
 //   fail    — the action REFUSES (the print must degrade to a note, not fail)
 //   throw   — the action THROWS
-//   stall   — the action never answers (Print then shows the "still loading" note)
+//   stall   — the action never answers (Print then shows the "still loading" note; the
+//             on-screen chart keeps its skeleton and says so after 15 s)
+//   flaky   — the FIRST read refuses and every later one answers, so the on-screen
+//             chart's Retry can be seen (and asserted) to recover
+// The same read feeds the ON-SCREEN chart in the dialog body (2026-09-26), so every mode
+// above is also that chart's state: skeleton, inline banner with Copy + Retry, or chart.
 // The price-denied reader (`?prices=0`) gets the SERVER's nulling: both ₱ series null.
 
 const MARKET_MONTHS: [string, number, number, number, number][] = [
@@ -633,12 +638,19 @@ export function BlendAnalysisFixture() {
   }, [blocks, includePrepared]);
 
   const marketMode = params.get('market');
+  // `flaky` refuses the FIRST read only, so the on-screen chart's Retry can be seen to work.
+  // "First" is every call started within 600 ms of the first one — dev StrictMode runs the
+  // dialog's effect twice on mount, and both of those are the same first read.
+  const firstMarketCallRef = React.useRef<number | null>(null);
   const marketAdapter = React.useCallback(
     async (): Promise<BlendMarketHistoryResult> => {
+      const now = Date.now();
+      if (firstMarketCallRef.current === null) firstMarketCallRef.current = now;
+      const isFirstRead = now - firstMarketCallRef.current < 600;
       if (marketMode === 'stall') return new Promise<never>(() => {});
       await new Promise((r) => setTimeout(r, Number.isFinite(delay) ? delay : 300));
       if (marketMode === 'throw') throw new Error('fixture: the market read threw');
-      if (marketMode === 'fail') {
+      if (marketMode === 'fail' || (marketMode === 'flaky' && isFirstRead)) {
         return {
           ok: false,
           reason: 'query_error',

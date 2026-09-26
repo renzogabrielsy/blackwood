@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Loader2,
   Calculator,
@@ -108,6 +108,7 @@ import {
   buildBlendMarketSlotHtml,
   type BlendMarketChartSlot,
 } from './blend-market-chart';
+import { BlendMarketChartScreen } from './blend-market-chart-screen';
 
 /** The page-one market read's lifecycle. `loading` and `error` both print a note, never fail. */
 type BlendMarketRead =
@@ -1430,16 +1431,22 @@ export function BlendProposalDialog({
   // today. A refusal or failure NEVER fails the documents: the slot then prints a short
   // "market history unavailable" note in the chart's place (and a Print that beats the
   // reply prints a "still loading" note), so page one keeps its shape either way.
+  //
+  // The SAME read also feeds the ON-SCREEN chart (`BlendMarketChartScreen`, placed under the
+  // pricing block) — one fetch, one model, two renderers. Its Retry bumps `marketNonce`,
+  // which is part of the signature so a late answer to the abandoned read is dropped.
   const [marketRead, setMarketRead] = useState<BlendMarketRead>({ status: 'loading' });
+  const [marketNonce, setMarketNonce] = useState(0);
   const marketWantRef = useRef('');
   const marketAnchor = saved ? factsAsOf : null;
   const hasProposal = !!proposal;
+  const marketLoadKey = `${marketAnchor ?? 'today'}#${marketNonce}`;
   useEffect(() => {
     if (!open || !hasProposal) {
       marketWantRef.current = '';
       return;
     }
-    const signature = marketAnchor ?? 'today';
+    const signature = marketLoadKey;
     marketWantRef.current = signature;
     setMarketRead({ status: 'loading' });
     void (marketAdapter ?? fetchBlendMarketHistory)(marketAnchor ?? undefined)
@@ -1458,7 +1465,8 @@ export function BlendProposalDialog({
       });
     // `marketAdapter` deliberately NOT a dependency — same reason as `factsAdapter`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, hasProposal, marketAnchor]);
+  }, [open, hasProposal, marketLoadKey]);
+  const retryMarket = useCallback(() => setMarketNonce((k) => k + 1), []);
 
   const marketSlot: BlendMarketChartSlot | null = useMemo(() => {
     if (!proposal) return null;
@@ -2042,6 +2050,19 @@ export function BlendProposalDialog({
                   )}
                 </div>
               )}
+
+              {/* ── RC MARKET — the print's page-one chart, on screen. The SAME model the
+                     printout and the PDF draw (`marketSlot`), so the three cannot disagree;
+                     collapsible (remembered per viewer) so it never buries the blocks. ── */}
+              <BlendMarketChartScreen
+                state={marketRead.status}
+                model={marketSlot?.kind === 'chart' ? marketSlot.model : null}
+                errorMessage={marketRead.status === 'error' ? marketRead.message : null}
+                showPrices={showPrices}
+                expectRefLine={proposal.raw_price_per_kg !== null}
+                loadKey={marketLoadKey}
+                onRetry={retryMarket}
+              />
 
               {/* ── Selected blocks (Excel-dense; per-block lab columns) ── */}
               <div>
