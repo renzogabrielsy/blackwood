@@ -7,9 +7,13 @@
 //   — orange line; avg RC fed volume past 12 months — purple area; avg RC deliveries
 //   volume past 12 months — green area."*
 //
-// ONE model, ONE geometry, TWO renderers: the HTML iframe printout draws the SVG string
-// built here, and the jsPDF file (`blend-proposal-pdf.ts`) walks the SAME layout with its
-// own primitives — so the two documents cannot draw different charts.
+// ONE model, ONE geometry, THREE thin renderers: the HTML iframe printout draws the SVG
+// string built here, the jsPDF file (`blend-proposal-pdf.ts`) walks the SAME layout with
+// its own primitives, and the ON-SCREEN dialog (`blend-market-chart-screen.tsx`, added
+// 2026-09-26) renders the SAME layout as a React SVG in theme tokens — so the three cannot
+// draw different charts. Each text item carries a `role` so the screen can re-ink it by
+// meaning (axis tick, unit, month, …) while the print keeps its explicit colour; the role
+// never reaches the printed SVG string, which stays byte-identical.
 //
 // ── ⚠️ IT COMPUTES NO STATISTIC ─────────────────────────────────────────────
 // Every price and kilogram is a field of `fetchBlendMarketHistory`, which reads them
@@ -108,6 +112,8 @@ export interface BlendMarketChartModel {
   subtitle: string;
   /** `Oct '25` … one per slot. */
   ticks: string[];
+  /** `Oct 2025` … one per slot — the on-screen tooltip's heading. */
+  monthLabels: string[];
   /** Per slot: the current, still-growing month. */
   partial: boolean[];
   /** Drawn in this order, BEHIND the lines. Deliveries first so fed sits on top. */
@@ -246,6 +252,17 @@ export const BLEND_MARKET_LOADING_REASON =
 
 // ── The model ───────────────────────────────────────────────────────────────
 
+/**
+ * The definitions line, one sentence per series family. Exported so the on-screen chart
+ * can print it while the read is still loading (the section keeps its height) — the
+ * model uses the same function, so the two can never word it differently.
+ */
+export function blendMarketSubtitle(showPrices: boolean): string {
+  return showPrices
+    ? `Fed price = delivered cost of the charcoal fed to the plant (MAIN feed only; not the shrinkage-adjusted actual price) ${MIDDOT} Deliveries = market purchases only (no sundry re-entries or re-cooks) ${MIDDOT} Volumes are monthly totals`
+    : `Fed = charcoal fed to the plant (MAIN feed only) ${MIDDOT} Deliveries = market purchases only (no sundry re-entries or re-cooks) ${MIDDOT} Volumes are monthly totals`;
+}
+
 export interface BuildBlendMarketChartInput {
   history: BlendMarketHistory;
   /** EFFECTIVE price flag: server gate AND the Prices toggle. Hide-only. */
@@ -260,6 +277,7 @@ export function buildBlendMarketChartModel(input: BuildBlendMarketChartInput): B
   const months = history.months;
 
   const ticks = months.map((m) => blendMarketTick(m.monthStart));
+  const monthLabels = months.map((m) => monthLong(m.monthStart));
   const partial = months.map((m) => m.isPartialMonth);
 
   // kg → tonnes: a UNIT change for the axis, not an aggregate.
@@ -378,9 +396,7 @@ export function buildBlendMarketChartModel(input: BuildBlendMarketChartInput): B
     ? `${monthLong(months[0].monthStart)} ${EMDASH} ${monthLong(months[months.length - 1].monthStart)}`
     : '';
 
-  const subtitle = showPrices
-    ? `Fed price = delivered cost of the charcoal fed to the plant (MAIN feed only; not the shrinkage-adjusted actual price) ${MIDDOT} Deliveries = market purchases only (no sundry re-entries or re-cooks) ${MIDDOT} Volumes are monthly totals`
-    : `Fed = charcoal fed to the plant (MAIN feed only) ${MIDDOT} Deliveries = market purchases only (no sundry re-entries or re-cooks) ${MIDDOT} Volumes are monthly totals`;
+  const subtitle = blendMarketSubtitle(showPrices);
 
   const ariaLabel = `${showPrices ? 'RC fed and deliveries price and volume' : 'RC fed and deliveries volume'}, ${range}`;
 
@@ -389,6 +405,7 @@ export function buildBlendMarketChartModel(input: BuildBlendMarketChartInput): B
     range,
     subtitle,
     ticks,
+    monthLabels,
     partial,
     areas,
     lines,
@@ -409,10 +426,26 @@ export interface BlendMarketPoint {
   y: number;
 }
 
+/**
+ * What a label IS, so a renderer with its own palette (the screen) can ink it by meaning.
+ * The print ignores it and uses `color`.
+ */
+export type BlendMarketTextRole =
+  | 'leftTick'
+  | 'leftUnit'
+  | 'rightTick'
+  | 'rightUnit'
+  | 'month'
+  | 'partial'
+  | 'ref';
+
 export interface BlendMarketTextItem {
   x: number;
   y: number;
   text: string;
+  role: BlendMarketTextRole;
+  /** The month slot a `month` / `partial` label belongs to (lets a narrow screen thin them). */
+  slot?: number;
   anchor: 'start' | 'middle' | 'end';
   bold?: boolean;
   italic?: boolean;
@@ -546,6 +579,7 @@ export function layoutBlendMarketChart(
       x: plot.x - font * 0.45,
       y: yLeft(t.value) + font * 0.35,
       text: t.label,
+      role: 'leftTick',
       anchor: 'end',
       size: font,
       color: BLEND_MARKET_INK.axis,
@@ -555,6 +589,7 @@ export function layoutBlendMarketChart(
     x: plot.x - font * 0.45,
     y: plot.y - font * 0.8,
     text: model.leftAxis.unit,
+    role: 'leftUnit',
     anchor: 'end',
     bold: true,
     size: font,
@@ -567,6 +602,7 @@ export function layoutBlendMarketChart(
         x: plot.x + plot.w + font * 0.45,
         y: yR(t.value) + font * 0.35,
         text: t.label,
+        role: 'rightTick',
         anchor: 'start',
         size: font,
         color: BLEND_MARKET_INK.axis,
@@ -576,6 +612,7 @@ export function layoutBlendMarketChart(
       x: plot.x + plot.w + font * 0.45,
       y: plot.y - font * 0.8,
       text: model.rightAxis.unit,
+      role: 'rightUnit',
       anchor: 'start',
       bold: true,
       size: font,
@@ -587,6 +624,8 @@ export function layoutBlendMarketChart(
       x: slotX[i],
       y: baselineY + font * 1.3,
       text: tick,
+      role: 'month',
+      slot: i,
       anchor: 'middle',
       bold: model.partial[i],
       size: font,
@@ -597,6 +636,8 @@ export function layoutBlendMarketChart(
         x: slotX[i],
         y: baselineY + font * 2.4,
         text: 'partial',
+        role: 'partial',
+        slot: i,
         anchor: 'middle',
         italic: true,
         size: font * 0.9,
@@ -613,6 +654,7 @@ export function layoutBlendMarketChart(
       x: plot.x + font * 0.4,
       y: ry - font * 0.45,
       text: model.refLine.label,
+      role: 'ref',
       anchor: 'start',
       bold: true,
       size: font,
@@ -621,6 +663,78 @@ export function layoutBlendMarketChart(
   }
 
   return { width, height, plot, guides, areas, lines, ref, texts, slotX, baselineY };
+}
+
+// ── The on-screen crosshair: hit-test + tooltip rows ────────────────────────
+//
+// Pure, so the screen renderer stays thin and the verify script can pin the wording.
+// FORMATTING ONLY: every value is a field of the model (prices as published, volumes in
+// tonnes after the one unit change above). A NULL is "no data" — never 0.
+
+/** The month slot under an x coordinate in the layout's unit, or null outside the plot. */
+export function blendMarketSlotAt(layout: BlendMarketLayout, x: number): number | null {
+  const n = layout.slotX.length;
+  if (n === 0) return null;
+  const { plot } = layout;
+  if (x < plot.x || x > plot.x + plot.w) return null;
+  const i = Math.floor(((x - plot.x) / plot.w) * n);
+  return Math.min(n - 1, Math.max(0, i));
+}
+
+/** Short names for the screen legend and the tooltip rows. The model's labels stay the long ones. */
+export const BLEND_MARKET_SHORT_LABEL: Record<BlendMarketSeriesId | 'ref', string> = {
+  fedPrice: 'Fed price',
+  deliveredPrice: 'Deliveries price',
+  fedVolume: 'Fed volume',
+  deliveredVolume: 'Deliveries volume',
+  ref: 'This blend',
+};
+
+export interface BlendMarketTooltipRow {
+  id: BlendMarketSeriesId;
+  label: string;
+  kind: 'line' | 'area';
+  /** `₱43.09/kg` or `730.3 t`; null = no data for that month (NEVER printed as 0). */
+  text: string | null;
+}
+
+export interface BlendMarketTooltip {
+  /** `Sep 2026`. */
+  month: string;
+  partial: boolean;
+  rows: BlendMarketTooltipRow[];
+}
+
+function tonnesPrecise(v: number): string {
+  return `${v.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} t`;
+}
+
+/**
+ * The tooltip for month slot `i`: the lines first (what the eye reads), then the areas —
+ * the legend's own order. A price-denied model has no lines, so no ₱ can appear here.
+ */
+export function blendMarketTooltip(model: BlendMarketChartModel, i: number): BlendMarketTooltip {
+  const rows: BlendMarketTooltipRow[] = [
+    ...[...model.lines].reverse().map<BlendMarketTooltipRow>((s) => {
+      const v = s.values[i] ?? null;
+      return {
+        id: s.id,
+        label: BLEND_MARKET_SHORT_LABEL[s.id],
+        kind: 'line',
+        text: v === null || !Number.isFinite(v) ? null : `${peso(v, 2)}/kg`,
+      };
+    }),
+    ...[...model.areas].reverse().map<BlendMarketTooltipRow>((s) => {
+      const v = s.values[i] ?? null;
+      return {
+        id: s.id,
+        label: BLEND_MARKET_SHORT_LABEL[s.id],
+        kind: 'area',
+        text: v === null || !Number.isFinite(v) ? null : tonnesPrecise(v),
+      };
+    }),
+  ];
+  return { month: model.monthLabels[i] ?? model.ticks[i] ?? '', partial: model.partial[i] === true, rows };
 }
 
 // ── The HTML sheet (the iframe printout) ────────────────────────────────────

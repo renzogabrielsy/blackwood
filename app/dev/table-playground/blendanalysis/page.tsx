@@ -32,7 +32,10 @@ import { BlendAnalysisFixture } from './blendanalysis-fixture';
 //   ?stall=1        — an adapter that never answers, to see the watchdog banner
 //   ?market=gaps    — page one's MARKET CHART with a NULL month, a missing fed price and a
 //                     97.3% coverage footnote (also: fail | throw | stall — the print must
-//                     degrade to a note). The default is the real 2026-09-26 shape.
+//                     degrade to a note — and flaky: the first read refuses, a Retry
+//                     answers). The default is the real 2026-09-26 shape. The SAME read
+//                     drives the on-screen chart in the dialog body, so each mode is also
+//                     that chart's state. Theme: follow the OS/app (dark = colorScheme dark).
 //
 // It is gated TWICE, and the two locks are independent:
 //   1. here — `notFound()` in production unless `TABLE_PLAYGROUND` is set;
