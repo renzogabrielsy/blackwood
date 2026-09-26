@@ -59,6 +59,7 @@ Physical warehouse grid visualization — the digital equivalent of the Excel bl
 | `../_shared/blend-analysis-sections.tsx` | **NEW. THE ANALYSIS PAGES ON SCREEN** — `BlendAnalysisSections` (the stack) and `BlendAnalysisIncludePopover` (the header's **Include pages** control). Three pages: **Price groups — natural breaks** (a plain-language method note, then HIGH → AVERAGE → LOW, each group a dense table with a SUBTOTAL row and one grand FOOTER from the payload's `overall`, which is what makes it visibly equal the proposal's own raw blend price) plus **Against market** (the PRICE LENS's bands, labelled with the lens's OWN `priceBandLabel` and the reader's own band names, dearest first); **Quality** (three tables — MC, ASH, and BD ASTM **with BD JIS as a second value column**, not a fourth table — highest reading first, with the reader's own WET / ASHY highlight applied through `getLabHighlightText`); **Age** (the AGE LENS's bands via `ageBandLabel`, oldest first, block · batch · balance · age · first delivery · last delivery). Excel Standard throughout: `table-fixed`, explicit pixel widths whose STATED sum is the table's `minWidth`, `font-mono` right-aligned numerics, accounting ₱. **Every subtotal and footer figure is the payload's own** — there is no `reduce`, no `+=` and no division by a total in the file; the one piece of money arithmetic is a per-ROW `kg × ₱/kg`, which contributes to no total. An unmeasured / undated block is listed in a MUTED group with an em dash, **never in the cheapest, cleanest or freshest group**. |
 | `../_shared/blend-analysis-print.ts` | **NEW. THE ANALYSIS PAGES ON PAPER** — `buildBlendAnalysisPages(input)` returns one `<section class="apage">` per chosen page and `BLEND_ANALYSIS_PRINT_CSS` carries their rules; both are appended to the existing self-contained iframe document by `buildBlendPrintDocument`'s new fifth argument. **An empty analysis leaves that document byte-identical, including its `<style>` block.** Print-specific rules the screen does not need: **no `<tfoot>`** (Chrome repeats one on every page, so a subtotal and the grand total are `<tbody>` rows), **a group is its own `<tbody>`** with `break-inside: avoid` only while it is SMALL (≤ 4 rows — forcing a 24-row group whole would push a page of white space ahead of it), `break-after: avoid` on every heading and caption, a **7pt font floor** with the padding squeezed first, and the group tints written as inline `rgb(r g b / 0.18)` from `lens/lens-ramp.ts` because **an iframe has no `globals.css`, so a `.lens-band-3` class would print white**. |
 | `../_shared/blend-yard-map-print.ts` | **NEW (2026-09-23). THE BLEND PRINT'S YARD MAP** — pure, no React. `BLEND_PRINT_MARGIN_MM` (the blend document's ONE margin, read by its `@page` rule AND by the map's fit), `buildBlendYardMapModel` (the normalized `BlendYardMapModel` BOTH print paths consume — cells, bands, caption, `goneLocs`, `byPriceGroup`), `blendYardMapStops` / `blendYardMapLegend` / `blendYardMapFit`, `BLEND_YARD_MAP_PRINT_CSS` and `buildBlendYardMapPage` (the `<section class="ymap">` HTML). **IT IS THE LENS MAP, NOT A PORT OF IT** — the geometry, the one-page fit (`solveYardMapFit`), the PRINT palette (`printFillRgbAtStop`), the ink rule (`lensYardMapInkOn`) and the four cell kinds (`lensYardMapPaint`) are all imported from `lens/lens-yard-map-model.ts`; a literal `220`/`238` appears nowhere and `WAREHOUSES` is never restated. It adds exactly two decisions — which band a selected block is in, and that a selected block the yard no longer holds is still drawn. **No ₱, no kilogram, no lab reading**, so its Include-pages checkbox is the one that is NOT price-gated. |
+| `../_shared/blend-market-chart.ts` | **NEW (2026-09-26). PAGE ONE'S MARKET CHART on the blend print + PDF** — pure, no React. `buildBlendMarketChartModel` (the normalized `BlendMarketChartModel` — four series, two axes or one, legend, footnotes), `layoutBlendMarketChart` (THE geometry, in any unit — px for the SVG, pt for jsPDF with its own text measure), `blendMarketChartSvg` / `buildBlendMarketChartSection` / `buildBlendMarketUnavailableSection` / `buildBlendMarketSlotHtml`, `BLEND_MARKET_CHART_PRINT_CSS` (incl. the `.p1` page-one wrapper) and `blendMarketPlotHeightPx`. `BlendMarketChartSlot` = `{kind:'chart', model}` or `{kind:'unavailable', reason}` — BOTH documents consume the same slot. **Computes no statistic**: every figure is a field of `fetchBlendMarketHistory`; the only arithmetic is kg → tonnes and axis geometry. See "PAGE ONE'S MARKET CHART" below. |
 | `lens/lens-summary-print.tsx` | **THE PRINTED LENS SUMMARY, REDESIGNED 2026-09-22** — `LensSummaryPrintControl` (the legend bar's **Print** button) + the sheet, over a normalized `LensSummaryPrintModel` each lens builds for itself. The owner's four asks, in his order: the TITLE is **exactly the lens's name** (`Price lens` / `Age lens` / `Supplier lens`) with **no blurb and no subheading**; **ONE terse settings line** under it in the `<fact> · <fact>` style (`Set price ₱46 · ₱46 and up is above set price · cuts −1 · market · by kilograms · printed 2026-09-22 09:04`), the stamp appended by the sheet; the **BAND TABLE** (band · blocks · kg · share · the lens's weighted figure, total as the last `<tbody>` row, its figure cell saying **`avg of priced`** / `avg of dated`) and the **RATIO BAR** kept unchanged, because they are the part he said worked (**the band table's last column grew TWO optional fields later the same day — `bandFigureColumnLabel` and a per-figure `LensPrintAccounting {symbol, amount}` — so the SUPPLIER sheet can head it `₱/kg` in the accounting layout, or `Mixed` for a price-denied reader, while the price and age sheets, which supply neither, stay byte-for-byte what they were**); and the three-column block lists **replaced by ONE FULL-WIDTH TABLE PER BAND, GROUPED BY WAREHOUSE** — `BLOCK · BATCH · BALANCE kg · MC · ASH · BD ASTM · BD JIS · GRIT · VM · FC · <figure>` — with **each band on its own page** (`.lens-print-band { break-before: page }`), a warehouse group per `<tbody>` (`break-inside: avoid` while small, its heading row `break-after: avoid`), a WAREHOUSE SUBTOTAL carrying blocks + kg, and a BAND TOTAL from the payload. **SECOND PASS 2026-09-22 — three PRICE-SHEET-ONLY additions, each behind an OPTIONAL model field so the age and supplier sheets are provably unchanged:** `warehousePages` puts each `WHSE X` on its OWN SHEET under a repeated band running line (the first warehouse rides the band's own break; the BAND TOTAL rides the LAST warehouse's page; `showWarehouseHeadingRow={false}` stops the heading printing twice); `figures` / `totalFigures` fill the subtotal's and the band total's seven lab cells and ₱/kg from `warehouseSubtotals` — a **LOOKUP**, never a computation, NULL an em dash and never a 0, with a coverage note naming only the stats short of the group; and `blockSupplierColumnLabel` adds a SUPPLIER column between BATCH and BALANCE (`Ornales` / `Paquibot 63%` / an em dash), on a SEPARATE width table that sums to exactly 100%. `page1Extra` is a NODE carrying page one's context block, so this sheet still knows nothing about a market series. Spanning several sheets is the deliberate trade for the lab panel. **Band ISOLATION is respected and SAID** (*"Showing 2 of 4 bands"*). **PAGE TWO is the YARD MAP** (2026-09-22, `lens/lens-yard-map-print.tsx`) — every block location in solid band colour, loc centred and big; it exports `LENS_PRINT_MARGIN_MM` so the map's fit arithmetic and the `@page` rule cannot disagree. It reuses the PLATFORM print kit (`GroupPrintStage` + `printCard` + `buildPrintPageRules`, stage PORTALLED to `<body>`) and adds nothing to it; the sheet is explicitly LIGHT (`bg-white` / `text-zinc-*`) because it lays out in the live DOM, with two deliberate exceptions — the swatch and the bar segments use `lens-band-swatch` + the ramp class, whose solid `rgb(var(--lens-hue))` is identical in both themes and identical to the grid. **It formats nothing**: every figure arrives preformatted. |
 | `lens/lens-yard-map-model.ts` | **NEW (2026-09-22). THE YARD MAP's CELLS — pure, no React.** `buildLensYardMap({ data, bandOf, isMixed? })` turns the grid's OWN geometry (`../constants`'s `WAREHOUSES`, plus `blocking-grid.tsx`'s `<whse>-<col><row>` slot key — **never a literal 220/238**) into one `LensYardMapCell` per SLOT: `{ loc, lines, occupied, band, mixed }`. Also `lensYardMapPaint(cell, ramp, stopByVisibleBand)` (the FOUR cell kinds — `banded` / `muted` / `nodata` / `empty`; a `banded` fill is `printFillRgbAtStop`, **never** the screen ramp), **`lensYardMapInkOn(rgb)` — the ONE luminance rule, which on the print palette now answers near-black for every fill and whose white branch is therefore unreachable on the map** (kept rather than hardcoded, because a cell, a legend swatch border and a mixed block's dash must all reach the same answer) — `lensYardMapLuminance`, `lensYardMapLines(key, loc, force?)` and the paper palette + `LENS_YARD_MAP_MIN_LOC_PT` / `_LINE_HEIGHT` / `_NODATA_PT` / `_INK_CROSSOVER`. It counts SLOTS and nothing else: no kilogram, no ₱, no age, no supplier, no lab reading. **SHARED WITH THE BLEND PROPOSAL PRINT since 2026-09-23** — the core `buildYardMapCells` (which `buildLensYardMap` is now a two-line wrapper over), the page geometry constants and the two-stage solve `solveYardMapFit` moved HERE from `lens-yard-map-print.tsx` so the blend's non-React print paths can read them; the lens page's own output is unchanged by construction, because none of the inputs moved. |
 | `lens/lens-yard-map-print.tsx` | **NEW (2026-09-22). THE YARD MAP PAGE** — `LensYardMapPage`, page TWO of the lens print. Every warehouse as a labelled block of square cells (column numbers along the top, row letters down the side, both small and muted), each occupied slot in the **SOLID** band fill from **`LENS_PRINT_FILL_RGB`** (the PRINT palette — a pale tint of the screen hue, so the loc is BLACK on every cell; the legend swatches read the same accessor, or the legend would describe a different map) with the BLOCK LOC centred in the largest font the cell allows. Solves its one-page promise with the PLATFORM `fitCellGrid` / `fitMonoLabelPt` (`components/shared/print/print-fit.ts`) against `a4LandscapeBox(LENS_PRINT_MARGIN_MM)` — the sheet's own margin, exported so the `@page` rule and the arithmetic cannot disagree. Carries a one-line legend (every shown band, `other bands (not shown)` when isolated, `— no data (N)`, `empty slot`) and NAMES any occupied block whose code is not a slot on this layout. |
@@ -1180,6 +1181,87 @@ conversion, `PT_PER_PX = 72/96`, since the solve works in CSS px at 96 dpi and j
 points. Its box is solved against the document's own `marginX`, converted to mm, so the
 drawing and the arithmetic cannot disagree. The dashed marker is `setLineDashPattern`, and
 the legend rows come from the shared `blendYardMapLegend`.
+
+#### PAGE ONE'S MARKET CHART — ADDED 2026-09-26
+
+Renzo: *"add a main chart below what is currently on it, showing: avg RC fed price (not
+actual price) the past 12 months — blue line; avg RC deliveries price past 12 months —
+orange line; avg RC fed volume past 12 months — purple area; avg RC deliveries volume past
+12 months — green area."* Page one of the blend print (title, version line, remark,
+SUMMARY, BLENDED LAB STATS, PRICING) was ~60% empty; the chart fills the rest.
+
+**The data — `fetchBlendMarketHistory(asOf?: string | null) → Promise<BlendMarketHistoryResult>`**
+(`blocking/actions.ts`; types `BlendMarketHistory` / `BlendMarketHistoryMonth` /
+`BlendMarketHistoryResult`, `BLEND_MARKET_HISTORY_MONTHS = 12` in `blocking/types.ts`).
+Two existing ONE-DEFINITION monthly views, month-filtered to at most 12 rows each and
+re-keyed by month — never re-aggregated:
+
+| Series | Colour | Column |
+|---|---|---|
+| Avg RC **fed** price | blue line | `view_analytics_cost_monthly.delivered_php_kg_fed_covered` — the DELIVERED basis over the traceable fed kilos, MAIN feed only. **Not** the shrinkage-adjusted actual price, and **not** `delivered_php_kg_fed` (which is understated whenever `fed_price_coverage_pct < 100`) |
+| Avg RC **deliveries** price | orange line | `view_analytics_rcin_monthly.market_avg_price` — market purchases only |
+| RC fed volume | purple area | `view_analytics_cost_monthly.fed_kg` (monthly TOTAL, shown in tonnes / month) |
+| RC deliveries volume | green area | `view_analytics_rcin_monthly.market_kg` (monthly TOTAL) |
+
+- **Window** = the 12 calendar months ending with the blend's as-of month: a SAVED
+  version passes the Manila date of its `asOfAt` (= `coalesce(revised_at, created_at)`,
+  the same anchor `fetchBlendBlockFacts` uses); a live what-if passes nothing (= today,
+  Asia/Manila). A future anchor is clamped to today; a malformed one is refused
+  `invalid_as_of`. The spine is calendar arithmetic; a month a view has no row for keeps
+  **NULL — a gap in the chart, never a 0**. `is_partial_month` (lifted by the cost view
+  from the flow view) marks the current month: hollow points on the lines, a bold tick
+  with `partial` under it, and a footnote with its `as_of_date`.
+- **Price gate — a NULLING pass, not a refusal.** Unlike `fetchBlockingMarketContext`,
+  this payload splits cleanly: the volumes carry no peso. `fedPhpKg` / `deliveredPhpKg`
+  are nulled SERVER-side when `!canViewPrices()` (fail-closed), `canViewPrices:false`
+  rides back, and the chart draws ONLY the two volume areas on ONE axis with a legend and
+  subtitle that name no price. The client's Prices toggle can hide the lines too (hide-only).
+- **Footnotes** are published facts: any month with `fed_price_coverage_pct < 100`
+  (*"Aug 2026: 97.3% of fed kg traceable to a delivery price …"*), likewise the deliveries
+  price coverage, the partial month, and one line saying a break is a month with no figure.
+  Measured 2026-09-26: every month of Oct 2025 – Sep 2026 is 100% on both.
+- The blend's own raw ₱/kg rides as a thin dashed reference line for a price reader.
+
+**The drawing.** Hand-drawn SVG (no Recharts — the `ResponsiveContainer` trap), explicit
+print ink (text zinc-900/700 on white; areas are 22%-opacity purple/green with a darker
+edge so overlaps stay readable and a mono printer still sees the edges; lines blue-700 /
+orange-700), month ticks `Oct '25 … Sep '26`, dual axis (left ₱/kg, right t / month) whose
+two ladders share an interval count so the right-hand numbers sit on the left's guides.
+**The jsPDF file draws the SAME slot** through `drawMarketChartPdf` in
+`blend-proposal-pdf.ts`, calling the same `layoutBlendMarketChart` in points with
+`doc.getTextWidth` as the measure, `GState` opacity for the areas and `PHP ` for `₱`.
+
+**Page one stays ONE page by construction.** With a slot present the head and the chart
+are wrapped in `.p1 { height: 189mm; display:flex; flex-direction:column; overflow:hidden;
+break-after: page }` (190 mm = A4-landscape height − 2 × `BLEND_PRINT_MARGIN_MM`, 1 mm
+slack). The head takes its natural height and the chart section is `flex: 1 1 0`, so it
+takes EXACTLY what is left; its SVG is `position:absolute; inset:0` with
+`preserveAspectRatio="xMidYMid meet"`, so an unusually tall head shrinks the chart
+uniformly instead of spilling. `blendMarketPlotHeightPx` picks the viewBox height from
+what page one carries (pricing block, remark lines, footnote count) so the ordinary case is
+width-bound at full label size. The Selected Blocks table therefore always starts on sheet
+two — where a 24-block table went anyway. In the jsPDF file the chart takes `[y, pageH − 28]`
+and `doc.addPage()` follows. Absent a slot (a caller that passes nothing) both documents
+are byte-identical to before.
+
+**A failed read never fails the document.** The dialog keeps a `loading | ready | error`
+read (published on the Print button as `data-blend-market-state`), guarded by its own
+signature (the anchor date) like the facts read. `error` → the slot prints *"Market
+history unavailable. <reason> The blend itself is unaffected."* in the chart's place;
+a Print that beats the reply prints the "still loading — print again" note. The
+dialog's port is `marketAdapter` (default `fetchBlendMarketHistory`), injectable for the
+same reason `factsAdapter` is.
+
+**Look rig:** `/dev/table-playground/blendanalysis?market=gaps|fail|throw|stall` (the
+real 2026-09-26 figures as literals, ~300 ms latency; `?prices=0` gets the server's
+nulling). **Proofs:** `npx tsx scripts/verify-blend-market-chart.ts` — static (the two
+views, the covered fed price, the server-side ₱ nulling, no fold in the chart file), pure
+(model, gaps, partial marking, the jsPDF page count with and without a slot) and a browser
+half that clicks the REAL Print button, captures the iframe document (print stubbed),
+lays it out as print media at A4 landscape and MEASURES page one: exactly 189 mm, no
+overflow, and exactly two printed sheets with no analysis pages ticked — for a price
+reader, a price-denied reader, a gap month, a refused read, a thrown read and a
+still-loading read.
 
 #### THE LENS SUMMARY PRINT — REDESIGNED 2026-09-22
 

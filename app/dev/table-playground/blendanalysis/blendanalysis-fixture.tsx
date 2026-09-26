@@ -45,6 +45,9 @@ import type {
   BlendQualityNatural,
   BlendVsMarketBand,
   BlendProposalVersionSummary,
+  BlendMarketHistory,
+  BlendMarketHistoryMonth,
+  BlendMarketHistoryResult,
   SavedBlendProposal,
 } from '@/app/(app)/inventory/blocking/types';
 
@@ -525,6 +528,62 @@ const OTHER_OCCUPIED_LOCS = [
 
 const PREPARED_OCCUPIED_LOCS = ['PCA-15A', 'PCA-16C', 'PCB-17B'] as const;
 
+// ── Page one's MARKET CHART (2026-09-26) ────────────────────────────────────
+//
+// The twelve months the real `fetchBlendMarketHistory` returned on 2026-09-26, as
+// literals (`view_analytics_cost_monthly` fed kg / covered fed ₱/kg / coverage and
+// `view_analytics_rcin_monthly` market kg / ₱/kg / coverage). `?market=` picks a mode:
+//   (none)  — the real shape: all twelve months, September 2026 partial
+//   gaps    — a month with NO delivery row (NULL, not 0), a month with no fed price,
+//             and August at 97.3% fed-price traceability (the footnote case)
+//   fail    — the action REFUSES (the print must degrade to a note, not fail)
+//   throw   — the action THROWS
+//   stall   — the action never answers (Print then shows the "still loading" note)
+// The price-denied reader (`?prices=0`) gets the SERVER's nulling: both ₱ series null.
+
+const MARKET_MONTHS: [string, number, number, number, number][] = [
+  // month, fed kg, fed ₱/kg (covered), market kg, market ₱/kg
+  ['2025-10-01', 678_216, 42.5046, 1_655_667, 44.9159],
+  ['2025-11-01', 419_767, 40.0385, 1_270_296, 44.9494],
+  ['2025-12-01', 869_431, 41.2279, 1_191_762, 46.3588],
+  ['2026-01-01', 829_328, 46.1226, 1_468_251, 47.5292],
+  ['2026-02-01', 708_538, 48.5778, 1_864_142, 48.2562],
+  ['2026-03-01', 1_112_078, 46.6957, 1_788_874, 47.5085],
+  ['2026-04-01', 643_922, 45.7934, 598_205, 46.8374],
+  ['2026-05-01', 805_634, 45.0054, 1_034_120, 44.9633],
+  ['2026-06-01', 848_458, 43.3282, 762_000, 38.2524],
+  ['2026-07-01', 762_271, 45.3704, 901_504, 37.8765],
+  ['2026-08-01', 709_627, 42.7427, 824_027, 39.9698],
+  ['2026-09-01', 730_306, 43.0874, 891_700, 39.8391],
+];
+
+function makeMarketHistory(mode: string | null, canViewPrices: boolean): BlendMarketHistory {
+  const months: BlendMarketHistoryMonth[] = MARKET_MONTHS.map(([m, fedKg, fedPhp, mktKg, mktPhp]) => {
+    const partial = m === '2026-09-01';
+    const noDeliveryRow = mode === 'gaps' && m === '2026-04-01';
+    const noFedPrice = mode === 'gaps' && m === '2025-12-01';
+    const cov = mode === 'gaps' && m === '2026-08-01' ? 97.3 : 100;
+    return {
+      monthStart: m,
+      isPartialMonth: partial,
+      measuredTo: partial ? '2026-09-26' : `${m.slice(0, 8)}28`,
+      fedKg,
+      fedPhpKg: canViewPrices && !noFedPrice ? fedPhp : null,
+      fedPriceCoveragePct: noFedPrice ? null : cov,
+      deliveredKg: noDeliveryRow ? null : mktKg,
+      deliveredPhpKg: canViewPrices && !noDeliveryRow ? mktPhp : null,
+      deliveredPriceCoveragePct: noDeliveryRow ? null : 100,
+    };
+  });
+  return {
+    fromMonth: '2025-10-01',
+    toMonth: '2026-09-01',
+    anchorDate: '2026-09-26',
+    months,
+    canViewPrices,
+  };
+}
+
 // ── The rig ─────────────────────────────────────────────────────────────────
 
 const AS_OF = '2026-09-21';
@@ -572,6 +631,24 @@ export function BlendAnalysisFixture() {
       ...(includePrepared ? PREPARED_OCCUPIED_LOCS : []),
     ];
   }, [blocks, includePrepared]);
+
+  const marketMode = params.get('market');
+  const marketAdapter = React.useCallback(
+    async (): Promise<BlendMarketHistoryResult> => {
+      if (marketMode === 'stall') return new Promise<never>(() => {});
+      await new Promise((r) => setTimeout(r, Number.isFinite(delay) ? delay : 300));
+      if (marketMode === 'throw') throw new Error('fixture: the market read threw');
+      if (marketMode === 'fail') {
+        return {
+          ok: false,
+          reason: 'query_error',
+          message: 'fixture: the market history could not be read.',
+        };
+      }
+      return { ok: true, history: makeMarketHistory(marketMode, canViewPrices) };
+    },
+    [marketMode, delay, canViewPrices],
+  );
 
   const factsAdapter = React.useCallback(async () => {
     await new Promise((r) => setTimeout(r, 120));
@@ -687,7 +764,8 @@ export function BlendAnalysisFixture() {
         <code>?saved={isSaved ? '1' : '0'}</code> ·{' '}
         <code>?unmeasured={includeUnmeasured ? '1' : '0'}</code> ·{' '}
         <code>?pages={pagesParam ?? '(all)'}</code> ·{' '}
-        <code>?pca={includePrepared ? '1' : '0'}</code> · adapter delay{' '}
+        <code>?pca={includePrepared ? '1' : '0'}</code> ·{' '}
+        <code>?market={marketMode ?? '(real shape)'}</code> · adapter delay{' '}
         <code>{stall ? 'never answers' : `${delay}ms`}</code> · toggle the OS/app theme to see both.
       </p>
       {!open && (
@@ -708,6 +786,7 @@ export function BlendAnalysisFixture() {
           showPrices
           analysisAdapter={analysisAdapter}
           factsAdapter={factsAdapter}
+          marketAdapter={marketAdapter}
           batchIdByLoc={Object.fromEntries(blocks.map((b) => [b.loc, b.loc]))}
           occupiedLocs={occupiedLocs}
           saved={

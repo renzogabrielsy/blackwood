@@ -67,6 +67,9 @@ import type {
   BlendVsMarket,
   BlendVsMarketBand,
   BlendVsMarketUnavailable,
+  BlendMarketHistory,
+  BlendMarketHistoryMonth,
+  BlendMarketHistoryResult,
 } from './types';
 import {
   BLOCKING_PRICE_LENS_DEFAULT_EDGES,
@@ -95,6 +98,7 @@ import {
   BLEND_ANALYSIS_DEFAULT_PRICE_EDGES,
   BLEND_ANALYSIS_DEFAULT_AGE_EDGES,
   BLEND_ANALYSIS_QUALITY_METRICS,
+  BLEND_MARKET_HISTORY_MONTHS,
 } from './types';
 import type { Json } from '@/types/supabase';
 
@@ -3405,5 +3409,172 @@ export async function fetchBlendAnalysis(
   } catch (err: unknown) {
     console.error('[Blocking] fetchBlendAnalysis failed:', err);
     return { ok: false, reason: 'exception', message: BLEND_ANALYSIS_UNREACHABLE_MESSAGE };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE BLEND PRINT'S MARKET CHART — `fetchBlendMarketHistory(asOf?)` (2026-09-26)
+//
+// Twelve calendar months ending with the blend's own as-of month, read from TWO existing
+// one-definition views and re-keyed — never re-aggregated:
+//   `view_analytics_cost_monthly`  fed_kg · delivered_php_kg_fed_covered ·
+//                                  fed_price_coverage_pct · is_partial_month · as_of_date
+//   `view_analytics_rcin_monthly`  market_kg · market_avg_price · price_coverage_pct
+// Both are monthly grains (75 / 49 rows over all history) and this reads at most 12 of
+// each, month-filtered — nowhere near PostgREST's 1000-row cap.
+//
+// THE FED PRICE IS `delivered_php_kg_fed_covered`, NOT `delivered_php_kg_fed`: the plain
+// figure puts untraceable fed kilos in the denominator with no money in the numerator and
+// is understated whenever `fed_price_coverage_pct < 100`; the covered figure is the same
+// money over only the traceable kilos. Coverage rides along so the print can footnote it.
+// And it is the DELIVERED basis, never the shrinkage-adjusted actual fed price.
+//
+// PRICE GATE — A NULLING PASS. The volumes are peso-free, so a `!canViewPrices()` reader
+// still gets the chart; both ₱ fields are nulled HERE, before the payload leaves the
+// server, and `canViewPrices: false` tells the print to drop the price axis and legend.
+// Fails closed: an error resolving the gate is treated as "cannot view".
+//
+// NULL IS NEVER 0: a month absent from a view, or a NULL the view published, stays NULL.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const BLEND_MARKET_HISTORY_UNREACHABLE_MESSAGE =
+  'The market history could not be read right now. The blend itself is unaffected — try printing again.';
+
+/** `yyyy-MM-01` of the month `delta` months after the month of `yyyy-MM-dd`. Calendar arithmetic only. */
+function blendMarketMonthStart(isoDate: string, delta: number): string {
+  const y = Number(isoDate.slice(0, 4));
+  const m = Number(isoDate.slice(5, 7)) - 1 + delta;
+  const yy = y + Math.floor(m / 12);
+  const mm = ((m % 12) + 12) % 12;
+  return `${yy}-${String(mm + 1).padStart(2, '0')}-01`;
+}
+
+/**
+ * The market picture behind the blend print's page-one chart.
+ *
+ * `asOf` (`yyyy-MM-dd`) anchors the window: a SAVED version passes the Asia/Manila date of
+ * its own `as_of_at`; the live what-if passes nothing (= today in Asia/Manila). The window
+ * is the 12 calendar months ending with that date's month.
+ */
+export async function fetchBlendMarketHistory(
+  asOf?: string | null,
+): Promise<BlendMarketHistoryResult> {
+  const manilaToday = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+
+  let anchor = manilaToday;
+  if (asOf !== null && asOf !== undefined && asOf !== '') {
+    const raw = String(asOf);
+    const parsed = new Date(`${raw}T00:00:00Z`);
+    const roundTrip = Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString().slice(0, 10);
+    if (!ISO_DATE_RE.test(raw) || roundTrip !== raw) {
+      return {
+        ok: false,
+        reason: 'invalid_as_of',
+        message: 'The as-of date has to be a real calendar date written as yyyy-mm-dd.',
+      };
+    }
+    // A future anchor is clamped to today rather than refused: the chart can only ever
+    // describe months that exist, and a version dated "tomorrow" by clock skew should
+    // still print.
+    anchor = raw > manilaToday ? manilaToday : raw;
+  }
+
+  const toMonth = blendMarketMonthStart(anchor, 0);
+  const fromMonth = blendMarketMonthStart(anchor, -(BLEND_MARKET_HISTORY_MONTHS - 1));
+
+  // (1) THE GATE. Fails closed on any error.
+  let canView = false;
+  try {
+    canView = await canViewPricesGate();
+  } catch {
+    canView = false;
+  }
+
+  try {
+    const supabase = await createClient();
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError || !user) {
+      return {
+        ok: false,
+        reason: 'not_signed_in',
+        message: 'Your session has expired — reload the page and sign in again.',
+      };
+    }
+
+    const [costRes, rcinRes] = await Promise.all([
+      supabase
+        .from('view_analytics_cost_monthly')
+        .select(
+          'month_start, is_partial_month, as_of_date, fed_kg, delivered_php_kg_fed_covered, fed_price_coverage_pct',
+        )
+        .gte('month_start', fromMonth)
+        .lte('month_start', toMonth)
+        .order('month_start', { ascending: true }),
+      supabase
+        .from('view_analytics_rcin_monthly')
+        .select('month_start, market_kg, market_avg_price, price_coverage_pct')
+        .gte('month_start', fromMonth)
+        .lte('month_start', toMonth)
+        .order('month_start', { ascending: true }),
+    ]);
+
+    if (costRes.error || rcinRes.error) {
+      const err = costRes.error ?? rcinRes.error;
+      console.error('[Blocking] fetchBlendMarketHistory query error:', err);
+      return {
+        ok: false,
+        reason: 'query_error',
+        message: err?.message || BLEND_MARKET_HISTORY_UNREACHABLE_MESSAGE,
+      };
+    }
+
+    const costByMonth = new Map<string, Record<string, unknown>>();
+    for (const r of (costRes.data ?? []) as Array<Record<string, unknown>>) {
+      costByMonth.set(String(r.month_start ?? '').slice(0, 10), r);
+    }
+    const rcinByMonth = new Map<string, Record<string, unknown>>();
+    for (const r of (rcinRes.data ?? []) as Array<Record<string, unknown>>) {
+      rcinByMonth.set(String(r.month_start ?? '').slice(0, 10), r);
+    }
+
+    // The 12-slot SPINE is calendar arithmetic; every value in it is a view column,
+    // re-keyed by month. A month a view has no row for keeps NULLs — a gap, never a 0.
+    const months: BlendMarketHistoryMonth[] = Array.from(
+      { length: BLEND_MARKET_HISTORY_MONTHS },
+      (_, i) => {
+        const key = blendMarketMonthStart(fromMonth, i);
+        const c = costByMonth.get(key) ?? null;
+        const r = rcinByMonth.get(key) ?? null;
+        return {
+          monthStart: key,
+          isPartialMonth: c?.is_partial_month === true,
+          measuredTo: c ? lensStrOrNull(c.as_of_date) : null,
+          fedKg: c ? lensNumOrNull(c.fed_kg) : null,
+          // THE ₱ NULLING — before the payload leaves the server.
+          fedPhpKg: canView && c ? lensNumOrNull(c.delivered_php_kg_fed_covered) : null,
+          fedPriceCoveragePct: c ? lensNumOrNull(c.fed_price_coverage_pct) : null,
+          deliveredKg: r ? lensNumOrNull(r.market_kg) : null,
+          deliveredPhpKg: canView && r ? lensNumOrNull(r.market_avg_price) : null,
+          deliveredPriceCoveragePct: r ? lensNumOrNull(r.price_coverage_pct) : null,
+        };
+      },
+    );
+
+    const history: BlendMarketHistory = {
+      fromMonth,
+      toMonth,
+      anchorDate: anchor,
+      months,
+      canViewPrices: canView,
+    };
+    return { ok: true, history };
+  } catch (err: unknown) {
+    console.error('[Blocking] fetchBlendMarketHistory failed:', err);
+    return { ok: false, reason: 'exception', message: BLEND_MARKET_HISTORY_UNREACHABLE_MESSAGE };
   }
 }

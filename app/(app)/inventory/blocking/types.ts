@@ -1848,3 +1848,76 @@ export const BLEND_ANALYSIS_QUALITY_METRICS: readonly BlendQualityMetric[] = [
   'bd_astm',
   'bd_jis',
 ];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE BLEND PRINT'S MARKET CHART (2026-09-26) — `fetchBlendMarketHistory(asOf?)`
+//
+// Page one of the blend proposal print carries a twelve-month market picture under the
+// summary and the blended lab stats. The owner asked for four series:
+//   • avg RC FED price        — blue line   (DELIVERED basis, MAIN feed only — never the
+//                                           shrinkage-adjusted "actual" price)
+//   • avg RC DELIVERIES price — orange line (MARKET purchases only)
+//   • RC FED volume           — purple area (monthly total)
+//   • RC DELIVERIES volume    — green area  (monthly total, market purchases)
+//
+// EVERY FIGURE IS A COLUMN OF AN EXISTING ONE-DEFINITION VIEW, published verbatim:
+//   fed kg / fed ₱/kg / coverage   ← `view_analytics_cost_monthly.fed_kg`,
+//                                    `.delivered_php_kg_fed_covered`, `.fed_price_coverage_pct`
+//   delivered kg / ₱/kg / coverage ← `view_analytics_rcin_monthly.market_kg`,
+//                                    `.market_avg_price`, `.price_coverage_pct`
+//   partial month                  ← `view_analytics_cost_monthly.is_partial_month`
+//                                    (lifted from `view_analytics_flow_monthly`)
+// No average is formed in TypeScript. NULL IS NEVER 0: a month with no row, or a view that
+// publishes NULL, is a GAP in the chart.
+//
+// PRICE GATE — A NULLING PASS, NOT A REFUSAL. Unlike `fetchBlockingMarketContext` (whose
+// whole payload is money), this payload SPLITS: the two volume series carry no peso and
+// none is derivable, so a `!canViewPrices()` caller still gets them, with `fedPhpKg` and
+// `deliveredPhpKg` nulled SERVER-SIDE and `canViewPrices: false`. The two coverage
+// percentages are kilogram ratios and are kept.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** How many calendar months the chart spans, ending with the blend's own as-of month. */
+export const BLEND_MARKET_HISTORY_MONTHS = 12;
+
+export interface BlendMarketHistoryMonth {
+  /** `yyyy-MM-01`. */
+  monthStart: string;
+  /** The current, still-running month — its totals will grow. */
+  isPartialMonth: boolean;
+  /** The last day the month is measured to (`as_of_date`), or null when the view has no row. */
+  measuredTo: string | null;
+  /** Monthly total kg FED (MAIN clock). */
+  fedKg: number | null;
+  /** DELIVERED-basis ₱/kg of the fed kilos, over the TRACEABLE kilos only. Null for a price-denied reader. */
+  fedPhpKg: number | null;
+  /** % of the month's fed kg that traces to a delivery price (a kg ratio — no peso). */
+  fedPriceCoveragePct: number | null;
+  /** Monthly total MARKET kg delivered. Null when the month had no delivery row. */
+  deliveredKg: number | null;
+  /** Weighted market ₱/kg (priced kg only). Null for a price-denied reader. */
+  deliveredPhpKg: number | null;
+  /** % of the month's market kg that carries a price (a kg ratio — no peso). */
+  deliveredPriceCoveragePct: number | null;
+}
+
+export interface BlendMarketHistory {
+  /** `yyyy-MM-01` of the first / last month in the window (always 12 months, ascending). */
+  fromMonth: string;
+  toMonth: string;
+  /** The date the window was anchored on (`yyyy-MM-dd`, Asia/Manila). */
+  anchorDate: string;
+  months: BlendMarketHistoryMonth[];
+  /** False → both ₱ series are null in every month (nulled by the server). */
+  canViewPrices: boolean;
+}
+
+export type BlendMarketHistoryRefusalReason =
+  | 'invalid_as_of'
+  | 'not_signed_in'
+  | 'query_error'
+  | 'exception';
+
+export type BlendMarketHistoryResult =
+  | { ok: true; history: BlendMarketHistory }
+  | { ok: false; reason: BlendMarketHistoryRefusalReason; message: string };
