@@ -16,8 +16,8 @@ import { BlendAnalysisFixture } from './blendanalysis-fixture';
 // only questions this feature can get WRONG in a way a test would not notice.
 //
 // It mounts the REAL `BlendProposalDialog` — with its real header actions, its real
-// Include-pages popover, its real print and its real PDF — and swaps only the two data
-// PORTS (`analysisAdapter`, `factsAdapter`) for static payloads shaped like the
+// Include-pages popover, its real print and its real PDF — and swaps only the data
+// PORTS (`analysisAdapter`, `factsAdapter`, `marketAdapter`) for static payloads shaped like the
 // contract. The analysis adapter answers after a REALISTIC ~300 ms, deliberately: a
 // microtask-resolving stub hid a request race on this page's siblings last week, and a
 // skeleton that never renders is a skeleton nobody can review.
@@ -30,6 +30,9 @@ import { BlendAnalysisFixture } from './blendanalysis-fixture';
 //   ?unmeasured=1   — include blocks with no lab reading and no price
 //   ?slow=2000      — a slower adapter, to look at the skeletons
 //   ?stall=1        — an adapter that never answers, to see the watchdog banner
+//   ?market=gaps    — page one's MARKET CHART with a NULL month, a missing fed price and a
+//                     97.3% coverage footnote (also: fail | throw | stall — the print must
+//                     degrade to a note). The default is the real 2026-09-26 shape.
 //
 // It is gated TWICE, and the two locks are independent:
 //   1. here — `notFound()` in production unless `TABLE_PLAYGROUND` is set;

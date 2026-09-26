@@ -18,7 +18,7 @@
  * the browser, where the glyph is fine).
  */
 
-import { jsPDF } from 'jspdf';
+import { jsPDF, GState } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { format } from 'date-fns';
 import type { BlendProposal } from '../blocking/actions';
@@ -68,6 +68,15 @@ import {
   lensYardMapLines,
   lensYardMapPaint,
 } from '../blocking/lens/lens-yard-map-model';
+// PAGE ONE'S MARKET CHART (2026-09-26) — the SAME model + geometry the HTML printout draws.
+import {
+  BLEND_MARKET_AREA_OPACITY,
+  BLEND_MARKET_CHART_TITLE,
+  BLEND_MARKET_INK,
+  BLEND_MARKET_UNAVAILABLE_HEADLINE,
+  layoutBlendMarketChart,
+  type BlendMarketChartSlot,
+} from './blend-market-chart';
 import { ageBandLabel } from '../blocking/lens/age-lens-settings';
 import { priceBandLabel } from '../blocking/lens/price-lens-settings';
 import type { LabHighlightSpec, LabMetric } from '@/types/table-settings';
@@ -145,6 +154,12 @@ export function buildBlendPdf(
    * before the map existed.
    */
   yardMap?: BlendYardMapModel | null,
+  /**
+   * PAGE ONE'S MARKET CHART (2026-09-26) — the SAME slot the HTML printout draws (the
+   * chart model, or the "unavailable" note). Absent → the file is exactly what it was
+   * before the chart existed.
+   */
+  marketSlot?: BlendMarketChartSlot | null,
 ): jsPDF {
   const showPrices = proposal.can_view_prices && showPricesPref && proposal.raw_price_per_kg !== null;
 
@@ -265,6 +280,17 @@ export function buildBlendPdf(
       doc.setTextColor(0, 0, 0);
       y += 18;
     }
+  }
+
+  // ── PAGE ONE'S MARKET CHART (2026-09-26) ──
+  // It takes EXACTLY what is left of page one (down to the bottom margin), so page one
+  // is one page by construction; the Selected Blocks table then starts on sheet two.
+  // A failed read draws a one-line note in its place — never a failed PDF.
+  if (marketSlot) {
+    const pageH = doc.internal.pageSize.getHeight();
+    drawMarketChartPdf(doc, marginX, y + 2, pageH - 28, marketSlot);
+    doc.addPage();
+    y = 48;
   }
 
   // ── Selected Blocks (per-block lab columns + gated PHP/KG) ──
@@ -906,6 +932,190 @@ function setInk(doc: jsPDF, css: string): void {
 }
 
 /**
+ * Page one's market chart (or its "unavailable" note), drawn into the box `[top, bottom]`
+ * of the CURRENT page. The geometry is `layoutBlendMarketChart` — the SAME function the
+ * HTML printout's SVG uses — laid out in points with jsPDF's own text measure, so the two
+ * documents draw one chart. Nothing here reads a number the model did not publish.
+ */
+function drawMarketChartPdf(
+  doc: jsPDF,
+  marginX: number,
+  top: number,
+  bottom: number,
+  slot: BlendMarketChartSlot,
+): void {
+  const width = doc.internal.pageSize.getWidth() - 2 * marginX;
+  let y = top;
+
+  // ── Heading: the model's own title + range ──
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(0, 0, 0);
+  const title = slot.kind === 'chart' ? slot.model.title : BLEND_MARKET_CHART_TITLE;
+  doc.text(pdfText(title), marginX, y);
+  if (slot.kind === 'chart') {
+    const tw = doc.getTextWidth(pdfText(title));
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(63, 63, 70);
+    doc.text(pdfText(slot.model.range), marginX + tw + 8, y);
+  }
+  y += 11;
+
+  if (slot.kind === 'unavailable') {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(24, 24, 27);
+    const head = `${BLEND_MARKET_UNAVAILABLE_HEADLINE}.`;
+    doc.text(head, marginX, y);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(63, 63, 70);
+    const hw = doc.getTextWidth(head) + 4;
+    const lines = doc.splitTextToSize(pdfText(slot.reason), width - hw) as string[];
+    doc.text(lines, marginX + hw, y);
+    doc.setTextColor(20, 20, 20);
+    return;
+  }
+
+  const model = slot.model;
+
+  // ── Subtitle (the definitions) ──
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(63, 63, 70);
+  const sub = doc.splitTextToSize(pdfText(model.subtitle), width) as string[];
+  doc.text(sub, marginX, y);
+  y += sub.length * 9 + 2;
+
+  // ── Legend ──
+  doc.setFontSize(7.5);
+  let lx = marginX;
+  doc.setLineWidth(1);
+  for (const e of model.legend) {
+    const text = pdfText(e.label);
+    const w = 16 + doc.getTextWidth(text) + 12;
+    if (lx + w > marginX + width && lx > marginX) {
+      lx = marginX;
+      y += 10;
+    }
+    setStroke(doc, e.stroke);
+    if (e.kind === 'area') {
+      setFill(doc, e.fill ?? e.stroke);
+      doc.setGState(new GState({ opacity: BLEND_MARKET_AREA_OPACITY }));
+      doc.rect(lx, y - 6, 11, 7, 'F');
+      doc.setGState(new GState({ opacity: 1 }));
+      doc.setLineWidth(0.8);
+      doc.rect(lx, y - 6, 11, 7, 'S');
+    } else {
+      doc.setLineWidth(e.kind === 'line' ? 2 : 1);
+      if (e.kind === 'ref') doc.setLineDashPattern([3, 2], 0);
+      doc.line(lx, y - 2.5, lx + 12, y - 2.5);
+      if (e.kind === 'ref') doc.setLineDashPattern([], 0);
+    }
+    doc.setTextColor(24, 24, 27);
+    doc.text(text, lx + 16, y);
+    lx += w;
+  }
+  y += 6;
+
+  // ── Footnotes, measured first so the plot takes exactly what is left ──
+  doc.setFontSize(7);
+  const noteLines = model.footnotes.flatMap(
+    (f) => doc.splitTextToSize(`- ${pdfText(f)}`, width) as string[],
+  );
+  const notesH = noteLines.length * 8.5;
+  const plotH = Math.max(90, bottom - y - notesH - (noteLines.length ? 4 : 0));
+
+  // ── The plot, in points ──
+  const FONT = 7;
+  doc.setFontSize(FONT);
+  const layout = layoutBlendMarketChart(model, width, plotH, FONT, 0.55, (s) =>
+    doc.getTextWidth(pdfText(s)),
+  );
+  const ox = marginX;
+  const oy = y;
+  const P = (p: { x: number; y: number }) => ({ x: ox + p.x, y: oy + p.y });
+
+  // Guides.
+  setStroke(doc, BLEND_MARKET_INK.grid);
+  doc.setLineWidth(0.5);
+  for (const gy of layout.guides) {
+    doc.line(ox + layout.plot.x, oy + gy, ox + layout.plot.x + layout.plot.w, oy + gy);
+  }
+
+  const polyPath = (pts: { x: number; y: number }[], style: 'F' | 'S', closed: boolean) => {
+    const abs = pts.map(P);
+    const deltas = abs.slice(1).map((p, i) => [p.x - abs[i].x, p.y - abs[i].y]);
+    doc.lines(deltas, abs[0].x, abs[0].y, [1, 1], style, closed);
+  };
+
+  // Areas, BEHIND everything else: a translucent fill, then an opaque edge.
+  for (const a of layout.areas) {
+    for (const poly of a.polygons) {
+      setFill(doc, a.fill);
+      doc.setGState(new GState({ opacity: BLEND_MARKET_AREA_OPACITY }));
+      polyPath(poly, 'F', true);
+      doc.setGState(new GState({ opacity: 1 }));
+      setStroke(doc, a.stroke);
+      doc.setLineWidth(0.8);
+      // The top edge only — the polygon's first and last points are on the baseline.
+      polyPath(poly.slice(1, -1).length > 1 ? poly.slice(1, -1) : poly, 'S', false);
+    }
+  }
+
+  // Baseline.
+  setStroke(doc, BLEND_MARKET_INK.axis);
+  doc.setLineWidth(0.7);
+  doc.line(ox + layout.plot.x, oy + layout.baselineY, ox + layout.plot.x + layout.plot.w, oy + layout.baselineY);
+
+  // Reference level.
+  if (layout.ref) {
+    setStroke(doc, BLEND_MARKET_INK.ref);
+    doc.setLineWidth(0.8);
+    doc.setLineDashPattern([4, 2.5], 0);
+    doc.line(ox + layout.ref.x1, oy + layout.ref.y, ox + layout.ref.x2, oy + layout.ref.y);
+    doc.setLineDashPattern([], 0);
+  }
+
+  // Lines + dots (hollow = the partial month).
+  for (const ln of layout.lines) {
+    setStroke(doc, ln.stroke);
+    doc.setLineWidth(1.6);
+    for (const run of ln.runs) if (run.length > 1) polyPath(run, 'S', false);
+    for (const d of ln.dots) {
+      const p = P(d);
+      if (d.hollow) {
+        doc.setFillColor(255, 255, 255);
+        doc.setLineWidth(1.2);
+        doc.circle(p.x, p.y, 2.4, 'FD');
+      } else {
+        setFill(doc, ln.stroke);
+        doc.circle(p.x, p.y, 1.9, 'F');
+      }
+    }
+  }
+
+  // Labels.
+  for (const t of layout.texts) {
+    doc.setFont('helvetica', t.bold ? 'bold' : t.italic ? 'italic' : 'normal');
+    doc.setFontSize(t.size);
+    setInk(doc, t.color);
+    const align = t.anchor === 'start' ? 'left' : t.anchor === 'end' ? 'right' : 'center';
+    doc.text(pdfText(t.text), ox + t.x, oy + t.y, { align });
+  }
+
+  // Footnotes.
+  if (noteLines.length) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(63, 63, 70);
+    doc.text(noteLines, marginX, oy + plotH + 8);
+  }
+  doc.setTextColor(20, 20, 20);
+  doc.setDrawColor(0, 0, 0);
+}
+
+/**
  * The map, on its own landscape page, drawn cell by cell.
  *
  * `marginX` is the document's own left/right margin in POINTS; the map solves against the
@@ -1051,6 +1261,7 @@ export function downloadBlendPdf(
   blockFacts?: BlendPdfFacts | null,
   analysis?: BlendPdfAnalysis | null,
   yardMap?: BlendYardMapModel | null,
+  marketSlot?: BlendMarketChartSlot | null,
 ): void {
   const filename = composeBlendPdfFilename(label);
   if (!filename) {
@@ -1064,6 +1275,7 @@ export function downloadBlendPdf(
     blockFacts,
     analysis,
     yardMap,
+    marketSlot,
   );
   doc.save(filename);
 }

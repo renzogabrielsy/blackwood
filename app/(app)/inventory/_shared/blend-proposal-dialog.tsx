@@ -50,8 +50,10 @@ import type {
   BlendProposalStatus,
   BlendProposalVersionSummary,
   SavedBlendProposal,
+  BlendMarketHistory,
+  BlendMarketHistoryResult,
 } from '../blocking/types';
-import { fetchBlendBlockFacts } from '../blocking/actions';
+import { fetchBlendBlockFacts, fetchBlendMarketHistory } from '../blocking/actions';
 // PERF-4: composeBlendPdfFilename is jspdf-free (pure filename helper) and is used
 // synchronously for the live preview / validity, so it stays a static import. The
 // heavy downloadBlendPdf (jsPDF + jspdf-autotable) is loaded lazily on the Download
@@ -95,6 +97,23 @@ import {
   buildBlendAnalysisPages,
 } from './blend-analysis-print';
 import { useBlendAnalysis, type BlendAnalysisAdapter } from './use-blend-analysis';
+// ── PAGE ONE'S MARKET CHART (2026-09-26) ──
+// Twelve months of fed / deliveries price and volume under the lab stats. One model,
+// two documents: the HTML printout draws its SVG, the jsPDF file walks the same layout.
+import {
+  BLEND_MARKET_CHART_PRINT_CSS,
+  BLEND_MARKET_LOADING_REASON,
+  blendMarketPlotHeightPx,
+  buildBlendMarketChartModel,
+  buildBlendMarketSlotHtml,
+  type BlendMarketChartSlot,
+} from './blend-market-chart';
+
+/** The page-one market read's lifecycle. `loading` and `error` both print a note, never fail. */
+type BlendMarketRead =
+  | { status: 'loading' }
+  | { status: 'ready'; history: BlendMarketHistory }
+  | { status: 'error'; message: string };
 import { useModuleSettings, lensSettingsModule } from '../blocking/lens/use-lens-settings';
 import {
   DEFAULT_PRICE_LENS_SETTINGS,
@@ -209,6 +228,16 @@ export function buildBlendPrintDocument(
    * what it was before the map existed, including its `<style>` block.
    */
   yardMapHtml?: string | null,
+  /**
+   * PAGE ONE'S MARKET CHART (2026-09-26), already built by `buildBlendMarketChartSection`
+   * — the twelve-month fed / deliveries price and volume picture under the lab stats.
+   *
+   * When present, the head and the chart are wrapped in a fixed-height `.p1` flex column
+   * so the chart takes EXACTLY what is left of page one and page one stays one page by
+   * construction; the Selected Blocks table then starts on sheet two. Absent or empty →
+   * this document is byte-identical to what it was before the chart existed.
+   */
+  marketChartHtml?: string | null,
 ): string {
   const showPrices = proposal.can_view_prices && showPricesPref && proposal.raw_price_per_kg !== null;
 
@@ -346,6 +375,11 @@ export function buildBlendPrintDocument(
   const analysisCss = analysisHtml === '' ? '' : BLEND_ANALYSIS_PRINT_CSS;
   const yardHtml = (yardMapHtml ?? '').trim();
   const yardCss = yardHtml === '' ? '' : BLEND_YARD_MAP_PRINT_CSS;
+  const chartHtml = (marketChartHtml ?? '').trim();
+  const chartCss = chartHtml === '' ? '' : BLEND_MARKET_CHART_PRINT_CSS;
+  // With a chart, page one is a fixed-height column (`.p1`) whose last child is the chart.
+  const p1Open = chartHtml === '' ? '' : '<div class="p1">\n';
+  const p1Close = chartHtml === '' ? '' : `\n  ${chartHtml}\n</div>`;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -380,10 +414,10 @@ export function buildBlendPrintDocument(
   }
   .sup-all  { background: #d1fae5; color: #065f46; border: 1px solid #6ee7b7; }
   .sup-some { background: #ffedd5; color: #9a3412; border: 1px solid #fdba74; }
-${yardCss}${analysisCss}</style>
+${yardCss}${analysisCss}${chartCss}</style>
 </head>
 <body>
-  <h1>${title}</h1>
+  ${p1Open}<h1>${title}</h1>
   <p class="subtitle">${subtitle}</p>
   ${remarkLine}
 
@@ -396,7 +430,7 @@ ${yardCss}${analysisCss}</style>
     <h2>Blended Lab Stats (Weighted Avg)</h2>
     <dl>${labRows}</dl>
   </section>
-${pricingSection}
+${pricingSection}${p1Close}
   <section>
     <h2>Selected Blocks</h2>
     ${blockTable}
@@ -1112,6 +1146,11 @@ interface BlendProposalDialogProps {
    * reviewed for layout, colour or wording.
    */
   analysisAdapter?: BlendAnalysisAdapter;
+  /**
+   * The page-one MARKET CHART read's PORT (2026-09-26) — same adapter idiom, same one
+   * reason for existing as `factsAdapter`. The default is `fetchBlendMarketHistory`.
+   */
+  marketAdapter?: (asOf?: string) => Promise<BlendMarketHistoryResult>;
   /** Present → the dialog renders a SAVED version (history mode). */
   saved?: BlendSavedContext | null;
   /** Fresh mode only: save this blend as a brand-new proposal. */
@@ -1157,6 +1196,7 @@ export function BlendProposalDialog({
   occupiedLocs,
   factsAdapter,
   analysisAdapter,
+  marketAdapter,
   saved = null,
   onSaveNew,
   saving = false,
@@ -1382,6 +1422,78 @@ export function BlendProposalDialog({
     [yardMap],
   );
 
+  // ── PAGE ONE'S MARKET CHART ──
+  //
+  // ONE read per open / per version switch, guarded by its own SIGNATURE (the anchor
+  // date) exactly like the facts read above. The window is the 12 months ending with the
+  // blend's own as-of month: a saved version's `as_of_at` (Manila), the live what-if's
+  // today. A refusal or failure NEVER fails the documents: the slot then prints a short
+  // "market history unavailable" note in the chart's place (and a Print that beats the
+  // reply prints a "still loading" note), so page one keeps its shape either way.
+  const [marketRead, setMarketRead] = useState<BlendMarketRead>({ status: 'loading' });
+  const marketWantRef = useRef('');
+  const marketAnchor = saved ? factsAsOf : null;
+  const hasProposal = !!proposal;
+  useEffect(() => {
+    if (!open || !hasProposal) {
+      marketWantRef.current = '';
+      return;
+    }
+    const signature = marketAnchor ?? 'today';
+    marketWantRef.current = signature;
+    setMarketRead({ status: 'loading' });
+    void (marketAdapter ?? fetchBlendMarketHistory)(marketAnchor ?? undefined)
+      .then((res) => {
+        if (marketWantRef.current !== signature) return;
+        setMarketRead(
+          res.ok ? { status: 'ready', history: res.history } : { status: 'error', message: res.message },
+        );
+      })
+      .catch((err: unknown) => {
+        if (marketWantRef.current !== signature) return;
+        setMarketRead({
+          status: 'error',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      });
+    // `marketAdapter` deliberately NOT a dependency — same reason as `factsAdapter`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, hasProposal, marketAnchor]);
+
+  const marketSlot: BlendMarketChartSlot | null = useMemo(() => {
+    if (!proposal) return null;
+    if (marketRead.status === 'loading') {
+      return { kind: 'unavailable', reason: BLEND_MARKET_LOADING_REASON };
+    }
+    if (marketRead.status === 'error') {
+      return {
+        kind: 'unavailable',
+        reason: `${marketRead.message} The blend itself is unaffected.`,
+      };
+    }
+    return {
+      kind: 'chart',
+      model: buildBlendMarketChartModel({
+        history: marketRead.history,
+        showPrices,
+        blendRawPhpKg: proposal.raw_price_per_kg,
+      }),
+    };
+  }, [marketRead, proposal, showPrices]);
+
+  const remarkText = saved?.proposal.notes ?? '';
+  const marketChartHtml = useMemo(() => {
+    if (!marketSlot || !proposal) return '';
+    return buildBlendMarketSlotHtml(
+      marketSlot,
+      blendMarketPlotHeightPx({
+        hasPricing: showPrices && proposal.raw_price_per_kg !== null,
+        remarkText,
+        footnoteCount: marketSlot.kind === 'chart' ? marketSlot.model.footnotes.length : 0,
+      }),
+    );
+  }, [marketSlot, proposal, showPrices, remarkText]);
+
   // ── Download PDF (label prompt) ──
   const [pdfPopoverOpen, setPdfPopoverOpen] = useState(false);
   const [pdfLabel, setPdfLabel] = useState('');
@@ -1425,6 +1537,8 @@ export function BlendProposalDialog({
         },
         // The SAME map model the HTML printout draws, so the two cannot disagree.
         yardMap,
+        // Page one's market chart (or its note) — the SAME slot the HTML printout draws.
+        marketSlot,
       );
       handlePdfPopoverOpenChange(false);
     } catch (err) {
@@ -1454,6 +1568,8 @@ export function BlendProposalDialog({
         analysisPagesHtml,
         // The YARD MAP sheet, between the blocks table and the analysis sheets.
         yardMapHtml,
+        // Page one's market chart, under the lab stats.
+        marketChartHtml,
       );
       const ok = printViaIframe(html);
       if (!ok) {
@@ -1700,6 +1816,9 @@ export function BlendProposalDialog({
                 onClick={handlePrint}
                 disabled={!proposal || loading}
                 data-blend-print
+                // Page one's market read — `loading | ready | error` — so a test (and a
+                // curious reader in devtools) can tell which chart slot a Print will carry.
+                data-blend-market-state={marketRead.status}
                 className={cn(
                   `flex items-center justify-center h-7 rounded-md border border-border
                    text-muted-foreground hover:text-foreground hover:bg-muted
